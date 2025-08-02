@@ -1,0 +1,14 @@
+{
+  "jsc": {
+    "parser": {
+      "syntax": "ecmascript",
+      "jsx": true,
+      "dynamicImport": true,
+      "privateMethod": true,
+      "functionBind": true
+    },
+    "target": "es2022",
+    "loose": false,
+    "externalHelpers": true
+  }
+}
