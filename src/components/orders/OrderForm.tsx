@@ -253,13 +253,20 @@ export function OrderForm() {
 
   const scrollLeft = () => {
     if (sliderRef.current) {
-      sliderRef.current.scrollBy({ left: -320, behavior: 'smooth' });
+      const currentScroll = sliderRef.current.scrollLeft;
+      const itemWidth = 320; // Width of one item
+      const newScroll = Math.max(0, currentScroll - itemWidth);
+      sliderRef.current.scrollTo({ left: newScroll, behavior: 'smooth' });
     }
   };
 
   const scrollRight = () => {
     if (sliderRef.current) {
-      sliderRef.current.scrollBy({ left: 320, behavior: 'smooth' });
+      const currentScroll = sliderRef.current.scrollLeft;
+      const itemWidth = 320; // Width of one item
+      const maxScroll = sliderRef.current.scrollWidth - sliderRef.current.clientWidth;
+      const newScroll = Math.min(maxScroll, currentScroll + itemWidth);
+      sliderRef.current.scrollTo({ left: newScroll, behavior: 'smooth' });
     }
   };
 
@@ -841,8 +848,6 @@ export function OrderForm() {
                                </button>
                              )}
                            </div>
-
-
                          </div>
                        </div>
 
@@ -913,38 +918,210 @@ export function OrderForm() {
                       </div>
                     </div>
 
-                                          {/* Selected Category Image Display */}
-                      {product.category_image_url && (
-                        <div className="space-y-3">
-                          <Label className="text-base font-semibold text-gray-700">Selected Category</Label>
-                          <div className="relative">
-                            {/* Main Image Container */}
-                            <div className="flex items-center justify-center p-4 border-2 border-green-200 rounded-xl bg-gradient-to-br from-green-50 to-white shadow-lg mb-3">
+                    {/* Selected Category Image Display */}
+                    {product.category_image_url && (
+                      <div className="space-y-3">
+                        <Label className="text-base font-semibold text-gray-700">Selected Category</Label>
+                        <div className="relative">
+                          {/* Main Image Container */}
+                          <div className="flex items-center justify-center p-4 border-2 border-green-200 rounded-xl bg-gradient-to-br from-green-50 to-white shadow-lg mb-3">
+                            <img 
+                              src={product.category_image_url} 
+                              alt="Selected Category" 
+                              className="max-h-64 w-full object-contain rounded-lg cursor-pointer hover:scale-105 transition-transform duration-200"
+                              onClick={() => handleImageClick(productIndex, 'category', product.category_image_url)}
+                            />
+                            <p className="text-center text-sm text-muted-foreground mt-2">Click to see full view</p>
+                          </div>
+                          
+                          {/* Thumbnail */}
+                          <div className="flex justify-center">
+                            <div 
+                              className="w-16 h-16 border-2 border-primary rounded-lg overflow-hidden cursor-pointer hover:scale-105 transition-transform duration-200"
+                              onClick={() => handleImageClick(productIndex, 'category', product.category_image_url)}
+                            >
                               <img 
                                 src={product.category_image_url} 
-                                alt="Selected Category" 
-                                className="max-h-64 w-full object-contain rounded-lg cursor-pointer hover:scale-105 transition-transform duration-200"
-                                onClick={() => handleImageClick(productIndex, 'category', product.category_image_url)}
+                                alt="Category Thumbnail" 
+                                className="w-full h-full object-cover"
                               />
-                              <p className="text-center text-sm text-muted-foreground mt-2">Click to see full view</p>
-                            </div>
-                            
-                            {/* Thumbnail */}
-                            <div className="flex justify-center">
-                              <div 
-                                className="w-16 h-16 border-2 border-primary rounded-lg overflow-hidden cursor-pointer hover:scale-105 transition-transform duration-200"
-                                onClick={() => handleImageClick(productIndex, 'category', product.category_image_url)}
-                              >
-                                <img 
-                                  src={product.category_image_url} 
-                                  alt="Category Thumbnail" 
-                                  className="w-full h-full object-cover"
-                                />
-                              </div>
                             </div>
                           </div>
                         </div>
-                      )}
+                      </div>
+                    )}
+
+                    {/* Image Gallery Sections */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Reference Images Gallery */}
+                      <div className="space-y-3">
+                        <Label className="text-sm font-medium">Reference Images</Label>
+                        <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            onChange={(e) => {
+                              const files = Array.from(e.target.files || []);
+                              handleImageUpload(productIndex, 'reference', files);
+                            }}
+                            className="hidden"
+                            id={`ref-images-${productIndex}`}
+                          />
+                          <label htmlFor={`ref-images-${productIndex}`} className="cursor-pointer block">
+                            <Image className="w-8 h-8 mx-auto mb-2 text-primary" />
+                            <p className="text-sm font-medium text-foreground">Upload Reference Images</p>
+                            <p className="text-xs text-muted-foreground">Up to 5 images • Click thumbnails to view</p>
+                          </label>
+                          
+                          {product.reference_images.length > 0 && (
+                            <div className="mt-4">
+                              <Badge variant="secondary" className="bg-primary/20 text-primary mb-3">
+                                {product.reference_images.length} file(s) selected
+                              </Badge>
+                              
+                              {/* Main Image Display */}
+                              <div className="mb-3 p-2 border-2 border-primary/30 rounded-lg bg-white">
+                                <img 
+                                  src={getMainImage(productIndex, 'reference') || URL.createObjectURL(product.reference_images[0])} 
+                                  alt="Main Reference"
+                                  className="w-full h-64 object-contain rounded cursor-pointer hover:scale-105 transition-transform duration-200"
+                                />
+                                <p className="text-center text-sm text-muted-foreground mt-2">Click to see full view</p>
+                              </div>
+                              
+                              {/* Thumbnail Gallery */}
+                              <div className="flex gap-2 overflow-x-auto pb-2">
+                                {product.reference_images.map((file, idx) => (
+                                  <div 
+                                    key={idx} 
+                                    className="flex-shrink-0 cursor-pointer hover:scale-105 transition-transform duration-200"
+                                    onClick={() => handleImageClick(productIndex, 'reference', URL.createObjectURL(file))}
+                                  >
+                                    <img 
+                                      src={URL.createObjectURL(file)} 
+                                      alt={`Reference ${idx + 1}`}
+                                      className={`w-16 h-16 object-cover rounded border-2 ${
+                                        getMainImage(productIndex, 'reference') === URL.createObjectURL(file) 
+                                          ? 'border-primary' 
+                                          : 'border-gray-200'
+                                      }`}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Mockup Images Gallery */}
+                      <div className="space-y-3">
+                        <Label className="text-sm font-medium">Mockup Images</Label>
+                        <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            onChange={(e) => {
+                              const files = Array.from(e.target.files || []);
+                              handleImageUpload(productIndex, 'mockup', files);
+                            }}
+                            className="hidden"
+                            id={`mockup-images-${productIndex}`}
+                          />
+                          <label htmlFor={`mockup-images-${productIndex}`} className="cursor-pointer block">
+                            <Image className="w-8 h-8 mx-auto mb-2 text-primary" />
+                            <p className="text-sm font-medium text-foreground">Upload Mockup Images</p>
+                            <p className="text-xs text-muted-foreground">Up to 5 images • Click thumbnails to view</p>
+                          </label>
+                          
+                          {product.mockup_images.length > 0 && (
+                            <div className="mt-4">
+                              <Badge variant="secondary" className="bg-primary/20 text-primary mb-3">
+                                {product.mockup_images.length} file(s) selected
+                              </Badge>
+                              
+                              {/* Main Image Display */}
+                              <div className="mb-3 p-2 border-2 border-primary/30 rounded-lg bg-white">
+                                <img 
+                                  src={getMainImage(productIndex, 'mockup') || URL.createObjectURL(product.mockup_images[0])} 
+                                  alt="Main Mockup"
+                                  className="w-full h-64 object-contain rounded cursor-pointer hover:scale-105 transition-transform duration-200"
+                                />
+                                <p className="text-center text-sm text-muted-foreground mt-2">Click to see full view</p>
+                              </div>
+                              
+                              {/* Thumbnail Gallery */}
+                              <div className="flex gap-2 overflow-x-auto pb-2">
+                                {product.mockup_images.map((file, idx) => (
+                                  <div 
+                                    key={idx} 
+                                    className="flex-shrink-0 cursor-pointer hover:scale-105 transition-transform duration-200"
+                                    onClick={() => handleImageClick(productIndex, 'mockup', URL.createObjectURL(file))}
+                                  >
+                                    <img 
+                                      src={URL.createObjectURL(file)} 
+                                      alt={`Mockup ${idx + 1}`}
+                                      className={`w-16 h-16 object-cover rounded border-2 ${
+                                        getMainImage(productIndex, 'mockup') === URL.createObjectURL(file) 
+                                          ? 'border-primary' 
+                                          : 'border-gray-200'
+                                      }`}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                      <div className="space-y-3">
+                        <Label className="text-sm font-medium">Attachments</Label>
+                        <div className="border-2 border-dashed border-primary/30 rounded-lg p-6 text-center hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
+                          <input
+                            type="file"
+                            multiple
+                            onChange={(e) => {
+                              const files = Array.from(e.target.files || []);
+                              setFormData(prev => ({
+                                ...prev,
+                                products: prev.products.map((p, i) => 
+                                  i === productIndex ? { ...p, attachments: files } : p
+                                )
+                              }));
+                            }}
+                            className="hidden"
+                            id={`attachments-${productIndex}`}
+                          />
+                          <label htmlFor={`attachments-${productIndex}`} className="cursor-pointer block">
+                            <Upload className="w-10 h-10 mx-auto mb-3 text-primary" />
+                            <p className="text-sm font-medium text-foreground">Upload Attachments</p>
+                            <p className="text-xs text-muted-foreground mt-1">Any file type • PDF, DOC, etc.</p>
+                            {product.attachments.length > 0 && (
+                              <div className="mt-3">
+                                <Badge variant="secondary" className="bg-primary/20 text-primary">
+                                  {product.attachments.length} file(s) selected
+                                </Badge>
+                                <div className="mt-2 max-h-20 overflow-y-auto">
+                                  {product.attachments.slice(0, 3).map((file, idx) => (
+                                    <div key={idx} className="text-xs text-muted-foreground truncate bg-muted/50 rounded px-2 py-1 mt-1">
+                                      {file.name}
+                                    </div>
+                                  ))}
+                                  {product.attachments.length > 3 && (
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                      +{product.attachments.length - 3} more files
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </label>
+                        </div>
+                      </div>
 
                     {/* Image Gallery Sections */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
