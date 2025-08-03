@@ -25,7 +25,8 @@ interface BulkUploadResult {
 }
 
 export function ProductMaster() {
-  const [popupImage, setPopupImage] = useState<string | null>(null);
+  const [popupImages, setPopupImages] = useState<string[]>([]);
+  const [popupIndex, setPopupIndex] = useState<number>(0);
   const [products, setProducts] = useState<ProductMaster[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
@@ -798,12 +799,14 @@ export function ProductMaster() {
 
                 <div className="grid grid-cols-3 gap-4">
                   <div>
-                    <Label htmlFor="images">Images (Comma-separated URLs)</Label>
+                    <Label htmlFor="images">Images</Label>
                     <Input
                       id="images"
                       value={formData.images}
                       onChange={(e) => setFormData({ ...formData, images: e.target.value })}
+                      placeholder="Paste multiple image URLs separated by commas"
                     />
+                    <span className="text-xs text-muted-foreground mt-1 block">You can enter multiple image URLs separated by commas. Example: https://img1.jpg, https://img2.png</span>
                   </div>
                 </div>
 
@@ -892,7 +895,6 @@ export function ProductMaster() {
                       <TableCell>
                         {(() => {
                           const isValidUrl = (url: string) => {
-                            // Basic check for image URL
                             return /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|svg)$/i.test(url.trim());
                           };
                           let imagesArr: string[] = [];
@@ -903,16 +905,25 @@ export function ProductMaster() {
                           }
                           const validImages = imagesArr.filter(isValidUrl);
                           if (validImages.length > 0) {
-                            return validImages.map((img, idx) => (
-                              <img
-                                key={idx}
-                                src={img}
-                                alt="Product"
-                                className="w-10 h-10 object-cover rounded mr-1 inline-block cursor-pointer"
-                                onClick={() => setPopupImage(img)}
-                                onError={e => { e.currentTarget.src = '/placeholder.svg'; }}
-                              />
-                            ));
+                            return (
+                              <div className="flex items-center">
+                                <img
+                                  src={validImages[0]}
+                                  alt="Product"
+                                  className="w-10 h-10 object-cover rounded mr-1 inline-block cursor-pointer"
+                                  onClick={() => { setPopupImages(validImages); setPopupIndex(0); }}
+                                  onError={e => { e.currentTarget.src = '/placeholder.svg'; }}
+                                />
+                                {validImages.length > 1 && (
+                                  <span
+                                    className="ml-2 px-2 py-1 text-xs bg-gray-200 rounded cursor-pointer"
+                                    onClick={() => { setPopupImages(validImages); setPopupIndex(0); }}
+                                  >
+                                    +{validImages.length - 1} more
+                                  </span>
+                                )}
+                              </div>
+                            );
                           } else {
                             return <span className="text-muted-foreground">No Images</span>;
                           }
@@ -966,16 +977,41 @@ export function ProductMaster() {
         </CardContent>
       </Card>
 
-      {/* Image Popup Dialog */}
-      <Dialog open={!!popupImage} onOpenChange={() => setPopupImage(null)}>
+      {/* Image Popup Dialog with Slider */}
+      <Dialog open={popupImages.length > 0} onOpenChange={() => setPopupImages([])}>
         <DialogContent className="flex flex-col items-center justify-center max-w-md">
-          {popupImage && (
-            <img
-              src={popupImage}
-              alt="Product Preview"
-              className="w-full h-auto max-h-[400px] object-contain rounded shadow-lg"
-              onError={e => { e.currentTarget.src = '/placeholder.svg'; }}
-            />
+          {popupImages.length > 0 && (
+            <div className="w-full flex flex-col items-center">
+              <img
+                src={popupImages[popupIndex]}
+                alt={`Product Preview ${popupIndex + 1}`}
+                className="w-full h-auto max-h-[400px] object-contain rounded shadow-lg mb-2"
+                onError={e => { e.currentTarget.src = '/placeholder.svg'; }}
+              />
+              <div className="flex items-center justify-between w-full mt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={popupIndex === 0}
+                  onClick={() => setPopupIndex(idx => Math.max(0, idx - 1))}
+                  className="mr-2"
+                >
+                  Prev
+                </Button>
+                <span className="text-sm font-medium">
+                  {popupIndex + 1} / {popupImages.length}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={popupIndex === popupImages.length - 1}
+                  onClick={() => setPopupIndex(idx => Math.min(popupImages.length - 1, idx + 1))}
+                  className="ml-2"
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
           )}
         </DialogContent>
       </Dialog>
