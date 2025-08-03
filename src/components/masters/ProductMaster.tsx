@@ -25,6 +25,7 @@ interface BulkUploadResult {
 }
 
 export function ProductMaster() {
+  const [detailProduct, setDetailProduct] = useState<ProductMaster | null>(null);
   const [popupImages, setPopupImages] = useState<string[]>([]);
   const [popupIndex, setPopupIndex] = useState<number>(0);
   const [products, setProducts] = useState<ProductMaster[]>([]);
@@ -876,7 +877,11 @@ export function ProductMaster() {
                 </TableHeader>
                 <TableBody>
                   {filteredProducts.map((product) => (
-                    <TableRow key={product.id} className="hover:bg-gray-50/50">
+                    <TableRow
+                      key={product.id}
+                      className="hover:bg-primary/10 cursor-pointer"
+                      onClick={() => setDetailProduct(product)}
+                    >
                       {/* Product Name and SKU */}
                       <TableCell>
                         <div>
@@ -978,6 +983,103 @@ export function ProductMaster() {
       </Card>
 
       {/* Image Popup Dialog with Slider */}
+      {/* Product Detail Popup */}
+      <Dialog open={!!detailProduct} onOpenChange={() => setDetailProduct(null)}>
+        <DialogContent className="max-w-lg p-0">
+          {detailProduct && (
+            <div className="p-6">
+              <div className="flex gap-6 items-center mb-4">
+                {/* Images slider or single image */}
+                {(() => {
+                  const isValidUrl = (url: string) => /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|svg)$/i.test(url.trim());
+                  let imagesArr: string[] = [];
+                  if (Array.isArray(detailProduct.images)) {
+                    imagesArr = detailProduct.images;
+                  } else if (typeof detailProduct.images === 'string' && detailProduct.images.trim()) {
+                    imagesArr = detailProduct.images.split(',').map((img: string) => img.trim());
+                  }
+                  const validImages = imagesArr.filter(isValidUrl);
+                  if (validImages.length > 0) {
+                    return (
+                      <div className="flex gap-2">
+                        {validImages.slice(0, 3).map((img, idx) => (
+                          <img
+                            key={idx}
+                            src={img}
+                            alt={`Product ${idx + 1}`}
+                            className="w-20 h-20 object-cover rounded shadow"
+                            onError={e => { e.currentTarget.src = '/placeholder.svg'; }}
+                          />
+                        ))}
+                        {validImages.length > 3 && (
+                          <span className="text-xs text-muted-foreground ml-2">+{validImages.length - 3} more</span>
+                        )}
+                      </div>
+                    );
+                  } else {
+                    return <span className="text-muted-foreground">No Images</span>;
+                  }
+                })()}
+                <div>
+                  <h2 className="text-2xl font-bold mb-1 text-primary">{detailProduct.name || 'Unnamed Product'}</h2>
+                  <div className="text-sm text-muted-foreground mb-1">SKU: {detailProduct.sku || 'N/A'}</div>
+                  <div className="text-sm text-muted-foreground mb-1">Category: {detailProduct.category || 'N/A'}</div>
+                  <div className="text-sm text-muted-foreground">HSN: {detailProduct.hsn || 'N/A'}</div>
+                </div>
+              </div>
+              <div className="mb-4">
+                <div className="text-base font-semibold mb-1">Description</div>
+                <div className="text-sm text-muted-foreground">{detailProduct.description || 'No description provided.'}</div>
+              </div>
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <div className="text-xs text-muted-foreground">MRP</div>
+                  <div className="font-semibold">₹{detailProduct.mrp !== undefined && detailProduct.mrp !== null ? detailProduct.mrp : 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Selling Price</div>
+                  <div className="font-semibold">₹{detailProduct.selling_price !== undefined && detailProduct.selling_price !== null ? detailProduct.selling_price : 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Cost Price</div>
+                  <div className="font-semibold">₹{detailProduct.cost_price !== undefined && detailProduct.cost_price !== null ? detailProduct.cost_price : 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Tax (%)</div>
+                  <div className="font-semibold">{detailProduct.gst_rate !== undefined && detailProduct.gst_rate !== null ? detailProduct.gst_rate : 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Fabric</div>
+                  <div className="font-semibold">{detailProduct.fabric || 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">GSM</div>
+                  <div className="font-semibold">{detailProduct.gsm !== undefined && detailProduct.gsm !== null ? detailProduct.gsm : 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Min Stock</div>
+                  <div className="font-semibold">{detailProduct.min_stock !== undefined && detailProduct.min_stock !== null ? detailProduct.min_stock : 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Max Stock</div>
+                  <div className="font-semibold">{detailProduct.maximum_stock !== undefined && detailProduct.maximum_stock !== null ? detailProduct.maximum_stock : 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">SKU Hierarchy</div>
+                  <div className="font-semibold">{detailProduct.sku_hierarchy !== undefined && detailProduct.sku_hierarchy !== null ? detailProduct.sku_hierarchy : 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Images (Raw)</div>
+                  <div className="font-semibold break-all">{Array.isArray(detailProduct.images) ? detailProduct.images.join(', ') : detailProduct.images || 'N/A'}</div>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <Button variant="outline" onClick={() => setDetailProduct(null)}>Close</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
       <Dialog open={popupImages.length > 0} onOpenChange={() => setPopupImages([])}>
         <DialogContent className="flex flex-col items-center justify-center max-w-md">
           {popupImages.length > 0 && (
