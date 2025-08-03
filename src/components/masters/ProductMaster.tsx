@@ -937,10 +937,10 @@ export function ProductMaster() {
                       <TableCell>
                         <div className="space-y-1">
                           <div>
-                            <span className="font-semibold">Total Price:</span> {product.mrp !== undefined && product.mrp !== null ? product.mrp : 'N/A'}
+                            <span className="font-semibold">MRP:</span> {product.mrp !== undefined && product.mrp !== null ? product.mrp : 'N/A'}
                           </div>
                           <div>
-                            <span className="font-semibold">Cost Price:</span> {product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : 'N/A'}
+                            <span className="font-semibold">Selling Price:</span> {product.selling_price !== undefined && product.selling_price !== null ? product.selling_price : 'N/A'}
                           </div>
                           <div>
                             <span className="font-semibold">Tax:</span> {product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 'N/A'}%
