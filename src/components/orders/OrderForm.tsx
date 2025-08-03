@@ -977,17 +977,23 @@ export function OrderForm() {
 
       
     </div>
-       <div>
-        <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
+      {/* Price */}
+      <div>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">Price (INR)</Label>
         <Input
-          value={product.gsm}
-          placeholder="GSM will be auto-selected from fabric"
-          disabled
-          className="bg-gray-50"
+          type="number"
+          value={product.price}
+          onChange={(e) =>
+            setFormData((prev) => ({
+              ...prev,
+              products: prev.products.map((p, i) =>
+                i === productIndex ? { ...p, price: parseFloat(e.target.value) || 0 } : p
+              ),
+            }))
+          }
+          placeholder="Enter price"
         />
       </div>
-
-      
                        <div className="space-y-2">
                         <Label>Product Description</Label>
                         <Textarea
