@@ -57,10 +57,8 @@ export function ProductMaster() {
       console.log('Fetching products...');
       const { data, error } = await supabase
         .from('product_master')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(50);
-      
+        .select('*');
+
       if (error) {
         console.error('Database error:', error);
         throw error;
@@ -391,11 +389,34 @@ export function ProductMaster() {
           const headers = jsonData[0] as string[];
           const rows = jsonData.slice(1) as any[][];
           
+          // Map headers to expected field names
+          const headerMap: { [key: string]: string } = {};
+          headers.forEach((header, idx) => {
+            let normalized = header.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+            // Map known header variants to expected keys
+            if (normalized.includes('name')) normalized = 'name';
+            if (normalized.includes('category')) normalized = 'category';
+            if (normalized.includes('sku')) normalized = 'sku';
+            if (normalized.includes('description')) normalized = 'description';
+            if (normalized.includes('images')) normalized = 'images';
+            if (normalized.includes('hsn')) normalized = 'hsn';
+            if (normalized.includes('gst_rate')) normalized = 'gst_rate';
+            if (normalized.includes('mrp')) normalized = 'mrp';
+            if (normalized.includes('cost_price')) normalized = 'cost_price';
+            if (normalized.includes('selling_price')) normalized = 'selling_price';
+            if (normalized.includes('fabric')) normalized = 'fabric';
+            if (normalized.includes('gsm')) normalized = 'gsm';
+            if (normalized.includes('min_stock')) normalized = 'min_stock';
+            if (normalized.includes('maximum_stock')) normalized = 'maximum_stock';
+            if (normalized.includes('sku_hierarchy')) normalized = 'sku_hierarchy';
+            headerMap[idx] = normalized;
+          });
+
           const products = rows.map(row => {
             const product: any = {};
-            headers.forEach((header, index) => {
-              if (row[index] !== undefined) {
-                product[header.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')] = row[index];
+            row.forEach((cell, idx) => {
+              if (cell !== undefined) {
+                product[headerMap[idx]] = cell;
               }
             });
             return product;
