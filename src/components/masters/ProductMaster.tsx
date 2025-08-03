@@ -25,6 +25,7 @@ interface BulkUploadResult {
 }
 
 export function ProductMaster() {
+  const [popupImage, setPopupImage] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductMaster[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
@@ -864,13 +865,16 @@ export function ProductMaster() {
                 <TableHeader>
                   <TableRow className="bg-gray-50">
                     <TableHead className="font-semibold">Product</TableHead>
-                    <TableHead className="font-semibold">Category</TableHead>
+                    <TableHead className="font-semibold">Images</TableHead>
+                    <TableHead className="font-semibold">HSN Code</TableHead>
+                    <TableHead className="font-semibold">Pricing</TableHead>
                     <TableHead className="font-semibold">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredProducts.map((product) => (
                     <TableRow key={product.id} className="hover:bg-gray-50/50">
+                      {/* Product Name and SKU */}
                       <TableCell>
                         <div>
                           <div className="font-semibold text-gray-900">
@@ -879,18 +883,60 @@ export function ProductMaster() {
                           <div className="text-sm text-muted-foreground">
                             SKU: {product.sku || 'N/A'}
                           </div>
-                          {product.description && (
-                            <div className="text-sm text-muted-foreground mt-1 line-clamp-2">
-                              {product.description}
-                            </div>
-                          )}
+                          <div className="text-sm text-muted-foreground">
+                            Desc.: {product.description || 'N/A'}
+                          </div>
                         </div>
                       </TableCell>
+                      {/* Images */}
                       <TableCell>
-                        <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-                          {product.category || 'Uncategorized'}
-                        </Badge>
+                        {(() => {
+                          const isValidUrl = (url: string) => {
+                            // Basic check for image URL
+                            return /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|svg)$/i.test(url.trim());
+                          };
+                          let imagesArr: string[] = [];
+                          if (Array.isArray(product.images)) {
+                            imagesArr = product.images;
+                          } else if (typeof product.images === 'string' && product.images.trim()) {
+                            imagesArr = product.images.split(',').map((img: string) => img.trim());
+                          }
+                          const validImages = imagesArr.filter(isValidUrl);
+                          if (validImages.length > 0) {
+                            return validImages.map((img, idx) => (
+                              <img
+                                key={idx}
+                                src={img}
+                                alt="Product"
+                                className="w-10 h-10 object-cover rounded mr-1 inline-block cursor-pointer"
+                                onClick={() => setPopupImage(img)}
+                                onError={e => { e.currentTarget.src = '/placeholder.svg'; }}
+                              />
+                            ));
+                          } else {
+                            return <span className="text-muted-foreground">No Images</span>;
+                          }
+                        })()}
                       </TableCell>
+                      {/* HSN Code */}
+                      <TableCell>
+                        {product.hsn || <span className="text-muted-foreground">N/A</span>}
+                      </TableCell>
+                      {/* Pricing */}
+                      <TableCell>
+                        <div className="space-y-1">
+                          <div>
+                            <span className="font-semibold">Total Price:</span> {product.mrp !== undefined && product.mrp !== null ? product.mrp : 'N/A'}
+                          </div>
+                          <div>
+                            <span className="font-semibold">Cost Price:</span> {product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : 'N/A'}
+                          </div>
+                          <div>
+                            <span className="font-semibold">Tax:</span> {product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 'N/A'}%
+                          </div>
+                        </div>
+                      </TableCell>
+                      {/* Actions */}
                       <TableCell>
                         <div className="flex items-center space-x-2">
                           <Button
@@ -919,6 +965,20 @@ export function ProductMaster() {
           )}
         </CardContent>
       </Card>
+
+      {/* Image Popup Dialog */}
+      <Dialog open={!!popupImage} onOpenChange={() => setPopupImage(null)}>
+        <DialogContent className="flex flex-col items-center justify-center max-w-md">
+          {popupImage && (
+            <img
+              src={popupImage}
+              alt="Product Preview"
+              className="w-full h-auto max-h-[400px] object-contain rounded shadow-lg"
+              onError={e => { e.currentTarget.src = '/placeholder.svg'; }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
