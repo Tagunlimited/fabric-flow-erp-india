@@ -253,20 +253,13 @@ export function OrderForm() {
 
   const scrollLeft = () => {
     if (sliderRef.current) {
-      const currentScroll = sliderRef.current.scrollLeft;
-      const itemWidth = 320; // Width of one item
-      const newScroll = Math.max(0, currentScroll - itemWidth);
-      sliderRef.current.scrollTo({ left: newScroll, behavior: 'smooth' });
+      sliderRef.current.scrollBy({ left: -320, behavior: 'smooth' });
     }
   };
 
   const scrollRight = () => {
     if (sliderRef.current) {
-      const currentScroll = sliderRef.current.scrollLeft;
-      const itemWidth = 320; // Width of one item
-      const maxScroll = sliderRef.current.scrollWidth - sliderRef.current.clientWidth;
-      const newScroll = Math.min(maxScroll, currentScroll + itemWidth);
-      sliderRef.current.scrollTo({ left: newScroll, behavior: 'smooth' });
+      sliderRef.current.scrollBy({ left: 320, behavior: 'smooth' });
     }
   };
 
@@ -746,12 +739,14 @@ export function OrderForm() {
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-6">
+                    
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                      <div className="lg:col-span-4 space-y-3">
-                        <Label className="text-base font-semibold text-gray-700">Product Category</Label>
+  {/* Left Column - Product Category */}
+  <div className="lg:col-span-4">
+     <Label className="text-base font-semibold text-gray-700">Product Category</Label>
                          
                          {/* Image-based Category Selector */}
-                         <div className="relative">
+                         <div className="relative"> {/* Added horizontal padding */}
                            <div className="w-[300px] h-[400px] bg-gradient-to-br from-gray-50 to-white border-2 border-gray-200 rounded-xl overflow-hidden relative shadow-lg hover:shadow-xl transition-all duration-300">
                              {/* Category Slider */}
                              <div 
@@ -794,7 +789,7 @@ export function OrderForm() {
 
                              {/* Lock Icon Overlay */}
                              {isCategoryLocked && (
-                               <div className="absolute inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center">
+                               <div className="absolute inset-0   flex items-center justify-center">
                                  <div className="bg-white rounded-full p-4 shadow-xl border-2 border-gray-200">
                                    <Lock className="w-8 h-8 text-gray-700" />
                                  </div>
@@ -848,281 +843,177 @@ export function OrderForm() {
                                </button>
                              )}
                            </div>
-                         </div>
-                       </div>
+                           </div>
+  </div>
 
-                      <div className="lg:col-span-4 space-y-3">
-                        <Label className="text-base font-semibold text-gray-700">Fabric</Label>
-                        <Select
-                          value={product.fabric_id}
-                          onValueChange={(value) => handleFabricSelect(productIndex, value)}
-                          disabled={!product.product_category_id}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder={product.product_category_id ? "Select fabric" : "Select category first"} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {getFilteredFabrics(productIndex).map((fabric) => (
-                              <SelectItem key={fabric.id} value={fabric.id}>
-                                {fabric.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+  {/* Right Column - 2 Rows × 2 Columns each */}
+  <div className="lg:col-span-8 grid grid-cols-1 gap-6">
+    {/* Row 1 */}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* Fabric */}
+      <div>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">Fabric</Label>
+        <Select
+          value={product.fabric_id}
+          onValueChange={(value) => handleFabricSelect(productIndex, value)}
+          disabled={!product.product_category_id}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder={product.product_category_id ? "Select fabric" : "Select category first"} />
+          </SelectTrigger>
+          <SelectContent>
+            {getFilteredFabrics(productIndex).map((fabric) => (
+              <SelectItem key={fabric.id} value={fabric.id}>
+                {fabric.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Size Type */}
+      <div>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">Size Type</Label>
+        <Select
+          value={product.size_type_id}
+          onValueChange={(value) => handleSizeTypeSelect(productIndex, value)}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Select size type" />
+          </SelectTrigger>
+          <SelectContent>
+            {sizeTypes.map((sizeType) => (
+              <SelectItem key={sizeType.id} value={sizeType.id}>
+                {sizeType.size_name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+{/* <div className="space-y-3">
+                        <Label>Color</Label>
+                        {product.fabric_id ? (
+                          <Select
+                            value={product.color}
+                            onValueChange={(value) => handleColorSelect(productIndex, value)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select color" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                                          {fabricVariants
+                              .filter(variant => variant.fabric_id === product.fabric_id)
+                              .map((variant) => (
+                                <SelectItem key={variant.id} value={variant.color}>
+                                  {variant.color}
+                                </SelectItem>
+                              ))
+                            }
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input
+                            value={product.color}
+                            onChange={(e) => setFormData(prev => ({
+                              ...prev,
+                              products: prev.products.map((p, i) => 
+                                i === productIndex ? { ...p, color: e.target.value } : p
+                              )
+                            }))}
+                            placeholder={product.product_category_id ? "Select fabric first to see available colors" : "Select category and fabric first"}
+                            disabled
+                          />
+                        )}
+                      </div> */}
+                      
+    {/* Row 2 */}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* COLOR */}
+      <div >
+                        <Label className="text-base font-semibold text-gray-700 mb-2 block">Color</Label>
+                        {product.fabric_id ? (
+                          <Select
+                            value={product.color}
+                            onValueChange={(value) => handleColorSelect(productIndex, value)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select color" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                                          {fabricVariants
+                              .filter(variant => variant.fabric_id === product.fabric_id)
+                              .map((variant) => (
+                                <SelectItem key={variant.id} value={variant.color}>
+                                  {variant.color}
+                                </SelectItem>
+                              ))
+                            }
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input
+                            value={product.color}
+                            onChange={(e) => setFormData(prev => ({
+                              ...prev,
+                              products: prev.products.map((p, i) => 
+                                i === productIndex ? { ...p, color: e.target.value } : p
+                              )
+                            }))}
+                            placeholder={product.product_category_id ? "Select fabric first to see available colors" : "Select category and fabric first"}
+                            disabled
+                          />
+                        )}
                       </div>
+      <div>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
+        <Input
+          value={product.gsm}
+          placeholder="GSM will be auto-selected from fabric"
+          disabled
+          className="bg-gray-50"
+        />
+      </div>
 
-                      <div className="lg:col-span-4 space-y-3">
-                        <Label className="text-base font-semibold text-gray-700">Size Type</Label>
-                        <Select
-                          value={product.size_type_id}
-                          onValueChange={(value) => handleSizeTypeSelect(productIndex, value)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select size type" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {sizeTypes.map((sizeType) => (
-                              <SelectItem key={sizeType.id} value={sizeType.id}>
-                                {sizeType.size_name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
+      
+    </div>
+       <div>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
+        <Input
+          value={product.gsm}
+          placeholder="GSM will be auto-selected from fabric"
+          disabled
+          className="bg-gray-50"
+        />
+      </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label>GSM (Auto-selected)</Label>
-                        <Input
-                          value={product.gsm}
-                          placeholder="GSM will be auto-selected from fabric"
-                          disabled
-                          className="bg-gray-50"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Price (INR)</Label>
-                        <Input
-                          type="number"
-                          value={product.price}
+      
+                       <div className="space-y-2">
+                        <Label>Product Description</Label>
+                        <Textarea
+                          value={product.product_description}
                           onChange={(e) => setFormData(prev => ({
                             ...prev,
                             products: prev.products.map((p, i) => 
-                              i === productIndex ? { ...p, price: parseFloat(e.target.value) || 0 } : p
+                              i === productIndex ? { ...p, product_description: e.target.value } : p
                             )
                           }))}
-                          placeholder="Enter price"
+                          placeholder="Enter product description"
+                          rows={2}
+                          className="resize-none"
                         />
                       </div>
-                    </div>
 
-                    {/* Selected Category Image Display */}
-                    {product.category_image_url && (
-                      <div className="space-y-3">
-                        <Label className="text-base font-semibold text-gray-700">Selected Category</Label>
-                        <div className="relative">
-                          {/* Main Image Container */}
-                          <div className="flex items-center justify-center p-4 border-2 border-green-200 rounded-xl bg-gradient-to-br from-green-50 to-white shadow-lg mb-3">
-                            <img 
-                              src={product.category_image_url} 
-                              alt="Selected Category" 
-                              className="max-h-64 w-full object-contain rounded-lg cursor-pointer hover:scale-105 transition-transform duration-200"
-                              onClick={() => handleImageClick(productIndex, 'category', product.category_image_url)}
-                            />
-                            <p className="text-center text-sm text-muted-foreground mt-2">Click to see full view</p>
-                          </div>
-                          
-                          {/* Thumbnail */}
-                          <div className="flex justify-center">
-                            <div 
-                              className="w-16 h-16 border-2 border-primary rounded-lg overflow-hidden cursor-pointer hover:scale-105 transition-transform duration-200"
-                              onClick={() => handleImageClick(productIndex, 'category', product.category_image_url)}
-                            >
-                              <img 
-                                src={product.category_image_url} 
-                                alt="Category Thumbnail" 
-                                className="w-full h-full object-cover"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                      
+  </div>
+  
+</div>
 
-                    {/* Image Gallery Sections */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Reference Images Gallery */}
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium">Reference Images</Label>
-                        <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
-                          <input
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            onChange={(e) => {
-                              const files = Array.from(e.target.files || []);
-                              handleImageUpload(productIndex, 'reference', files);
-                            }}
-                            className="hidden"
-                            id={`ref-images-${productIndex}`}
-                          />
-                          <label htmlFor={`ref-images-${productIndex}`} className="cursor-pointer block">
-                            <Image className="w-8 h-8 mx-auto mb-2 text-primary" />
-                            <p className="text-sm font-medium text-foreground">Upload Reference Images</p>
-                            <p className="text-xs text-muted-foreground">Up to 5 images • Click thumbnails to view</p>
-                          </label>
-                          
-                          {product.reference_images.length > 0 && (
-                            <div className="mt-4">
-                              <Badge variant="secondary" className="bg-primary/20 text-primary mb-3">
-                                {product.reference_images.length} file(s) selected
-                              </Badge>
-                              
-                              {/* Main Image Display */}
-                              <div className="mb-3 p-2 border-2 border-primary/30 rounded-lg bg-white">
-                                <img 
-                                  src={getMainImage(productIndex, 'reference') || URL.createObjectURL(product.reference_images[0])} 
-                                  alt="Main Reference"
-                                  className="w-full h-64 object-contain rounded cursor-pointer hover:scale-105 transition-transform duration-200"
-                                />
-                                <p className="text-center text-sm text-muted-foreground mt-2">Click to see full view</p>
-                              </div>
-                              
-                              {/* Thumbnail Gallery */}
-                              <div className="flex gap-2 overflow-x-auto pb-2">
-                                {product.reference_images.map((file, idx) => (
-                                  <div 
-                                    key={idx} 
-                                    className="flex-shrink-0 cursor-pointer hover:scale-105 transition-transform duration-200"
-                                    onClick={() => handleImageClick(productIndex, 'reference', URL.createObjectURL(file))}
-                                  >
-                                    <img 
-                                      src={URL.createObjectURL(file)} 
-                                      alt={`Reference ${idx + 1}`}
-                                      className={`w-16 h-16 object-cover rounded border-2 ${
-                                        getMainImage(productIndex, 'reference') === URL.createObjectURL(file) 
-                                          ? 'border-primary' 
-                                          : 'border-gray-200'
-                                      }`}
-                                    />
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
 
-                      {/* Mockup Images Gallery */}
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium">Mockup Images</Label>
-                        <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
-                          <input
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            onChange={(e) => {
-                              const files = Array.from(e.target.files || []);
-                              handleImageUpload(productIndex, 'mockup', files);
-                            }}
-                            className="hidden"
-                            id={`mockup-images-${productIndex}`}
-                          />
-                          <label htmlFor={`mockup-images-${productIndex}`} className="cursor-pointer block">
-                            <Image className="w-8 h-8 mx-auto mb-2 text-primary" />
-                            <p className="text-sm font-medium text-foreground">Upload Mockup Images</p>
-                            <p className="text-xs text-muted-foreground">Up to 5 images • Click thumbnails to view</p>
-                          </label>
-                          
-                          {product.mockup_images.length > 0 && (
-                            <div className="mt-4">
-                              <Badge variant="secondary" className="bg-primary/20 text-primary mb-3">
-                                {product.mockup_images.length} file(s) selected
-                              </Badge>
-                              
-                              {/* Main Image Display */}
-                              <div className="mb-3 p-2 border-2 border-primary/30 rounded-lg bg-white">
-                                <img 
-                                  src={getMainImage(productIndex, 'mockup') || URL.createObjectURL(product.mockup_images[0])} 
-                                  alt="Main Mockup"
-                                  className="w-full h-64 object-contain rounded cursor-pointer hover:scale-105 transition-transform duration-200"
-                                />
-                                <p className="text-center text-sm text-muted-foreground mt-2">Click to see full view</p>
-                              </div>
-                              
-                              {/* Thumbnail Gallery */}
-                              <div className="flex gap-2 overflow-x-auto pb-2">
-                                {product.mockup_images.map((file, idx) => (
-                                  <div 
-                                    key={idx} 
-                                    className="flex-shrink-0 cursor-pointer hover:scale-105 transition-transform duration-200"
-                                    onClick={() => handleImageClick(productIndex, 'mockup', URL.createObjectURL(file))}
-                                  >
-                                    <img 
-                                      src={URL.createObjectURL(file)} 
-                                      alt={`Mockup ${idx + 1}`}
-                                      className={`w-16 h-16 object-cover rounded border-2 ${
-                                        getMainImage(productIndex, 'mockup') === URL.createObjectURL(file) 
-                                          ? 'border-primary' 
-                                          : 'border-gray-200'
-                                      }`}
-                                    />
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
+                    
 
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium">Attachments</Label>
-                        <div className="border-2 border-dashed border-primary/30 rounded-lg p-6 text-center hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
-                          <input
-                            type="file"
-                            multiple
-                            onChange={(e) => {
-                              const files = Array.from(e.target.files || []);
-                              setFormData(prev => ({
-                                ...prev,
-                                products: prev.products.map((p, i) => 
-                                  i === productIndex ? { ...p, attachments: files } : p
-                                )
-                              }));
-                            }}
-                            className="hidden"
-                            id={`attachments-${productIndex}`}
-                          />
-                          <label htmlFor={`attachments-${productIndex}`} className="cursor-pointer block">
-                            <Upload className="w-10 h-10 mx-auto mb-3 text-primary" />
-                            <p className="text-sm font-medium text-foreground">Upload Attachments</p>
-                            <p className="text-xs text-muted-foreground mt-1">Any file type • PDF, DOC, etc.</p>
-                            {product.attachments.length > 0 && (
-                              <div className="mt-3">
-                                <Badge variant="secondary" className="bg-primary/20 text-primary">
-                                  {product.attachments.length} file(s) selected
-                                </Badge>
-                                <div className="mt-2 max-h-20 overflow-y-auto">
-                                  {product.attachments.slice(0, 3).map((file, idx) => (
-                                    <div key={idx} className="text-xs text-muted-foreground truncate bg-muted/50 rounded px-2 py-1 mt-1">
-                                      {file.name}
-                                    </div>
-                                  ))}
-                                  {product.attachments.length > 3 && (
-                                    <p className="text-xs text-muted-foreground mt-1">
-                                      +{product.attachments.length - 3} more files
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </label>
-                        </div>
-                      </div>
-
+                                          {/* Selected Category Image Display */}
+                      
                     {/* Image Gallery Sections */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       {/* Reference Images Gallery */}
@@ -1297,7 +1188,7 @@ export function OrderForm() {
                     {/* Removed extra closing div to fix JSX tag mismatch */}
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
+                      {/* <div className="space-y-2">
                         <Label>Product Description</Label>
                         <Textarea
                           value={product.product_description}
@@ -1311,9 +1202,9 @@ export function OrderForm() {
                           rows={2}
                           className="resize-none"
                         />
-                      </div>
+                      </div> */}
 
-                      <div className="space-y-2">
+                      {/* <div className="space-y-2">
                         <Label>Color</Label>
                         {product.fabric_id ? (
                           <Select
@@ -1347,7 +1238,7 @@ export function OrderForm() {
                             disabled
                           />
                         )}
-                      </div>
+                      </div> */}
                     </div>
 
                     {/* Size Quantities */}
