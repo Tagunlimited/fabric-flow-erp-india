@@ -354,13 +354,42 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose }: ErpSidebarProp
         <div className="p-3 sm:p-4 border-t border-primary-foreground/20">
           {!collapsed && (
             <div className="text-center text-primary-foreground/70 text-xs">
-              <p> 2024 Scissors ERP</p>
+              <p>2024 Scissors ERP</p>
               <p className="mt-1">v1.0.0</p>
               {(profile || isPreConfiguredAdmin) && (
                 <p className="mt-2 text-primary-foreground/90 font-medium capitalize">
                   {profile?.full_name || (isPreConfiguredAdmin ? 'System Admin' : '')}
                 </p>
               )}
+              <p className="mt-2">
+                Powered by <br />
+                <a
+                  href="https://sellerskacentral.in/"
+                  className="animated-sellers"
+                  style={{
+                    fontSize: '20px',
+                    fontWeight: 'bold',
+                    display: 'inline-block',
+                    marginTop: '4px',
+                    color: '#fff',
+                    textShadow: '0 0 8px #2196f3, 0 0 16px #2196f3',
+                  }}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Sellers ka Central
+                </a>
+              </p>
+              <style>{`
+                .animated-sellers {
+                  animation: sellersPulse 1.5s infinite alternate;
+                }
+                @keyframes sellersPulse {
+                  0% { letter-spacing: 0px; text-shadow: 0 0 8px #2196f3, 0 0 16px #2196f3; }
+                  50% { letter-spacing: 2px; text-shadow: 0 0 16px #fff, 0 0 32px #2196f3; }
+                  100% { letter-spacing: 0px; text-shadow: 0 0 8px #2196f3, 0 0 16px #2196f3; }
+                }
+              `}</style>
             </div>
           )}
         </div>
