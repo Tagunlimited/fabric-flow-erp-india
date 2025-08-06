@@ -2,12 +2,12 @@ import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/utils";
 import Papa from "papaparse";
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/Dialog";;
-import { Button } from "../ui/Button";
-import { Input } from "../ui/Input";
-import { Label } from "../ui/Label";
-import { Card, CardHeader, CardTitle, CardContent } from "../ui/Card";
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../ui/Table";
-import { Badge } from "../ui/Badge";
+import { Button } from "@/components/ui/Button";;
+import { Input } from "@/components/ui/Input";
+import { Label } from "@/components/ui/Label";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/Table";
+import { Badge } from "@/components/ui/Badge";
 import { Plus, Edit, Trash2, Search } from "lucide-react";
 
 const BULK_TEMPLATE_HEADERS = [
