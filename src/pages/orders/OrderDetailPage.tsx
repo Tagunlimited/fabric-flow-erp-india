@@ -101,6 +101,23 @@ interface OrderItem {
   attachments?: string[];
 }
 
+// Helper function to extract images from specifications
+const extractImagesFromSpecifications = (specifications: any) => {
+  if (!specifications) return { reference_images: [], mockup_images: [], attachments: [] };
+  
+  try {
+    const parsed = typeof specifications === 'string' ? JSON.parse(specifications) : specifications;
+    return {
+      reference_images: parsed.reference_images || [],
+      mockup_images: parsed.mockup_images || [],
+      attachments: parsed.attachments || []
+    };
+  } catch (error) {
+    console.error('Error parsing specifications:', error);
+    return { reference_images: [], mockup_images: [], attachments: [] };
+  }
+};
+
 export default function OrderDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -114,6 +131,8 @@ export default function OrderDetailPage() {
   const [productCategories, setProductCategories] = useState<{ [key: string]: ProductCategory }>({});
   const [loading, setLoading] = useState(true);
   const [cancellingOrder, setCancellingOrder] = useState(false);
+  const [selectedMockupImages, setSelectedMockupImages] = useState<{ [key: number]: number }>({});
+  const [selectedReferenceImages, setSelectedReferenceImages] = useState<{ [key: number]: number }>({});
 
   useEffect(() => {
     if (id) {
@@ -464,66 +483,182 @@ export default function OrderDetailPage() {
                               </div>
                             )}
 
-                            {/* Mockup Images with better layout */}
-                            {item.mockup_images && item.mockup_images.length > 0 && (
-                              <div>
-                                <p className="text-sm font-medium text-muted-foreground mb-3">Mockup Images:</p>
-                                <div className="grid grid-cols-1 gap-3">
-                                  {item.mockup_images.map((url: string, idx: number) => (
-                                    <div key={idx} className="aspect-[13/10] w-full overflow-hidden rounded-lg border shadow-sm">
-                                      <img 
-                                        src={url} 
-                                        alt={`Mockup ${idx + 1}`}
-                                        className="w-full h-full object-contain bg-muted cursor-pointer hover:scale-105 transition-transform duration-300"
-                                        onClick={() => {
-                                          const modal = document.createElement('div');
-                                          modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
-                                          modal.innerHTML = `
-                                            <div class="relative max-w-4xl max-h-full">
-                                              <img src="${url}" alt="Mockup ${idx + 1}" class="max-w-full max-h-full object-contain rounded-lg" />
-                                              <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
-                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                  <line x1="18" y1="6" x2="6" y2="18"></line>
-                                                  <line x1="6" y1="6" x2="18" y2="18"></line>
-                                                </svg>
-                                              </button>
-                                            </div>
-                                          `;
-                                          modal.onclick = (e) => {
-                                            if (e.target === modal) {
-                                              document.body.removeChild(modal);
-                                            }
-                                          };
-                                          document.body.appendChild(modal);
-                                        }}
-                                        onError={(e) => {
-                                          e.currentTarget.style.display = 'none';
-                                        }}
-                                      />
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
+                                                         {/* Mockup Images - Amazon Style Layout */}
+                             {(() => {
+                               const { mockup_images } = extractImagesFromSpecifications(item.specifications);
+                               return mockup_images && mockup_images.length > 0 ? (
+                                 <div>
+                                   <p className="text-sm font-medium text-muted-foreground mb-3">Mockup Images:</p>
+                                   <div className="space-y-3">
+                                     {/* Main large image */}
+                                     <div className="aspect-[13/15] w-full overflow-hidden rounded-lg border shadow-md">
+                                       <img 
+                                         src={mockup_images[selectedMockupImages[index] || 0]} 
+                                         alt="Main Mockup"
+                                         className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
+                                         onClick={() => {
+                                           const currentImage = mockup_images[selectedMockupImages[index] || 0];
+                                           const modal = document.createElement('div');
+                                           modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
+                                           modal.innerHTML = `
+                                             <div class="relative max-w-4xl max-h-full">
+                                               <img src="${currentImage}" alt="Main Mockup" class="max-w-full max-h-full object-contain rounded-lg" />
+                                               <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
+                                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                   <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                   <line x1="6" y1="6" x2="18" y2="18"></line>
+                                                 </svg>
+                                               </button>
+                                             </div>
+                                           `;
+                                           modal.onclick = (e) => {
+                                             if (e.target === modal) {
+                                               document.body.removeChild(modal);
+                                             }
+                                           };
+                                           document.body.appendChild(modal);
+                                         }}
+                                         onError={(e) => {
+                                           e.currentTarget.style.display = 'none';
+                                         }}
+                                       />
+                                     </div>
+                                     
+                                     {/* Thumbnail images */}
+                                     {mockup_images.length > 1 && (
+                                       <div className="grid grid-cols-4 gap-2">
+                                         {mockup_images.map((url: string, idx: number) => (
+                                           <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm">
+                                             <img 
+                                               src={url} 
+                                               alt={`Mockup ${idx + 1}`}
+                                               className={`w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300 ${
+                                                 (selectedMockupImages[index] || 0) === idx ? 'ring-2 ring-primary' : ''
+                                               }`}
+                                               onClick={() => {
+                                                 setSelectedMockupImages(prev => ({
+                                                   ...prev,
+                                                   [index]: idx
+                                                 }));
+                                               }}
+                                               onError={(e) => {
+                                                 e.currentTarget.style.display = 'none';
+                                               }}
+                                             />
+                                           </div>
+                                         ))}
+                                       </div>
+                                     )}
+                                   </div>
+                                 </div>
+                               ) : null;
+                             })()}
 
-                            {/* Reference Images */}
-                            {item.reference_images && item.reference_images.length > 0 && (
-                              <div>
-                                <p className="text-sm font-medium text-muted-foreground mb-3">Reference Images:</p>
-                                <div className="grid grid-cols-2 gap-3">
-                                  {item.reference_images.slice(0, 4).map((imgUrl: string, idx: number) => (
-                                    <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm">
-                                      <img 
-                                        src={imgUrl} 
-                                        alt={`Reference ${idx + 1}`}
-                                        className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300"
-                                        onClick={() => window.open(imgUrl, '_blank')}
-                                      />
-                                    </div>
-                                  ))}
+                             {/* Reference Images - Amazon Style Layout */}
+                             {(() => {
+                               const { reference_images } = extractImagesFromSpecifications(item.specifications);
+                               return reference_images && reference_images.length > 0 ? (
+                                 <div>
+                                   <p className="text-sm font-medium text-muted-foreground mb-3">Reference Images:</p>
+                                   <div className="space-y-3">
+                                     {/* Main large image */}
+                                     <div className="aspect-[13/15] w-full overflow-hidden rounded-lg border shadow-md">
+                                       <img 
+                                         src={reference_images[selectedReferenceImages[index] || 0]} 
+                                         alt="Main Reference"
+                                         className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
+                                         onClick={() => {
+                                           const currentImage = reference_images[selectedReferenceImages[index] || 0];
+                                           const modal = document.createElement('div');
+                                           modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
+                                           modal.innerHTML = `
+                                             <div class="relative max-w-4xl max-h-full">
+                                               <img src="${currentImage}" alt="Main Reference" class="max-w-full max-h-full object-contain rounded-lg" />
+                                               <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
+                                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                   <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                   <line x1="6" y1="6" x2="18" y2="18"></line>
+                                                 </svg>
+                                               </button>
+                                             </div>
+                                           `;
+                                           modal.onclick = (e) => {
+                                             if (e.target === modal) {
+                                               document.body.removeChild(modal);
+                                             }
+                                           };
+                                           document.body.appendChild(modal);
+                                         }}
+                                         onError={(e) => {
+                                           e.currentTarget.style.display = 'none';
+                                         }}
+                                       />
+                                     </div>
+                                     
+                                     {/* Thumbnail images */}
+                                     {reference_images.length > 1 && (
+                                       <div className="grid grid-cols-4 gap-2">
+                                         {reference_images.map((imgUrl: string, idx: number) => (
+                                           <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm">
+                                             <img 
+                                               src={imgUrl} 
+                                               alt={`Reference ${idx + 1}`}
+                                               className={`w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300 ${
+                                                 (selectedReferenceImages[index] || 0) === idx ? 'ring-2 ring-primary' : ''
+                                               }`}
+                                               onClick={() => {
+                                                 setSelectedReferenceImages(prev => ({
+                                                   ...prev,
+                                                   [index]: idx
+                                                 }));
+                                               }}
+                                               onError={(e) => {
+                                                 e.currentTarget.style.display = 'none';
+                                               }}
+                                             />
+                                           </div>
+                                         ))}
+                                       </div>
+                                     )}
+                                   </div>
+                                 </div>
+                               ) : null;
+                             })()}
+
+                            {/* Attachments */}
+                            {(() => {
+                              const { attachments } = extractImagesFromSpecifications(item.specifications);
+                              return attachments && attachments.length > 0 ? (
+                                <div>
+                                  <p className="text-sm font-medium text-muted-foreground mb-3">Attachments:</p>
+                                  <div className="space-y-2">
+                                    {attachments.map((attachmentUrl: string, idx: number) => (
+                                      <div key={idx} className="flex items-center justify-between p-3 bg-muted/20 rounded-lg border">
+                                        <div className="flex items-center space-x-3">
+                                          <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
+                                            <FileText className="w-4 h-4 text-primary" />
+                                          </div>
+                                          <div>
+                                            <p className="text-sm font-medium">Attachment {idx + 1}</p>
+                                            <p className="text-xs text-muted-foreground">
+                                              {attachmentUrl.split('/').pop() || 'File'}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => window.open(attachmentUrl, '_blank')}
+                                        >
+                                          <Download className="w-4 h-4 mr-1" />
+                                          Download
+                                        </Button>
+                                      </div>
+                                    ))}
+                                  </div>
                                 </div>
-                              </div>
-                            )}
+                              ) : null;
+                            })()}
                           </div>
 
                           {/* Product Details Section */}
@@ -595,31 +730,41 @@ export default function OrderDetailPage() {
                                 )}
 
                                 {/* Branding Details */}
-                                {item.specifications && (
-                                  <div>
-                                    <p className="text-sm font-medium text-muted-foreground mb-3">Branding Details:</p>
-                                    <div className="space-y-3">
-                                      {JSON.parse(item.specifications).branding_items?.map((branding: any, idx: number) => (
-                                        <div key={idx} className="bg-muted/20 rounded-lg p-4 border">
-                                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                            <div>
-                                              <span className="text-xs text-muted-foreground block">Type</span>
-                                              <span className="font-medium">{branding.branding_type}</span>
+                                {item.specifications && (() => {
+                                  try {
+                                    const parsed = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
+                                    const brandingItems = parsed.branding_items || [];
+                                    
+                                    return brandingItems.length > 0 ? (
+                                      <div>
+                                        <p className="text-sm font-medium text-muted-foreground mb-3">Branding Details:</p>
+                                        <div className="space-y-3">
+                                          {brandingItems.map((branding: any, idx: number) => (
+                                            <div key={idx} className="bg-muted/20 rounded-lg p-4 border">
+                                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                <div>
+                                                  <span className="text-xs text-muted-foreground block">Type</span>
+                                                  <span className="font-medium">{branding.branding_type}</span>
+                                                </div>
+                                                <div>
+                                                  <span className="text-xs text-muted-foreground block">Placement</span>
+                                                  <span className="font-medium">{branding.placement}</span>
+                                                </div>
+                                                <div>
+                                                  <span className="text-xs text-muted-foreground block">Size</span>
+                                                  <span className="font-medium">{branding.measurement}</span>
+                                                </div>
+                                              </div>
                                             </div>
-                                            <div>
-                                              <span className="text-xs text-muted-foreground block">Placement</span>
-                                              <span className="font-medium">{branding.placement}</span>
-                                            </div>
-                                            <div>
-                                              <span className="text-xs text-muted-foreground block">Size</span>
-                                              <span className="font-medium">{branding.measurement}</span>
-                                            </div>
-                                          </div>
+                                          ))}
                                         </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
+                                      </div>
+                                    ) : null;
+                                  } catch (error) {
+                                    console.error('Error parsing branding items:', error);
+                                    return null;
+                                  }
+                                })()}
                                 
                                 {item.remarks && (
                                   <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">

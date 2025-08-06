@@ -514,6 +514,91 @@ export function OrderForm() {
     return { subtotal, gstAmount, grandTotal, balance };
   };
 
+  // Upload images to Supabase storage
+  const uploadOrderImages = async (orderId: string, productIndex: number, product: Product) => {
+    const uploadedImages: { reference_images?: string[], mockup_images?: string[], attachments?: string[] } = {};
+
+    try {
+      // Upload reference images to order-images bucket
+      if (product.reference_images && product.reference_images.length > 0) {
+        const referenceUrls: string[] = [];
+        for (let i = 0; i < product.reference_images.length; i++) {
+          const file = product.reference_images[i];
+          const fileExt = file.name.split('.').pop();
+          const fileName = `${orderId}_product${productIndex}_reference_${i + 1}.${fileExt}`;
+          const filePath = `${orderId}/${fileName}`;
+
+          const { error: uploadError } = await supabase.storage
+            .from('order-images')
+            .upload(filePath, file);
+
+          if (uploadError) throw uploadError;
+
+          const { data } = supabase.storage
+            .from('order-images')
+            .getPublicUrl(filePath);
+
+          referenceUrls.push(data.publicUrl);
+        }
+        uploadedImages.reference_images = referenceUrls;
+      }
+
+      // Upload mockup images to order-images bucket
+      if (product.mockup_images && product.mockup_images.length > 0) {
+        const mockupUrls: string[] = [];
+        for (let i = 0; i < product.mockup_images.length; i++) {
+          const file = product.mockup_images[i];
+          const fileExt = file.name.split('.').pop();
+          const fileName = `${orderId}_product${productIndex}_mockup_${i + 1}.${fileExt}`;
+          const filePath = `${orderId}/${fileName}`;
+
+          const { error: uploadError } = await supabase.storage
+            .from('order-images')
+            .upload(filePath, file);
+
+          if (uploadError) throw uploadError;
+
+          const { data } = supabase.storage
+            .from('order-images')
+            .getPublicUrl(filePath);
+
+          mockupUrls.push(data.publicUrl);
+        }
+        uploadedImages.mockup_images = mockupUrls;
+      }
+
+      // Upload attachments to order-attachments bucket
+      if (product.attachments && product.attachments.length > 0) {
+        const attachmentUrls: string[] = [];
+        for (let i = 0; i < product.attachments.length; i++) {
+          const file = product.attachments[i];
+          const fileExt = file.name.split('.').pop();
+          const fileName = `${orderId}_product${productIndex}_attachment_${i + 1}.${fileExt}`;
+          const filePath = `${orderId}/${fileName}`;
+
+          const { error: uploadError } = await supabase.storage
+            .from('order-attachments')
+            .upload(filePath, file);
+
+          if (uploadError) throw uploadError;
+
+          const { data } = supabase.storage
+            .from('order-attachments')
+            .getPublicUrl(filePath);
+
+          attachmentUrls.push(data.publicUrl);
+        }
+        uploadedImages.attachments = attachmentUrls;
+      }
+
+      return uploadedImages;
+    } catch (error) {
+      console.error('Error uploading images:', error);
+      toast.error('Failed to upload images');
+      return {};
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -548,10 +633,14 @@ export function OrderForm() {
 
       if (orderError) throw orderError;
 
-      // Insert order items
-      for (const product of formData.products) {
+      // Insert order items with uploaded images
+      for (let productIndex = 0; productIndex < formData.products.length; productIndex++) {
+        const product = formData.products[productIndex];
         const totalQuantity = Object.values(product.sizes_quantities || {}).reduce((total, qty) => total + qty, 0);
         const itemTotal = totalQuantity * product.price;
+        
+        // Upload images for this product
+        const uploadedImages = await uploadOrderImages(orderResult.id, productIndex, product);
         
         const orderItemData = {
           order_id: orderResult.id,
@@ -569,7 +658,10 @@ export function OrderForm() {
           size_type_id: product.size_type_id,
           sizes_quantities: product.sizes_quantities,
           specifications: JSON.stringify({
-            branding_items: product.branding_items
+            branding_items: product.branding_items,
+            reference_images: uploadedImages.reference_images || [],
+            mockup_images: uploadedImages.mockup_images || [],
+            attachments: uploadedImages.attachments || []
           }) as any
         };
 
