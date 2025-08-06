@@ -356,11 +356,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose }: ErpSidebarProp
             <div className="text-center text-primary-foreground/70 text-xs">
               <p>2024 Scissors ERP</p>
               <p className="mt-1">v1.0.0</p>
-              {(profile || isPreConfiguredAdmin) && (
-                <p className="mt-2 text-primary-foreground/90 font-medium capitalize">
-                  {profile?.full_name || (isPreConfiguredAdmin ? 'System Admin' : '')}
-                </p>
-              )}
+              
               <p className="mt-2">
                 Powered by <br />
                 <a

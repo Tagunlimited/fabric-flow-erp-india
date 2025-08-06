@@ -10,7 +10,17 @@ interface ProtectedRouteProps {
 
 export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
   const { user, profile, loading } = useAuth();
-  
+
+  // Show loader while session is restoring
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <span className="ml-4 text-lg text-muted-foreground">Loading...</span>
+      </div>
+    );
+  }
+
   // Pre-configured admin user - bypass approval process
   const isPreConfiguredAdmin = user?.email === 'ecom@tagunlimitedclothing.com';
   // Allow access even without profile to handle RLS policy issues
@@ -38,7 +48,7 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
 
   // Allow pre-configured admin to access system even without profile
   if (isPreConfiguredAdmin) {
-    return <>{children}</>;
+    return <>{children}</>; 
   }
 
   if (profile?.status === 'pending_approval') {
