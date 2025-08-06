@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/utils";
 import Papa from "papaparse";
-import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/Dialog";;
-import { Button } from "@/components/ui/Button";;
-import { Input } from "@/components/ui/Input";
-import { Label } from "@/components/ui/Label";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/Table";
-import { Badge } from "@/components/ui/Badge";
+import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";;
+import { Button } from "@/components/ui/button";;
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import { Plus, Edit, Trash2, Search } from "lucide-react";
 
 const BULK_TEMPLATE_HEADERS = [
