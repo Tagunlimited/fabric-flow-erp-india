@@ -31,6 +31,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Helper: check if login expired
+  const isLoginExpired = () => {
+    const loginTime = localStorage.getItem('login_timestamp');
+    if (!loginTime) return false;
+    const now = Date.now();
+    return now - parseInt(loginTime, 10) > 1 * 24 * 60 * 60 * 1000; // 7 days
+  };
+
   const refreshProfile = async () => {
     if (user) {
       try {
@@ -49,6 +57,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       await authService.signOut();
       setUser(null);
       setProfile(null);
+      localStorage.removeItem('login_timestamp');
       toast.success('Signed out successfully');
     } catch (error) {
       toast.error('Error signing out');
@@ -56,11 +65,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
+    // Get initial session, try to refresh if missing
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      let user = session?.user ?? null;
+      if (!user && session?.refresh_token) {
+        // Try to refresh session if possible
+        const { data: refreshed } = await supabase.auth.refreshSession({ refresh_token: session.refresh_token });
+        user = refreshed.session?.user ?? null;
+      }
+      if (user) {
+        if (isLoginExpired()) {
+          signOut();
+          return;
+        }
+        setUser(user);
         refreshProfile();
+      } else {
+        setUser(null);
       }
       setLoading(false);
     });
@@ -69,12 +90,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
-      // Only handle SIGNED_OUT and SIGNED_IN events to prevent auto-logout on navigation
       if (event === 'SIGNED_OUT') {
         setUser(null);
         setProfile(null);
         setLoading(false);
+        localStorage.removeItem('login_timestamp');
       } else if (event === 'SIGNED_IN' && session?.user) {
+        localStorage.setItem('login_timestamp', Date.now().toString());
         setUser(session.user);
         await refreshProfile();
         setLoading(false);
@@ -90,6 +112,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
   useEffect(() => {
     if (user) {
       refreshProfile();
+    }
+  }, [user]);
+
+  // On every mount, check for expiry and auto logout if needed
+  useEffect(() => {
+    if (user && isLoginExpired()) {
+      signOut();
     }
   }, [user]);
 
