@@ -491,7 +491,7 @@ export default function OrderDetailPage() {
                                    <p className="text-sm font-medium text-muted-foreground mb-3">Mockup Images:</p>
                                    <div className="space-y-3">
                                      {/* Main large image */}
-                                     <div className="aspect-[13/15] w-full overflow-hidden rounded-lg border shadow-md">
+                                     <div className="aspect-[6/8] w-full overflow-hidden rounded-lg border shadow-md">
                                        <img 
                                          src={mockup_images[selectedMockupImages[index] || 0]} 
                                          alt="Main Mockup"
@@ -562,7 +562,7 @@ export default function OrderDetailPage() {
                                    <p className="text-sm font-medium text-muted-foreground mb-3">Reference Images:</p>
                                    <div className="space-y-3">
                                      {/* Main large image */}
-                                     <div className="aspect-[13/15] w-full overflow-hidden rounded-lg border shadow-md">
+                                     <div className="aspect-[6/8] w-full overflow-hidden rounded-lg border shadow-md">
                                        <img 
                                          src={reference_images[selectedReferenceImages[index] || 0]} 
                                          alt="Main Reference"
@@ -625,40 +625,7 @@ export default function OrderDetailPage() {
                                ) : null;
                              })()}
 
-                            {/* Attachments */}
-                            {(() => {
-                              const { attachments } = extractImagesFromSpecifications(item.specifications);
-                              return attachments && attachments.length > 0 ? (
-                                <div>
-                                  <p className="text-sm font-medium text-muted-foreground mb-3">Attachments:</p>
-                                  <div className="space-y-2">
-                                    {attachments.map((attachmentUrl: string, idx: number) => (
-                                      <div key={idx} className="flex items-center justify-between p-3 bg-muted/20 rounded-lg border">
-                                        <div className="flex items-center space-x-3">
-                                          <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
-                                            <FileText className="w-4 h-4 text-primary" />
-                                          </div>
-                                          <div>
-                                            <p className="text-sm font-medium">Attachment {idx + 1}</p>
-                                            <p className="text-xs text-muted-foreground">
-                                              {attachmentUrl.split('/').pop() || 'File'}
-                                            </p>
-                                          </div>
-                                        </div>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => window.open(attachmentUrl, '_blank')}
-                                        >
-                                          <Download className="w-4 h-4 mr-1" />
-                                          Download
-                                        </Button>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              ) : null;
-                            })()}
+                           
                           </div>
 
                           {/* Product Details Section */}
@@ -774,19 +741,41 @@ export default function OrderDetailPage() {
                                     </p>
                                   </div>
                                 )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      );
-                    })}
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Order Lifecycle */}
-              <Card>
+                                 {/* Attachments */}
+                            {(() => {
+                              const { attachments } = extractImagesFromSpecifications(item.specifications);
+                              return attachments && attachments.length > 0 ? (
+                                <div>
+                                  <p className="text-sm font-medium text-muted-foreground mb-3">Attachments:</p>
+                                  <div className="space-y-2">
+                                    {attachments.map((attachmentUrl: string, idx: number) => (
+                                      <div key={idx} className="flex items-center justify-between p-3 bg-muted/20 rounded-lg border">
+                                        <div className="flex items-center space-x-3">
+                                          <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
+                                            <FileText className="w-4 h-4 text-primary" />
+                                          </div>
+                                          <div>
+                                            <p className="text-sm font-medium">Attachment {idx + 1}</p>
+                                            <p className="text-xs text-muted-foreground">
+                                              {attachmentUrl.split('/').pop() || 'File'}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => window.open(attachmentUrl, '_blank')}
+                                        >
+                                          <Download className="w-4 h-4 mr-1" />
+                                          Download
+                                        </Button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null;
+                            })()}
+                             <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center">
                     <Calendar className="w-5 h-5 mr-2" />
@@ -849,6 +838,19 @@ export default function OrderDetailPage() {
                   </div>
                 </CardContent>
               </Card>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Order Lifecycle */}
+             
             </div>
 
             <div className="xl:col-span-1 space-y-6">
