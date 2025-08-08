@@ -60,6 +60,8 @@ export default function ReceiptPage() {
   const [openPreview, setOpenPreview] = useState(false);
   const [receiptNumber, setReceiptNumber] = useState('');
   const [date, setDate] = useState<Date>(new Date());
+  const [receiptAmount, setReceiptAmount] = useState<number>(0);
+  const [receiptReference, setReceiptReference] = useState<string>('');
 
   const [paymentMode, setPaymentMode] = useState('UPI');
   const [paymentType, setPaymentType] = useState('Advance');
@@ -69,11 +71,29 @@ export default function ReceiptPage() {
   const [notes, setNotes] = useState('');
   const [txns, setTxns] = useState<any[]>([]);
   const [loadingTxns, setLoadingTxns] = useState<boolean>(false);
+  const [editingReceipt, setEditingReceipt] = useState<any>(null);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [savingReceipt, setSavingReceipt] = useState(false);
+  const [generatingReceipt, setGeneratingReceipt] = useState(false);
+
+  // Edit form state
+  const [editAmount, setEditAmount] = useState('');
+  const [editPaymentMode, setEditPaymentMode] = useState('');
+  const [editPaymentType, setEditPaymentType] = useState('');
+  const [editReferenceId, setEditReferenceId] = useState('');
+  const [editVerifiedBy, setEditVerifiedBy] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editDate, setEditDate] = useState<Date>(new Date());
 
   // When customerId changes, load basic customer details
   useEffect(() => {
     const run = async () => {
-      if (!customerId) { setCustomer(null); return; }
+      if (!customerId) { 
+        setCustomer(null); 
+        // Load all receipts when no customer is selected
+        fetchReceipts();
+        return; 
+      }
       const { data } = await supabase
         .from('customers')
         .select('*')
@@ -87,13 +107,18 @@ export default function ReceiptPage() {
     run();
   }, [customerId]);
 
+  // Load receipts on initial page load
+  useEffect(() => {
+    fetchReceipts();
+  }, []);
+
   const fetchReceipts = async () => {
     try {
       setLoadingTxns(true);
       // First try: full select with status and join to customers
       let query = supabase
         .from('receipts')
-        .select('id, created_at, receipt_number, reference_number, reference_type, amount, payment_mode, payment_type, status, customer_id, customers(company_name)')
+        .select('id, created_at, receipt_number, reference_number, reference_type, amount, payment_mode, payment_type, customer_id, customers(company_name)')
         .order('created_at', { ascending: false })
         .limit(50);
       let resp = customerId ? await query.eq('customer_id', customerId) : await query;
@@ -176,84 +201,224 @@ export default function ReceiptPage() {
 
   const handleGenerate = async () => {
     if (!selected || !amount) {
-      toast.error('Please select a reference and enter amount');
+      toast.error('Please select an order and enter amount');
       return;
     }
 
-    // Generate receipt number: RCP/YY-YY/MON/SEQ
-    const now = new Date();
-    const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
-    const fyEnd = fyStart + 1;
-    const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
-    const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-    let seq = 1;
     try {
-      const { data } = await supabase
-        .from('receipts')
-        .select('receipt_number')
-        .ilike('receipt_number', `RCP/${fyStr}/${month}/%`)
-        .order('created_at', { ascending: false })
-        .limit(1);
-      if (data && data.length > 0) {
-        const m = data[0].receipt_number.match(/(\d+)$/);
-        if (m) seq = parseInt(m[1]) + 1;
-      }
-    } catch {}
-    const seqStr = seq.toString().padStart(3, '0');
-    const newReceiptNumber = `RCP/${fyStr}/${month}/${seqStr}`;
-    setReceiptNumber(newReceiptNumber);
+      setGeneratingReceipt(true);
+      console.log('Starting receipt generation with:', { selected, amount, customer });
 
-    // Persist receipt and update balances
-    const receiptAmount = Number(amount);
-    try {
-      const payload: any = {
-        receipt_number: newReceiptNumber,
+      // Validate amount doesn't exceed order total
+      if (selected.type === 'order') {
+        console.log('Validating order amount...');
+        const { data: order, error: orderError } = await supabase
+          .from('orders')
+          .select('id, final_amount, balance_amount')
+          .eq('order_number', selected.number)
+          .single();
+
+        if (orderError) {
+          console.error('Error fetching order:', orderError);
+          toast.error('Failed to fetch order details');
+          return;
+        }
+
+        if (order) {
+          console.log('Order found:', order);
+          // Calculate total existing receipts for this order
+          const { data: existingReceipts, error: receiptsError } = await supabase
+            .from('receipts')
+            .select('amount')
+            .eq('reference_number', selected.number)
+            .eq('reference_type', 'order');
+
+          if (receiptsError) {
+            console.error('Error fetching existing receipts:', receiptsError);
+            toast.error('Failed to validate existing receipts');
+            return;
+          }
+
+          const totalExistingReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount), 0);
+          const totalWithNewReceipt = totalExistingReceipts + Number(amount);
+
+          console.log('Receipt validation:', {
+            totalExistingReceipts,
+            newAmount: Number(amount),
+            totalWithNewReceipt,
+            orderAmount: Number(order.final_amount)
+          });
+
+          if (totalWithNewReceipt > Number(order.final_amount)) {
+            toast.error(`Total receipts (₹${totalWithNewReceipt.toLocaleString()}) cannot exceed order amount (₹${Number(order.final_amount).toLocaleString()})`);
+            return;
+          }
+        } else {
+          console.warn('Order not found for validation');
+        }
+      }
+
+      // Generate receipt number
+      console.log('Generating receipt number...');
+      
+      // Use the format: RCP/YY-YY/MON/SEQ
+      const now = new Date();
+      const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+      const fyEnd = fyStart + 1;
+      const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
+      const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+      
+      // Get the next sequence number for this month
+      let seq = 1;
+      try {
+        const { data } = await supabase
+          .from('receipts')
+          .select('receipt_number')
+          .ilike('receipt_number', `RCP/${fyStr}/${month}/%`)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        if (data && data.length > 0) {
+          const m = data[0].receipt_number.match(/(\d+)$/);
+          if (m) seq = parseInt(m[1]) + 1;
+        }
+      } catch (error) {
+        console.warn('Error getting sequence number:', error);
+      }
+      
+      const seqStr = seq.toString().padStart(3, '0');
+      const receiptNumber = `RCP/${fyStr}/${month}/${seqStr}`;
+      console.log('Generated receipt number:', receiptNumber);
+
+      // Create receipt
+      const payload = {
+        receipt_number: receiptNumber,
         reference_type: selected.type,
-        reference_id: selected.id,
         reference_number: selected.number,
-        customer_id: selected.customer_id,
+        reference_id: selected.id,
+        customer_id: customer?.id,
+        amount: Number(amount),
         payment_mode: paymentMode,
         payment_type: paymentType,
-        amount: receiptAmount,
         reference_txn_id: referenceId || null,
-        entry_date: date.toISOString(),
         verified_by: verifiedBy || null,
         notes: notes || null,
+        created_at: date.toISOString()
       };
-      const { error: insertErr } = await supabase.from('receipts').insert(payload);
-      if (insertErr) console.warn('Receipts insert warning:', insertErr.message);
 
-      // Decrease order balance_amount
-      if (selected.type === 'order') {
-        const newOrderBalance = Math.max((selected.balance_amount || 0) - receiptAmount, 0);
-        const { error: updErr } = await supabase
-          .from('orders')
-          .update({ balance_amount: newOrderBalance })
-          .eq('id', selected.id);
-        if (updErr) console.warn('Order balance update warning:', updErr.message);
-        // Reflect updated pending in UI
-        setSelected({ ...selected, balance_amount: newOrderBalance });
+      console.log('Creating receipt with payload:', payload);
+
+      const { data: newReceipt, error } = await supabase
+        .from('receipts')
+        .insert(payload)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error creating receipt:', error);
+        toast.error(`Failed to create receipt: ${error.message}`);
+        return;
       }
 
-      // Decrease customer's total pending (if a field exists like customers.pending_amount)
-      try {
-        const { data: custData } = await supabase
+      console.log('Receipt created successfully:', newReceipt);
+
+      // Update order balance if reference is order
+      if (selected.type === 'order') {
+        console.log('Updating order balance...');
+        const { data: order, error: orderUpdateError } = await supabase
+          .from('orders')
+          .select('id, final_amount, balance_amount')
+          .eq('order_number', selected.number)
+          .single();
+
+        if (orderUpdateError) {
+          console.error('Error fetching order for balance update:', orderUpdateError);
+        } else if (order) {
+          // Calculate total receipts for this order (including the new one)
+          const { data: allReceipts, error: receiptsError } = await supabase
+            .from('receipts')
+            .select('amount')
+            .eq('reference_number', selected.number)
+            .eq('reference_type', 'order');
+
+          if (receiptsError) {
+            console.error('Error fetching receipts for balance calculation:', receiptsError);
+          } else {
+            const totalReceipts = (allReceipts || []).reduce((sum, r) => sum + Number(r.amount), 0);
+            const newBalance = Number(order.final_amount) - totalReceipts;
+            
+            console.log('Balance calculation:', {
+              finalAmount: Number(order.final_amount),
+              totalReceipts,
+              newBalance
+            });
+
+            const { error: balanceUpdateError } = await supabase
+              .from('orders')
+              .update({ balance_amount: newBalance })
+              .eq('id', order.id);
+
+            if (balanceUpdateError) {
+              console.error('Error updating order balance:', balanceUpdateError);
+            } else {
+              console.log('Order balance updated successfully');
+            }
+          }
+        }
+      }
+
+      // Update customer pending amount if available
+      if (customer?.id) {
+        console.log('Updating customer pending amount...');
+        const { data: customerData, error: customerError } = await supabase
           .from('customers')
           .select('pending_amount')
-          .eq('id', selected.customer_id)
+          .eq('id', customer.id)
           .single();
-        if (custData && typeof custData.pending_amount === 'number') {
-          const newCustPending = Math.max(custData.pending_amount - receiptAmount, 0);
-          await supabase.from('customers').update({ pending_amount: newCustPending }).eq('id', selected.customer_id);
-        }
-      } catch {}
-    } catch (e) {
-      // ignore errors if table or columns are missing
-    }
 
-    setOpenPreview(true);
-    // Refresh txn list (debounced to let DB commit)
-    setTimeout(() => { fetchReceipts(); }, 300);
+        if (customerError) {
+          console.error('Error fetching customer for pending update:', customerError);
+        } else if (customerData) {
+          const newPending = (Number(customerData.pending_amount) || 0) - Number(amount);
+          const { error: pendingUpdateError } = await supabase
+            .from('customers')
+            .update({ pending_amount: newPending })
+            .eq('id', customer.id);
+
+          if (pendingUpdateError) {
+            console.error('Error updating customer pending amount:', pendingUpdateError);
+          } else {
+            console.log('Customer pending amount updated successfully');
+          }
+        }
+      }
+
+      toast.success(`Receipt ${receiptNumber} generated successfully`);
+      
+      // Store the amount before clearing the form
+      setReceiptAmount(Number(amount));
+      setReceiptReference(selected.number);
+      
+      setReceiptNumber(receiptNumber);
+      setOpenPreview(true);
+
+      // Refresh order data to update UI
+      await refreshOrderData(selected.number);
+
+      // Clear form
+      setAmount('');
+      setReferenceId('');
+      setVerifiedBy('');
+      setNotes('');
+      setSelected(null);
+
+      // Refresh receipts list
+      await fetchReceipts();
+    } catch (error) {
+      console.error('Error generating receipt:', error);
+      toast.error(`Failed to generate receipt: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setGeneratingReceipt(false);
+    }
   };
 
   const handleExportPDF = async () => {
@@ -286,15 +451,123 @@ export default function ReceiptPage() {
 
   // Edit and Cancel handlers
   const handleEditReceipt = async (r: any) => {
-    // Basic inline edit example: reopen preview with values
-    setReceiptNumber(r.receipt_number);
-    setAmount(String(r.amount));
-    setPaymentMode(r.payment_mode);
-    setPaymentType(r.payment_type);
-    setReferenceId(r.reference_txn_id || '');
-    setVerifiedBy(r.verified_by || '');
-    setNotes(r.notes || '');
-    setOpenPreview(true);
+    // Set editing receipt and populate form fields
+    setEditingReceipt(r);
+    setEditAmount(String(r.amount || ''));
+    setEditPaymentMode(r.payment_mode || 'UPI');
+    setEditPaymentType(r.payment_type || 'Advance');
+    setEditReferenceId(r.reference_txn_id || '');
+    setEditVerifiedBy(r.verified_by || '');
+    setEditNotes(r.notes || '');
+    setEditDate(new Date(r.created_at));
+    setShowEditDialog(true);
+  };
+
+  const handleSaveReceipt = async () => {
+    if (!editingReceipt) return;
+
+    try {
+      setSavingReceipt(true);
+      
+      const oldAmount = Number(editingReceipt.amount);
+      const newAmount = Number(editAmount);
+      const amountDifference = newAmount - oldAmount;
+
+      // Validate amount doesn't exceed order total
+      if (editingReceipt.reference_type === 'order') {
+        const { data: order } = await supabase
+          .from('orders')
+          .select('id, final_amount, balance_amount')
+          .eq('order_number', editingReceipt.reference_number)
+          .single();
+
+        if (order) {
+          // Calculate total receipts for this order (excluding current receipt)
+          const { data: existingReceipts } = await supabase
+            .from('receipts')
+            .select('amount')
+            .eq('reference_number', editingReceipt.reference_number)
+            .eq('reference_type', 'order')
+            .neq('id', editingReceipt.id);
+
+          const totalExistingReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount), 0);
+          const totalWithNewAmount = totalExistingReceipts + newAmount;
+
+          if (totalWithNewAmount > Number(order.final_amount)) {
+            toast.error(`Total receipts (₹${totalWithNewAmount.toLocaleString()}) cannot exceed order amount (₹${Number(order.final_amount).toLocaleString()})`);
+            return;
+          }
+        }
+      }
+
+      // Update receipt
+      const { error: receiptError } = await supabase
+        .from('receipts')
+        .update({
+          amount: newAmount,
+          payment_mode: editPaymentMode,
+          payment_type: editPaymentType,
+          reference_txn_id: editReferenceId,
+          verified_by: editVerifiedBy,
+          notes: editNotes,
+          entry_date: editDate.toISOString()
+        })
+        .eq('id', editingReceipt.id);
+
+      if (receiptError) throw receiptError;
+
+      // Update order balance if amount changed and reference is order
+      if (amountDifference !== 0 && editingReceipt.reference_type === 'order') {
+        const { data: order } = await supabase
+          .from('orders')
+          .select('id, final_amount, balance_amount')
+          .eq('order_number', editingReceipt.reference_number)
+          .single();
+
+        if (order) {
+          // Calculate total receipts for this order (excluding current receipt, then add new amount)
+          const { data: existingReceipts } = await supabase
+            .from('receipts')
+            .select('amount')
+            .eq('reference_number', editingReceipt.reference_number)
+            .eq('reference_type', 'order')
+            .neq('id', editingReceipt.id);
+
+          const totalExistingReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount), 0);
+          const totalReceipts = totalExistingReceipts + newAmount;
+          const newBalance = Number(order.final_amount) - totalReceipts;
+
+          console.log('Edit balance calculation:', {
+            finalAmount: Number(order.final_amount),
+            totalExistingReceipts,
+            newAmount,
+            totalReceipts,
+            newBalance
+          });
+
+          await supabase
+            .from('orders')
+            .update({ balance_amount: newBalance })
+            .eq('id', order.id);
+        }
+      }
+
+      toast.success('Receipt updated successfully');
+      setShowEditDialog(false);
+      setEditingReceipt(null);
+      
+      // Refresh order data to update UI
+      if (editingReceipt?.reference_type === 'order') {
+        await refreshOrderData(editingReceipt.reference_number);
+      }
+      
+      await fetchReceipts();
+    } catch (error) {
+      console.error('Error saving receipt:', error);
+      toast.error('Failed to update receipt');
+    } finally {
+      setSavingReceipt(false);
+    }
   };
 
   const handleCancelReceipt = async (r: any) => {
@@ -304,7 +577,7 @@ export default function ReceiptPage() {
       // Mark receipt as cancelled
       const { error } = await supabase
         .from('receipts')
-        .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .delete()
         .eq('id', r.id);
       if (error) throw error;
 
@@ -313,18 +586,42 @@ export default function ReceiptPage() {
         // Fetch order id by reference_number if needed
         const { data: ord } = await supabase
           .from('orders')
-          .select('id, balance_amount')
+          .select('id, final_amount, balance_amount')
           .eq('order_number', r.reference_number)
           .single();
         if (ord) {
+          // Calculate total receipts for this order (excluding the cancelled receipt)
+          const { data: remainingReceipts } = await supabase
+            .from('receipts')
+            .select('amount')
+            .eq('reference_number', r.reference_number)
+            .eq('reference_type', 'order')
+            .neq('id', r.id);
+
+          const totalRemainingReceipts = (remainingReceipts || []).reduce((sum, receipt) => sum + Number(receipt.amount), 0);
+          const newBalance = Number(ord.final_amount) - totalRemainingReceipts;
+
+          console.log('Cancel balance calculation:', {
+            finalAmount: Number(ord.final_amount),
+            cancelledAmount: Number(r.amount),
+            totalRemainingReceipts,
+            newBalance
+          });
+
           await supabase
             .from('orders')
-            .update({ balance_amount: (Number(ord.balance_amount) || 0) + Number(r.amount) })
+            .update({ balance_amount: newBalance })
             .eq('id', ord.id);
         }
         // Customer pending will be recalculated by trigger if migration applied
       }
       toast.success('Receipt cancelled');
+      
+      // Refresh order data to update UI
+      if (r.reference_type === 'order') {
+        await refreshOrderData(r.reference_number);
+      }
+      
       await fetchReceipts();
     } catch (e) {
       toast.error('Failed to cancel receipt');
@@ -355,6 +652,7 @@ export default function ReceiptPage() {
       setVerifiedBy(r.verified_by || '');
       setNotes(r.notes || '');
       setDate(new Date(r.created_at));
+      setReceiptReference(r.reference_number || '');
       if (ord) {
         setSelected({
           id: ord.id,
@@ -381,6 +679,37 @@ export default function ReceiptPage() {
       setOpenPreview(true);
     } catch (e) {
       setOpenPreview(true);
+    }
+  };
+
+  // Refresh order data to update UI state
+  const refreshOrderData = async (orderNumber: string) => {
+    try {
+      const { data: order } = await supabase
+        .from('orders')
+        .select('id, order_number, customer_id, order_date, final_amount, balance_amount')
+        .eq('order_number', orderNumber)
+        .single();
+
+      if (order && selected && selected.number === orderNumber) {
+        // Update the selected order with fresh data
+        setSelected({
+          ...selected,
+          total_amount: order.final_amount,
+          balance_amount: order.balance_amount,
+        });
+
+        // Also update the results array to reflect the new balance
+        setResults(prevResults => 
+          prevResults.map(r => 
+            r.number === orderNumber 
+              ? { ...r, total_amount: order.final_amount, balance_amount: order.balance_amount }
+              : r
+          )
+        );
+      }
+    } catch (error) {
+      console.error('Error refreshing order data:', error);
     }
   };
 
@@ -416,7 +745,6 @@ export default function ReceiptPage() {
                           <th className="p-2 text-left border">Type</th>
                           <th className="p-2 text-right border">Amount</th>
                           <th className="p-2 text-left border">Mode</th>
-                          <th className="p-2 text-left border">Status</th>
                           <th className="p-2 text-left border">Actions</th>
                         </tr>
                       </thead>
@@ -430,7 +758,6 @@ export default function ReceiptPage() {
                             <td className="p-2 border uppercase">{r.reference_type}</td>
                             <td className="p-2 border text-right">₹{Number(r.amount).toLocaleString()}</td>
                             <td className="p-2 border">{r.payment_mode}</td>
-                            <td className="p-2 border capitalize">{r.status || 'active'}</td>
                             <td className="p-2 border space-x-2">
                               <Button variant="outline" size="sm" onClick={async (e) => { e.stopPropagation(); await handleEditReceipt(r); }}>Edit</Button>
                               <Button variant="outline" size="sm" className="text-destructive" onClick={async (e) => { e.stopPropagation(); await handleCancelReceipt(r); }}>Cancel</Button>
@@ -439,7 +766,7 @@ export default function ReceiptPage() {
                         ))}
                         {!loadingTxns && txns.length === 0 && (
                           <tr>
-                            <td className="p-4 text-center text-muted-foreground" colSpan={6}>No receipts found.</td>
+                            <td className="p-4 text-center text-muted-foreground" colSpan={8}>No receipts found.</td>
                           </tr>
                         )}
                       </tbody>
@@ -571,7 +898,7 @@ export default function ReceiptPage() {
             </div>
 
                 <div className="flex justify-end gap-2">
-                  <Button onClick={handleGenerate} disabled={!selected || !amount}>Generate Receipt</Button>
+                  <Button onClick={handleGenerate} disabled={!selected || !amount || generatingReceipt}>Generate Receipt</Button>
                 </div>
               </CardContent>
             </Card>
@@ -616,13 +943,13 @@ export default function ReceiptPage() {
               <div className="grid grid-cols-2 gap-4 text-xs mb-3">
                 <div className="space-y-1">
                   <div><span className="font-medium">Receipt No.:</span> {receiptNumber}</div>
-                  <div><span className="font-medium">Reference:</span> {selected?.number} ({selected?.type})</div>
+                  <div><span className="font-medium">Reference:</span> {receiptReference} ({selected?.type})</div>
                   <div><span className="font-medium">Customer:</span> {customer?.company_name || '-'}</div>
                   <div><span className="font-medium">Payment Mode:</span> {paymentMode}</div>
                   <div><span className="font-medium">Payment Type:</span> {paymentType}</div>
                 </div>
                 <div className="space-y-1 text-right">
-                  <div><span className="font-medium">Amount:</span> ₹{Number(amount || 0).toLocaleString()}</div>
+                  <div><span className="font-medium">Amount:</span> ₹{receiptAmount.toLocaleString()}</div>
                   {referenceId && <div><span className="font-medium">Reference ID:</span> {referenceId}</div>}
                   {verifiedBy && <div><span className="font-medium">Verified By:</span> {verifiedBy}</div>}
                 </div>
@@ -630,10 +957,10 @@ export default function ReceiptPage() {
 
               {/* Acknowledgement */}
               <div className="border rounded p-3 text-sm">
-                Received a sum of <span className="font-semibold">₹{Number(amount || 0).toLocaleString()}</span> from
+                Received a sum of <span className="font-semibold">₹{receiptAmount.toLocaleString()}</span> from
                 {' '}<span className="font-semibold">{customer?.company_name || 'Customer'}</span> towards
                 {' '}<span className="font-semibold">{paymentType}</span> against reference
-                {' '}<span className="font-semibold">{selected?.number}</span>.
+                {' '}<span className="font-semibold">{receiptReference}</span>.
                 {notes && <div className="mt-1 text-xs text-muted-foreground">Note: {notes}</div>}
               </div>
 
@@ -647,6 +974,129 @@ export default function ReceiptPage() {
                   <div className="mt-8 border-b w-40"></div>
                   <div className="text-muted-foreground">Authorized Signatory</div>
                 </div>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Receipt Dialog */}
+        <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+          <DialogContent className="max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>Edit Receipt — {editingReceipt?.receipt_number}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-6">
+              {/* Receipt Information */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label>Receipt Number</Label>
+                  <Input value={editingReceipt?.receipt_number || ''} disabled />
+                </div>
+                <div>
+                  <Label>Reference</Label>
+                  <Input value={editingReceipt?.reference_number || ''} disabled />
+                </div>
+                <div>
+                  <Label>Customer</Label>
+                  <Input value={editingReceipt?.customers?.company_name || editingReceipt?.customer_name || ''} disabled />
+                </div>
+                <div>
+                  <Label>Entry Date</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className="w-full justify-start">
+                        <CalendarIcon className="mr-2 h-4 w-4" /> {editDate.toLocaleDateString('en-IN')}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="p-0">
+                      <Calendar mode="single" selected={editDate} onSelect={(d) => d && setEditDate(d)} />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              </div>
+
+              {/* Payment Details */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div>
+                  <Label>Amount</Label>
+                  <Input 
+                    type="number" 
+                    value={editAmount} 
+                    onChange={(e) => setEditAmount(e.target.value)} 
+                    placeholder="₹" 
+                  />
+                </div>
+                <div>
+                  <Label>Payment Mode</Label>
+                  <Select value={editPaymentMode} onValueChange={setEditPaymentMode}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="UPI">UPI</SelectItem>
+                      <SelectItem value="Cash">Cash</SelectItem>
+                      <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
+                      <SelectItem value="Card">Card</SelectItem>
+                      <SelectItem value="Cheque">Cheque</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Payment Type</Label>
+                  <Select value={editPaymentType} onValueChange={setEditPaymentType}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Advance">Advance</SelectItem>
+                      <SelectItem value="Partial">Partial</SelectItem>
+                      <SelectItem value="Full">Full</SelectItem>
+                      <SelectItem value="Balance">Balance</SelectItem>
+                      <SelectItem value="Refund">Refund</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Reference / UTR / Txn ID</Label>
+                  <Input 
+                    value={editReferenceId} 
+                    onChange={(e) => setEditReferenceId(e.target.value)} 
+                    placeholder="Optional" 
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <Label>Verified By</Label>
+                  <Input 
+                    value={editVerifiedBy} 
+                    onChange={(e) => setEditVerifiedBy(e.target.value)} 
+                    placeholder="Verifier name" 
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <Label>Notes</Label>
+                  <Input 
+                    value={editNotes} 
+                    onChange={(e) => setEditNotes(e.target.value)} 
+                    placeholder="Optional notes" 
+                  />
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex justify-end gap-2">
+                <Button 
+                  variant="outline" 
+                  onClick={() => setShowEditDialog(false)}
+                  disabled={savingReceipt}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  onClick={handleSaveReceipt} 
+                  disabled={!editAmount || savingReceipt}
+                >
+                  {savingReceipt ? 'Saving...' : 'Save Changes'}
+                </Button>
               </div>
             </div>
           </DialogContent>
