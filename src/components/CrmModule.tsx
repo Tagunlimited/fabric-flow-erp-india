@@ -15,7 +15,7 @@ import {
   Download,
   Users
 } from "lucide-react";
-import { generateAllDummyData, Customer } from "@/lib/dummyData";
+import { getCustomers, type Customers } from "@/lib/database";
 
 export function CrmModule() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -24,36 +24,36 @@ export function CrmModule() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Force fresh data generation by clearing any cached state
-    setCustomers([]);
-    setLoading(true);
-    
-    const timer = setTimeout(() => {
-      const data = generateAllDummyData();
-      console.log('Generated customer data sample:', data.customers[0]); // Debug log
-      console.log('First customer LTV:', data.customers[0]?.totalBilledAmount); // Specific LTV check
-      setCustomers(data.customers);
-      setLoading(false);
-    }, 1000);
+    const fetchCustomers = async () => {
+      try {
+        setLoading(true);
+        const customersData = await getCustomers();
+        setCustomers(customersData);
+      } catch (error) {
+        console.error('Error fetching customers:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-    return () => clearTimeout(timer);
-  }, []); // Force refresh by adding a timestamp dependency
+    fetchCustomers();
+  }, []);
 
   const filteredCustomers = customers.filter(customer => {
-    const matchesSearch = customer.companyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         customer.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         customer.mobile.includes(searchTerm);
+    const matchesSearch = customer.company_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         (customer.email && customer.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
+                         (customer.phone && customer.phone.includes(searchTerm));
     
-    const matchesTier = selectedTier === "all" || customer.loyaltyTier.toLowerCase() === selectedTier.toLowerCase();
+    const matchesTier = selectedTier === "all" || (customer.customer_tier && customer.customer_tier.toLowerCase() === selectedTier.toLowerCase());
     
     return matchesSearch && matchesTier;
   });
 
   const tierCounts = {
     all: customers.length,
-    gold: customers.filter(c => c.loyaltyTier === 'Gold').length,
-    silver: customers.filter(c => c.loyaltyTier === 'Silver').length,
-    bronze: customers.filter(c => c.loyaltyTier === 'Bronze').length
+    gold: customers.filter(c => c.customer_tier === 'gold').length,
+    silver: customers.filter(c => c.customer_tier === 'silver').length,
+    bronze: customers.filter(c => c.customer_tier === 'bronze').length
   };
 
   const getTierColor = (tier: string) => {
@@ -153,7 +153,7 @@ export function CrmModule() {
               <div>
                 <p className="text-sm text-muted-foreground">Outstanding Amount</p>
                 <p className="text-2xl font-bold">
-                  ₹{Math.round(customers.reduce((sum, c) => sum + c.outstandingAmount, 0) / 1000)}K
+                  ₹{Math.round(customers.reduce((sum, c) => sum + (c.outstanding_amount || 0), 0) / 1000)}K
                 </p>
               </div>
               <div className="p-2 bg-red-500 rounded-lg">
@@ -169,7 +169,7 @@ export function CrmModule() {
               <div>
                 <p className="text-sm text-muted-foreground">Credit Limit</p>
                 <p className="text-2xl font-bold">
-                  ₹{Math.round(customers.reduce((sum, c) => sum + c.creditLimit, 0) / 1000000)}M
+                  ₹{Math.round(customers.reduce((sum, c) => sum + (c.credit_limit || 0), 0) / 1000000)}M
                 </p>
               </div>
               <div className="p-2 bg-green-500 rounded-lg">
@@ -222,15 +222,15 @@ export function CrmModule() {
             <CardHeader className="pb-3">
               <div className="flex items-start justify-between">
                 <div>
-                  <CardTitle className="text-lg">{customer.companyName}</CardTitle>
+                  <CardTitle className="text-lg">{customer.company_name}</CardTitle>
                   <p className="text-sm text-muted-foreground">ID: {customer.id}</p>
                 </div>
                 <div className="flex gap-2">
-                  <Badge className={getTierColor(customer.loyaltyTier)}>
-                    {customer.loyaltyTier}
+                  <Badge className={getTierColor(customer.customer_tier || '')}>
+                    {customer.customer_tier || 'N/A'}
                   </Badge>
-                  <Badge className={getVolumeColor(customer.orderVolume)}>
-                    {customer.orderVolume}
+                  <Badge className={getVolumeColor(customer.customer_type || '')}>
+                    {customer.customer_type || 'N/A'}
                   </Badge>
                 </div>
               </div>
@@ -238,15 +238,15 @@ export function CrmModule() {
             <CardContent className="space-y-3">
               <div className="flex items-center text-sm text-muted-foreground">
                 <Phone className="w-4 h-4 mr-2" />
-                {customer.mobile}
+                {customer.phone || 'N/A'}
               </div>
               <div className="flex items-center text-sm text-muted-foreground">
                 <Mail className="w-4 h-4 mr-2" />
-                {customer.email}
+                {customer.email || 'N/A'}
               </div>
               <div className="flex items-center text-sm text-muted-foreground">
                 <MapPin className="w-4 h-4 mr-2" />
-                {customer.city}, {customer.state}
+                {customer.city || 'N/A'}, {customer.state || 'N/A'}
               </div>
               <div className="flex items-center text-sm text-muted-foreground">
                 <Building className="w-4 h-4 mr-2" />
@@ -257,20 +257,20 @@ export function CrmModule() {
                 <div className="flex justify-between items-center">
                   <div>
                     <p className="text-sm font-medium">Total Orders</p>
-                    <p className="text-lg font-bold">{customer.totalOrders}</p>
+                    <p className="text-lg font-bold">{customer.total_orders || 0}</p>
                   </div>
                   <div className="text-right">
                     <p className="text-sm text-muted-foreground">Outstanding</p>
                     <p className="text-lg font-bold text-red-600">
-                      ₹{customer.outstandingAmount.toLocaleString()}
+                      ₹{(customer.outstanding_amount || 0).toLocaleString()}
                     </p>
                   </div>
                 </div>
                 <div className="flex justify-between items-center">
                   <div>
-                    <p className="text-sm font-medium">Lifetime Value</p>
+                    <p className="text-sm font-medium">Credit Limit</p>
                     <p className="text-lg font-bold text-green-600">
-                      ₹{customer.totalBilledAmount.toLocaleString()}
+                      ₹{(customer.credit_limit || 0).toLocaleString()}
                     </p>
                   </div>
                 </div>
