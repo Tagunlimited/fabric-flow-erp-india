@@ -675,211 +675,7 @@ export default function OrderDetailPage() {
           </div>
         </div>
 
-        {/* Printable Content - Optimized for A4 */}
-        <div ref={printRef} className="bg-white print:shadow-none" style={{ padding: '15mm 25mm 15mm 15mm', minHeight: '297mm', width: '210mm', margin: '0 auto', fontSize: '10px', lineHeight: '1.3' }}>
-          <style jsx>{`
-            @media print {
-              .print\\:hidden { display: none !important; }
-              header, nav, .header, .navigation { display: none !important; }
-              .print-content { display: block !important; }
-            }
-          `}</style>
-          {/* Company Header with Logo */}
-          <div className="flex justify-between items-start border-b-2 border-gray-800 pb-4 mb-6">
-            <div className="flex items-center space-x-4">
-              {(company as any)?.logo_url && (
-                <img 
-                  src={(company as any).logo_url} 
-                  alt="Company Logo" 
-                  className="w-16 h-16 object-contain"
-                  style={{ maxWidth: '60px', maxHeight: '60px' }}
-                />
-              )}
-              <div>
-                <h1 className="text-2xl font-bold text-gray-800 mb-1">Order Confirmation</h1>
-                <div className="text-sm text-gray-600">
-                  Order #{order.order_number} | Date: {new Date(order.order_date).toLocaleDateString('en-IN')}
-                </div>
-              </div>
-            </div>
-            <div className="text-right">
-              <div className="bg-primary text-white px-4 py-2 rounded">
-                <h2 className="text-xl font-bold">ORDER</h2>
-              </div>
-            </div>
-          </div>
-
-          {/* Document Title and Crucial Details */}
-          <div className="flex justify-between items-start mb-6">
-            <div>
-              <h2 className="text-2xl font-bold text-gray-800 mb-2">ORDER DETAILS</h2>
-              <div className="text-sm space-y-1">
-                <div><strong>Order Number:</strong> {order.order_number}</div>
-                <div><strong>Order Date:</strong> {new Date(order.order_date).toLocaleDateString('en-IN')}</div>
-                <div><strong>Expected Delivery:</strong> {order.expected_delivery_date ? new Date(order.expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
-                <div><strong>Status:</strong> <span className="capitalize font-medium">{order.status.replace('_', ' ')}</span></div>
-              </div>
-            </div>
-            <div className="text-right">
-              <div className="border-2 border-gray-800 p-3 bg-gray-50">
-                <div className="font-bold text-lg">₹{order.final_amount.toLocaleString()}</div>
-                <div className="text-sm text-gray-600">Total Amount</div>
-                {order.balance_amount > 0 && (
-                  <div className="text-sm text-orange-600 mt-1">
-                    Balance: ₹{order.balance_amount.toLocaleString()}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Customer and Order Information */}
-          <div className="grid grid-cols-2 gap-8 mb-6">
-            {/* Customer Details */}
-            <div>
-              <h3 className="text-base font-bold text-gray-800 mb-2 border-b border-gray-400 pb-1">Customer Details:</h3>
-              <div className="space-y-1 text-xs">
-                <div className="font-semibold text-sm">{customer.company_name}</div>
-                <div>{customer.contact_person}</div>
-                <div>{customer.address}</div>
-                <div>{customer.city}, {customer.state} - {customer.pincode}</div>
-                <div><strong>Phone:</strong> {customer.phone}</div>
-                <div><strong>Email:</strong> {customer.email}</div>
-                {customer.gstin && <div><strong>GSTIN:</strong> {customer.gstin}</div>}
-              </div>
-            </div>
-
-            {/* Order Summary */}
-            <div>
-              <h3 className="text-base font-bold text-gray-800 mb-2 border-b border-gray-400 pb-1">Payment Summary:</h3>
-              <div className="space-y-1 text-xs">
-                <div><strong>Subtotal:</strong> ₹{order.total_amount.toLocaleString()}</div>
-                <div><strong>GST ({order.gst_rate}%):</strong> ₹{order.tax_amount.toLocaleString()}</div>
-                <div><strong>Total Amount:</strong> ₹{order.final_amount.toLocaleString()}</div>
-                <div><strong>Advance Paid:</strong> <span className="text-green-600">₹{order.advance_amount.toLocaleString()}</span></div>
-                <div><strong>Balance Due:</strong> <span className={order.balance_amount > 0 ? "text-orange-600" : "text-green-600"}>₹{order.balance_amount.toLocaleString()}</span></div>
-                <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
-                {order.payment_channel && <div><strong>Payment Method:</strong> {order.payment_channel}</div>}
-              </div>
-            </div>
-          </div>
-
-          {/* Order Items Table for PDF */}
-          <div className="mb-6">
-            <h3 className="text-lg font-bold text-gray-800 mb-3 border-b border-gray-400 pb-1">Order Items</h3>
-            <table className="w-full border-collapse border border-gray-400 text-xs">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="border border-gray-400 px-2 py-1 text-left font-semibold">Image</th>
-                  <th className="border border-gray-400 px-2 py-1 text-left font-semibold">Product Details</th>
-                  <th className="border border-gray-400 px-2 py-1 text-left font-semibold">Qty</th>
-                  <th className="border border-gray-400 px-2 py-1 text-left font-semibold">Rate</th>
-                  <th className="border border-gray-400 px-2 py-1 text-left font-semibold">Amount</th>
-                  <th className="border border-gray-400 px-2 py-1 text-left font-semibold">GST</th>
-                  <th className="border border-gray-400 px-2 py-1 text-left font-semibold">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orderItems.map((item, index) => {
-                  const amount = item.quantity * item.unit_price;
-                  const gstRate = item.gst_rate ?? 
-                                 (item.specifications?.gst_rate) ?? 
-                                 (order?.gst_rate ?? 0);
-                  const gstAmt = (amount * gstRate) / 100;
-                  const total = amount + gstAmt;
-                  
-                  return (
-                    <tr key={index}>
-                      <td className="border border-gray-400 px-2 py-1 align-top">
-                        {item.category_image_url && (
-                          <img 
-                            src={item.category_image_url} 
-                            alt="Product" 
-                            className="w-12 h-12 object-cover" 
-                          />
-                        )}
-                      </td>
-                      <td className="border border-gray-400 px-2 py-1 align-top">
-                        <div className="font-semibold">{item.product_description}</div>
-                        <div className="text-xs text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
-                        <div className="text-xs text-gray-600">{fabrics[item.fabric_id]?.name} - {item.color}, {item.gsm}GSM</div>
-                        {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
-                          <div className="text-xs text-gray-600 mt-1">
-                            Sizes: {Object.entries(item.sizes_quantities)
-                              .filter(([_, qty]) => (qty as number) > 0)
-                              .map(([size, qty]) => `${size}(${qty})`)
-                              .join(', ')}
-                          </div>
-                        )}
-                      </td>
-                      <td className="border border-gray-400 px-2 py-1 align-top text-center">
-                        <div className="font-semibold">{item.quantity}</div>
-                        <div className="text-xs">Pcs</div>
-                      </td>
-                      <td className="border border-gray-400 px-2 py-1 align-top text-right">₹{item.unit_price}</td>
-                      <td className="border border-gray-400 px-2 py-1 align-top text-right">₹{amount.toLocaleString()}</td>
-                      <td className="border border-gray-400 px-2 py-1 align-top text-center">
-                        <div>{gstRate}%</div>
-                        <div className="text-xs">₹{gstAmt.toLocaleString()}</div>
-                      </td>
-                      <td className="border border-gray-400 px-2 py-1 align-top text-right font-semibold">₹{total.toLocaleString()}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* PDF Totals Summary */}
-          <div className="mt-6 border-t-2 border-gray-800 pt-4">
-            <div className="flex justify-end">
-              <div className="w-80 space-y-1">
-                <div className="flex justify-between text-sm">
-                  <span>Subtotal:</span>
-                  <span>₹{order.total_amount.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span>GST ({order.gst_rate}%):</span>
-                  <span>₹{order.tax_amount.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between text-sm text-green-600">
-                  <span>Advance Paid:</span>
-                  <span>₹{order.advance_amount.toLocaleString()}</span>
-                </div>
-                <div className="border-t border-gray-400 pt-2 mt-2">
-                  <div className="flex justify-between text-lg font-bold">
-                    <span>FINAL AMOUNT:</span>
-                    <span>₹{order.final_amount.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between text-sm text-orange-600 mt-1">
-                    <span>Balance Due:</span>
-                    <span>₹{order.balance_amount.toLocaleString()}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Order Footer */}
-          <div className="mt-6 pt-4 border-t border-gray-400">
-            <div className="flex justify-between items-end">
-              <div>
-                <div className="text-xs font-medium">Order Terms:</div>
-                <div className="text-xs text-gray-600 mt-2 space-y-1">
-                  <div>• Expected delivery: {order.expected_delivery_date ? new Date(order.expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
-                  <div>• Payment: {order.payment_channel || 'As per agreement'}</div>
-                  <div>• Quality assurance included</div>
-                  <div>• Warranty: 1 year from delivery</div>
-                </div>
-              </div>
-              <div className="text-right text-xs text-gray-600">
-                <div>Generated: {new Date().toLocaleDateString('en-IN')}</div>
-                <div>Sales Manager: {salesManager?.full_name || 'N/A'}</div>
-                <div>Status: <span className="capitalize font-medium">{order.status.replace('_', ' ')}</span></div>
-              </div>
-            </div>
-          </div>
-        </div>
+       
 
         {/* Regular UI Content (not printed) */}
         <div className="print:hidden space-y-6">
@@ -932,7 +728,7 @@ export default function OrderDetailPage() {
                             {item.category_image_url && (
                               <div>
                                 <p className="text-sm font-medium text-muted-foreground mb-3">Category Image:</p>
-                                <div className="aspect-[13/15] w-full overflow-hidden rounded-lg border shadow-md">
+                                <div className="aspect-[3/3.5] w-full overflow-hidden rounded-lg border shadow-md">
                                   <img 
                                     src={item.category_image_url} 
                                     alt="Category"
@@ -942,7 +738,7 @@ export default function OrderDetailPage() {
                                       modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
                                       modal.innerHTML = `
                                         <div class="relative max-w-4xl max-h-full">
-                                          <img src="${item.category_image_url}" alt="Category" class="max-w-full max-h-full object-contain rounded-lg" />
+                                          <img src="${item.category_image_url}" alt="Category" class="max-w-full max-h-ful object-contain rounded-lg" />
                                           <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
                                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                               <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -964,146 +760,7 @@ export default function OrderDetailPage() {
                             )}
 
                                                          {/* Mockup Images - Amazon Style Layout */}
-                             {(() => {
-                               const { mockup_images } = extractImagesFromSpecifications(item.specifications);
-                               return mockup_images && mockup_images.length > 0 ? (
-                                 <div>
-                                   <p className="text-sm font-medium text-muted-foreground mb-3">Mockup Images:</p>
-                                   <div className="space-y-3">
-                                     {/* Main large image */}
-                                     <div className="aspect-[13/15] w-full overflow-hidden rounded-lg border shadow-md">
-                                       <img 
-                                         src={mockup_images[selectedMockupImages[index] || 0]} 
-                                         alt="Main Mockup"
-                                         className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
-                                         onClick={() => {
-                                           const currentImage = mockup_images[selectedMockupImages[index] || 0];
-                                           const modal = document.createElement('div');
-                                           modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
-                                           modal.innerHTML = `
-                                             <div class="relative max-w-4xl max-h-full">
-                                               <img src="${currentImage}" alt="Main Mockup" class="max-w-full max-h-full object-contain rounded-lg" />
-                                               <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
-                                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                   <line x1="18" y1="6" x2="6" y2="18"></line>
-                                                   <line x1="6" y1="6" x2="18" y2="18"></line>
-                                                 </svg>
-                                               </button>
-                                             </div>
-                                           `;
-                                           modal.onclick = (e) => {
-                                             if (e.target === modal) {
-                                               document.body.removeChild(modal);
-                                             }
-                                           };
-                                           document.body.appendChild(modal);
-                                         }}
-                                         onError={(e) => {
-                                           e.currentTarget.style.display = 'none';
-                                         }}
-                                       />
-                                     </div>
-                                     
-                                     {/* Thumbnail images */}
-                                     {mockup_images.length > 1 && (
-                                       <div className="grid grid-cols-4 gap-2">
-                                         {mockup_images.map((url: string, idx: number) => (
-                                           <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm">
-                                             <img 
-                                               src={url} 
-                                               alt={`Mockup ${idx + 1}`}
-                                               className={`w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300 ${
-                                                 (selectedMockupImages[index] || 0) === idx ? 'ring-2 ring-primary' : ''
-                                               }`}
-                                               onClick={() => {
-                                                 setSelectedMockupImages(prev => ({
-                                                   ...prev,
-                                                   [index]: idx
-                                                 }));
-                                               }}
-                                               onError={(e) => {
-                                                 e.currentTarget.style.display = 'none';
-                                               }}
-                                             />
-                                           </div>
-                                         ))}
-                                       </div>
-                                     )}
-                                   </div>
-                                 </div>
-                               ) : null;
-                             })()}
-
-                             {/* Reference Images - Amazon Style Layout */}
-                             {(() => {
-                               const { reference_images } = extractImagesFromSpecifications(item.specifications);
-                               return reference_images && reference_images.length > 0 ? (
-                                 <div>
-                                   <p className="text-sm font-medium text-muted-foreground mb-3">Reference Images:</p>
-                                   <div className="space-y-3">
-                                     {/* Main large image */}
-                                     <div className="aspect-[13/15] w-full overflow-hidden rounded-lg border shadow-md">
-                                       <img 
-                                         src={reference_images[selectedReferenceImages[index] || 0]} 
-                                         alt="Main Reference"
-                                         className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
-                                         onClick={() => {
-                                           const currentImage = reference_images[selectedReferenceImages[index] || 0];
-                                           const modal = document.createElement('div');
-                                           modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
-                                           modal.innerHTML = `
-                                             <div class="relative max-w-4xl max-h-full">
-                                               <img src="${currentImage}" alt="Main Reference" class="max-w-full max-h-full object-contain rounded-lg" />
-                                               <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
-                                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                   <line x1="18" y1="6" x2="6" y2="18"></line>
-                                                   <line x1="6" y1="6" x2="18" y2="18"></line>
-                                                 </svg>
-                                               </button>
-                                             </div>
-                                           `;
-                                           modal.onclick = (e) => {
-                                             if (e.target === modal) {
-                                               document.body.removeChild(modal);
-                                             }
-                                           };
-                                           document.body.appendChild(modal);
-                                         }}
-                                         onError={(e) => {
-                                           e.currentTarget.style.display = 'none';
-                                         }}
-                                       />
-                                     </div>
-                                     
-                                     {/* Thumbnail images */}
-                                     {reference_images.length > 1 && (
-                                       <div className="grid grid-cols-4 gap-2">
-                                         {reference_images.map((imgUrl: string, idx: number) => (
-                                           <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm">
-                                             <img 
-                                               src={imgUrl} 
-                                               alt={`Reference ${idx + 1}`}
-                                               className={`w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300 ${
-                                                 (selectedReferenceImages[index] || 0) === idx ? 'ring-2 ring-primary' : ''
-                                               }`}
-                                               onClick={() => {
-                                                 setSelectedReferenceImages(prev => ({
-                                                   ...prev,
-                                                   [index]: idx
-                                                 }));
-                                               }}
-                                               onError={(e) => {
-                                                 e.currentTarget.style.display = 'none';
-                                               }}
-                                             />
-                                           </div>
-                                         ))}
-                                       </div>
-                                     )}
-                                   </div>
-                                 </div>
-                               ) : null;
-                             })()}
+                             
 
                             {/* Attachments */}
                             {(() => {
@@ -1258,6 +915,105 @@ export default function OrderDetailPage() {
                              </div>
                            </div>
                          </div>
+                         <div className="flex flex-nowrap justify-center gap-6">
+  {(() => {
+    const { mockup_images, reference_images } = extractImagesFromSpecifications(item.specifications);
+
+    // First column: either Mockup or Reference (if Mockup missing)
+    const firstBlock = mockup_images && mockup_images.length > 0
+      ? {
+          title: "Mockup Images",
+          images: mockup_images,
+          selected: selectedMockupImages,
+          setSelected: setSelectedMockupImages
+        }
+      : reference_images && reference_images.length > 0
+        ? {
+            title: "Reference Images",
+            images: reference_images,
+            selected: selectedReferenceImages,
+            setSelected: setSelectedReferenceImages
+          }
+        : null;
+
+    // Second column: only shown if both types are available
+    const secondBlock =
+      mockup_images && mockup_images.length > 0 && reference_images && reference_images.length > 0
+        ? {
+            title: "Reference Images",
+            images: reference_images,
+            selected: selectedReferenceImages,
+            setSelected: setSelectedReferenceImages
+          }
+        : null;
+
+    // Render a block
+    const renderImageBlock = (block: any, blockIndex: number) => (
+      <div key={blockIndex} className="flex-none w-[40%] ">
+        <p className="text-sm font-medium text-muted-foreground mb-3 justify-content-center">{block.title}:</p>
+        <div className="space-y-3">
+          {/* Main large image */}
+          <div className="aspect-square w-full overflow-hidden rounded-lg border shadow-md">
+            <img
+              src={block.images[block.selected[index] || 0]}
+              alt={block.title}
+              className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
+              onClick={() => {
+                const currentImage = block.images[block.selected[index] || 0];
+                const modal = document.createElement('div');
+                modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
+                modal.innerHTML = `
+                  <div class="relative max-w-4xl max-h-full">
+                    <img src="${currentImage}" alt="${block.title}" class="max-w-full max-h-full object-contain rounded-lg" />
+                    <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                      </svg>
+                    </button>
+                  </div>
+                `;
+                modal.onclick = (e) => { if (e.target === modal) document.body.removeChild(modal); };
+                document.body.appendChild(modal);
+              }}
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            />
+          </div>
+
+          {/* Thumbnails */}
+          {block.images.length > 1 && (
+            <div className="grid grid-cols-4 gap-2">
+              {block.images.map((url: string, idx: number) => (
+                <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm">
+                  <img
+                    src={url}
+                    alt={`${block.title} ${idx + 1}`}
+                    className={`w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300 ${
+                      (block.selected[index] || 0) === idx ? 'ring-2 ring-primary' : ''
+                    }`}
+                    onClick={() => {
+                      block.setSelected(prev => ({ ...prev, [index]: idx }));
+                    }}
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+
+    return (
+      <>
+        {firstBlock && renderImageBlock(firstBlock, 1)}
+        {secondBlock && renderImageBlock(secondBlock, 2)}
+      </>
+    );
+  })()}
+</div>
+
+
                        </div>
                        );
                      })}
@@ -1354,69 +1110,7 @@ export default function OrderDetailPage() {
                </Card>
 
                {/* Order Lifecycle */}
-               <Card>
-                 <CardHeader>
-                   <CardTitle className="flex items-center">
-                     <Calendar className="w-5 h-5 mr-2" />
-                     Order Lifecycle
-                   </CardTitle>
-                 </CardHeader>
-                 <CardContent>
-                   <div className="space-y-4">
-                     <div className="flex items-center space-x-4">
-                       <div className="w-4 h-4 bg-blue-500 rounded-full"></div>
-                       <div>
-                         <p className="font-semibold">Order Placed</p>
-                         <p className="text-sm text-muted-foreground">
-                           {new Date(order.order_date).toLocaleDateString('en-GB', {
-                             day: '2-digit',
-                             month: 'long',
-                             year: 'numeric'
-                           })}
-                         </p>
-                       </div>
-                     </div>
-                     
-                     {order.status !== 'pending' && order.status !== 'cancelled' && (
-                       <div className="flex items-center space-x-4">
-                         <div className="w-4 h-4 bg-green-500 rounded-full"></div>
-                         <div>
-                           <p className="font-semibold">Order Confirmed</p>
-                           <p className="text-sm text-muted-foreground">Processing started</p>
-                         </div>
-                       </div>
-                     )}
-                     
-                     {order.expected_delivery_date && (
-                       <div className="flex items-center space-x-4">
-                         <div className={`w-4 h-4 rounded-full ${order.status === 'delivered' ? 'bg-green-500' : 'bg-gray-300'}`}></div>
-                         <div>
-                           <p className="font-semibold">
-                             {order.status === 'delivered' ? 'Delivered' : 'Expected Delivery'}
-                           </p>
-                           <p className="text-sm text-muted-foreground">
-                             {new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
-                               day: '2-digit',
-                               month: 'long',
-                               year: 'numeric'
-                             })}
-                           </p>
-                         </div>
-                       </div>
-                     )}
-
-                     {order.status === 'cancelled' && (
-                       <div className="flex items-center space-x-4">
-                         <div className="w-4 h-4 bg-red-500 rounded-full"></div>
-                         <div>
-                           <p className="font-semibold text-red-600">Order Cancelled</p>
-                           <p className="text-sm text-muted-foreground">Order has been cancelled</p>
-                         </div>
-                       </div>
-                     )}
-                   </div>
-                 </CardContent>
-               </Card>
+               
 
                
 
@@ -1555,7 +1249,69 @@ export default function OrderDetailPage() {
                   )}
                 </CardContent>
               </Card>
+<Card>
+                 <CardHeader>
+                   <CardTitle className="flex items-center">
+                     <Calendar className="w-5 h-5 mr-2" />
+                     Order Lifecycle
+                   </CardTitle>
+                 </CardHeader>
+                 <CardContent>
+                   <div className="space-y-4">
+                     <div className="flex items-center space-x-4">
+                       <div className="w-4 h-4 bg-blue-500 rounded-full"></div>
+                       <div>
+                         <p className="font-semibold">Order Placed</p>
+                         <p className="text-sm text-muted-foreground">
+                           {new Date(order.order_date).toLocaleDateString('en-GB', {
+                             day: '2-digit',
+                             month: 'long',
+                             year: 'numeric'
+                           })}
+                         </p>
+                       </div>
+                     </div>
+                     
+                     {order.status !== 'pending' && order.status !== 'cancelled' && (
+                       <div className="flex items-center space-x-4">
+                         <div className="w-4 h-4 bg-green-500 rounded-full"></div>
+                         <div>
+                           <p className="font-semibold">Order Confirmed</p>
+                           <p className="text-sm text-muted-foreground">Processing started</p>
+                         </div>
+                       </div>
+                     )}
+                     
+                     {order.expected_delivery_date && (
+                       <div className="flex items-center space-x-4">
+                         <div className={`w-4 h-4 rounded-full ${order.status === 'delivered' ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+                         <div>
+                           <p className="font-semibold">
+                             {order.status === 'delivered' ? 'Delivered' : 'Expected Delivery'}
+                           </p>
+                           <p className="text-sm text-muted-foreground">
+                             {new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
+                               day: '2-digit',
+                               month: 'long',
+                               year: 'numeric'
+                             })}
+                           </p>
+                         </div>
+                       </div>
+                     )}
 
+                     {order.status === 'cancelled' && (
+                       <div className="flex items-center space-x-4">
+                         <div className="w-4 h-4 bg-red-500 rounded-full"></div>
+                         <div>
+                           <p className="font-semibold text-red-600">Order Cancelled</p>
+                           <p className="text-sm text-muted-foreground">Order has been cancelled</p>
+                         </div>
+                       </div>
+                     )}
+                   </div>
+                 </CardContent>
+               </Card>
 
             </div>
           </div>
