@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { Eye, Printer, Download, Mail, MessageCircle, Share, FileText, Send, ChevronDown } from 'lucide-react';
+import { Eye, Printer, Download, Mail, MessageCircle, Share, FileText, Send, ChevronDown, ArrowLeft, CreditCard } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { formatCurrency } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
 import {
@@ -295,7 +296,7 @@ export default function QuotationDetailPage() {
         `Dear ${customer.company_name},\n\n` +
         `Thank you for your inquiry! Please find your quotation details below:\n\n` +
         `📋 *Quotation No:* ${quotationNumber}\n` +
-        `💰 *Total Amount:* ₹${grandTotal.toLocaleString()}\n` +
+        `💰 *Total Amount:* ${formatCurrency(grandTotal)}\n` +
         `📅 *Date:* ${new Date(orderDate).toLocaleDateString('en-IN')}\n` +
         `📞 *Contact:* ${customer.contact_person || 'Sales Team'}\n\n` +
         `✅ *Next Steps:*\n` +
@@ -314,7 +315,7 @@ export default function QuotationDetailPage() {
         `Dear ${customer.company_name},\n\n` +
         `Your detailed quotation PDF has been prepared!\n\n` +
         `📋 *Quotation:* ${quotationNumber}\n` +
-        `💰 *Amount:* ₹${grandTotal.toLocaleString()}\n\n` +
+        `💰 *Amount:* ${formatCurrency(grandTotal)}\n\n` +
         `📎 *The PDF file has been downloaded to your device.*\n` +
         `Please attach it to this chat to share the complete quotation.\n\n` +
         `🔄 *How to attach:*\n` +
@@ -349,7 +350,7 @@ export default function QuotationDetailPage() {
         `QUOTATION DETAILS:\n` +
         `• Quotation Number: ${quotationNumber}\n` +
         `• Date: ${new Date(orderDate).toLocaleDateString('en-IN')}\n` +
-        `• Total Amount: ₹${grandTotal.toLocaleString()}\n` +
+        `• Total Amount: ${formatCurrency(grandTotal)}\n` +
         `• Sales Manager: ${salesManagerName || 'Sales Team'}\n\n` +
         `NEXT STEPS:\n` +
         `1. Review the quotation details\n` +
@@ -559,7 +560,7 @@ export default function QuotationDetailPage() {
         `Please find attached the detailed quotation PDF for your reference.\n\n` +
         `Quotation Details:\n` +
         `• Quotation Number: ${quotationNumber}\n` +
-        `• Total Amount: ₹${grandTotal.toLocaleString()}\n` +
+        `• Total Amount: ${formatCurrency(grandTotal)}\n` +
         `• Date: ${new Date(order.order_date).toLocaleDateString('en-IN')}\n\n` +
         `Note: The PDF file has been downloaded to your device. Please attach it to this email before sending.\n\n` +
         `Thank you for your business.\n\n` +
@@ -595,6 +596,12 @@ export default function QuotationDetailPage() {
   return (
     <ErpLayout>
       <div className="space-y-6">
+        {/* Back Button */}
+        <div className="flex items-center">
+          <Button variant="outline" onClick={() => navigate('/accounts/quotations')}>
+            <ArrowLeft className="w-4 h-4 mr-2" /> Back to Quotations
+          </Button>
+        </div>
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -606,6 +613,24 @@ export default function QuotationDetailPage() {
                 
                 <Button variant="outline" onClick={handleExportPDF}>
                   <Download className="w-4 h-4 mr-1" /> Export PDF
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => navigate('/accounts/receipts', {
+                    state: {
+                      prefill: {
+                        type: 'order',
+                        id,
+                        number: order.order_number,
+                        date: order.order_date,
+                        customer_id: order.customer_id,
+                        amount: grandTotal,
+                      },
+                      tab: 'create'
+                    }
+                  })}
+                >
+                  <CreditCard className="w-4 h-4 mr-1" /> Create Receipt
                 </Button>
                 
                 {/* Enhanced Email Dropdown */}
@@ -745,7 +770,7 @@ export default function QuotationDetailPage() {
                 </div>
                 <div className="text-right">
                   <div className="border-2 border-gray-800 p-3 bg-gray-50">
-                    <div className="font-bold text-lg">₹{grandTotal.toLocaleString()}</div>
+                    <div className="font-bold text-lg">{formatCurrency(grandTotal)}</div>
                     <div className="text-sm text-gray-600">Total Amount</div>
                   </div>
                 </div>
@@ -827,13 +852,13 @@ export default function QuotationDetailPage() {
                             <div className="font-semibold text-xs">{item.quantity}</div>
                             <div className="text-xs">Pcs</div>
                           </td>
-                          <td className="border border-gray-400 px-1 py-1 align-top text-right text-xs">₹{item.unit_price}</td>
-                          <td className="border border-gray-400 px-1 py-1 align-top text-right text-xs">₹{amount.toLocaleString()}</td>
+                          <td className="border border-gray-400 px-1 py-1 align-top text-right text-xs">{formatCurrency(item.unit_price)}</td>
+                          <td className="border border-gray-400 px-1 py-1 align-top text-right text-xs">{formatCurrency(amount)}</td>
                           <td className="border border-gray-400 px-1 py-1 align-top text-center">
                             <div className="text-xs">{gstRate}%</div>
-                            <div className="text-xs">₹{gstAmt.toLocaleString()}</div>
+                            <div className="text-xs">{formatCurrency(gstAmt)}</div>
                             </td>
-                          <td className="border border-gray-400 px-1 py-1 align-top text-right font-semibold text-xs">₹{total.toLocaleString()}</td>
+                          <td className="border border-gray-400 px-1 py-1 align-top text-right font-semibold text-xs">{formatCurrency(total)}</td>
                           </tr>
                         );
                       })}
@@ -859,7 +884,7 @@ export default function QuotationDetailPage() {
                           <td className="border border-gray-400 px-2 py-1">{charge.particular}</td>
                           <td className="border border-gray-400 px-2 py-1 text-right">{charge.rate}</td>
                           <td className="border border-gray-400 px-2 py-1 text-center">{charge.gst_percentage}%</td>
-                          <td className="border border-gray-400 px-2 py-1 text-right">₹{charge.amount_incl_gst.toLocaleString()}</td>
+                          <td className="border border-gray-400 px-2 py-1 text-right">{formatCurrency(charge.amount_incl_gst)}</td>
                           </tr>
                       ))}
                     </tbody>
@@ -872,22 +897,22 @@ export default function QuotationDetailPage() {
                   <div className="w-72 space-y-0.5">
                     <div className="flex justify-between text-xs">
                       <span>Subtotal:</span>
-                      <span>₹{subtotal.toLocaleString()}</span>
+                      <span>{formatCurrency(subtotal)}</span>
                     </div>
                     <div className="flex justify-between text-xs">
                       <span>GST Total:</span>
-                      <span>₹{gstTotal.toLocaleString()}</span>
+                      <span>{formatCurrency(gstTotal)}</span>
                     </div>
                     {additionalChargesTotal > 0 && (
                       <div className="flex justify-between text-xs">
                         <span>Additional Charges:</span>
-                        <span>₹{additionalChargesTotal.toLocaleString()}</span>
+                        <span>{formatCurrency(additionalChargesTotal)}</span>
                       </div>
                     )}
                     <div className="border-t border-gray-400 pt-1 mt-1">
                       <div className="flex justify-between text-base font-bold">
                         <span>GRAND TOTAL:</span>
-                        <span>₹{grandTotal.toLocaleString()}</span>
+                        <span>{formatCurrency(grandTotal)}</span>
                       </div>
                     </div>
                   </div>

@@ -17,7 +17,7 @@ import {
   Target
 } from "lucide-react";
 import { generateAllDummyData } from "@/lib/dummyData";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 
 interface DashboardMetric {
   title: string;
@@ -273,7 +273,7 @@ export function Dashboard() {
                     <Badge className={getStatusColor(order.status)}>
                       {order.status.replace('_', ' ')}
                     </Badge>
-                    <p className="text-sm font-medium mt-1">₹{order.totalAmount.toLocaleString()}</p>
+                     <p className="text-sm font-medium mt-1">{formatCurrency(order.totalAmount)}</p>
                   </div>
                 </div>
               ))}
