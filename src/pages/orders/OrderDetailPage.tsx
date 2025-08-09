@@ -24,10 +24,15 @@ import {
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { formatCurrency } from "@/lib/utils";
 import { ErpLayout } from "@/components/ErpLayout";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -165,6 +170,19 @@ export default function OrderDetailPage() {
   const [cancellingOrder, setCancellingOrder] = useState(false);
   const [selectedMockupImages, setSelectedMockupImages] = useState<{ [key: number]: number }>({});
   const [selectedReferenceImages, setSelectedReferenceImages] = useState<{ [key: number]: number }>({});
+  const [employees, setEmployees] = useState<SalesManager[]>([]);
+  const [editOpen, setEditOpen] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editDraft, setEditDraft] = useState<{ 
+    order_date: string; 
+    expected_delivery_date: string; 
+    sales_manager: string | null; 
+    gst_rate: number; 
+    payment_channel: string | null; 
+    reference_id: string | null; 
+    notes: string | null; 
+  } | null>(null);
+  const [editItems, setEditItems] = useState<Array<{ id: string; product_description: string; quantity: number; unit_price: number; gst_rate: number }>>([]);
 
   useEffect(() => {
     if (id) {
@@ -206,6 +224,13 @@ export default function OrderDetailPage() {
         
         setSalesManager(salesManagerData);
       }
+
+      // Fetch employees for edit dropdown
+      const { data: employeesData } = await supabase
+        .from('employees')
+        .select('id, full_name')
+        .order('full_name');
+      setEmployees(employeesData || []);
 
       // Fetch order items
       const { data: itemsData, error: itemsError } = await supabase
@@ -285,6 +310,92 @@ export default function OrderDetailPage() {
     }
   };
 
+  const openEditDialog = () => {
+    if (!order) return;
+    setEditDraft({
+      order_date: order.order_date ? order.order_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
+      expected_delivery_date: order.expected_delivery_date ? order.expected_delivery_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
+      sales_manager: order.sales_manager || null,
+      gst_rate: order.gst_rate ?? 0,
+      payment_channel: order.payment_channel || '',
+      reference_id: order.reference_id || '',
+      notes: order.notes || ''
+    });
+    const itemsDraft = orderItems.map(it => ({
+      id: it.id,
+      product_description: it.product_description,
+      quantity: it.quantity,
+      unit_price: it.unit_price,
+      gst_rate: it.gst_rate ?? (order.gst_rate ?? 0)
+    }));
+    setEditItems(itemsDraft);
+    setEditOpen(true);
+  };
+
+  const computeDraftTotals = () => {
+    let subtotal = 0;
+    let gstTotal = 0;
+    editItems.forEach(it => {
+      const amount = it.quantity * it.unit_price;
+      subtotal += amount;
+      const rate = isNaN(it.gst_rate) ? 0 : it.gst_rate;
+      gstTotal += (amount * rate) / 100;
+    });
+    return { subtotal, gstTotal, grandTotal: subtotal + gstTotal };
+  };
+
+  const handleSaveEdit = async () => {
+    if (!order || !editDraft) return;
+    try {
+      setSavingEdit(true);
+      // Update order items
+      await Promise.all(
+        editItems.map(it =>
+          supabase
+            .from('order_items')
+            .update({
+              quantity: it.quantity,
+              unit_price: it.unit_price,
+              total_price: it.quantity * it.unit_price,
+              gst_rate: it.gst_rate,
+            })
+            .eq('id', it.id)
+        )
+      );
+
+      const { subtotal, gstTotal, grandTotal } = computeDraftTotals();
+      const balanceAmount = grandTotal - (order.advance_amount || 0);
+
+      const { error: orderUpdateError } = await supabase
+        .from('orders')
+        .update({
+          order_date: new Date(editDraft.order_date).toISOString(),
+          expected_delivery_date: new Date(editDraft.expected_delivery_date).toISOString(),
+          sales_manager: editDraft.sales_manager,
+          gst_rate: editDraft.gst_rate,
+          payment_channel: editDraft.payment_channel,
+          reference_id: editDraft.reference_id,
+          notes: editDraft.notes,
+          total_amount: subtotal,
+          tax_amount: gstTotal,
+          final_amount: grandTotal,
+          balance_amount: balanceAmount
+        })
+        .eq('id', order.id);
+      if (orderUpdateError) throw orderUpdateError;
+
+      toast.success('Order updated successfully');
+      setEditOpen(false);
+      // Refresh
+      await fetchOrderDetails();
+    } catch (e: any) {
+      console.error('Update failed', e);
+      toast.error(`Failed to update order: ${e?.message || 'Unknown error'}`);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const handlePrint = () => {
     window.print();
   };
@@ -353,7 +464,7 @@ export default function OrderDetailPage() {
         `Dear ${customer.company_name},\n\n` +
         `Your order details:\n\n` +
         `📋 *Order No:* ${orderNumber}\n` +
-        `💰 *Total Amount:* ₹${grandTotal.toLocaleString()}\n` +
+        `💰 *Total Amount:* ${formatCurrency(grandTotal)}\n` +
         `📅 *Order Date:* ${new Date(orderDate).toLocaleDateString('en-IN')}\n` +
         `📦 *Status:* ${status.replace('_', ' ').toUpperCase()}\n\n` +
         `We appreciate your business!\n\n` +
@@ -367,7 +478,7 @@ export default function OrderDetailPage() {
         `Dear ${customer.company_name},\n\n` +
         `Your detailed order PDF is ready!\n\n` +
         `📋 *Order:* ${orderNumber}\n` +
-        `💰 *Amount:* ₹${grandTotal.toLocaleString()}\n` +
+        `💰 *Amount:* ${formatCurrency(grandTotal)}\n` +
         `📦 *Status:* ${status.replace('_', ' ').toUpperCase()}\n\n` +
         `📎 *PDF downloaded to your device.*\n` +
         `Please attach it to share complete order details.\n\n` +
@@ -391,7 +502,7 @@ export default function OrderDetailPage() {
         `ORDER DETAILS:\n` +
         `• Order Number: ${orderNumber}\n` +
         `• Order Date: ${new Date(orderDate).toLocaleDateString('en-IN')}\n` +
-        `• Total Amount: ₹${grandTotal.toLocaleString()}\n` +
+        `• Total Amount: ${formatCurrency(grandTotal)}\n` +
         `• Current Status: ${status.replace('_', ' ').toUpperCase()}\n` +
         `• Sales Manager: ${salesManagerName || 'Sales Team'}\n\n` +
         `We will keep you updated on the progress of your order.\n\n` +
@@ -490,7 +601,7 @@ export default function OrderDetailPage() {
         `Please find attached the detailed order PDF for your reference.\n\n` +
         `Order Details:\n` +
         `• Order Number: ${order.order_number}\n` +
-        `• Total Amount: ₹${order.final_amount.toLocaleString()}\n` +
+        `• Total Amount: ${formatCurrency(order.final_amount)}\n` +
         `• Status: ${order.status.replace('_', ' ').toUpperCase()}\n` +
         `• Date: ${new Date(order.order_date).toLocaleDateString('en-IN')}\n\n` +
         `Note: The PDF file has been downloaded. Please attach it before sending.\n\n` +
@@ -575,6 +686,9 @@ export default function OrderDetailPage() {
             </Badge>
             
             <div className="flex space-x-2">
+              <Button variant="outline" onClick={openEditDialog}>
+                Edit
+              </Button>
               <Button variant="outline" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print
@@ -671,11 +785,9 @@ export default function OrderDetailPage() {
                   </AlertDialogContent>
                 </AlertDialog>
               )}
-            </div>
-          </div>
-        </div>
-
-       
+             </div>
+           </div>
+         </div>
 
         {/* Regular UI Content (not printed) */}
         <div className="print:hidden space-y-6">
@@ -745,7 +857,120 @@ export default function OrderDetailPage() {
                                               <line x1="6" y1="6" x2="18" y2="18"></line>
                                             </svg>
                                           </button>
-                                        </div>
+       </div>
+
+      {/* Edit Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Edit Order</DialogTitle>
+          </DialogHeader>
+          {editDraft && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <Label>Order Date</Label>
+                  <Input type="date" value={editDraft.order_date} onChange={e => setEditDraft({ ...editDraft, order_date: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Expected Delivery</Label>
+                  <Input type="date" value={editDraft.expected_delivery_date} onChange={e => setEditDraft({ ...editDraft, expected_delivery_date: e.target.value })} />
+                </div>
+                <div>
+                  <Label>GST Rate (%)</Label>
+                  <Input type="number" value={editDraft.gst_rate} onChange={e => setEditDraft({ ...editDraft, gst_rate: parseFloat(e.target.value) || 0 })} />
+                </div>
+                <div>
+                  <Label>Sales Manager</Label>
+                  <Select value={editDraft.sales_manager || ''} onValueChange={(v) => setEditDraft({ ...editDraft, sales_manager: v || null })}>
+                    <SelectTrigger><SelectValue placeholder="Select manager" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None</SelectItem>
+                      {employees.map(emp => (
+                        <SelectItem key={emp.id} value={emp.id}>{emp.full_name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Payment Method</Label>
+                  <Input value={editDraft.payment_channel || ''} onChange={e => setEditDraft({ ...editDraft, payment_channel: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Reference ID</Label>
+                  <Input value={editDraft.reference_id || ''} onChange={e => setEditDraft({ ...editDraft, reference_id: e.target.value })} />
+                </div>
+                <div className="md:col-span-3">
+                  <Label>Notes</Label>
+                  <Input value={editDraft.notes || ''} onChange={e => setEditDraft({ ...editDraft, notes: e.target.value })} />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h3 className="font-semibold">Items</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full border">
+                    <thead className="bg-muted/50 text-sm">
+                      <tr>
+                        <th className="p-2 border text-left">Product</th>
+                        <th className="p-2 border">Qty</th>
+                        <th className="p-2 border">Unit Price</th>
+                        <th className="p-2 border">GST %</th>
+                        <th className="p-2 border">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editItems.map((it, idx) => {
+                        const amount = it.quantity * it.unit_price;
+                        return (
+                          <tr key={it.id} className="text-sm">
+                            <td className="p-2 border text-left">{it.product_description}</td>
+                            <td className="p-2 border w-24">
+                              <Input type="number" value={it.quantity} onChange={e => {
+                                const v = parseInt(e.target.value) || 0;
+                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, quantity: v } : p));
+                              }} />
+                            </td>
+                            <td className="p-2 border w-32">
+                              <Input type="number" value={it.unit_price} onChange={e => {
+                                const v = parseFloat(e.target.value) || 0;
+                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, unit_price: v } : p));
+                              }} />
+                            </td>
+                            <td className="p-2 border w-24">
+                              <Input type="number" value={it.gst_rate} onChange={e => {
+                                const v = parseFloat(e.target.value) || 0;
+                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, gst_rate: v } : p));
+                              }} />
+                            </td>
+                            <td className="p-2 border text-right">{formatCurrency(amount)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {(() => {
+                  const { subtotal, gstTotal, grandTotal } = computeDraftTotals();
+                  return (
+                    <div className="text-right space-y-1 text-sm">
+                      <div>Subtotal: {formatCurrency(subtotal)}</div>
+                      <div>GST Total: {formatCurrency(gstTotal)}</div>
+                      <div className="font-semibold">Grand Total: {formatCurrency(grandTotal)}</div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={savingEdit}>Cancel</Button>
+            </DialogClose>
+            <Button onClick={handleSaveEdit} disabled={savingEdit}>{savingEdit ? 'Saving...' : 'Save Changes'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
                                       `;
                                       modal.onclick = (e) => {
                                         if (e.target === modal) {
@@ -830,11 +1055,11 @@ export default function OrderDetailPage() {
                                   </div>
                                   <div className="bg-muted/30 rounded-lg p-3">
                                     <span className="text-xs text-muted-foreground block">Unit Price</span>
-                                    <span className="font-medium">₹{item.unit_price.toLocaleString()}</span>
+                                    <span className="font-medium">{formatCurrency(item.unit_price)}</span>
                                   </div>
                                   <div className="bg-muted/30 rounded-lg p-3">
                                     <span className="text-xs text-muted-foreground block">Total Price</span>
-                                    <span className="font-medium text-primary">₹{item.total_price.toLocaleString()}</span>
+                                    <span className="font-medium text-primary">{formatCurrency(item.total_price)}</span>
                                   </div>
                                 </div>
                                 
@@ -1002,6 +1227,8 @@ export default function OrderDetailPage() {
           )}
         </div>
       </div>
+
+      
     );
 
     return (
@@ -1083,11 +1310,11 @@ export default function OrderDetailPage() {
                                          .join(', ')}
                                    </div>
                                  </td>
-                                 <td className="border border-gray-300 px-3 py-2 text-sm">₹{item.unit_price}</td>
-                                 <td className="border border-gray-300 px-3 py-2 text-sm">₹{amount.toLocaleString()}</td>
+                                  <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(item.unit_price)}</td>
+                                  <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(amount)}</td>
                                  <td className="border border-gray-300 px-3 py-2 text-sm">{gstRate}%</td>
-                                 <td className="border border-gray-300 px-3 py-2 text-sm">₹{gstAmt.toLocaleString()}</td>
-                                 <td className="border border-gray-300 px-3 py-2 text-sm font-medium">₹{total.toLocaleString()}</td>
+                                  <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(gstAmt)}</td>
+                                  <td className="border border-gray-300 px-3 py-2 text-sm font-medium">{formatCurrency(total)}</td>
                                </tr>
                              );
                            })}
@@ -1099,9 +1326,9 @@ export default function OrderDetailPage() {
                        const { subtotal, gstAmount, grandTotal } = calculateOrderSummary(orderItems, order);
                        return (
                          <div className="text-right space-y-1">
-                           <div className="text-lg font-semibold">Subtotal: ₹{subtotal.toLocaleString()}</div>
-                           <div className="text-lg font-semibold">GST Total: ₹{gstAmount.toLocaleString()}</div>
-                           <div className="text-2xl font-bold text-primary">Grand Total: ₹{grandTotal.toLocaleString()}</div>
+                           <div className="text-lg font-semibold">Subtotal: {formatCurrency(subtotal)}</div>
+                           <div className="text-lg font-semibold">GST Total: {formatCurrency(gstAmount)}</div>
+                           <div className="text-2xl font-bold text-primary">Grand Total: {formatCurrency(grandTotal)}</div>
                          </div>
                        );
                      })()}
@@ -1210,25 +1437,25 @@ export default function OrderDetailPage() {
                 <CardContent className="space-y-4">
                   <div className="flex justify-between">
                     <span>Subtotal</span>
-                    <span>₹{order.total_amount.toLocaleString()}</span>
+                    <span>{formatCurrency(order.total_amount)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span>GST ({order.gst_rate}%)</span>
-                    <span>₹{order.tax_amount.toLocaleString()}</span>
+                    <span>{formatCurrency(order.tax_amount)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Advance Paid</span>
-                    <span className="text-green-600">₹{order.advance_amount.toLocaleString()}</span>
+                    <span className="text-green-600">{formatCurrency(order.advance_amount)}</span>
                   </div>
                   <hr />
                   <div className="flex justify-between font-bold text-lg">
                     <span>Total Amount</span>
-                    <span>₹{order.final_amount.toLocaleString()}</span>
+                    <span>{formatCurrency(order.final_amount)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Balance Due</span>
                     <span className={order.balance_amount > 0 ? "text-orange-600" : "text-green-600"}>
-                      ₹{order.balance_amount.toLocaleString()}
+                      {formatCurrency(order.balance_amount)}
                     </span>
                   </div>
                   

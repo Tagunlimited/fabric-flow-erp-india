@@ -196,7 +196,7 @@ const CustomerDetailPage = () => {
                 <CreditCard className="w-8 h-8 text-primary" />
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">Credit Limit</p>
-                  <p className="text-2xl font-bold">₹{customer.credit_limit?.toLocaleString() || '0'}</p>
+                  <p className="text-2xl font-bold">{formatCurrency(customer.credit_limit || 0)}</p>
                 </div>
               </div>
             </CardContent>
@@ -208,7 +208,7 @@ const CustomerDetailPage = () => {
                 <TrendingUp className="w-8 h-8 text-accent" />
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">Outstanding</p>
-                  <p className="text-2xl font-bold">₹{customer.outstanding_amount?.toLocaleString() || '0'}</p>
+                  <p className="text-2xl font-bold">{formatCurrency(customer.outstanding_amount || 0)}</p>
                 </div>
               </div>
             </CardContent>
@@ -409,7 +409,7 @@ const CustomerDetailPage = () => {
                                 {order.status?.replace('_', ' ').toUpperCase()}
                               </span>
                             </td>
-                            <td className="px-4 py-2">₹{order.final_amount?.toLocaleString() || '0'}</td>
+                             <td className="px-4 py-2">{formatCurrency(order.final_amount || 0)}</td>
                             <td className="px-4 py-2">
                               <Button size="sm" variant="outline" onClick={e => { e.stopPropagation(); navigate(`/orders/${order.id}`); }}>
                                 View
@@ -468,7 +468,7 @@ const CustomerDetailPage = () => {
                                 {invoice.status?.replace('_', ' ').toUpperCase()}
                               </span>
                             </td>
-                            <td className="px-4 py-2">₹{invoice.total_amount?.toLocaleString() || '0'}</td>
+                            <td className="px-4 py-2">{formatCurrency(invoice.total_amount || 0)}</td>
                             <td className="px-4 py-2">
                               <Button size="sm" variant="outline" onClick={e => { e.stopPropagation(); navigate(`/accounts/invoices/${invoice.id}`); }}>
                                 View

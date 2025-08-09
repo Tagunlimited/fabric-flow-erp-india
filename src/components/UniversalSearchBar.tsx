@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { cn } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 
 interface SearchResult {
   id: string;
@@ -319,9 +319,9 @@ export function UniversalSearchBar({
                         <p className="text-xs text-muted-foreground truncate">{result.description}</p>
                       )}
                       <div className="flex items-center space-x-4 mt-1">
-                        {result.amount && (
+                        {typeof result.amount === 'number' && (
                           <span className="text-xs text-muted-foreground">
-                            ₹{result.amount.toLocaleString()}
+                            {formatCurrency(result.amount)}
                           </span>
                         )}
                         {result.date && (
