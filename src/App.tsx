@@ -29,6 +29,8 @@ import QualityPage from "./pages/QualityPage";
 import DispatchPage from "./pages/DispatchPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import SettingsPage from "./pages/SettingsPage";
+import DesignPage from "./pages/DesignPage";
+import ProcurementPage from "./pages/ProcurementPage";
 import CompanyConfigPage from "./pages/admin/CompanyConfigPage";
 import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
@@ -165,6 +167,16 @@ const App = () => {
                 <Route path="/production" element={
                   <ProtectedRoute>
                     <ProductionPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/design" element={
+                  <ProtectedRoute>
+                    <DesignPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement" element={
+                  <ProtectedRoute>
+                    <ProcurementPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/quality" element={

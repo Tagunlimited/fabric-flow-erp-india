@@ -67,12 +67,19 @@ const sidebarItems: SidebarItem[] = [
       { title: "Create/View Invoices", url: "/accounts/invoices", icon: Calculator },
       { title: "Receipts", url: "/accounts/receipts", icon: Calculator },
       { title: "Payments", url: "/accounts/payments", icon: Calculator },
-      { title: "Expenses", url: "/accounts/expenses", icon: Calculator },
-      { title: "Payroll", url: "/accounts/payroll", icon: Calculator },
-      { title: "Settings", url: "/accounts/settings", icon: Settings }
+      // { title: "Expenses", url: "/accounts/expenses", icon: Calculator },
+      // { title: "Payroll", url: "/accounts/payroll", icon: Calculator },
+      // { title: "Settings", url: "/accounts/settings", icon: Settings }
     ]
   },
   { title: "Design & Printing", url: "/design", icon: Palette },
+  { 
+    title: "Procurement", 
+    icon: ShoppingBag,
+    children: [
+      { title: "Bills of Materials", url: "/procurement", icon: ClipboardList },
+    ]
+  },
   { 
     title: "Inventory", 
     icon: Package, 
@@ -146,12 +153,6 @@ function SidebarItemComponent({ item, collapsed, level = 0, onMobileClick }: Sid
   const hasChildrenInit = item.children && item.children.length > 0;
   const hasActiveChildInit = hasChildrenInit && item.children?.some(child => currentPath === child.url);
   const [isOpen, setIsOpen] = useState(hasActiveChildInit);
-  // Keep parent open if one of its children is active
-  // This improves mobile UX as well
-  if (hasActiveChildInit && !isOpen) {
-    // Avoid setState during render by deferring in microtask
-    queueMicrotask(() => setIsOpen(true));
-  }
 
   const hasChildren = item.children && item.children.length > 0;
   const isActive = item.url ? currentPath === item.url : false;
@@ -181,43 +182,76 @@ function SidebarItemComponent({ item, collapsed, level = 0, onMobileClick }: Sid
       }
     }
     
+    const isMobile = typeof window !== 'undefined' && window.innerWidth < 1024;
     return (
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-        <div
-          className={cn(
-            "flex items-center w-full px-3 py-2 text-sm font-medium rounded-lg transition-all duration-200",
-            (isActive || hasActiveChild)
-              ? "bg-primary-foreground/20 text-primary-foreground shadow-lg"
-              : "text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground",
-            level > 0 && "ml-4"
-          )}
-        >
-          <item.icon className="flex-shrink-0 w-5 h-5 mr-3" />
-          <span className="flex-1 text-left select-none">{item.title}</span>
-          {item.badge && (
-            <span
+        {isMobile ? (
+          <div
+            className={cn(
+              "flex items-center w-full px-3 py-2 text-sm font-medium rounded-lg transition-all duration-200",
+              (isActive || hasActiveChild)
+                ? "bg-primary-foreground/20 text-primary-foreground shadow-lg"
+                : "text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground",
+              level > 0 && "ml-4"
+            )}
+          >
+            <item.icon className="flex-shrink-0 w-5 h-5 mr-3" />
+            <span className="flex-1 text-left select-none">{item.title}</span>
+            {item.badge && (
+              <span
+                className={cn(
+                  "px-2 py-1 text-xs rounded-full font-medium text-primary-foreground mr-2",
+                  item.badgeColor || "bg-primary-foreground/20"
+                )}
+              >
+                {item.badge}
+              </span>
+            )}
+            <CollapsibleTrigger asChild>
+              <button
+                className="p-1 rounded hover:bg-primary-foreground/10"
+                aria-label={isOpen ? "Collapse" : "Expand"}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {isOpen ? (
+                  <ChevronDown className="w-4 h-4" />
+                ) : (
+                  <ChevronRight className="w-4 h-4" />
+                )}
+              </button>
+            </CollapsibleTrigger>
+          </div>
+        ) : (
+          <CollapsibleTrigger asChild>
+            <div
               className={cn(
-                "px-2 py-1 text-xs rounded-full font-medium text-primary-foreground mr-2",
-                item.badgeColor || "bg-primary-foreground/20"
+                "flex items-center w-full px-3 py-2 text-sm font-medium rounded-lg transition-all duration-200 cursor-pointer",
+                (isActive || hasActiveChild)
+                  ? "bg-primary-foreground/20 text-primary-foreground shadow-lg"
+                  : "text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground",
+                level > 0 && "ml-4"
               )}
             >
-              {item.badge}
-            </span>
-          )}
-          <CollapsibleTrigger asChild>
-            <button
-              className="p-1 rounded hover:bg-primary-foreground/10"
-              aria-label={isOpen ? "Collapse" : "Expand"}
-              onClick={(e) => e.stopPropagation()}
-            >
+              <item.icon className="flex-shrink-0 w-5 h-5 mr-3" />
+              <span className="flex-1 text-left select-none">{item.title}</span>
+              {item.badge && (
+                <span
+                  className={cn(
+                    "px-2 py-1 text-xs rounded-full font-medium text-primary-foreground mr-2",
+                    item.badgeColor || "bg-primary-foreground/20"
+                  )}
+                >
+                  {item.badge}
+                </span>
+              )}
               {isOpen ? (
                 <ChevronDown className="w-4 h-4" />
               ) : (
                 <ChevronRight className="w-4 h-4" />
               )}
-            </button>
+            </div>
           </CollapsibleTrigger>
-        </div>
+        )}
         <CollapsibleContent className="space-y-1 mt-1">
           {item.children?.map((child, index) => (
             <SidebarItemComponent 

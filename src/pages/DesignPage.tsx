@@ -7,10 +7,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { ShoppingCart, Eye, Package, Truck, Clock, CheckCircle, Search, Filter, FileImage } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
+import { useOrdersWithReceipts } from "@/hooks/useOrdersWithReceipts";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
+import { formatCurrency } from "@/lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
@@ -35,59 +37,21 @@ interface Order {
 const DesignPage = () => {
   const navigate = useNavigate();
   const { config: company } = useCompanySettings();
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { orders, loading, refetch } = useOrdersWithReceipts<Order>();
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<string>("date_desc");
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [showMockupDialog, setShowMockupDialog] = useState(false);
+  
   const [showPrintDialog, setShowPrintDialog] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetchOrders();
+    // orders are fetched by the hook; keep effect to satisfy other dependencies if needed
   }, []);
 
-  const fetchOrders = async () => {
-    try {
-      setLoading(true);
-      
-      // First get orders that have receipts
-      const { data: receipts } = await supabase
-        .from('receipts')
-        .select('reference_id, reference_number')
-        .eq('reference_type', 'order')
-        .not('status', 'eq', 'cancelled');
-      
-      if (!receipts || receipts.length === 0) {
-        setOrders([]);
-        return;
-      }
-
-      const orderIds = receipts.map(r => r.reference_id).filter(Boolean);
-      const orderNumbers = receipts.map(r => r.reference_number).filter(Boolean);
-
-      // Fetch orders with customer details and mockup_url
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          customer:customers(company_name)
-        `)
-        .or(`id.in.(${orderIds.join(',')}),order_number.in.(${orderNumbers.map(n => `"${n}"`).join(',')})`)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setOrders(data || []);
-    } catch (error) {
-      console.error('Error fetching orders:', error);
-      toast.error('Failed to fetch orders');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const fetchOrders = async () => { await refetch(); };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -100,38 +64,7 @@ const DesignPage = () => {
     }
   };
 
-  const handleMockupUpload = async (file: File) => {
-    if (!selectedOrder) return;
-    
-    try {
-      // Upload file to Supabase storage
-      const fileName = `mockups/${selectedOrder.id}/${Date.now()}_${file.name}`;
-      const { data, error } = await supabase.storage
-        .from('order-mockups')
-        .upload(fileName, file);
-
-      if (error) throw error;
-
-      // Update order with mockup URL
-      const { error: updateError } = await supabase
-        .from('orders')
-        .update({ 
-          mockup_url: data.path,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', selectedOrder.id);
-
-      if (updateError) throw updateError;
-
-      toast.success('Mockup uploaded successfully');
-      setShowMockupDialog(false);
-      // Refresh orders list
-      fetchOrders();
-    } catch (e) {
-      console.error('Error uploading mockup:', e);
-      toast.error('Failed to upload mockup');
-    }
-  };
+  // Upload functionality moved to OrderDetailPage
 
   const handleExportPDF = async () => {
     if (!printRef.current) return;
@@ -359,8 +292,8 @@ const DesignPage = () => {
                             {order.status.replace('_', ' ').toUpperCase()}
                           </Badge>
                         </TableCell>
-                        <TableCell>₹{order.final_amount?.toFixed(2) || '0.00'}</TableCell>
-                        <TableCell>₹{order.balance_amount?.toFixed(2) || '0.00'}</TableCell>
+                        <TableCell>{formatCurrency(order.final_amount || 0)}</TableCell>
+                        <TableCell>{formatCurrency(order.balance_amount || 0)}</TableCell>
                         <TableCell>
                           {order.mockup_url ? (
                             <div className="w-6 h-6 bg-green-100 rounded flex items-center justify-center">
@@ -384,17 +317,7 @@ const DesignPage = () => {
                             >
                               <Eye className="w-4 h-4" />
                             </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedOrder(order);
-                                setShowMockupDialog(true);
-                              }}
-                            >
-                              <FileImage className="w-4 h-4" />
-                            </Button>
+                            {/* Upload moved to Order Detail page */}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -406,38 +329,7 @@ const DesignPage = () => {
           </CardContent>
         </Card>
 
-        {/* Mockup Upload Dialog */}
-        <Dialog open={showMockupDialog} onOpenChange={setShowMockupDialog}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Upload Mockup</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="text-sm text-muted-foreground">
-                Upload a design mockup for order {selectedOrder?.order_number}
-              </div>
-              <div className="border-2 border-dashed border-gray-300 rounded p-6 text-center">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      handleMockupUpload(file);
-                    }
-                  }}
-                  className="hidden"
-                  id="mockup-upload"
-                />
-                <label htmlFor="mockup-upload" className="cursor-pointer">
-                  <FileImage className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-                  <div className="text-gray-500">Click to select image</div>
-                  <div className="text-xs text-gray-400 mt-1">Supports: JPG, PNG, GIF</div>
-                </label>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+        {/* Upload removed; handled in Order Detail Page */}
 
         {/* Print Dialog */}
         <Dialog open={showPrintDialog} onOpenChange={setShowPrintDialog}>
