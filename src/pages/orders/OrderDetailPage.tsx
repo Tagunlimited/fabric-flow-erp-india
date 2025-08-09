@@ -173,6 +173,8 @@ export default function OrderDetailPage() {
   const [employees, setEmployees] = useState<SalesManager[]>([]);
   const [editOpen, setEditOpen] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [editDraft, setEditDraft] = useState<{ 
     order_date: string; 
     expected_delivery_date: string; 
@@ -393,6 +395,64 @@ export default function OrderDetailPage() {
       toast.error(`Failed to update order: ${e?.message || 'Unknown error'}`);
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  // Image upload handlers for mockup/reference images stored within order_items.specifications
+  const handleUploadImage = (orderItemId: string, type: 'mockup' | 'reference', file: File) => uploadImages(orderItemId, type, [file]);
+  const handleUploadImages = (orderItemId: string, type: 'mockup' | 'reference', files: FileList | File[]) => uploadImages(orderItemId, type, Array.from(files || []));
+
+  const uploadImages = async (orderItemId: string, type: 'mockup' | 'reference', files: File[]) => {
+    if (!files || files.length === 0) return;
+    try {
+      setUploadingImage(true);
+      const bucket = 'order-images';
+      const uploadedUrls: string[] = [];
+      for (const file of files) {
+        const path = `${order?.id}/${type}/${Date.now()}_${Math.random().toString(36).slice(2)}_${file.name}`;
+        const { error } = await supabase.storage.from(bucket).upload(path, file);
+        if (error) throw error;
+        const { data: pub } = supabase.storage.from(bucket).getPublicUrl(path);
+        uploadedUrls.push(pub?.publicUrl || path);
+      }
+
+      // Update specifications JSON on the specific order_item
+      const target = orderItems.find(i => i.id === orderItemId);
+      if (!target) throw new Error('Order item not found');
+      const specs = typeof target.specifications === 'string' ? (JSON.parse(target.specifications || '{}') || {}) : (target.specifications || {});
+      const key = type === 'mockup' ? 'mockup_images' : 'reference_images';
+      const baseList: string[] = Array.isArray(specs[key]) ? specs[key] : [];
+      const updatedList: string[] = [...baseList, ...uploadedUrls];
+      const updatedSpecs = { ...specs, [key]: updatedList };
+
+      const { error: updErr } = await supabase.from('order_items').update({ specifications: updatedSpecs }).eq('id', orderItemId);
+      if (updErr) throw updErr;
+      toast.success(`${type === 'mockup' ? 'Mockup' : 'Reference'} image${uploadedUrls.length > 1 ? 's' : ''} uploaded`);
+      await fetchOrderDetails();
+    } catch (e: any) {
+      console.error('Upload failed', e);
+      toast.error(e?.message || 'Upload failed');
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleRemoveImage = async (orderItemId: string, type: 'mockup' | 'reference', url: string) => {
+    try {
+      const target = orderItems.find(i => i.id === orderItemId);
+      if (!target) throw new Error('Order item not found');
+      const specs = typeof target.specifications === 'string' ? (JSON.parse(target.specifications || '{}') || {}) : (target.specifications || {});
+      const key = type === 'mockup' ? 'mockup_images' : 'reference_images';
+      const currentList: string[] = Array.isArray(specs[key]) ? specs[key] : [];
+      const updatedList = currentList.filter((p: string) => p !== url);
+      const updatedSpecs = { ...specs, [key]: updatedList };
+      const { error } = await supabase.from('order_items').update({ specifications: updatedSpecs }).eq('id', orderItemId);
+      if (error) throw error;
+      toast.success('Image removed');
+      await fetchOrderDetails();
+    } catch (e: any) {
+      console.error('Remove failed', e);
+      toast.error(e?.message || 'Remove failed');
     }
   };
 
@@ -1023,7 +1083,7 @@ export default function OrderDetailPage() {
                             })()}
                           </div>
 
-                          {/* Product Details Section */}
+                           {/* Product Details Section */}
                           <div className="xl:w-3/5 space-y-4">
                             <div className="flex justify-between items-start">
                               <div className="flex-1 space-y-4">
@@ -1090,6 +1150,28 @@ export default function OrderDetailPage() {
                                     </div>
                                   </div>
                                 )}
+
+                                {/* Upload Controls for Mockup / Reference Images */}
+                                <div className="flex gap-3">
+                                  {(() => {
+                                    const mockupInputId = `mockup-${item.id}`;
+                                    const refInputId = `reference-${item.id}`;
+                                    return (
+                                      <>
+                                        <input id={mockupInputId} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files && e.target.files.length) handleUploadImages(item.id, 'mockup', e.target.files); }} />
+                                        <Button type="button" variant="outline" size="sm" disabled={uploadingImage} onClick={() => document.getElementById(mockupInputId)?.click()}>
+                                          <Image className="w-4 h-4 mr-1" />
+                                          {uploadingImage ? 'Uploading...' : 'Upload Mockup'}
+                                        </Button>
+                                        <input id={refInputId} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files && e.target.files.length) handleUploadImages(item.id, 'reference', e.target.files); }} />
+                                        <Button type="button" variant="outline" size="sm" disabled={uploadingImage} onClick={() => document.getElementById(refInputId)?.click()}>
+                                          <Image className="w-4 h-4 mr-1" />
+                                          {uploadingImage ? 'Uploading...' : 'Upload Reference'}
+                                        </Button>
+                                      </>
+                                    );
+                                  })()}
+                                </div>
 
                                 {/* Branding Details */}
                                 {item.specifications && (() => {
@@ -1209,7 +1291,7 @@ export default function OrderDetailPage() {
           {block.images.length > 1 && (
             <div className="grid grid-cols-4 gap-2">
               {block.images.map((url: string, idx: number) => (
-                <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm">
+                <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm relative group">
                   <img
                     src={url}
                     alt={`${block.title} ${idx + 1}`}
@@ -1221,6 +1303,12 @@ export default function OrderDetailPage() {
                     }}
                     onError={(e) => { e.currentTarget.style.display = 'none'; }}
                   />
+                  <button
+                    className="absolute top-1 right-1 hidden group-hover:block bg-white/90 hover:bg-white rounded px-1 text-[10px]"
+                    onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); handleRemoveImage(item.id, block.title.includes('Mockup') ? 'mockup' : 'reference', url); }}
+                  >
+                    Remove
+                  </button>
                 </div>
               ))}
             </div>
