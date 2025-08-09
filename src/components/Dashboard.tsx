@@ -16,6 +16,7 @@ import {
   Clock,
   Target
 } from "lucide-react";
+
 import { getDashboardData, type DashboardData } from "@/lib/database";
 import { cn } from "@/lib/utils";
 
@@ -276,7 +277,9 @@ export function Dashboard() {
                     <Badge className={getStatusColor(order.status)}>
                       {order.status.replace('_', ' ')}
                     </Badge>
-                    <p className="text-sm font-medium mt-1">₹{(order.total_amount || 0).toLocaleString()}</p>
+
+                     <p className="text-sm font-medium mt-1">{formatCurrency(order.totalAmount)}</p>
+
                   </div>
                 </div>
               ))}

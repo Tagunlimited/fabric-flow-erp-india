@@ -15,7 +15,7 @@ import { CalendarIcon, Plus, Trash2, Upload, X, Image, ChevronLeft, ChevronRight
 import { format } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 
 interface Customer {
   id: string;
@@ -1699,7 +1699,7 @@ export function OrderForm() {
                                 </div>
                               </td>
                               <td className="border border-gray-300 px-3 py-2 text-sm">₹{product.price}</td>
-                              <td className="border border-gray-300 px-3 py-2 text-sm">₹{amount.toLocaleString()}</td>
+                              <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(amount)}</td>
                               <td className="border border-gray-300 px-3 py-2 text-sm">
                                 <Input
                                   type="number"
@@ -1713,8 +1713,8 @@ export function OrderForm() {
                                 />
                                 %
                               </td>
-                              <td className="border border-gray-300 px-3 py-2 text-sm">₹{gstAmount.toLocaleString()}</td>
-                              <td className="border border-gray-300 px-3 py-2 text-sm font-medium">₹{total.toLocaleString()}</td>
+                              <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(gstAmount)}</td>
+                              <td className="border border-gray-300 px-3 py-2 text-sm font-medium">{formatCurrency(total)}</td>
                             </tr>
                           );
                         })}
@@ -1724,7 +1724,7 @@ export function OrderForm() {
                   
                   {/* Subtotal */}
                   <div className="text-right">
-                    <div className="text-lg font-semibold">Subtotal: ₹{subtotal.toLocaleString()}</div>
+                    <div className="text-lg font-semibold">Subtotal: {formatCurrency(subtotal)}</div>
                   </div>
                 </div>
 
@@ -1785,7 +1785,7 @@ export function OrderForm() {
                                 />
                               </td>
                               <td className="border border-gray-300 px-3 py-2 text-sm font-medium">
-                                ₹{charge.amount_incl_gst.toLocaleString()}
+                                {formatCurrency(charge.amount_incl_gst)}
                               </td>
                               <td className="border border-gray-300 px-3 py-2">
                                 <Button
@@ -1813,7 +1813,7 @@ export function OrderForm() {
                     <div className="text-sm font-medium">INR {numberToWords(Math.round(grandTotal))}</div>
                   </div>
                   <div className="text-right">
-                    <div className="text-2xl font-bold text-primary">Grand Total: ₹{grandTotal.toLocaleString()}</div>
+                    <div className="text-2xl font-bold text-primary">Grand Total: {formatCurrency(grandTotal)}</div>
                   </div>
                 </div>
               </CardContent>

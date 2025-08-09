@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { ErpLayout } from '@/components/ErpLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelect';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { formatCurrency } from '@/lib/utils';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
@@ -47,6 +49,10 @@ interface Customer {
 export default function ReceiptPage() {
   const printRef = useRef<HTMLDivElement>(null);
   const { config: company } = useCompanySettings();
+  const location = useLocation();
+  const navState: any = location.state as any;
+  const prefill: any = navState?.prefill;
+  const initialTab: 'view' | 'create' = navState?.tab === 'create' ? 'create' : 'view';
 
   // Customer selection
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -100,16 +106,57 @@ export default function ReceiptPage() {
         .eq('id', customerId)
         .single();
       setCustomer((data || null) as Customer | null);
-      setSelected(null);
+      // If selection already exists (from prefill), keep it
+      // Otherwise, clear selection when switching customer
+      setSelected(prev => (prev && prev.customer_id === customerId ? prev : null));
       setRefSearch('');
       fetchReceipts();
     };
     run();
   }, [customerId]);
 
-  // Load receipts on initial page load
+  // Load receipts on initial page load and handle prefill from navigation
   useEffect(() => {
     fetchReceipts();
+  }, []);
+
+  useEffect(() => {
+    const prefillFromQuotation = async () => {
+      if (!prefill || prefill.type !== 'order' || !prefill.id) return;
+      try {
+        // Fetch order and customer to prefill
+        const { data: ord } = await supabase
+          .from('orders')
+          .select('id, order_number, order_date, customer_id, final_amount, balance_amount')
+          .eq('id', prefill.id)
+          .single();
+        if (!ord) return;
+        const { data: cust } = await supabase
+          .from('customers')
+          .select('*')
+          .eq('id', ord.customer_id)
+          .single();
+        setCustomer((cust || null) as Customer | null);
+        setCustomerId(ord.customer_id);
+        const sel = {
+          id: ord.id,
+          type: 'order' as const,
+          number: ord.order_number,
+          date: ord.order_date,
+          customer_id: ord.customer_id,
+          customer_name: cust?.company_name,
+          total_amount: ord.final_amount,
+          balance_amount: ord.balance_amount,
+        };
+        setSelected(sel);
+        setReceiptReference(ord.order_number);
+        setAmount(String(prefill.amount ?? ord.final_amount ?? ''));
+      } catch (e) {
+        // ignore prefill errors
+      }
+    };
+    prefillFromQuotation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchReceipts = async () => {
@@ -121,7 +168,7 @@ export default function ReceiptPage() {
         .select('id, created_at, receipt_number, reference_number, reference_type, amount, payment_mode, payment_type, customer_id, customers(company_name)')
         .order('created_at', { ascending: false })
         .limit(50);
-      let resp = customerId ? await query.eq('customer_id', customerId) : await query;
+      let resp: any = customerId ? await query.eq('customer_id', customerId) : await query;
       if (resp.error) {
         // Fallback: older schema without status or relationship
         console.warn('Receipts select with join/status failed, falling back:', resp.error.message);
@@ -250,7 +297,7 @@ export default function ReceiptPage() {
           });
 
           if (totalWithNewReceipt > Number(order.final_amount)) {
-            toast.error(`Total receipts (₹${totalWithNewReceipt.toLocaleString()}) cannot exceed order amount (₹${Number(order.final_amount).toLocaleString()})`);
+            toast.error(`Total receipts (${formatCurrency(totalWithNewReceipt)}) cannot exceed order amount (${formatCurrency(Number(order.final_amount))})`);
             return;
           }
         } else {
@@ -494,7 +541,7 @@ export default function ReceiptPage() {
           const totalWithNewAmount = totalExistingReceipts + newAmount;
 
           if (totalWithNewAmount > Number(order.final_amount)) {
-            toast.error(`Total receipts (₹${totalWithNewAmount.toLocaleString()}) cannot exceed order amount (₹${Number(order.final_amount).toLocaleString()})`);
+            toast.error(`Total receipts (${formatCurrency(totalWithNewAmount)}) cannot exceed order amount (${formatCurrency(Number(order.final_amount))})`);
             return;
           }
         }
@@ -646,6 +693,7 @@ export default function ReceiptPage() {
       }
       setReceiptNumber(r.receipt_number || '');
       setAmount(String(r.amount || ''));
+      setReceiptAmount(Number(r.amount) || 0);
       setPaymentMode(r.payment_mode || 'UPI');
       setPaymentType(r.payment_type || 'Advance');
       setReferenceId(r.reference_txn_id || '');
@@ -716,7 +764,7 @@ export default function ReceiptPage() {
   return (
     <ErpLayout>
       <div className="space-y-6">
-        <Tabs defaultValue="view" className="w-full">
+        <Tabs defaultValue={initialTab} className="w-full">
           <TabsList>
             <TabsTrigger value="view">View Txn</TabsTrigger>
             <TabsTrigger value="create">Create Receipt</TabsTrigger>
@@ -756,7 +804,7 @@ export default function ReceiptPage() {
                             <td className="p-2 border">{r.customers?.company_name || r.customer_name || '-'}</td>
                             <td className="p-2 border">{r.reference_number}</td>
                             <td className="p-2 border uppercase">{r.reference_type}</td>
-                            <td className="p-2 border text-right">₹{Number(r.amount).toLocaleString()}</td>
+                            <td className="p-2 border text-right">{formatCurrency(Number(r.amount))}</td>
                             <td className="p-2 border">{r.payment_mode}</td>
                             <td className="p-2 border space-x-2">
                               <Button variant="outline" size="sm" onClick={async (e) => { e.stopPropagation(); await handleEditReceipt(r); }}>Edit</Button>
@@ -830,7 +878,7 @@ export default function ReceiptPage() {
                 </Popover>
                 {selected && (
                   <div className="text-xs text-muted-foreground mt-1">
-                    Pending Amount: <span className="font-semibold text-amber-700">₹{(selected.balance_amount ?? 0).toLocaleString()}</span>
+                    Pending Amount: <span className="font-semibold text-amber-700">{formatCurrency(selected.balance_amount ?? 0)}</span>
                   </div>
                 )}
               </div>
@@ -949,7 +997,7 @@ export default function ReceiptPage() {
                   <div><span className="font-medium">Payment Type:</span> {paymentType}</div>
                 </div>
                 <div className="space-y-1 text-right">
-                  <div><span className="font-medium">Amount:</span> ₹{receiptAmount.toLocaleString()}</div>
+                  <div><span className="font-medium">Amount:</span> {formatCurrency(receiptAmount)}</div>
                   {referenceId && <div><span className="font-medium">Reference ID:</span> {referenceId}</div>}
                   {verifiedBy && <div><span className="font-medium">Verified By:</span> {verifiedBy}</div>}
                 </div>
@@ -957,7 +1005,7 @@ export default function ReceiptPage() {
 
               {/* Acknowledgement */}
               <div className="border rounded p-3 text-sm">
-                Received a sum of <span className="font-semibold">₹{receiptAmount.toLocaleString()}</span> from
+                Received a sum of <span className="font-semibold">{formatCurrency(receiptAmount)}</span> from
                 {' '}<span className="font-semibold">{customer?.company_name || 'Customer'}</span> towards
                 {' '}<span className="font-semibold">{paymentType}</span> against reference
                 {' '}<span className="font-semibold">{receiptReference}</span>.

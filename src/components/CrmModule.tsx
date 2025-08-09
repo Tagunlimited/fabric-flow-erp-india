@@ -152,9 +152,12 @@ export function CrmModule() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Outstanding Amount</p>
-                <p className="text-2xl font-bold">
-                  ₹{Math.round(customers.reduce((sum, c) => sum + (c.outstanding_amount || 0), 0) / 1000)}K
-                </p>
+
+
+                 <p className="text-2xl font-bold">
+                   ₹{Math.round(customers.reduce((sum, c) => sum + c.outstandingAmount, 0) / 1000)}K
+                 </p>
+
               </div>
               <div className="p-2 bg-red-500 rounded-lg">
                 <Building className="w-5 h-5 text-white" />
@@ -168,9 +171,11 @@ export function CrmModule() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Credit Limit</p>
-                <p className="text-2xl font-bold">
-                  ₹{Math.round(customers.reduce((sum, c) => sum + (c.credit_limit || 0), 0) / 1000000)}M
-                </p>
+
+                 <p className="text-2xl font-bold">
+                   ₹{Math.round(customers.reduce((sum, c) => sum + c.creditLimit, 0) / 1000000)}M
+                 </p>
+
               </div>
               <div className="p-2 bg-green-500 rounded-lg">
                 <Building className="w-5 h-5 text-white" />
@@ -262,7 +267,9 @@ export function CrmModule() {
                   <div className="text-right">
                     <p className="text-sm text-muted-foreground">Outstanding</p>
                     <p className="text-lg font-bold text-red-600">
-                      ₹{(customer.outstanding_amount || 0).toLocaleString()}
+
+                      ₹{customer.outstandingAmount.toLocaleString('en-IN')}
+
                     </p>
                   </div>
                 </div>
@@ -270,7 +277,9 @@ export function CrmModule() {
                   <div>
                     <p className="text-sm font-medium">Credit Limit</p>
                     <p className="text-lg font-bold text-green-600">
-                      ₹{(customer.credit_limit || 0).toLocaleString()}
+
+                      ₹{customer.totalBilledAmount.toLocaleString('en-IN')}
+
                     </p>
                   </div>
                 </div>

@@ -418,10 +418,10 @@ export function CustomerList() {
                       <TableCell>
                         <div className="space-y-1">
                           <Badge className="bg-accent text-accent-foreground">
-                            Credit: ₹{customer.credit_limit?.toLocaleString() || '0'}
+                            Credit: {formatCurrency(customer.credit_limit || 0)}
                           </Badge>
                           <div className="text-xs text-muted-foreground">
-                            LTV: ₹{customerLifetimeValues[customer.id]?.toLocaleString() || '0'}
+                            LTV: {formatCurrency(customerLifetimeValues[customer.id] || 0)}
                           </div>
                         </div>
                       </TableCell>

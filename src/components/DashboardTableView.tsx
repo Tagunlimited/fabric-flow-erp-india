@@ -15,7 +15,7 @@ import {
   UserPlus,
   ArrowRight
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { Link, useNavigate } from "react-router-dom";
 
 interface DashboardTableViewProps {
@@ -240,8 +240,10 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
                   <TableCell>
                     {order.customer?.company_name || 'Unknown'}
                   </TableCell>
+
                   <TableCell>{new Date(order.order_date).toLocaleDateString()}</TableCell>
                   <TableCell className="font-semibold">₹{order.total_amount?.toLocaleString() || '0'}</TableCell>
+
                   <TableCell>
                     <Badge className={getStatusColor(order.status)}>
                       {order.status.replace('_', ' ')}
