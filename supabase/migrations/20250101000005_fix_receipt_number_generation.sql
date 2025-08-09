@@ -1,32 +1,13 @@
--- Receipts table for payment acknowledgements
+-- Fix receipt number generation to prevent duplicate key constraint violations
+-- This migration adds a database trigger to auto-generate receipt numbers atomically
 
--- Create sequence for receipt numbers
+-- Create sequence for receipt numbers (if not exists)
 CREATE SEQUENCE IF NOT EXISTS receipts_sequence_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-
-create table if not exists public.receipts (
-  id uuid primary key default gen_random_uuid(),
-  created_at timestamptz not null default now(),
-  receipt_number text not null unique,
-
-  reference_type text not null check (reference_type in ('order','invoice','quotation')),
-  reference_id uuid not null,
-  reference_number text,
-
-  customer_id uuid not null references public.customers(id) on delete restrict,
-
-  payment_mode text not null,
-  payment_type text not null,
-  amount numeric(12,2) not null,
-  reference_txn_id text,
-  entry_date timestamptz not null default now(),
-  verified_by text,
-  notes text
-);
 
 -- Create function to generate receipt numbers
 CREATE OR REPLACE FUNCTION generate_receipt_number()
@@ -38,7 +19,7 @@ DECLARE
     seq_num INTEGER;
     receipt_num TEXT;
 BEGIN
-    -- Calculate financial year
+    -- Calculate financial year (April to March)
     IF EXTRACT(MONTH FROM NEW.created_at) < 4 THEN
         fy_start := EXTRACT(YEAR FROM NEW.created_at) - 1;
     ELSE
@@ -63,6 +44,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Drop existing trigger if it exists
+DROP TRIGGER IF EXISTS receipts_generate_number ON receipts;
+
 -- Create trigger to auto-generate receipt numbers
 CREATE TRIGGER receipts_generate_number
     BEFORE INSERT ON receipts
@@ -70,10 +54,5 @@ CREATE TRIGGER receipts_generate_number
     WHEN (NEW.receipt_number IS NULL OR NEW.receipt_number = '')
     EXECUTE FUNCTION generate_receipt_number();
 
-create index if not exists receipts_customer_idx on public.receipts(customer_id);
-create index if not exists receipts_reference_idx on public.receipts(reference_id);
-create index if not exists receipts_created_at_idx on public.receipts(created_at desc);
-
-comment on table public.receipts is 'Payment receipts generated against orders/invoices/quotations.';
-comment on column public.receipts.receipt_number is 'Format: RCP/YY-YY/MON/SEQ';
-
+-- Add comment explaining the new behavior
+COMMENT ON FUNCTION generate_receipt_number() IS 'Auto-generates receipt numbers in format RCP/YY-YY/MON/SEQ to prevent duplicate constraint violations';

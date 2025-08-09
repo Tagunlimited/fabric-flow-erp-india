@@ -15,6 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
+import { cn } from "@/lib/utils";
 
 interface ErpLayoutProps {
   children: React.ReactNode;
@@ -30,6 +31,7 @@ export function ErpLayout({ children }: ErpLayoutProps) {
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { config } = useCompanySettings();
   const headerLogo = config.header_logo_url || config.logo_url || 'https://i.postimg.cc/D0hJxKtP/tag-black.png';
   
@@ -111,13 +113,18 @@ export function ErpLayout({ children }: ErpLayoutProps) {
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col lg:flex-row">
-      {/* Sidebar overlays content on mobile, is static on desktop */}
+    <div className="min-h-screen bg-background">
+      {/* Sidebar overlays content on mobile, is fixed on desktop */}
       <ErpSidebar 
         mobileOpen={mobileMenuOpen}
         onMobileClose={handleMobileMenuClose}
+        onCollapsedChange={setSidebarCollapsed}
       />
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* Main content area with left margin to account for fixed sidebar */}
+      <div className={cn(
+        "transition-all duration-300 flex flex-col min-w-0 min-h-screen",
+        sidebarCollapsed ? "lg:ml-16" : "lg:ml-64"
+      )}>
         {/* Floating Header - Only spans the main content area */}
         <header className={`sticky top-0 z-50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b transition-transform duration-300 ${
           isHeaderVisible ? 'translate-y-0' : '-translate-y-full'
@@ -238,7 +245,7 @@ export function ErpLayout({ children }: ErpLayoutProps) {
           </div>
         </header>
         {/* Main Content with proper spacing */}
-        <main className="flex-1 px-2 sm:px-6 py-4 sm:py-6 w-full overflow-x-auto">
+        <main className="flex-1 px-2 sm:px-6 py-4 sm:py-6 w-full overflow-x-auto overflow-y-auto">
           {children}
         </main>
       </div>

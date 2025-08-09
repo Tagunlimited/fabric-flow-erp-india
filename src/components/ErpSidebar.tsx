@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { 
   Home, 
   Users, 
@@ -78,6 +78,10 @@ const sidebarItems: SidebarItem[] = [
     icon: ShoppingBag,
     children: [
       { title: "Bills of Materials", url: "/procurement", icon: ClipboardList },
+      { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingBag },
+      { title: "Goods Receipt Note", url: "/procurement/grn", icon: ClipboardList },
+      { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
+      { title: "Material Shortfall Alerts", url: "/procurement/alerts", icon: AlertTriangle }
     ]
   },
   { 
@@ -90,17 +94,7 @@ const sidebarItems: SidebarItem[] = [
       { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList }
     ]
   },
-  { 
-    title: "Procurement", 
-    icon: ShoppingBag,
-    children: [
-      { title: "Bills of Materials", url: "/procurement/bom", icon: ClipboardList },
-      { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingBag },
-      { title: "Goods Receipt Note", url: "/procurement/grn", icon: ClipboardList },
-      { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
-      { title: "Material Shortfall Alerts", url: "/procurement/alerts", icon: AlertTriangle }
-    ]
-  },
+
   { title: "Production", url: "/production", icon: Factory, badge: "300", badgeColor: "bg-warning" },
   { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality" },
   { 
@@ -306,9 +300,10 @@ function SidebarItemComponent({ item, collapsed, level = 0, onMobileClick }: Sid
 interface ErpSidebarProps {
   mobileOpen?: boolean;
   onMobileClose?: () => void;
+  onCollapsedChange?: (collapsed: boolean) => void;
 }
 
-export function ErpSidebar({ mobileOpen = false, onMobileClose }: ErpSidebarProps) {
+export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChange }: ErpSidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const { profile, user } = useAuth();
   const { config } = useCompanySettings();
@@ -323,6 +318,16 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose }: ErpSidebarProp
     !item.adminOnly || userRole === 'admin'
   );
 
+  const handleCollapsedChange = (newCollapsed: boolean) => {
+    setCollapsed(newCollapsed);
+    onCollapsedChange?.(newCollapsed);
+  };
+
+  // Sync initial collapsed state with parent
+  useEffect(() => {
+    onCollapsedChange?.(collapsed);
+  }, []); // Only run once on mount
+
   return (
     <>
       {/* Mobile Overlay */}
@@ -336,11 +341,13 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose }: ErpSidebarProp
       {/* Sidebar */}
       <div className={cn(
         "h-screen bg-primary border-r border-border/40 transition-all duration-300 flex flex-col shadow-lg z-50",
-        "fixed top-0 left-0 lg:relative lg:flex-shrink-0",
+        "fixed top-0 left-0 lg:fixed lg:left-0 lg:top-0",
         collapsed ? "w-16" : "w-64",
         mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
         "lg:translate-x-0",
-        "ease-in-out"
+        "ease-in-out",
+        "lg:shadow-2xl",
+        "lg:backdrop-blur-sm"
       )}>
         {/* Header */}
         <div className="flex items-center justify-between p-3 sm:p-4 border-b border-primary-foreground/20">
@@ -373,7 +380,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose }: ErpSidebarProp
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setCollapsed(!collapsed)}
+            onClick={() => handleCollapsedChange(!collapsed)}
             className="text-primary-foreground hover:bg-primary-foreground/10 hover:text-primary-foreground hidden lg:flex"
             aria-label="Toggle sidebar"
           >
@@ -390,7 +397,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose }: ErpSidebarProp
           </Button>
         </div>
         {/* Navigation */}
-        <nav className="flex-1 px-1 sm:px-2 py-2 sm:py-4 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-primary-foreground/20"
+        <nav className="flex-1 px-1 sm:px-2 py-2 sm:py-4 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-primary-foreground/20 lg:overflow-y-auto"
              onClick={(e) => {
                // Prevent sidebar closing on first tap when expanding parents on mobile
                // We only close on navigation to a leaf item
@@ -431,7 +438,10 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose }: ErpSidebarProp
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  Sellers ka Central
+                  <span className="flex items-center gap-2">
+                    {/* <img src="/Users//public/1.png" alt="Tech Panda" className="w-10 h-10" /> */}
+                    Tech Panda
+                  </span>
                 </a>
               </p>
               <style>{`
