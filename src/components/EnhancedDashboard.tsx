@@ -30,7 +30,7 @@ import {
   ToggleLeft,
   ToggleRight
 } from "lucide-react";
-import { generateAllDummyData } from "@/lib/dummyData";
+import { getDashboardData, type DashboardData } from "@/lib/database";
 import { cn } from "@/lib/utils";
 import { Link, useNavigate } from "react-router-dom";
 import { CalendarView } from "@/components/CalendarView";
@@ -67,7 +67,7 @@ interface ModuleCard {
 }
 
 export function EnhancedDashboard() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'dashboard' | 'calendar'>('dashboard');
   const [dashboardSettings, setDashboardSettings] = useState<DashboardSettingsType>({
@@ -92,17 +92,24 @@ export function EnhancedDashboard() {
   const { user } = useAuth();
 
   useEffect(() => {
-    // Simulate loading and generate dummy data
-    const timer = setTimeout(() => {
-      const generatedData = generateAllDummyData();
-      setData(generatedData);
-      setLoading(false);
-    }, 1000);
+    const fetchDashboardData = async () => {
+      try {
+        setLoading(true);
+        console.log('Fetching dashboard data...');
+        const dashboardData = await getDashboardData();
+        console.log('Dashboard data received:', dashboardData);
+        setData(dashboardData);
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-    return () => clearTimeout(timer);
+    fetchDashboardData();
   }, []);
 
-  if (loading) {
+  if (loading || !data) {
     return (
       <div className="space-y-6 animate-pulse">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -121,7 +128,7 @@ export function EnhancedDashboard() {
   const keyMetrics: DashboardMetric[] = [
     {
       title: "Total Revenue",
-      value: `₹${(data.orders.reduce((sum: number, order: any) => sum + order.totalAmount, 0) / 100000).toFixed(1)}L`,
+      value: `₹${(data.summary.totalRevenue / 100000).toFixed(1)}L`,
       change: "+12.5%",
       trend: "up",
       icon: DollarSign,
@@ -129,9 +136,7 @@ export function EnhancedDashboard() {
     },
     {
       title: "Active Orders",
-      value: data.orders.filter((order: any) => 
-        ['pending', 'confirmed', 'in_production', 'quality_check'].includes(order.status)
-      ).length.toString(),
+      value: (data.summary.pendingOrders + data.summary.inProductionOrders).toString(),
       change: "+8.2%",
       trend: "up",
       icon: ShoppingCart,
@@ -139,7 +144,7 @@ export function EnhancedDashboard() {
     },
     {
       title: "Production Efficiency",
-      value: `${Math.round(data.productionLogs.reduce((sum: number, log: any) => sum + log.efficiency, 0) / data.productionLogs.length)}%`,
+      value: `${Math.round((data.productionOrders || []).reduce((sum, order) => sum + (order.efficiency_percentage || 0), 0) / Math.max((data.productionOrders || []).length, 1))}%`,
       change: "-2.1%",
       trend: "down",
       icon: Factory,
@@ -147,7 +152,7 @@ export function EnhancedDashboard() {
     },
     {
       title: "Quality Pass Rate",
-      value: `${Math.round((data.qualityChecks.filter((qc: any) => qc.passed).length / data.qualityChecks.length) * 100)}%`,
+      value: `${Math.round(((data.qualityChecks || []).filter((qc) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100)}%`,
       change: "+5.3%",
       trend: "up",
       icon: CheckCircle,
@@ -158,32 +163,32 @@ export function EnhancedDashboard() {
   const quickStats: QuickStat[] = [
     {
       label: "Total Customers",
-      value: data.customers.length,
-      total: data.customers.length,
+      value: data.summary.totalCustomers,
+      total: data.summary.totalCustomers,
       color: "bg-accent",
       icon: Users,
       link: "/crm/customers"
     },
     {
       label: "Active Employees",
-      value: 50, // From employees data
-      total: 50,
+      value: data.summary.totalEmployees,
+      total: data.summary.totalEmployees,
       color: "bg-primary",
       icon: UserPlus,
       link: "/people/employees"
     },
     {
       label: "Products",
-      value: data.products.length,
-      total: data.products.length,
+      value: data.summary.totalProducts,
+      total: data.summary.totalProducts,
       color: "bg-inventory",
       icon: Package,
       link: "/inventory"
     },
     {
       label: "Low Stock Alerts",
-      value: data.inventoryItems.filter((item: any) => item.stockStatus === 'low' || item.stockStatus === 'critical').length,
-      total: data.inventoryItems.length,
+      value: data.summary.lowStockItems,
+      total: data.summary.totalInventory,
       color: "bg-error",
       icon: AlertTriangle,
       link: "/inventory"
@@ -198,8 +203,8 @@ export function EnhancedDashboard() {
       color: "bg-accent",
       link: "/crm",
       stats: [
-        { label: "Customers", value: data.customers.length.toString() },
-        { label: "Active Orders", value: data.orders.filter((o: any) => o.status !== 'delivered').length.toString() }
+        { label: "Customers", value: data.summary.totalCustomers.toString() },
+        { label: "Active Orders", value: (data.summary.pendingOrders + data.summary.inProductionOrders).toString() }
       ]
     },
     {
@@ -209,8 +214,8 @@ export function EnhancedDashboard() {
       color: "bg-manufacturing",
       link: "/orders",
       stats: [
-        { label: "Total Orders", value: data.orders.length.toString() },
-        { label: "Pending", value: data.orders.filter((o: any) => o.status === 'pending').length.toString() }
+        { label: "Total Orders", value: data.summary.totalOrders.toString() },
+        { label: "Pending", value: data.summary.pendingOrders.toString() }
       ]
     },
     {
@@ -220,8 +225,8 @@ export function EnhancedDashboard() {
       color: "bg-warning",
       link: "/production",
       stats: [
-        { label: "In Production", value: data.productionLogs.length.toString() },
-        { label: "Avg Efficiency", value: `${Math.round(data.productionLogs.reduce((sum: number, log: any) => sum + log.efficiency, 0) / data.productionLogs.length)}%` }
+        { label: "In Production", value: data.productionOrders.length.toString() },
+        { label: "Avg Efficiency", value: `${Math.round(data.productionOrders.reduce((sum, order) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%` }
       ]
     },
     {
@@ -231,8 +236,8 @@ export function EnhancedDashboard() {
       color: "bg-quality",
       link: "/quality",
       stats: [
-        { label: "QC Checks", value: data.qualityChecks.length.toString() },
-        { label: "Pass Rate", value: `${Math.round((data.qualityChecks.filter((qc: any) => qc.passed).length / data.qualityChecks.length) * 100)}%` }
+        { label: "QC Checks", value: (data.qualityChecks || []).length.toString() },
+        { label: "Pass Rate", value: `${Math.round(((data.qualityChecks || []).filter((qc) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100)}%` }
       ]
     },
     {
@@ -242,8 +247,8 @@ export function EnhancedDashboard() {
       color: "bg-inventory",
       link: "/inventory",
       stats: [
-        { label: "Items", value: data.inventoryItems.length.toString() },
-        { label: "Low Stock", value: data.inventoryItems.filter((item: any) => item.stockStatus === 'low').length.toString() }
+        { label: "Items", value: data.summary.totalInventory.toString() },
+        { label: "Low Stock", value: data.summary.lowStockItems.toString() }
       ]
     },
     {
@@ -253,8 +258,8 @@ export function EnhancedDashboard() {
       color: "bg-primary",
       link: "/dispatch",
       stats: [
-        { label: "Ready to Ship", value: data.orders.filter((o: any) => o.status === 'ready').length.toString() },
-        { label: "In Transit", value: data.orders.filter((o: any) => o.status === 'dispatched').length.toString() }
+        { label: "Ready to Ship", value: data.orders.filter((o) => o.status === 'completed').length.toString() },
+        { label: "In Transit", value: data.dispatchOrders.length.toString() }
       ]
     },
     {
@@ -264,7 +269,7 @@ export function EnhancedDashboard() {
       color: "bg-accent",
       link: "/people",
       stats: [
-        { label: "Employees", value: "50" },
+        { label: "Employees", value: data.summary.totalEmployees.toString() },
         { label: "Departments", value: "8" }
       ]
     },
@@ -275,14 +280,14 @@ export function EnhancedDashboard() {
       color: "bg-success",
       link: "/analytics",
       stats: [
-        { label: "Revenue", value: `₹${(data.orders.reduce((sum: number, order: any) => sum + order.totalAmount, 0) / 100000).toFixed(1)}L` },
+        { label: "Revenue", value: `₹${(data.summary.totalRevenue / 100000).toFixed(1)}L` },
         { label: "Growth", value: "+12.5%" }
       ]
     }
   ];
 
-  const recentOrders = data.orders
-    .sort((a: any, b: any) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime())
+  const recentOrders = (data.orders || [])
+    .sort((a, b) => new Date(b.order_date).getTime() - new Date(a.order_date).getTime())
     .slice(0, 5);
 
   const getStatusColor = (status: string) => {
@@ -565,8 +570,8 @@ export function EnhancedDashboard() {
                   <CardContent>
                     <div className="space-y-4">
                       {['cutting', 'stitching', 'quality_check'].map((stage) => {
-                        const stageOrders = data.productionLogs.filter((log: any) => log.stage === stage);
-                        const percentage = Math.round((stageOrders.length / data.productionLogs.length) * 100);
+                        const stageOrders = (data.productionOrders || []).filter((order: any) => order.stage === stage);
+                        const percentage = Math.round((stageOrders.length / Math.max((data.productionOrders || []).length, 1)) * 100);
                         
                         return (
                           <div 
@@ -670,7 +675,7 @@ export function EnhancedDashboard() {
                     <Target className="w-6 h-6 mr-2" />
                     System Overview
                     <Badge className="ml-3 bg-success text-success-foreground text-lg px-3 py-1">
-                      {data.summary.totalRecords.toLocaleString()} Total Records
+                      {(data.summary.totalCustomers + data.summary.totalOrders + data.summary.totalProducts + data.summary.totalEmployees).toLocaleString()} Total Records
                     </Badge>
                   </div>
                   <div className="flex items-center space-x-2">
@@ -687,7 +692,7 @@ export function EnhancedDashboard() {
                   dashboardSettings.compactMode ? "grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3" : "grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4"
                 )}>
                   <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-accent", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalUsers}</p>
+                    <p className={cn("font-bold text-accent", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalEmployees}</p>
                     <p className="text-sm text-muted-foreground font-medium">System Users</p>
                   </div>
                   <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
@@ -703,15 +708,15 @@ export function EnhancedDashboard() {
                     <p className="text-sm text-muted-foreground font-medium">Total Orders</p>
                   </div>
                   <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-warning", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalProductionLogs}</p>
+                    <p className={cn("font-bold text-warning", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{(data.productionOrders || []).length}</p>
                     <p className="text-sm text-muted-foreground font-medium">Production Jobs</p>
                   </div>
                   <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-quality", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalQualityChecks}</p>
+                    <p className={cn("font-bold text-quality", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{(data.qualityChecks || []).length}</p>
                     <p className="text-sm text-muted-foreground font-medium">QC Checks</p>
                   </div>
                   <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-success", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalInventoryItems}</p>
+                    <p className={cn("font-bold text-success", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalInventory}</p>
                     <p className="text-sm text-muted-foreground font-medium">Inventory Items</p>
                   </div>
                 </div>

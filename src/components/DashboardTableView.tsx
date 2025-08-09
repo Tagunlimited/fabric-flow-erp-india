@@ -28,7 +28,7 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
   const keyMetricsData = [
     {
       metric: "Total Revenue",
-      value: `₹${(data.orders.reduce((sum: number, order: any) => sum + order.totalAmount, 0) / 100000).toFixed(1)}L`,
+      value: `₹${(data.summary.totalRevenue / 100000).toFixed(1)}L`,
       change: "+12.5%",
       trend: "up",
       icon: DollarSign,
@@ -36,9 +36,7 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
     },
     {
       metric: "Active Orders",
-      value: data.orders.filter((order: any) => 
-        ['pending', 'confirmed', 'in_production', 'quality_check'].includes(order.status)
-      ).length.toString(),
+      value: (data.summary.pendingOrders + data.summary.inProductionOrders).toString(),
       change: "+8.2%",
       trend: "up",
       icon: ShoppingCart,
@@ -46,7 +44,7 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
     },
     {
       metric: "Production Efficiency",
-      value: `${Math.round(data.productionLogs.reduce((sum: number, log: any) => sum + log.efficiency, 0) / data.productionLogs.length)}%`,
+      value: `${Math.round(data.productionOrders.reduce((sum, order) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%`,
       change: "-2.1%",
       trend: "down",
       icon: Factory,
@@ -54,7 +52,7 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
     },
     {
       metric: "Quality Pass Rate",
-      value: `${Math.round((data.qualityChecks.filter((qc: any) => qc.passed).length / data.qualityChecks.length) * 100)}%`,
+      value: `${Math.round(((data.qualityChecks || []).filter((qc) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100)}%`,
       change: "+5.3%",
       trend: "up",
       icon: CheckCircle,
@@ -65,32 +63,32 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
   const quickStatsData = [
     {
       category: "Customers",
-      count: data.customers.length,
+      count: data.summary.totalCustomers,
       status: "Active",
       link: "/crm/customers"
     },
     {
       category: "Employees",
-      count: 50,
+      count: data.summary.totalEmployees,
       status: "Active",
       link: "/people/employees"
     },
     {
       category: "Products",
-      count: data.products.length,
+      count: data.summary.totalProducts,
       status: "Available",
       link: "/inventory"
     },
     {
       category: "Low Stock Alerts",
-      count: data.inventoryItems.filter((item: any) => item.stockStatus === 'low' || item.stockStatus === 'critical').length,
+      count: data.summary.lowStockItems,
       status: "Critical",
       link: "/inventory"
     }
   ];
 
-  const recentOrdersData = data.orders
-    .sort((a: any, b: any) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime())
+  const recentOrdersData = (data.orders || [])
+    .sort((a: any, b: any) => new Date(b.order_date).getTime() - new Date(a.order_date).getTime())
     .slice(0, 10);
 
   const getStatusColor = (status: string) => {
@@ -238,12 +236,14 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
                   className="cursor-pointer hover:bg-muted/50"
                   onClick={() => navigate(`/orders/${order.id}`)}
                 >
-                  <TableCell className="font-medium">{order.orderNumber}</TableCell>
+                  <TableCell className="font-medium">{order.order_number}</TableCell>
                   <TableCell>
-                    {data.customers.find((c: any) => c.id === order.customerId)?.companyName || 'Unknown'}
+                    {order.customer?.company_name || 'Unknown'}
                   </TableCell>
-                  <TableCell>{new Date(order.orderDate).toLocaleDateString()}</TableCell>
-                  <TableCell className="font-semibold">{formatCurrency(order.totalAmount)}</TableCell>
+
+                  <TableCell>{new Date(order.order_date).toLocaleDateString()}</TableCell>
+                  <TableCell className="font-semibold">₹{order.total_amount?.toLocaleString() || '0'}</TableCell>
+
                   <TableCell>
                     <Badge className={getStatusColor(order.status)}>
                       {order.status.replace('_', ' ')}

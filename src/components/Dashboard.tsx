@@ -16,8 +16,9 @@ import {
   Clock,
   Target
 } from "lucide-react";
-import { generateAllDummyData } from "@/lib/dummyData";
-import { cn, formatCurrency } from "@/lib/utils";
+
+import { getDashboardData, type DashboardData } from "@/lib/database";
+import { cn } from "@/lib/utils";
 
 interface DashboardMetric {
   title: string;
@@ -37,21 +38,26 @@ interface QuickStat {
 }
 
 export function Dashboard() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Simulate loading and generate dummy data
-    const timer = setTimeout(() => {
-      const generatedData = generateAllDummyData();
-      setData(generatedData);
-      setLoading(false);
-    }, 1000);
+    const fetchDashboardData = async () => {
+      try {
+        setLoading(true);
+        const dashboardData = await getDashboardData();
+        setData(dashboardData);
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-    return () => clearTimeout(timer);
+    fetchDashboardData();
   }, []);
 
-  if (loading) {
+  if (loading || !data) {
     return (
       <div className="space-y-6 animate-pulse">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -78,7 +84,7 @@ export function Dashboard() {
   const metrics: DashboardMetric[] = [
     {
       title: "Total Revenue",
-      value: `₹${(data.orders.reduce((sum: number, order: any) => sum + order.totalAmount, 0) / 100000).toFixed(1)}L`,
+      value: `₹${(data.summary.totalRevenue / 100000).toFixed(1)}L`,
       change: "+12.5%",
       trend: "up",
       icon: DollarSign,
@@ -86,9 +92,7 @@ export function Dashboard() {
     },
     {
       title: "Active Orders",
-      value: data.orders.filter((order: any) => 
-        ['pending', 'confirmed', 'in_production', 'quality_check'].includes(order.status)
-      ).length.toString(),
+      value: (data.summary.pendingOrders + data.summary.inProductionOrders).toString(),
       change: "+8.2%",
       trend: "up",
       icon: ShoppingCart,
@@ -96,7 +100,7 @@ export function Dashboard() {
     },
     {
       title: "Production Efficiency",
-      value: `${Math.round(data.productionLogs.reduce((sum: number, log: any) => sum + log.efficiency, 0) / data.productionLogs.length)}%`,
+      value: `${Math.round(data.productionOrders.reduce((sum, order) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%`,
       change: "-2.1%",
       trend: "down",
       icon: Factory,
@@ -104,7 +108,7 @@ export function Dashboard() {
     },
     {
       title: "Quality Pass Rate",
-      value: `${Math.round((data.qualityChecks.filter((qc: any) => qc.passed).length / data.qualityChecks.length) * 100)}%`,
+      value: `${Math.round((data.qualityChecks.filter((qc) => qc.status === 'passed').length / Math.max(data.qualityChecks.length, 1)) * 100)}%`,
       change: "+5.3%",
       trend: "up",
       icon: CheckCircle,
@@ -115,36 +119,36 @@ export function Dashboard() {
   const quickStats: QuickStat[] = [
     {
       label: "Customers",
-      value: data.customers.length,
-      total: data.customers.length,
+      value: data.summary.totalCustomers,
+      total: data.summary.totalCustomers,
       color: "bg-accent",
       icon: Users
     },
     {
       label: "Products",
-      value: data.products.length,
-      total: data.products.length,
+      value: data.summary.totalProducts,
+      total: data.summary.totalProducts,
       color: "bg-inventory",
       icon: Package
     },
     {
       label: "Low Stock Items",
-      value: data.inventoryItems.filter((item: any) => item.stockStatus === 'low' || item.stockStatus === 'critical').length,
-      total: data.inventoryItems.length,
+      value: data.summary.lowStockItems,
+      total: data.summary.totalInventory,
       color: "bg-error",
       icon: AlertTriangle
     },
     {
       label: "Ready to Dispatch",
-      value: data.orders.filter((order: any) => order.status === 'ready').length,
-      total: data.orders.length,
+      value: data.orders.filter((order) => order.status === 'completed').length,
+      total: data.summary.totalOrders,
       color: "bg-primary",
       icon: Truck
     }
   ];
 
-  const recentOrders = data.orders
-    .sort((a: any, b: any) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime())
+  const recentOrders = (data.orders || [])
+    .sort((a, b) => new Date(b.order_date).getTime() - new Date(a.order_date).getTime())
     .slice(0, 5);
 
   const getStatusColor = (status: string) => {
@@ -273,7 +277,9 @@ export function Dashboard() {
                     <Badge className={getStatusColor(order.status)}>
                       {order.status.replace('_', ' ')}
                     </Badge>
+
                      <p className="text-sm font-medium mt-1">{formatCurrency(order.totalAmount)}</p>
+
                   </div>
                 </div>
               ))}
@@ -295,10 +301,10 @@ export function Dashboard() {
           <CardContent>
             <div className="space-y-4">
               {['cutting', 'stitching', 'embroidery', 'quality_check'].map((stage) => {
-                const stageOrders = data.productionLogs.filter((log: any) => log.stage === stage);
-                const percentage = Math.round((stageOrders.length / data.productionLogs.length) * 100);
+                const stageOrders = (data.productionOrders || []).filter((order: any) => order.stage === stage);
+                const percentage = Math.round((stageOrders.length / Math.max((data.productionOrders || []).length, 1)) * 100);
                 const avgEfficiency = Math.round(
-                  stageOrders.reduce((sum: number, log: any) => sum + log.efficiency, 0) / stageOrders.length
+                  stageOrders.reduce((sum: number, order: any) => sum + (order.efficiency_percentage || 0), 0) / Math.max(stageOrders.length, 1)
                 );
                 
                 return (
@@ -328,14 +334,14 @@ export function Dashboard() {
             <Target className="w-5 h-5 mr-2" />
             System Overview
             <Badge className="ml-2 bg-success text-success-foreground">
-              {data.summary.totalRecords.toLocaleString()} Records
+              {(data.summary.totalCustomers + data.summary.totalOrders + data.summary.totalProducts + data.summary.totalEmployees).toLocaleString()} Records
             </Badge>
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 text-center">
             <div className="p-4 bg-gradient-subtle rounded-lg">
-              <p className="text-2xl font-bold text-accent">{data.summary.totalUsers}</p>
+              <p className="text-2xl font-bold text-accent">{data.summary.totalEmployees}</p>
               <p className="text-sm text-muted-foreground">Users</p>
             </div>
             <div className="p-4 bg-gradient-subtle rounded-lg">
@@ -351,15 +357,15 @@ export function Dashboard() {
               <p className="text-sm text-muted-foreground">Orders</p>
             </div>
             <div className="p-4 bg-gradient-subtle rounded-lg">
-              <p className="text-2xl font-bold text-warning">{data.summary.totalProductionLogs}</p>
+              <p className="text-2xl font-bold text-warning">{data.productionOrders.length}</p>
               <p className="text-sm text-muted-foreground">Production</p>
             </div>
             <div className="p-4 bg-gradient-subtle rounded-lg">
-              <p className="text-2xl font-bold text-quality">{data.summary.totalQualityChecks}</p>
+              <p className="text-2xl font-bold text-quality">{(data.qualityChecks || []).length}</p>
               <p className="text-sm text-muted-foreground">QC Checks</p>
             </div>
             <div className="p-4 bg-gradient-subtle rounded-lg">
-              <p className="text-2xl font-bold text-success">{data.summary.totalInventoryItems}</p>
+              <p className="text-2xl font-bold text-success">{data.summary.totalInventory}</p>
               <p className="text-sm text-muted-foreground">Inventory</p>
             </div>
           </div>

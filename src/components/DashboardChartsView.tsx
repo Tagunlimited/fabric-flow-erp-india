@@ -60,15 +60,15 @@ export function DashboardChartsView({ data, chartTypes }: DashboardChartsViewPro
     },
     {
       name: "Production Efficiency",
-      value: Math.round(data.productionLogs.reduce((sum: number, log: any) => sum + log.efficiency, 0) / data.productionLogs.length),
-      fullValue: `${Math.round(data.productionLogs.reduce((sum: number, log: any) => sum + log.efficiency, 0) / data.productionLogs.length)}%`,
+      value: Math.round(data.productionOrders.reduce((sum: number, order: any) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1)),
+      fullValue: `${Math.round(data.productionOrders.reduce((sum: number, order: any) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%`,
       change: "-2.1%",
       color: "#F59E0B"
     },
     {
       name: "Quality Pass Rate",
-      value: Math.round((data.qualityChecks.filter((qc: any) => qc.passed).length / data.qualityChecks.length) * 100),
-      fullValue: `${Math.round((data.qualityChecks.filter((qc: any) => qc.passed).length / data.qualityChecks.length) * 100)}%`,
+      value: Math.round(((data.qualityChecks || []).filter((qc: any) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100),
+      fullValue: `${Math.round(((data.qualityChecks || []).filter((qc: any) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100)}%`,
       change: "+5.3%",
       color: "#8B5CF6"
     }
@@ -77,25 +77,25 @@ export function DashboardChartsView({ data, chartTypes }: DashboardChartsViewPro
   const quickStatsData = [
     {
       name: "Customers",
-      value: data.customers.length,
+      value: data.summary.totalCustomers,
       color: "#10B981",
       icon: Users
     },
     {
       name: "Employees", 
-      value: 50,
+      value: data.summary.totalEmployees,
       color: "#3B82F6",
       icon: Users
     },
     {
       name: "Products",
-      value: data.products.length,
+      value: data.summary.totalProducts,
       color: "#F59E0B",
       icon: Package
     },
     {
       name: "Low Stock",
-      value: data.inventoryItems.filter((item: any) => item.stockStatus === 'low' || item.stockStatus === 'critical').length,
+      value: data.summary.lowStockItems,
       color: "#EF4444",
       icon: AlertTriangle
     }
@@ -104,40 +104,40 @@ export function DashboardChartsView({ data, chartTypes }: DashboardChartsViewPro
   const orderStatusData = [
     {
       name: "Pending",
-      value: data.orders.filter((o: any) => o.status === 'pending').length,
+      value: (data.orders || []).filter((o: any) => o.status === 'pending').length,
       color: "#F59E0B"
     },
     {
       name: "Confirmed",
-      value: data.orders.filter((o: any) => o.status === 'confirmed').length,
+      value: (data.orders || []).filter((o: any) => o.status === 'confirmed').length,
       color: "#3B82F6"
     },
     {
       name: "In Production",
-      value: data.orders.filter((o: any) => o.status === 'in_production').length,
+      value: (data.orders || []).filter((o: any) => o.status === 'in_production').length,
       color: "#8B5CF6"
     },
     {
       name: "Quality Check",
-      value: data.orders.filter((o: any) => o.status === 'quality_check').length,
+      value: (data.orders || []).filter((o: any) => o.status === 'quality_check').length,
       color: "#EC4899"
     },
     {
       name: "Ready",
-      value: data.orders.filter((o: any) => o.status === 'ready').length,
+      value: (data.orders || []).filter((o: any) => o.status === 'ready').length,
       color: "#10B981"
     },
     {
       name: "Delivered",
-      value: data.orders.filter((o: any) => o.status === 'delivered').length,
+      value: (data.orders || []).filter((o: any) => o.status === 'delivered').length,
       color: "#06B6D4"
     }
   ];
 
   // Monthly revenue trend
-  const monthlyRevenue = data.orders.reduce((acc: any, order: any) => {
-    const month = new Date(order.orderDate).toLocaleDateString('en-US', { month: 'short' });
-    acc[month] = (acc[month] || 0) + order.totalAmount;
+  const monthlyRevenue = (data.orders || []).reduce((acc: any, order: any) => {
+    const month = new Date(order.order_date).toLocaleDateString('en-US', { month: 'short' });
+    acc[month] = (acc[month] || 0) + (order.total_amount || 0);
     return acc;
   }, {});
 
