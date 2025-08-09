@@ -10,7 +10,7 @@ create table if not exists public.bom_records (
   created_at timestamptz default now()
 );
 
-create table if not exists public.bom_record_items (
+create table if not exists public.bom_items (
   id uuid primary key default gen_random_uuid(),
   bom_id uuid not null references public.bom_records(id) on delete cascade,
   item_id uuid references public.item_master(id) on delete set null,
@@ -25,9 +25,9 @@ create table if not exists public.bom_record_items (
 );
 
 alter table public.bom_records enable row level security;
-alter table public.bom_record_items enable row level security;
+alter table public.bom_items enable row level security;
 
 create policy "auth manage bom_records" on public.bom_records for all to authenticated using (true) with check (true);
-create policy "auth manage bom_record_items" on public.bom_record_items for all to authenticated using (true) with check (true);
+create policy "auth manage bom_items" on public.bom_items for all to authenticated using (true) with check (true);
 
 
