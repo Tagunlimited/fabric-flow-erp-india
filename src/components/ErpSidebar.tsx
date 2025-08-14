@@ -119,7 +119,8 @@ const sidebarItems: SidebarItem[] = [
       { title: "Fabric Master", url: "/inventory/fabrics", icon: Palette },
       { title: "Size Master", url: "/inventory/size-types", icon: ClipboardList },
       { title: "Warehouse Master", url: "/masters/warehouses", icon: Building },
-      { title: "Customer Type Master", url: "/masters/customer-types", icon: Users }
+      { title: "Customer Type Master", url: "/masters/customer-types", icon: Users },
+      { title: "Supplier Master", url: "/masters/suppliers", icon: Truck }
     ]
   },
   { 

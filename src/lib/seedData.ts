@@ -64,7 +64,7 @@ const sampleProducts: Tables['products']['Insert'][] = [
     cost_price: 120,
     description: 'High-quality cotton t-shirt with excellent comfort',
     hsn_code: '6104.42',
-    tax_rate: 18
+   gst_rate: 18
   },
   {
     name: 'Corporate Uniform',
@@ -74,7 +74,7 @@ const sampleProducts: Tables['products']['Insert'][] = [
     cost_price: 250,
     description: 'Professional corporate uniform with company branding',
     hsn_code: '6104.43',
-    tax_rate: 18
+   gst_rate: 18
   },
   {
     name: 'Winter Jacket',
@@ -84,7 +84,7 @@ const sampleProducts: Tables['products']['Insert'][] = [
     cost_price: 450,
     description: 'Warm winter jacket with multiple pockets',
     hsn_code: '6104.44',
-    tax_rate: 18
+   gst_rate: 18
   }
 ];
 

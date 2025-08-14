@@ -25,7 +25,7 @@ const BULK_TEMPLATE_HEADERS = [
   "min_stock_level",
   "lead_time",
   "cost_price",
-  "tax_rate",
+  "gst_rate",
   "is_active",
   "image"
 ];
@@ -46,7 +46,7 @@ interface Item {
   min_stock_level?: number;
   lead_time?: number;
   cost_price?: number;
-  tax_rate?: number;
+  gst_rate?: number;
   is_active?: boolean;
   image?: string;
   created_at?: string;
@@ -84,7 +84,7 @@ export function ItemMaster() {
     min_stock_level: 0,
     lead_time: 0,
     cost_price: 0,
-    tax_rate: 0,
+    gst_rate: 0,
     is_active: true,
     image: ""
   });
@@ -148,7 +148,7 @@ export function ItemMaster() {
           min_stock_level: itemToEdit.min_stock_level || 0,
           lead_time: itemToEdit.lead_time || 0,
           cost_price: itemToEdit.cost_price || 0,
-          tax_rate: itemToEdit.tax_rate || 0,
+          gst_rate: (itemToEdit as any).gst_rate || 0,
           is_active: itemToEdit.is_active || true,
           image: itemToEdit.image || ""
         });
@@ -206,7 +206,7 @@ export function ItemMaster() {
       min_stock_level: 0,
       lead_time: 0,
       cost_price: 0,
-      tax_rate: 0,
+      gst_rate: 0,
       is_active: true,
       image: ""
     });
@@ -278,7 +278,7 @@ export function ItemMaster() {
         min_stock_level: item.min_stock_level ? Number(item.min_stock_level) : 0,
         lead_time: item.lead_time ? Number(item.lead_time) : 0,
         cost_price: item.cost_price ? Number(item.cost_price) : 0,
-        tax_rate: item.tax_rate ? Number(item.tax_rate) : 0,
+        gst_rate: item.gst_rate ? Number(item.gst_rate) : 0,
         is_active: item.is_active ? item.is_active.toString().toLowerCase() === 'true' : true
       }));
       
@@ -490,12 +490,12 @@ export function ItemMaster() {
             {/* Column 4 */}
             <div className="space-y-4">
               <div>
-                <Label>Tax Rate (%)</Label>
+                 <Label>GST Rate (%)</Label>
                 <Input
-                  type="number"
-                  step="0.01"
-                  value={formData.tax_rate}
-                  onChange={(e) => setFormData({...formData, tax_rate: Number(e.target.value)})}
+                   type="number"
+                   step="0.01"
+                   value={formData.gst_rate}
+                   onChange={(e) => setFormData({...formData, gst_rate: Number(e.target.value)})}
                 />
               </div>
               <div>
