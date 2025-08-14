@@ -20,6 +20,7 @@ import ProductMasterPage from "./pages/masters/ProductMasterPage";
 import ItemMasterPage from "./pages/masters/ItemMasterPage";
 import WarehouseMasterPage from "./pages/masters/WarehouseMasterPage";
 import CustomerTypeMasterPage from "./pages/masters/CustomerTypeMasterPage";
+import SupplierMasterPage from "./pages/masters/SupplierMasterPage";
 import NotFound from "./pages/NotFound";
 import CrmPage from "./pages/CrmPage";
 import OrdersPage from "./pages/OrdersPage";
@@ -31,6 +32,8 @@ import AnalyticsPage from "./pages/AnalyticsPage";
 import SettingsPage from "./pages/SettingsPage";
 import DesignPage from "./pages/DesignPage";
 import ProcurementPage from "./pages/ProcurementPage";
+import PurchaseOrderListPage from "./pages/procurement/PurchaseOrderListPage";
+import PurchaseOrderFormPage from "./pages/procurement/PurchaseOrderFormPage";
 import CompanyConfigPage from "./pages/admin/CompanyConfigPage";
 import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
@@ -163,6 +166,11 @@ const App = () => {
                     <CustomerTypeMasterPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/masters/suppliers" element={
+                  <ProtectedRoute>
+                    <SupplierMasterPage />
+                  </ProtectedRoute>
+                } />
                 
                 <Route path="/production" element={
                   <ProtectedRoute>
@@ -177,6 +185,21 @@ const App = () => {
                 <Route path="/procurement" element={
                   <ProtectedRoute>
                     <ProcurementPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/po" element={
+                  <ProtectedRoute>
+                    <PurchaseOrderListPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/po/new" element={
+                  <ProtectedRoute>
+                    <PurchaseOrderFormPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/po/:id" element={
+                  <ProtectedRoute>
+                    <PurchaseOrderFormPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/quality" element={
