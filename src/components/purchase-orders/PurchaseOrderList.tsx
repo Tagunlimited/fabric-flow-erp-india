@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, RefreshCw, Eye, Pencil, Trash2 } from 'lucide-react';
+import { Plus, RefreshCw, Eye, Pencil, Trash2, ClipboardList } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { format } from 'date-fns';
@@ -134,6 +134,9 @@ export function PurchaseOrderList() {
         <div className="flex gap-2">
           <Button variant="outline" onClick={fetchAll}>
             <RefreshCw className="w-4 h-4 mr-2" /> Refresh
+          </Button>
+          <Button variant="outline" onClick={() => navigate('/procurement/bom')}>
+            <ClipboardList className="w-4 h-4 mr-2" /> Create from BOM
           </Button>
           <Button onClick={() => navigate('/procurement/po/new')}>
             <Plus className="w-4 h-4 mr-2" /> New PO

@@ -13,5 +13,9 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
     storage: localStorage,
     persistSession: true,
     autoRefreshToken: true,
+    // Avoid multiple GoTrueClient conflicts across tabs and hot reloads
+    multiTab: false,
+    // Use a unique storage key for this app
+    storageKey: 'scissors-erp-auth',
   }
 });

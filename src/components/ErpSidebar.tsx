@@ -77,7 +77,8 @@ const sidebarItems: SidebarItem[] = [
     title: "Procurement", 
     icon: ShoppingBag,
     children: [
-      { title: "Bills of Materials", url: "/procurement", icon: ClipboardList },
+      { title: "Create BOMs", url: "/procurement", icon: ClipboardList },
+      { title: "View BOMs", url: "/procurement/bom", icon: ClipboardList },
       { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingBag },
       { title: "Goods Receipt Note", url: "/procurement/grn", icon: ClipboardList },
       { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
