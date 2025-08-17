@@ -47,6 +47,7 @@ import QuotationsPage from './pages/accounts/QuotationsPage';
 import QuotationDetailPage from './pages/accounts/QuotationDetailPage';
 import ReceiptPage from './pages/accounts/ReceiptPage';
 import { CompanySettingsProvider } from "@/hooks/CompanySettingsContext";
+import EmployeeAccessManagementPage from "./pages/admin/EmployeeAccessManagement";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
 import { useEffect } from "react";
 
@@ -291,6 +292,11 @@ const App = () => {
                 <Route path="/admin/customer-access" element={
                   <ProtectedRoute requiredRole={['admin']}>
                     <CustomerAccessManagement />
+                  </ProtectedRoute>
+                } />
+                <Route path="/admin/employee-access" element={
+                  <ProtectedRoute requiredRole={['admin']}>
+                    <EmployeeAccessManagementPage />
                   </ProtectedRoute>
                 } />
                 

@@ -39,101 +39,98 @@ interface SidebarItem {
   children?: SidebarItem[];
 }
 
-const sidebarItems: SidebarItem[] = [
-  { title: "Dashboard", url: "/", icon: Home },
-  { 
-    title: "CRM", 
-    icon: Users, 
-    children: [
-      { title: "Create/View Customers", url: "/crm/customers", icon: Users },
-      // { title: "Customer Types", url: "/crm/customer-types", icon: Users },
-      // { title: "Loyalty Programme", url: "/crm/loyalty", icon: Award }
-    ]
-  },
-  { 
-    title: "Orders", 
-    icon: ShoppingCart, 
-    badge: "200", 
-    badgeColor: "bg-manufacturing",
-    children: [
-      { title: "Create/View Orders", url: "/orders", icon: ShoppingCart }
-    ]
-  },
-  { 
-    title: "Accounts", 
-    icon: Calculator,
-    children: [
-      { title: "View Quotation", url: "/accounts/quotations", icon: Calculator },
-      { title: "Create/View Invoices", url: "/accounts/invoices", icon: Calculator },
-      { title: "Receipts", url: "/accounts/receipts", icon: Calculator },
-      { title: "Payments", url: "/accounts/payments", icon: Calculator },
-      // { title: "Expenses", url: "/accounts/expenses", icon: Calculator },
-      // { title: "Payroll", url: "/accounts/payroll", icon: Calculator },
-      // { title: "Settings", url: "/accounts/settings", icon: Settings }
-    ]
-  },
-  { title: "Design & Printing", url: "/design", icon: Palette },
-  { 
-    title: "Procurement", 
-    icon: ShoppingBag,
-    children: [
-      { title: "Bills of Materials", url: "/procurement", icon: ClipboardList },
-      { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingBag },
-      { title: "Goods Receipt Note", url: "/procurement/grn", icon: ClipboardList },
-      { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
-      { title: "Material Shortfall Alerts", url: "/procurement/alerts", icon: AlertTriangle }
-    ]
-  },
-  { 
-    title: "Inventory", 
-    icon: Package, 
-    badge: "500", 
-    badgeColor: "bg-inventory",
-    children: [
-      { title: "Dashboard", url: "/inventory", icon: BarChart3 },
-      { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList }
-    ]
-  },
-
-  { title: "Production", url: "/production", icon: Factory, badge: "300", badgeColor: "bg-warning" },
-  { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality" },
-  { 
-    title: "People", 
-    icon: Users,
-    children: [
-      { title: "Dashboard", url: "/people", icon: BarChart3 },
-      { title: "Our People", url: "/people/employees", icon: Users },
-      { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
-      { title: "Incentive Programme", url: "/people/incentives", icon: Award },
-      { title: "Departments", url: "/people/departments", icon: Building }
-    ]
-  },
-  { 
-    title: "Masters", 
-    icon: Package,
-    children: [
-      { title: "Masters Dashboard", url: "/masters", icon: Package },
-      { title: "Product Master", url: "/masters/products", icon: Package },
-      { title: "Item Master", url: "/masters/items", icon: Package },
-      { title: "Product Categories", url: "/inventory/product-categories", icon: Package },
-      { title: "Fabric Master", url: "/inventory/fabrics", icon: Palette },
-      { title: "Size Master", url: "/inventory/size-types", icon: ClipboardList },
-      { title: "Warehouse Master", url: "/masters/warehouses", icon: Building },
-      { title: "Customer Type Master", url: "/masters/customer-types", icon: Users },
-      { title: "Supplier Master", url: "/masters/suppliers", icon: Truck }
-    ]
-  },
-  { 
-    title: "User & Roles", 
-    icon: UserCog, 
-    adminOnly: true,
-    children: [
-      { title: "Users", url: "/admin/users", icon: UserCog },
-      { title: "Customer Access", url: "/admin/customer-access", icon: Users }
-    ]
-  },
-  { title: "Configuration", url: "/configuration", icon: Settings }
-];
+function buildSidebarItems(currentPath: string): SidebarItem[] {
+  return [
+    { title: "Dashboard", url: "/", icon: Home },
+    {
+      title: "CRM",
+      icon: Users,
+      children: [
+        { title: "Create/View Customers", url: "/crm/customers", icon: Users },
+      ]
+    },
+    {
+      title: "Orders",
+      icon: ShoppingCart,
+      badge: currentPath === "/orders" ? "..." : "0",
+      badgeColor: "bg-manufacturing",
+      children: [
+        { title: "Create/View Orders", url: "/orders", icon: ShoppingCart }
+      ]
+    },
+    {
+      title: "Accounts",
+      icon: Calculator,
+      children: [
+        { title: "View Quotation", url: "/accounts/quotations", icon: Calculator },
+        { title: "Create/View Invoices", url: "/accounts/invoices", icon: Calculator },
+        { title: "Receipts", url: "/accounts/receipts", icon: Calculator },
+        { title: "Payments", url: "/accounts/payments", icon: Calculator },
+      ]
+    },
+    { title: "Design & Printing", url: "/design", icon: Palette },
+    {
+      title: "Procurement",
+      icon: ShoppingBag,
+      children: [
+        { title: "Bills of Materials", url: "/procurement", icon: ClipboardList },
+        { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingBag },
+        { title: "Goods Receipt Note", url: "/procurement/grn", icon: ClipboardList },
+        { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
+        { title: "Material Shortfall Alerts", url: "/procurement/alerts", icon: AlertTriangle }
+      ]
+    },
+    {
+      title: "Inventory",
+      icon: Package,
+      badge: "500",
+      badgeColor: "bg-inventory",
+      children: [
+        { title: "Dashboard", url: "/inventory", icon: BarChart3 },
+        { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList }
+      ]
+    },
+    { title: "Production", url: "/production", icon: Factory, badge: "300", badgeColor: "bg-warning" },
+    { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality" },
+    {
+      title: "People",
+      icon: Users,
+      children: [
+        { title: "Dashboard", url: "/people", icon: BarChart3 },
+        { title: "Our People", url: "/people/employees", icon: Users },
+        { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
+        { title: "Incentive Programme", url: "/people/incentives", icon: Award },
+        { title: "Departments", url: "/people/departments", icon: Building }
+      ]
+    },
+    {
+      title: "Masters",
+      icon: Package,
+      children: [
+        { title: "Masters Dashboard", url: "/masters", icon: Package },
+        { title: "Product Master", url: "/masters/products", icon: Package },
+        { title: "Item Master", url: "/masters/items", icon: Package },
+        { title: "Product Categories", url: "/inventory/product-categories", icon: Package },
+        { title: "Fabric Master", url: "/inventory/fabrics", icon: Palette },
+        { title: "Size Master", url: "/inventory/size-types", icon: ClipboardList },
+        { title: "Warehouse Master", url: "/masters/warehouses", icon: Building },
+        { title: "Customer Type Master", url: "/masters/customer-types", icon: Users },
+        { title: "Supplier Master", url: "/masters/suppliers", icon: Truck }
+      ]
+    },
+    {
+      title: "User & Roles",
+      icon: UserCog,
+      adminOnly: true,
+      children: [
+        { title: "Users", url: "/admin/users", icon: UserCog },
+        { title: "Employee Access", url: "/admin/employee-access", icon: Users },
+        { title: "Customer Access", url: "/admin/customer-access", icon: Users }
+      ]
+    },
+    { title: "Configuration", url: "/configuration", icon: Settings }
+  ];
+}
 
 interface SidebarItemComponentProps {
   item: SidebarItem;
@@ -307,6 +304,7 @@ interface ErpSidebarProps {
 export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChange }: ErpSidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const { profile, user } = useAuth();
+  const location = useLocation();
   const { config } = useCompanySettings();
   // Use sidebar_logo_url if available, else logo_url
   const companyLogo = config.sidebar_logo_url || config.logo_url || 'https://i.postimg.cc/3JbMq1Fw/6732e31fc8403c1a709ad1e0-256-1.png';
@@ -315,6 +313,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   const isPreConfiguredAdmin = user?.email === 'ecom@tagunlimitedclothing.com';
   const userRole = profile?.role || (isPreConfiguredAdmin ? 'admin' : null);
 
+  const sidebarItems = buildSidebarItems(location.pathname);
   const filteredItems = sidebarItems.filter(item => 
     !item.adminOnly || userRole === 'admin'
   );
