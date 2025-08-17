@@ -386,14 +386,14 @@ export function EmployeeAccessManagement() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
+        {/* <div>
           <h1 className="text-3xl font-bold">Employee Access Management</h1>
           <p className="text-gray-600 mt-1">
             Create user accounts with passwords for employees and manage their system access
           </p>
-        </div>
+        </div> */}
                         <div className="flex items-center space-x-4">
-              <div className="text-sm text-muted-foreground">
+              {/* <div className="text-sm text-muted-foreground">
                 <p>💡 <strong>Note:</strong> You can now create user accounts with passwords for employees. They can log in immediately using their email and password.</p>
                 <p className="mt-1">🔑 <strong>Role Mapping:</strong> Roles from the roles table are automatically mapped to system permissions.</p>
                 <Button 
@@ -589,7 +589,7 @@ export function EmployeeAccessManagement() {
                 >
                   🎭 Check Available Roles
                 </Button>
-              </div>
+              </div> */}
               <Dialog open={showCreateForm} onOpenChange={setShowCreateForm}>
                 <DialogTrigger asChild>
                   <Button>

@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
+import { supabase } from '@/integrations/supabase/client';
 
 interface SidebarItem {
   title: string;
@@ -306,6 +307,12 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   const { profile, user } = useAuth();
   const location = useLocation();
   const { config } = useCompanySettings();
+  const [portalSettings, setPortalSettings] = useState<null | {
+    can_view_orders: boolean;
+    can_view_invoices: boolean;
+    can_view_quotations: boolean;
+  }>(null);
+  const [portalLoading, setPortalLoading] = useState(false);
   // Use sidebar_logo_url if available, else logo_url
   const companyLogo = config.sidebar_logo_url || config.logo_url || 'https://i.postimg.cc/3JbMq1Fw/6732e31fc8403c1a709ad1e0-256-1.png';
   
@@ -313,10 +320,83 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   const isPreConfiguredAdmin = user?.email === 'ecom@tagunlimitedclothing.com';
   const userRole = profile?.role || (isPreConfiguredAdmin ? 'admin' : null);
 
+  // Fetch customer portal permissions when role is customer
+  useEffect(() => {
+    const fetchPortalSettings = async () => {
+      if (!user || userRole !== 'customer') return;
+      try {
+        setPortalLoading(true);
+        const { data: link, error: linkErr } = await supabase
+          .from('customer_users')
+          .select('customer_id')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        if (linkErr) throw linkErr;
+        if (!link?.customer_id) {
+          setPortalSettings({ can_view_orders: false, can_view_invoices: false, can_view_quotations: false });
+          return;
+        }
+        const { data: settings, error: settingsErr } = await supabase
+          .from('customer_portal_settings')
+          .select('can_view_orders, can_view_invoices, can_view_quotations')
+          .eq('customer_id', link.customer_id)
+          .maybeSingle();
+        if (settingsErr) throw settingsErr;
+        setPortalSettings({
+          can_view_orders: !!settings?.can_view_orders,
+          can_view_invoices: !!settings?.can_view_invoices,
+          can_view_quotations: !!settings?.can_view_quotations,
+        });
+      } catch (e) {
+        setPortalSettings({ can_view_orders: false, can_view_invoices: false, can_view_quotations: false });
+      } finally {
+        setPortalLoading(false);
+      }
+    };
+    fetchPortalSettings();
+  }, [user?.id, userRole]);
+
+  // Build items based on role
   const sidebarItems = buildSidebarItems(location.pathname);
-  const filteredItems = sidebarItems.filter(item => 
-    !item.adminOnly || userRole === 'admin'
-  );
+  let filteredItems = sidebarItems.filter(item => !item.adminOnly || userRole === 'admin');
+
+  if (userRole === 'customer' && portalSettings !== null) {
+    // Only hide items/tabs; do not change labels or structure beyond filtering
+    const allowedTopTitles = new Set(["Orders", "Accounts"]);
+    const mapItem = (item: SidebarItem): SidebarItem | null => {
+      // Hide dashboard and all non-customer sections
+      if (!allowedTopTitles.has(item.title)) {
+        return null;
+      }
+      if (!item.children || item.children.length === 0) {
+        return null;
+      }
+      // Filter children based on portal flags
+      const children = item.children.filter(child => {
+        if (item.title === 'Orders') {
+          // Keep orders tab only if orders permission is on
+          return !!portalSettings?.can_view_orders && child.url === '/orders';
+        }
+        if (item.title === 'Accounts') {
+          if (child.url === '/accounts/quotations') {
+            return !!portalSettings?.can_view_quotations;
+          }
+          if (child.url === '/accounts/invoices') {
+            return !!portalSettings?.can_view_invoices;
+          }
+          // Hide other account tabs (receipts, payments) for customers
+          return false;
+        }
+        return false;
+      });
+      if (children.length === 0) return null;
+      return { ...item, children };
+    };
+
+    filteredItems = filteredItems
+      .map(mapItem)
+      .filter((x): x is SidebarItem => x !== null);
+  }
 
   const handleCollapsedChange = (newCollapsed: boolean) => {
     setCollapsed(newCollapsed);
