@@ -34,6 +34,7 @@ import DesignPage from "./pages/DesignPage";
 import ProcurementPage from "./pages/ProcurementPage";
 import PurchaseOrderListPage from "./pages/procurement/PurchaseOrderListPage";
 import PurchaseOrderFormPage from "./pages/procurement/PurchaseOrderFormPage";
+import BomListPage from "./pages/procurement/BomListPage";
 import CompanyConfigPage from "./pages/admin/CompanyConfigPage";
 import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
@@ -201,6 +202,11 @@ const App = () => {
                 <Route path="/procurement/po/:id" element={
                   <ProtectedRoute>
                     <PurchaseOrderFormPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/bom" element={
+                  <ProtectedRoute>
+                    <BomListPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/quality" element={

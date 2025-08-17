@@ -40,6 +40,7 @@ interface SidebarItem {
   children?: SidebarItem[];
 }
 
+
 function buildSidebarItems(currentPath: string): SidebarItem[] {
   return [
     { title: "Dashboard", url: "/", icon: Home },
@@ -132,6 +133,7 @@ function buildSidebarItems(currentPath: string): SidebarItem[] {
     { title: "Configuration", url: "/configuration", icon: Settings }
   ];
 }
+
 
 interface SidebarItemComponentProps {
   item: SidebarItem;

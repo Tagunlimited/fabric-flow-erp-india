@@ -88,13 +88,13 @@ export default function ProcurementPage() {
     const result: Record<string, number> = {};
     if (codeSet.length === 0) return result;
     try {
-      const { data, error } = await supabase.from('inventory').select('item_code, quantity');
+      const { data, error } = await supabase.from('inventory').select('item_code, quantity').limit(10000);
       if (!error && data) {
         for (const r of data) if (r.item_code) result[r.item_code] = Number(r.quantity) || 0;
       }
     } catch {}
     try {
-      const { data } = await supabase.from('item_master').select('item_code, stock, current_stock');
+      const { data } = await supabase.from('item_master').select('item_code, stock, current_stock').limit(10000);
       if (data) {
         for (const r of data) {
           const v = r.current_stock ?? r.stock;
@@ -267,7 +267,7 @@ export default function ProcurementPage() {
                           const name = `${fabricName}${fabricColor ? ' - ' + fabricColor : ''}${fabricGsm ? ', ' + fabricGsm + ' GSM' : ''}`;
                           setSelectedFabricLabel(name);
                           const stockVal = Number(fab?.available_qty ?? fab?.stock ?? 0) || 0;
-                          fabricRow = [{ id: crypto.randomUUID(), item_id: null, item_name: name, category: 'Fabric', uom: 'Kgs', qty_per: 0, qty_total: 0, stock: stockVal, to_order: 0, locked: true }];
+                          fabricRow = [{ id: crypto.randomUUID(), item_id: it.fabric_id || null, item_name: name, category: 'Fabric', uom: 'Kgs', qty_per: 0, qty_total: 0, stock: stockVal, to_order: 0, locked: true }];
                         }
                       } catch {}
                       setBomRows(fabricRow);
