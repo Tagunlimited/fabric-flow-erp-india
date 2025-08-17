@@ -123,7 +123,7 @@ function buildSidebarItems(currentPath: string): SidebarItem[] {
       icon: UserCog,
       adminOnly: true,
       children: [
-        { title: "Users", url: "/admin/users", icon: UserCog },
+       // { title: "Users", url: "/admin/users", icon: UserCog },
         { title: "Employee Access", url: "/admin/employee-access", icon: Users },
         { title: "Customer Access", url: "/admin/customer-access", icon: Users }
       ]

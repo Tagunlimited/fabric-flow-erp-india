@@ -97,10 +97,65 @@ serve(async (req) => {
     // Check for duplicate email to provide a clearer error
     try {
       const { data: usersPage } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
-      const exists = usersPage?.users?.some((u: any) => (u.email || '').toLowerCase() === email.toLowerCase());
-      if (exists) {
+      const existing = usersPage?.users?.find((u: any) => (u.email || '').toLowerCase() === email.toLowerCase());
+      if (existing) {
+        // If user already exists in auth, treat this as a re-grant: reset password, upsert profile, and link role
+        await supabase.auth.admin.updateUserById(existing.id, { password, email_confirm: true });
+
+        // Upsert profile for the existing user
+        let { error: profileErr } = await supabase
+          .from('profiles')
+          .upsert({
+            user_id: existing.id,
+            full_name: fullName,
+            email: email,
+            role: (requestedRole === 'admin') ? 'admin' : 'sales manager',
+            phone: phone || null,
+            department: department || null,
+            status: 'approved'
+          }, { onConflict: 'user_id' })
+
+        if (profileErr) {
+          // Try again with safe role if enum mismatch
+          const msg = (profileErr.message || '').toLowerCase();
+          if (msg.includes('enum')) {
+            const retry = await supabase
+              .from('profiles')
+              .upsert({
+                user_id: existing.id,
+                full_name: fullName,
+                email: email,
+                role: 'admin',
+                phone: phone || null,
+                department: department || null,
+                status: 'approved'
+              }, { onConflict: 'user_id' })
+            profileErr = retry.error as any;
+          }
+          if (profileErr) {
+            return new Response(
+              JSON.stringify({ success: false, error: `Failed to update user profile: ${profileErr.message}` }),
+              { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            )
+          }
+        }
+
+        // Link role via roles table
+        try {
+          const { data: roleRow } = await supabase
+            .from('roles')
+            .select('id,name')
+            .ilike('name', role)
+            .maybeSingle();
+          if (roleRow?.id) {
+            await supabase
+              .from('user_roles')
+              .upsert({ user_id: existing.id, role_id: roleRow.id, assigned_by: user.id }, { onConflict: 'user_id,role_id' });
+          }
+        } catch (_) {}
+
         return new Response(
-          JSON.stringify({ success: false, error: 'Email already exists in auth. Please use a different email.' }),
+          JSON.stringify({ success: true, message: 'User account updated and access granted', user: { id: existing.id, email } }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
       }

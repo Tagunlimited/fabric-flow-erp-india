@@ -250,58 +250,36 @@ export function EmployeeAccessManagement() {
         throw new Error('Not authenticated. Please sign in again.');
       }
 
-      // Prefer direct RPC to avoid Edge Function deployment issues
-      const { error: rpcError, data: rpcData } = await supabase.rpc('create_employee_user_account', {
-        p_email: newUserData.email,
-        p_password: newUserData.password,
-        p_full_name: selectedEmployee.full_name,
-        p_role: mapRoleNameToEnum(newUserData.role),
-        p_phone: selectedEmployee.personal_phone || null,
-        p_department: selectedEmployee.department || null,
+      // Always use the Edge Function so we can re-grant access to existing emails
+      const { data, error } = await supabase.functions.invoke('create-employee-user', {
+        body: {
+          email: newUserData.email,
+          password: newUserData.password,
+          fullName: selectedEmployee.full_name,
+          role: newUserData.role,
+          phone: selectedEmployee.personal_phone,
+          department: selectedEmployee.department
+        },
+        headers: { Authorization: `Bearer ${accessToken}` }
       });
 
-      if (rpcError) {
-        const msg = rpcError.message?.toLowerCase() || '';
-        const missingFn = msg.includes('could not find the function') || msg.includes('schema cache');
-        if (!missingFn) {
-          throw new Error(rpcError.message || 'Failed to create user');
-        }
-
-        // Fallback to Edge Function if RPC isn't present in DB yet
-        const { data: sessionData } = await supabase.auth.getSession();
-        const accessToken = sessionData.session?.access_token;
-        if (!accessToken) throw new Error('Not authenticated. Please sign in again.');
-
-        const { data, error } = await supabase.functions.invoke('create-employee-user', {
-          body: {
-            email: newUserData.email,
-            password: newUserData.password,
-            fullName: selectedEmployee.full_name,
-            role: newUserData.role,
-            phone: selectedEmployee.personal_phone,
-            department: selectedEmployee.department
-          },
-          headers: { Authorization: `Bearer ${accessToken}` }
-        });
-
-        if (error) {
-          let serverMsg = (data && (data as any).error) ? (data as any).error : undefined;
-          try {
-        
-            const resp = error.context?.response as Response | undefined;
-            if (resp) {
-              const text = await resp.text();
-              if (text) {
-                try { serverMsg = JSON.parse(text).error || serverMsg; } catch { serverMsg = text || serverMsg; }
-              }
+      if (error) {
+        let serverMsg = (data && (data as any).error) ? (data as any).error : undefined;
+        try {
+          // @ts-expect-error
+          const resp = error.context?.response as Response | undefined;
+          if (resp) {
+            const text = await resp.text();
+            if (text) {
+              try { serverMsg = JSON.parse(text).error || serverMsg; } catch { serverMsg = text || serverMsg; }
             }
-          } catch {}
-          throw new Error(serverMsg || error.message || 'Failed to create user');
-        }
+          }
+        } catch {}
+        throw new Error(serverMsg || error.message || 'Failed to create user');
+      }
 
-        if (!(data as any)?.success) {
-          throw new Error(((data as any)?.error) || 'Failed to create user');
-        }
+      if (!(data as any)?.success) {
+        throw new Error(((data as any)?.error) || 'Failed to create user');
       }
 
       toast.success('Employee user account created successfully!');
