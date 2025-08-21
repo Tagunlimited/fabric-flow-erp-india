@@ -117,15 +117,31 @@ export function BomList() {
         .filter((x: any) => (x.category === 'Fabric') && x.item_id)
         .map((x: any) => x.item_id))) as string[];
       let fabricsMap: Record<string, any> = {};
+      let fabricVariantsMap: Record<string, any[]> = {};
       if (fabricIds.length > 0) {
         const chunkSize = 50;
         for (let i = 0; i < fabricIds.length; i += chunkSize) {
           const slice = fabricIds.slice(i, i + chunkSize);
+          // Fetch fabrics
           const { data: fabrics } = await supabase
             .from('fabrics')
-            .select('id, name, image_url, gsm')
+            .select('id, name, gsm, image_url')
             .in('id', slice as any);
           (fabrics || []).forEach((f: any) => { if (f?.id) fabricsMap[f.id] = f; });
+          
+          // Fetch fabric variants for colors and GSM
+          const { data: fabricVariants } = await supabase
+            .from('fabric_variants')
+            .select('fabric_id, color, gsm, description')
+            .in('fabric_id', slice as any);
+          (fabricVariants || []).forEach((fv: any) => { 
+            if (fv?.fabric_id) {
+              if (!fabricVariantsMap[fv.fabric_id]) {
+                fabricVariantsMap[fv.fabric_id] = [];
+              }
+              fabricVariantsMap[fv.fabric_id].push(fv);
+            }
+          });
         }
       }
       
@@ -185,6 +201,7 @@ export function BomList() {
           ...bi,
           item: itemsMap[bi.item_id] || undefined,
           fabric: fabricsMap[bi.item_id] || undefined,
+          fabric_variants: fabricVariantsMap[bi.item_id] || [],
           inventory: inventoryMap[bi.item_id] || [],
         });
       });
@@ -235,25 +252,52 @@ export function BomList() {
         if (item.category === 'Fabric') {
           // Prefer values from linked order_item (color/gsm) when available
           const parsed = parseFabric(item.item_name);
-          const color = bom.order_item?.color || parsed.color;
-          const gsm = bom.order_item?.gsm || (item.fabric as any)?.gsm || parsed.gsm;
           const qty = item.to_order || item.qty_total;
           
           // Use fabric name from fabrics table if available, otherwise parse from item_name
           const fabricName = item.fabric?.name || parsed.name || item.item_name;
           
-          // Try to get color from inventory if not available from order_item
-          const inventoryColor = color || ((item as any).inventory && (item as any).inventory.length > 0 ? (item as any).inventory[0].color : '');
+          // Get color and GSM from multiple sources in order of preference:
+          // 1. order_item (from the original order)
+          // 2. fabric_variants (from the fabric variants table)
+          // 3. inventory (from inventory table)
+          // 4. parsed from item_name
+          let color = bom.order_item?.color || '';
+          let gsm = bom.order_item?.gsm || '';
+          
+          // If not available from order_item, try fabric_variants
+          if (!color || !gsm) {
+            const fabricVariants = (item as any).fabric_variants || [];
+            if (fabricVariants.length > 0) {
+              // Use the first variant if color/gsm not specified
+              if (!color) color = fabricVariants[0].color || '';
+              if (!gsm) gsm = fabricVariants[0].gsm || '';
+            }
+          }
+          
+          // If still not available, try inventory
+          if (!color || !gsm) {
+            const inventory = (item as any).inventory || [];
+            if (inventory.length > 0) {
+              if (!color) color = inventory[0].color || '';
+              if (!gsm) gsm = inventory[0].gsm || '';
+            }
+          }
+          
+          // If still not available, use parsed values
+          if (!color) color = parsed.color;
+          if (!gsm) gsm = parsed.gsm;
           
           console.log('Fabric item data:', {
             item_name: item.item_name,
             fabric_name: item.fabric?.name,
             parsed_name: parsed.name,
             final_name: fabricName,
-            color: inventoryColor,
-            gsm,
+            color: color,
+            gsm: gsm,
             quantity: qty,
-            fabric_image: item.fabric?.image_url,
+            fabric_image: item.fabric?.image_url || null,
+            fabric_variants: (item as any).fabric_variants,
             inventory: (item as any).inventory
           });
           
@@ -265,7 +309,7 @@ export function BomList() {
             unit_price: 0,
             unit_of_measure: item.unit_of_measure || 'Kgs',
             item_image_url: item.fabric?.image_url || null,
-            fabricSelections: [{ color: inventoryColor || '', gsm: gsm || '', quantity: qty }],
+            fabricSelections: [{ color: color || '', gsm: gsm || '', quantity: qty }],
           };
         }
         // Items
@@ -300,7 +344,7 @@ export function BomList() {
           <h2 className="text-2xl font-bold">Bills of Material</h2>
           <p className="text-muted-foreground">Manage and create purchase orders from BOMs</p>
         </div>
-        <Button onClick={() => navigate('/procurement')} className="bg-emerald-600 hover:bg-emerald-700">
+        <Button onClick={() => navigate('/procurement/bom/new')} className="bg-emerald-600 hover:bg-emerald-700">
           <Plus className="w-4 h-4 mr-2" /> Create New BOM
         </Button>
       </div>
@@ -387,9 +431,16 @@ export function BomList() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => viewBomDetails(bom)}
+                            onClick={() => navigate(`/procurement/bom/${bom.id}`)}
                           >
                             <Eye className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => viewBomDetails(bom)}
+                          >
+                            Details
                           </Button>
                           <Button
                             size="sm"

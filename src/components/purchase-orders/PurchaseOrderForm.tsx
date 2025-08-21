@@ -50,16 +50,16 @@ type LineItem = {
   item_image_url?: string | null;
   quantity: number;
   unit_price: number;
-    total_price: number;
-    gst_rate?: number;
-    gst_amount?: number;
-    line_total?: number;
+  total_price: number;
+  gst_rate?: number;
+  gst_amount?: number;
+  line_total?: number;
   unit_of_measure?: string;
   notes?: string;
   attributes?: Record<string, any> | null;
   fabricSelections?: { color: string; gsm: string; quantity: number }[];
-    itemSelections?: { id: string; label: string; image_url?: string | null; quantity: number; price: number }[];
-    item_category?: string | null;
+  itemSelections?: { id: string; label: string; image_url?: string | null; quantity: number; price: number }[];
+  item_category?: string | null;
 };
 
 type PurchaseOrder = {
@@ -75,6 +75,31 @@ type PurchaseOrder = {
   total_amount?: number | null;
   status: 'draft' | 'submitted' | 'approved' | 'in_progress' | 'completed' | 'cancelled';
 };
+
+// Helper function to safely access Supabase query results
+function safeQueryResult<T>(result: { data: T | null; error: any }): T | null {
+  if (result.error) {
+    console.error('Supabase query error:', result.error);
+    return null;
+  }
+  return result.data;
+}
+
+// Helper function to convert number to words
+function numberToWords(num: number): string {
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  const teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+
+  if (num === 0) return 'Zero';
+  if (num < 10) return ones[num];
+  if (num < 20) return teens[num - 10];
+  if (num < 100) return tens[Math.floor(num / 10)] + (num % 10 ? ' ' + ones[num % 10] : '');
+  if (num < 1000) return ones[Math.floor(num / 100)] + ' Hundred' + (num % 100 ? ' and ' + numberToWords(num % 100) : '');
+  if (num < 100000) return numberToWords(Math.floor(num / 1000)) + ' Thousand' + (num % 1000 ? ' ' + numberToWords(num % 1000) : '');
+  if (num < 10000000) return numberToWords(Math.floor(num / 100000)) + ' Lakh' + (num % 100000 ? ' ' + numberToWords(num % 100000) : '');
+  return numberToWords(Math.floor(num / 10000000)) + ' Crore' + (num % 10000000 ? ' ' + numberToWords(num % 10000000) : '');
+}
 
 export function PurchaseOrderForm() {
   const navigate = useNavigate();
@@ -98,185 +123,72 @@ export function PurchaseOrderForm() {
   const [items, setItems] = useState<LineItem[]>([]);
   // Option lists by type
   const [fabricOptions, setFabricOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
-  const [itemOptions, setItemOptions] = useState<{ id: string; label: string; image_url?: string | null; uom?: string | null; type?: string | null; gst_rate?: number | null }[]>([]);
-  const [itemTypeOptions, setItemTypeOptions] = useState<string[]>([]);
+  const [itemOptions, setItemOptions] = useState<{ id: string; label: string; image_url?: string | null; item_type?: string; uom?: string; gst_rate?: number; type?: string }[]>([]);
   const [productOptions, setProductOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
+  const [itemTypeOptions, setItemTypeOptions] = useState<string[]>([]);
 
-  // Add debouncing for input changes
-  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [debouncedItems, setDebouncedItems] = useState<LineItem[]>([]);
-
-  // Debounce items changes to prevent excessive recalculations
+  // Process BOM data from URL params
   useEffect(() => {
-    if (debounceTimeoutRef.current) {
-      clearTimeout(debounceTimeoutRef.current);
-    }
-    
-    debounceTimeoutRef.current = setTimeout(() => {
-      setDebouncedItems(items);
-    }, 300); // 300ms debounce
-
-    return () => {
-      if (debounceTimeoutRef.current) {
-        clearTimeout(debounceTimeoutRef.current);
-      }
-    };
-  }, [items]);
-
-  useEffect(() => {
-    fetchSuppliers();
-    fetchOptions();
-    fetchCompanySettings();
-    if (id) fetchExisting();
-    
-    // Process BOM data if present
-    if (bomParam && !id) {
+    if (bomParam) {
       try {
-        const decodedBomData = JSON.parse(decodeURIComponent(bomParam));
-        setBomData(decodedBomData);
+        const decoded = JSON.parse(decodeURIComponent(bomParam));
+        setBomData(decoded);
         
-        // Pre-fill items from BOM data
-        if (decodedBomData.items && Array.isArray(decodedBomData.items)) {
-          setItems(decodedBomData.items.map((item: any) => ({
-            ...item,
-            total_price: 0,
-            gst_amount: 0,
-            line_total: 0,
-            attributes: {},
-            fabricSelections: item.item_type === 'fabric' ? item.fabricSelections || [{ color: '', gsm: '', quantity: item.quantity }] : undefined,
-            itemSelections: item.item_type === 'item' ? item.itemSelections : undefined
-          })));
+        // Pre-fill PO with BOM data
+        if (decoded.items && Array.isArray(decoded.items)) {
+          const bomItems: LineItem[] = decoded.items.map((item: any) => ({
+            id: undefined,
+            item_type: item.item_type || 'item',
+            item_id: item.item_id || '',
+            item_name: item.item_name || '',
+            item_image_url: item.item_image_url || null,
+            quantity: item.quantity || 0,
+            unit_price: item.unit_price || 0,
+            total_price: (item.quantity || 0) * (item.unit_price || 0),
+            unit_of_measure: item.unit_of_measure || '',
+            notes: item.notes || '',
+            attributes: item.attributes || {},
+            fabricSelections: item.fabricSelections || [],
+            itemSelections: item.itemSelections || [],
+            item_category: item.item_category || null,
+          }));
+          setItems(bomItems);
         }
       } catch (error) {
         console.error('Error parsing BOM data:', error);
       }
     }
-  }, [id, bomParam]);
-
-  // When we came from a BOM, hydrate each prefilled line with attributes/images
-  useEffect(() => {
-    if (!bomData) return;
-    if (!items || items.length === 0) return;
-    items.forEach((it, idx) => {
-      if (it.item_id) {
-        fetchAndSetAttributes(idx, it.item_type, it.item_id);
-      }
-    });
-    // run once after bom prefills
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bomData]);
-
-  // Optimized useEffect - only run when itemOptions change, not on every render
-  useEffect(() => {
-    if (!itemOptions || itemOptions.length === 0) return;
-    
-    setItems((prev) => {
-      const hasChanges = prev.some((it) => {
-        if (it.item_type !== 'item') return false;
-        const opt = it.item_id ? itemOptions.find(o => o.id === it.item_id) : undefined;
-        return !it.item_category && opt?.type;
-      });
-      
-      if (!hasChanges) return prev; // Skip if no changes needed
-      
-      return prev.map((it) => {
-        if (it.item_type !== 'item') return it;
-        
-        const opt = it.item_id ? itemOptions.find(o => o.id === it.item_id) : undefined;
-        const next: any = { ...it };
-        
-        // Only update if missing
-        if (!next.item_category && opt?.type) {
-          next.item_category = opt.type;
-        }
-        if ((next.gst_rate == null || isNaN(Number(next.gst_rate))) && typeof opt?.gst_rate === 'number') {
-          next.gst_rate = opt.gst_rate;
-        }
-        if (!next.unit_of_measure && opt?.uom) next.unit_of_measure = opt.uom;
-        if (!next.item_image_url && opt?.image_url) next.item_image_url = opt.image_url;
-        
-        // Only recalculate if values actually changed
-        const qty = Number(next.quantity) || 0;
-        const unitPrice = Number(next.unit_price) || 0;
-        const totalPrice = qty * unitPrice;
-        const gstRate = Number(next.gst_rate) || 0;
-        const gstAmount = totalPrice * (gstRate / 100);
-        const lineTotal = totalPrice + gstAmount;
-        
-        // Only update if values are different
-        if (next.total_price !== totalPrice) next.total_price = totalPrice;
-        if (next.gst_amount !== gstAmount) next.gst_amount = gstAmount;
-        if (next.line_total !== lineTotal) next.line_total = lineTotal;
-        
-        return next;
-      });
-    });
-  }, [itemOptions]);
-
-  const fetchSuppliers = async () => {
-    const { data, error } = await supabase
-      .from('supplier_master')
-      .select('*')
-      .order('supplier_name');
-    
-    if (error) {
-      console.error('Error fetching suppliers:', error);
-    }
-    
-    setSuppliers((data as any) || []);
-  };
-
-  const fetchCompanySettings = async () => {
-    try {
-      const { data } = await supabase
-        .from('company_settings')
-        .select('*')
-        .single();
-      if (data) {
-        setCompanySettings(data as any);
-      }
-    } catch (error) {
-      console.warn('Failed to fetch company settings:', error);
-    }
-  };
-
-  const parseFabricDetails = (name?: string): { color?: string; gsm?: string } => {
-    if (!name) return {};
-    const parts = name.split('|').map((p) => p.trim());
-    if (parts.length >= 3) {
-      return { color: parts[1], gsm: parts[2] };
-    }
-    return {};
-  };
+  }, [bomParam]);
 
   const fetchExisting = async () => {
+    if (!id) return;
+    
     setLoading(true);
     try {
-      // Ensure suppliers are loaded first
-      if (suppliers.length === 0) {
+      const headerResult = await supabase
+        .from('purchase_orders')
+        .select('*')
+        .eq('id', id as any)
+        .single();
+      
+      const header = safeQueryResult(headerResult);
+      if (!header) return;
+      
+      setPo(header as any);
+      
+      // Double-check if supplier exists in our list
+      const supplierExists = suppliers.find(s => s.id === (header as any).supplier_id);
+      if (!supplierExists && (header as any).supplier_id) {
         await fetchSuppliers();
       }
       
-      const { data: header } = await supabase
-        .from('purchase_orders')
-        .select('*')
-        .eq('id', id)
-        .single();
-      
-      if (header) {
-        setPo(header as any);
-        
-        // Double-check if supplier exists in our list
-        const supplierExists = suppliers.find(s => s.id === header.supplier_id);
-        if (!supplierExists && header.supplier_id) {
-          await fetchSuppliers();
-        }
-      }
-      
-      const { data: lines } = await supabase
+      const linesResult = await supabase
         .from('purchase_order_items')
         .select('*')
-        .eq('po_id', id);
+        .eq('po_id', id as any);
+      
+      const lines = safeQueryResult(linesResult);
+      if (!lines) return;
       
       let restored: LineItem[] = (lines as any || []).map((row: any) => {
         const base: LineItem = {
@@ -306,16 +218,19 @@ export function PurchaseOrderForm() {
         }
         return base;
       });
+      
       // Populate fabric attributes (colors/gsm lists) for restored fabric lines
       const fabricIndices: number[] = [];
       restored.forEach((it, i) => { if (it.item_type === 'fabric' && it.item_id) fabricIndices.push(i); });
       if (fabricIndices.length > 0) {
         const populated = await Promise.all(fabricIndices.map(async (i) => {
           const it = restored[i];
-          const { data: variants } = await supabase
+          const variantsResult = await supabase
             .from('fabric_variants')
             .select('color, gsm')
             .eq('fabric_id', it.item_id as any);
+          
+          const variants = safeQueryResult(variantsResult);
           const colorSet = new Set<string>();
           const gsmSet = new Set<string>();
           (variants || []).forEach((v: any) => { if (v.color) colorSet.add(v.color); if (v.gsm) gsmSet.add(v.gsm); });
@@ -331,17 +246,19 @@ export function PurchaseOrderForm() {
           (restored[index] as any).attributes = { ...(restored[index].attributes || {}), ...attrs };
         });
       }
+      
       // If item_category is missing for any items, fetch it from item_master
       const itemsNeedingCategory = restored.filter(it => (it.item_type === 'item' || it.item_type === 'Zipper' || it.item_type === 'Drawcord' || it.item_type === 'Laces') && !it.item_category && it.item_id);
       if (itemsNeedingCategory.length > 0) {
         const itemIds = itemsNeedingCategory.map(it => it.item_id);
-        const { data: itemMasterData } = await supabase
+        const itemMasterResult = await supabase
           .from('item_master')
           .select('id, item_type')
-          .in('id', itemIds);
+          .in('id', itemIds as any);
         
+        const itemMasterData = safeQueryResult(itemMasterResult);
         if (itemMasterData) {
-          const itemTypeMap = new Map(itemMasterData.map(item => [item.id, item.item_type]));
+          const itemTypeMap = new Map((itemMasterData as any[]).map(item => [item.id, item.item_type]));
           restored.forEach(item => {
             if ((item.item_type === 'item' || item.item_type === 'Zipper' || item.item_type === 'Drawcord' || item.item_type === 'Laces') && !item.item_category && item.item_id) {
               item.item_category = itemTypeMap.get(item.item_id) || null;
@@ -358,71 +275,102 @@ export function PurchaseOrderForm() {
 
   const fetchOptions = async () => {
     try {
-      const { data: fabrics, error: fabricsError } = await supabase
+      const fabricsResult = await supabase
         .from('fabrics')
         .select('*')
         .order('name');
       
-      if (fabricsError) {
-        console.error('Error fetching fabrics:', fabricsError);
+      const fabrics = safeQueryResult(fabricsResult);
+      if (fabrics) {
+        setFabricOptions((fabrics as any[]).map(f => ({ id: f.id, label: f.name, image_url: f.image_url })));
       }
-      
-      setFabricOptions((fabrics || []).map((f: any) => ({ id: f.id, label: f.name, image_url: null })));
 
-      // Items
-      let { data: items, error: itemsError } = await supabase
+      const itemsResult = await supabase
         .from('item_master')
-        .select('id, item_name, image, gst_rate, uom, item_type')
+        .select('id, item_name, image_url, item_type, is_active')
+        .eq('is_active', true as any)
         .order('item_name');
       
-      if (itemsError) {
-        console.error('Error fetching items:', itemsError);
+      const items = safeQueryResult(itemsResult);
+      if (items) {
+        setItemOptions((items as any[]).map(i => ({ 
+          id: i.id, 
+          label: i.item_name, 
+          image_url: i.image_url, 
+          item_type: i.item_type,
+          uom: i.uom || i.unit_of_measure,
+          gst_rate: i.gst_rate || 0,
+          type: i.item_type
+        })));
+        
+        // Extract unique item types for the first dropdown
+        const types = Array.from(new Set((items as any[]).map(i => i.item_type).filter(Boolean)));
+        setItemTypeOptions(types);
       }
-      
-      // Fallback ordering if item_name missing
-      if (!items || items.length === 0) {
-        const res = await supabase.from('item_master').select('id, item_name, image, gst_rate, uom, item_type');
-        items = res.data || [];
-      }
-      setItemOptions((items || []).map((it: any) => ({
-        id: it.id,
-        label: it.item_name || it.name || it.item_code || 'Unnamed Item',
-        image_url: it.image_url || it.image || null,
-        uom: it.unit_of_measure || null,
-        type: it.item_type || null,
-        gst_rate: it.gst_rate || null
-      })));
 
-      // distinct item_type list from item_master table
-      const typeSet = new Set<string>();
-      (items || []).forEach((it: any) => { if (it.item_type) typeSet.add(it.item_type); });
-      setItemTypeOptions(Array.from(typeSet));
-
-      // Product master may not be present in some setups. Try-select safely.
-      let products: any[] | null = null;
-      let productsError: any = null;
-      try {
-        const res = await supabase
-          .from('product_master')
-          .select('id, name, sku');
-        products = res.data || [];
-        productsError = res.error || null;
-      } catch (e) {
-        products = [];
-        productsError = e;
-      }
+      const productsResult = await supabase
+        .from('product_master')
+        .select('id, product_name, image_url, status')
+        .eq('status', 'active' as any)
+        .order('product_name');
       
-      if (productsError) {
-        console.error('Error fetching products:', productsError);
+      const products = safeQueryResult(productsResult);
+      if (products) {
+        setProductOptions((products as any[]).map(p => ({ id: p.id, label: p.product_name, image_url: p.image_url })));
       }
-      
-      setProductOptions((products || []).map((p: any) => {
-        const label = p.name || p.sku || 'Unnamed Product';
-        return { id: p.id, label, image_url: null };
-      }));
-    } catch (e) {
-      console.warn('Fetch options warning', e);
+    } catch (error) {
+      console.error('Error fetching options:', error);
     }
+  };
+
+  const fetchSuppliers = async () => {
+    try {
+      const result = await supabase
+        .from('supplier_master')
+        .select('*')
+        .order('supplier_name');
+      
+      const suppliers = safeQueryResult(result);
+      if (suppliers) {
+        setSuppliers(suppliers as any);
+      }
+    } catch (error) {
+      console.error('Error fetching suppliers:', error);
+    }
+  };
+
+  const fetchCompanySettings = async () => {
+    try {
+      const result = await supabase
+        .from('company_settings')
+        .select('*')
+        .single();
+      
+      const settings = safeQueryResult(result);
+      if (settings) {
+        setCompanySettings(settings as any);
+      }
+    } catch (error) {
+      console.error('Error fetching company settings:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchSuppliers();
+    fetchCompanySettings();
+    fetchOptions();
+    if (id) {
+      fetchExisting();
+    }
+  }, [id]);
+
+  const parseFabricDetails = (name?: string): { color?: string; gsm?: string } => {
+    if (!name) return {};
+    const parts = name.split('|').map((p) => p.trim());
+    if (parts.length >= 3) {
+      return { color: parts[1], gsm: parts[2] };
+    }
+    return {};
   };
 
   const updateItem = useCallback((index: number, patch: Partial<LineItem>) => {
@@ -491,8 +439,8 @@ export function PurchaseOrderForm() {
     try {
       if (type === 'fabric') {
         const [{ data: fabric }, { data: variants }] = await Promise.all([
-          supabase.from('fabrics').select('*').eq('id', entityId).maybeSingle(),
-          supabase.from('fabric_variants').select('*').eq('fabric_id', entityId),
+          supabase.from('fabrics').select('*').eq('id', entityId as any).maybeSingle(),
+          supabase.from('fabric_variants').select('*').eq('fabric_id', entityId as any),
         ]);
         const colorSet = new Set<string>();
         const gsmSet = new Set<string>();
@@ -500,7 +448,7 @@ export function PurchaseOrderForm() {
           if (r.color) colorSet.add(r.color);
           if (r.gsm) gsmSet.add(r.gsm);
         });
-        const uomCandidate = (variants || []).find((v: any) => !!v.uom)?.uom || 'MTR';
+        const uomCandidate = ((variants as any[]) || []).find((v: any) => !!v.uom)?.uom || 'MTR';
         const attrs: Record<string, any> = {
           fabric_name: (fabric as any)?.name || '',
           fabric_gsm: (fabric as any)?.gsm || null,
@@ -520,7 +468,7 @@ export function PurchaseOrderForm() {
         return;
       }
       if (type === 'item') {
-        const { data: item } = await supabase.from('item_master').select('*').eq('id', entityId).maybeSingle();
+        const { data: item } = await supabase.from('item_master').select('*').eq('id', entityId as any).maybeSingle();
         const attrs: Record<string, any> = {};
         if (item) {
           ['item_code', 'uom', 'brand', 'category', 'color', 'size', 'specs', 'description'].forEach((k) => {
@@ -541,13 +489,13 @@ export function PurchaseOrderForm() {
       }
       if (type === 'product') {
         let attrs: Record<string, any> = {};
-        const { data: pm } = await supabase.from('product_master').select('*').eq('id', entityId).maybeSingle();
+        const { data: pm } = await supabase.from('product_master').select('*').eq('id', entityId as any).maybeSingle();
         if (pm) {
           ['code', 'category', 'base_price', 'hsn_code', 'gst_rate'].forEach((k) => {
             if (pm[k] != null && pm[k] !== '') attrs[k] = pm[k];
           });
         } else {
-          const { data: p } = await supabase.from('products').select('*').eq('id', entityId).maybeSingle();
+          const { data: p } = await supabase.from('products').select('*').eq('id', entityId as any).maybeSingle();
           if (p) {
             ['code', 'category', 'base_price', 'hsn_code', 'gst_rate'].forEach((k) => {
               if (p[k] != null && p[k] !== '') attrs[k] = p[k];
@@ -564,69 +512,16 @@ export function PurchaseOrderForm() {
     }
   }, [updateItem]);
 
-  // Function to convert number to words
-  const numberToWords = (num: number): string => {
-    const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
-    const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-    const teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
-    
-    const convertLessThanOneThousand = (num: number): string => {
-      if (num === 0) return '';
-      
-      if (num < 10) return ones[num];
-      
-      if (num < 20) return teens[num - 10];
-      
-      if (num < 100) {
-        return tens[Math.floor(num / 10)] + (num % 10 !== 0 ? ' ' + ones[num % 10] : '');
-      }
-      
-      if (num < 1000) {
-        return ones[Math.floor(num / 100)] + ' Hundred' + (num % 100 !== 0 ? ' and ' + convertLessThanOneThousand(num % 100) : '');
-      }
-      
-      return '';
-    };
-    
-    const convert = (num: number): string => {
-      if (num === 0) return 'Zero';
-      
-      const crore = Math.floor(num / 10000000);
-      const lakh = Math.floor((num % 10000000) / 100000);
-      const thousand = Math.floor((num % 100000) / 1000);
-      const remainder = num % 1000;
-      
-      let result = '';
-      
-      if (crore > 0) {
-        result += convertLessThanOneThousand(crore) + ' Crore ';
-      }
-      
-      if (lakh > 0) {
-        result += convertLessThanOneThousand(lakh) + ' Lakh ';
-      }
-      
-      if (thousand > 0) {
-        result += convertLessThanOneThousand(thousand) + ' Thousand ';
-      }
-      
-      if (remainder > 0) {
-        result += convertLessThanOneThousand(remainder);
-      }
-      
-      return result.trim();
-    };
-    
-    const rupees = Math.floor(num);
-    const paise = Math.round((num - rupees) * 100);
-    
-    let result = convert(rupees) + ' Rupees';
-    if (paise > 0) {
-      result += ' and ' + convert(paise) + ' Paise';
-    }
-    
-    return result;
-  };
+  // Add debounced items state
+  const [debouncedItems, setDebouncedItems] = useState<LineItem[]>([]);
+
+  // Debounce items changes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedItems(items);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [items]);
 
   const totals = useMemo(() => {
     // Use debounced items to prevent excessive recalculations
@@ -687,31 +582,31 @@ export function PurchaseOrderForm() {
           .from('purchase_orders')
           .insert({
             po_number: poNumberData,
-            supplier_id: po.supplier_id,
+            supplier_id: po.supplier_id as any,
             order_date: po.order_date,
             expected_delivery_date: po.expected_delivery_date,
             delivery_address: po.delivery_address,
             terms_conditions: po.terms_conditions,
             status: po.status,
-          })
+          } as any)
           .select('id')
           .single();
         if (error) throw error;
-        poId = inserted?.id;
+        poId = inserted && 'id' in inserted ? inserted.id : undefined;
       } else {
         await supabase
           .from('purchase_orders')
           .update({
-            supplier_id: po.supplier_id,
+            supplier_id: po.supplier_id as any,
             order_date: po.order_date,
             expected_delivery_date: po.expected_delivery_date,
             delivery_address: po.delivery_address,
             terms_conditions: po.terms_conditions,
             status: po.status,
-          })
-          .eq('id', poId);
+          } as any)
+          .eq('id', poId as any);
         // clear existing lines to simplify
-        await supabase.from('purchase_order_items').delete().eq('po_id', poId);
+        await supabase.from('purchase_order_items').delete().eq('po_id', poId as any);
       }
 
       // Expand each UI line into individual DB rows
@@ -798,7 +693,7 @@ export function PurchaseOrderForm() {
         await supabase
           .from('purchase_orders')
           .select('id, subtotal, gst_total, total_amount')
-          .eq('id', poId)
+          .eq('id', poId as any)
           .single();
       }
 

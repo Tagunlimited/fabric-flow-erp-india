@@ -35,6 +35,7 @@ import ProcurementPage from "./pages/ProcurementPage";
 import PurchaseOrderListPage from "./pages/procurement/PurchaseOrderListPage";
 import PurchaseOrderFormPage from "./pages/procurement/PurchaseOrderFormPage";
 import BomListPage from "./pages/procurement/BomListPage";
+import { BomForm } from "./components/purchase-orders/BomForm";
 import CompanyConfigPage from "./pages/admin/CompanyConfigPage";
 import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
@@ -207,6 +208,16 @@ const App = () => {
                 <Route path="/procurement/bom" element={
                   <ProtectedRoute>
                     <BomListPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/bom/new" element={
+                  <ProtectedRoute>
+                    <BomForm />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/bom/:id" element={
+                  <ProtectedRoute>
+                    <BomForm />
                   </ProtectedRoute>
                 } />
                 <Route path="/quality" element={
