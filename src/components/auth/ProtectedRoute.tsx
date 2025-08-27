@@ -110,5 +110,7 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
     );
   }
 
+  // No customer route gating here to avoid layout/UX changes; RLS + sidebar filtering handle access.
+
   return <>{children}</>;
 }

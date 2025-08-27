@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Eye, Filter, Search } from "lucide-react";
+import { Eye, Filter, Search, PlusCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useOrdersWithReceipts } from "@/hooks/useOrdersWithReceipts";
 import { useNavigate } from "react-router-dom";
@@ -12,6 +12,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { formatCurrency } from "@/lib/utils";
 
 interface Order {
   id: string;
@@ -30,6 +31,9 @@ export default function ProcurementPage() {
   const { orders, loading, refetch } = useOrdersWithReceipts<Order>();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
+
+
+
 
   useEffect(() => {
     // hook fetches on mount
@@ -68,6 +72,9 @@ export default function ProcurementPage() {
           <h1 className="text-3xl font-bold">Procurement</h1>
           <p className="text-muted-foreground mt-1">Orders with receipts for procurement actions</p>
         </div>
+        <Button onClick={() => navigate('/procurement/bom/new')} className="rounded-full bg-emerald-600 hover:bg-emerald-700">
+          <PlusCircle className="w-4 h-4 mr-2" /> Create BOM
+        </Button>
 
         <Card>
           <CardHeader>
@@ -107,7 +114,7 @@ export default function ProcurementPage() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <Table className="min-w-[700px]">
+                 <Table className="min-w-[900px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead>Order #</TableHead>
@@ -131,9 +138,30 @@ export default function ProcurementPage() {
                         <TableCell>₹{(o.final_amount || 0).toFixed(2)}</TableCell>
                         <TableCell>₹{(o.balance_amount || 0).toFixed(2)}</TableCell>
                         <TableCell>
-                          <Button variant="outline" size="sm" onClick={() => navigate(`/orders/${o.id}`)}>
-                            <Eye className="w-4 h-4" />
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button variant="outline" size="sm" onClick={() => navigate(`/orders/${o.id}`)}>
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              className="bg-emerald-600 hover:bg-emerald-700" 
+                              onClick={() => {
+                                const orderData = encodeURIComponent(JSON.stringify({
+                                  order_id: o.id,
+                                  order_number: o.order_number,
+                                  customer: o.customer,
+                                  order_item: {
+                                    product_description: 'Product from Order',
+                                    category_image_url: null,
+                                    quantity: 1
+                                  }
+                                }));
+                                navigate(`/procurement/bom/new?order=${orderData}`);
+                              }}
+                            >
+                              Create BOM
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -143,6 +171,8 @@ export default function ProcurementPage() {
             )}
           </CardContent>
         </Card>
+
+
       </div>
     </ErpLayout>
   );

@@ -20,22 +20,32 @@ import ProductMasterPage from "./pages/masters/ProductMasterPage";
 import ItemMasterPage from "./pages/masters/ItemMasterPage";
 import WarehouseMasterPage from "./pages/masters/WarehouseMasterPage";
 import CustomerTypeMasterPage from "./pages/masters/CustomerTypeMasterPage";
+import SupplierMasterPage from "./pages/masters/SupplierMasterPage";
 import NotFound from "./pages/NotFound";
 import CrmPage from "./pages/CrmPage";
 import OrdersPage from "./pages/OrdersPage";
 import InventoryPage from "./pages/InventoryPage";
 import ProductionPage from "./pages/ProductionPage";
+import AssignOrdersPage from "./pages/production/AssignOrdersPage";
+import OrdersStatusPage from "./pages/production/OrdersStatusPage";
+import CuttingManagerPage from "./pages/production/CuttingManagerPage";
 import QualityPage from "./pages/QualityPage";
 import DispatchPage from "./pages/DispatchPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import SettingsPage from "./pages/SettingsPage";
 import DesignPage from "./pages/DesignPage";
 import ProcurementPage from "./pages/ProcurementPage";
+import PurchaseOrderListPage from "./pages/procurement/PurchaseOrderListPage";
+import PurchaseOrderFormPage from "./pages/procurement/PurchaseOrderFormPage";
+import BomListPage from "./pages/procurement/BomListPage";
+import { BomForm } from "./components/purchase-orders/BomForm";
 import CompanyConfigPage from "./pages/admin/CompanyConfigPage";
 import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
 import EmployeeDetailPage from "./pages/people/EmployeeDetailPage";
 import DepartmentsPage from "./pages/people/DepartmentsPage";
+import ProductionTeamPage from "./pages/people/ProductionTeamPage";
+import ProductionTeamDetailPage from "./pages/people/ProductionTeamDetailPage";
 import OrderDetailPage from "./pages/orders/OrderDetailPage";
 import { CustomerDashboard } from "./pages/customer/CustomerDashboard";
 import { CustomerAccessManagement } from "./pages/admin/CustomerAccessManagement";
@@ -44,6 +54,7 @@ import QuotationsPage from './pages/accounts/QuotationsPage';
 import QuotationDetailPage from './pages/accounts/QuotationDetailPage';
 import ReceiptPage from './pages/accounts/ReceiptPage';
 import { CompanySettingsProvider } from "@/hooks/CompanySettingsContext";
+import EmployeeAccessManagementPage from "./pages/admin/EmployeeAccessManagement";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
 import { useEffect } from "react";
 
@@ -163,10 +174,30 @@ const App = () => {
                     <CustomerTypeMasterPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/masters/suppliers" element={
+                  <ProtectedRoute>
+                    <SupplierMasterPage />
+                  </ProtectedRoute>
+                } />
                 
                 <Route path="/production" element={
                   <ProtectedRoute>
                     <ProductionPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/production/assign-orders" element={
+                  <ProtectedRoute>
+                    <AssignOrdersPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/production/orders-status" element={
+                  <ProtectedRoute>
+                    <OrdersStatusPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/production/cutting-manager" element={
+                  <ProtectedRoute>
+                    <CuttingManagerPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/design" element={
@@ -177,6 +208,36 @@ const App = () => {
                 <Route path="/procurement" element={
                   <ProtectedRoute>
                     <ProcurementPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/po" element={
+                  <ProtectedRoute>
+                    <PurchaseOrderListPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/po/new" element={
+                  <ProtectedRoute>
+                    <PurchaseOrderFormPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/po/:id" element={
+                  <ProtectedRoute>
+                    <PurchaseOrderFormPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/bom" element={
+                  <ProtectedRoute>
+                    <BomListPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/bom/new" element={
+                  <ProtectedRoute>
+                    <BomForm />
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/bom/:id" element={
+                  <ProtectedRoute>
+                    <BomForm />
                   </ProtectedRoute>
                 } />
                 <Route path="/quality" element={
@@ -226,6 +287,16 @@ const App = () => {
                     <DepartmentsPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/people/production-team" element={
+                  <ProtectedRoute>
+                    <ProductionTeamPage />
+                  </ProtectedRoute>
+                } />
+                        <Route path="/people/production-team/:id" element={
+          <ProtectedRoute>
+            <ProductionTeamDetailPage />
+          </ProtectedRoute>
+        } />
                 
                 {/* Customer Routes */}
                 <Route path="/customer" element={
@@ -268,6 +339,11 @@ const App = () => {
                 <Route path="/admin/customer-access" element={
                   <ProtectedRoute requiredRole={['admin']}>
                     <CustomerAccessManagement />
+                  </ProtectedRoute>
+                } />
+                <Route path="/admin/employee-access" element={
+                  <ProtectedRoute requiredRole={['admin']}>
+                    <EmployeeAccessManagementPage />
                   </ProtectedRoute>
                 } />
                 

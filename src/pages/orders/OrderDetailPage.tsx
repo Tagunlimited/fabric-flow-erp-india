@@ -746,9 +746,9 @@ export default function OrderDetailPage() {
             </Badge>
             
             <div className="flex space-x-2">
-              <Button variant="outline" onClick={openEditDialog}>
+              {/* <Button variant="outline" onClick={openEditDialog}>
                 Edit
-              </Button>
+              </Button> */}
               <Button variant="outline" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print

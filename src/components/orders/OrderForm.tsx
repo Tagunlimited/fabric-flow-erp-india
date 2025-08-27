@@ -186,6 +186,9 @@ export function OrderForm() {
     if (category) {
       handleProductCategorySelect(productIndex, category.id);
       toast.success(`Category "${category.category_name}" selected!`);
+      // Reset the category selection state
+      setIsCategoryLocked(false);
+      setSelectedCategoryImage('');
     }
   };
 
@@ -397,17 +400,21 @@ export function OrderForm() {
   // Get fabrics filtered by selected product category
   const getFilteredFabrics = (productIndex: number) => {
     const product = formData.products[productIndex];
+    
     if (!product.product_category_id) {
       return fabrics; // Show all fabrics if no category is selected
     }
     
     const category = productCategories.find(c => c.id === product.product_category_id);
+    
     if (!category || !category.fabrics || category.fabrics.length === 0) {
       return fabrics; // Show all fabrics if category has no associated fabrics
     }
     
     // Filter fabrics based on category's associated fabric IDs
-    return fabrics.filter(fabric => category.fabrics.includes(fabric.id));
+    // If the fabrics array is empty or doesn't exist, show all fabrics
+    const filteredFabrics = fabrics.filter(fabric => category.fabrics.includes(fabric.id));
+    return filteredFabrics.length > 0 ? filteredFabrics : fabrics;
   };
 
   // Define proper size order
@@ -1125,7 +1132,7 @@ export function OrderForm() {
         <Select
           value={product.fabric_id}
           onValueChange={(value) => handleFabricSelect(productIndex, value)}
-          disabled={!product.product_category_id}
+          disabled={false}
         >
           <SelectTrigger>
             <SelectValue placeholder={product.product_category_id ? "Select fabric" : "Select category first"} />

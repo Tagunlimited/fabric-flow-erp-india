@@ -11,27 +11,27 @@ import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { CustomerForm } from './CustomerForm';
 import { calculateLifetimeValue, formatCurrency } from '@/lib/utils';
+import * as XLSX from 'xlsx';
 
 interface Customer {
   id: string;
+  customer_id: string;
   company_name: string;
-  contact_person: string;
+  gstin?: string;
+  mobile: string;
   email: string;
-  phone: string;
+  customer_type_id: number;
   address: string;
   city: string;
-  state: string;
+  state_id: number;
   pincode: string;
-  gstin: string;
-  pan: string;
-  customer_tier: string;
-  customer_type: string;
-  credit_limit: number;
-  outstanding_amount: number;
-  total_orders: number;
-  last_order_date: string;
+  loyalty_points: number;
+  created_by?: string;
   created_at: string;
   updated_at: string;
+  // Added for display purposes
+  customer_type_name?: string;
+  state_name?: string;
 }
 
 export function CustomerList() {
@@ -57,17 +57,31 @@ export function CustomerList() {
   const fetchCustomers = async () => {
     try {
       setLoading(true);
+      
+      // Fetch customers with joined data
       const { data, error } = await supabase
         .from('customers')
-        .select('*')
+        .select(`
+          *,
+          customer_types!customers_customer_type_id_fkey(name),
+          states!customers_state_id_fkey(name)
+        `)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setCustomers(data || []);
+      
+      // Transform the data to include the names
+      const transformedData = (data || []).map(customer => ({
+        ...customer,
+        customer_type_name: customer.customer_types?.name || 'Unknown',
+        state_name: customer.states?.name || 'Unknown'
+      }));
+      
+      setCustomers(transformedData);
       
       // Fetch lifetime values for all customers
-      if (data && data.length > 0) {
-        await fetchCustomerLifetimeValues(data);
+      if (transformedData && transformedData.length > 0) {
+        await fetchCustomerLifetimeValues(transformedData);
       }
     } catch (error) {
       console.error('Error fetching customers:', error);
@@ -122,14 +136,14 @@ export function CustomerList() {
       filtered = filtered.filter(customer =>
         customer.company_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         customer.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        customer.phone?.includes(searchTerm) ||
-        customer.contact_person?.toLowerCase().includes(searchTerm.toLowerCase())
+        customer.mobile?.includes(searchTerm) ||
+        customer.gstin?.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
 
     if (selectedType !== 'all') {
       filtered = filtered.filter(customer => 
-        customer.customer_type?.toLowerCase() === selectedType.toLowerCase()
+        customer.customer_type_name?.toLowerCase() === selectedType.toLowerCase()
       );
     }
 
@@ -178,47 +192,20 @@ export function CustomerList() {
     setEditingCustomer(null);
   };
 
-  const downloadTemplate = () => {
-    const templateContent = [
-      ['Company Name', 'Contact Person', 'Phone', 'Email', 'Address', 'City', 'State', 'Pincode', 'GSTIN', 'PAN', 'Customer Type', 'Customer Tier', 'Credit Limit', 'Outstanding Amount'],
-      ['Sample Company Ltd', 'John Doe', '+91-9876543210', 'contact@samplecompany.com', '123 Main Street', 'Mumbai', 'Maharashtra', '400001', '27XXXXX1234X1Z5', 'ABCDE1234F', 'Wholesale', 'bronze', '100000', '0'],
-      ['', '', '', '', '', '', '', '', '', '', '', '', '', '']
-    ].map(row => row.join(',')).join('\n');
-
-    const blob = new Blob([templateContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'customer_upload_template.csv';
-    a.click();
-    window.URL.revokeObjectURL(url);
-    toast({
-      title: "Success",
-      description: "Template downloaded successfully!",
-    });
-  };
-
-  const exportCustomers = () => {
+  const exportCustomers = async () => {
     const csvContent = [
-      ['Company Name', 'Contact Person', 'Phone', 'Email', 'Address', 'City', 'State', 'Pincode', 'GSTIN', 'PAN', 'Customer Type', 'Customer Tier', 'Credit Limit', 'Outstanding Amount', 'Total Orders', 'Last Order Date', 'Lifetime Value'],
+      ['Company Name', 'GSTIN', 'Mobile', 'Email', 'Customer Type', 'Address', 'City', 'State', 'Pincode', 'Loyalty Points'],
       ...filteredCustomers.map(customer => [
         customer.company_name,
-        customer.contact_person || '',
-        customer.phone || '',
+        customer.gstin || '',
+        customer.mobile || '',
         customer.email || '',
+        customer.customer_type_name || 'Unknown',
         customer.address || '',
         customer.city || '',
-        customer.state || '',
+        customer.state_name || 'Unknown',
         customer.pincode || '',
-        customer.gstin || '',
-        customer.pan || '',
-        customer.customer_type || 'Retail',
-        customer.customer_tier || 'bronze',
-        customer.credit_limit?.toString() || '0',
-        customer.outstanding_amount?.toString() || '0',
-        customer.total_orders?.toString() || '0',
-        customer.last_order_date || '',
-        customerLifetimeValues[customer.id]?.toString() || '0'
+        customer.loyalty_points?.toString() || '0'
       ])
     ].map(row => row.join(',')).join('\n');
 
@@ -235,60 +222,493 @@ export function CustomerList() {
     });
   };
 
+  const downloadTemplate = () => {
+    // Create workbook
+    const workbook = XLSX.utils.book_new();
+
+    // Create data sheet
+    const dataSheet = [
+      ['Company Name', 'GSTIN', 'Mobile', 'Email', 'Customer Type', 'Address', 'City', 'State', 'Pincode', 'Loyalty Points'],
+      ['Example Company', 'GSTIN123456789', '9876543210', 'example@email.com', 'Wholesale', '123 Main St', 'Mumbai', 'Maharashtra', '400001', '0'],
+      ['ABC Textiles', 'GSTIN987654321', '9876543211', 'contact@abctextiles.com', 'Retail', '456 Industrial Area', 'Delhi', 'Delhi', '110001', '0'],
+      ['Fashion Hub', 'GSTIN456789123', '9876543212', 'sales@fashionhub.com', 'Ecommerce', '789 Commercial Plaza', 'Bangalore', 'Karnataka', '560001', '0'],
+      ['', '', '', '', '', '', '', '', '', ''],
+      ['', '', '', '', '', '', '', '', '', ''],
+      ['', '', '', '', '', '', '', '', '', ''],
+      ['', '', '', '', '', '', '', '', '', ''],
+      ['', '', '', '', '', '', '', '', '', ''],
+      ['', '', '', '', '', '', '', '', '', '']
+    ];
+
+    const dataWorksheet = XLSX.utils.aoa_to_sheet(dataSheet);
+    XLSX.utils.book_append_sheet(workbook, dataWorksheet, 'Data Entry');
+
+    // Create instructions sheet
+    const instructionsSheet = [
+      ['CUSTOMER BULK UPLOAD INSTRUCTIONS'],
+      [''],
+      ['📋 REQUIRED FIELDS:'],
+      ['• Company Name: Required, cannot be empty'],
+      ['• Mobile: Required, must be at least 10 digits'],
+      ['• Email: Required, must be valid email format'],
+      ['• Customer Type: Required, must be one of the valid types'],
+      ['• Address: Required, cannot be empty'],
+      ['• City: Required, cannot be empty'],
+      ['• State: Required, must be one of the valid states'],
+      ['• Pincode: Required, must be exactly 6 digits'],
+      [''],
+      ['📋 OPTIONAL FIELDS:'],
+      ['• GSTIN: Optional but recommended for business customers'],
+      ['• Loyalty Points: Optional, defaults to 0'],
+      [''],
+      ['📋 VALID CUSTOMER TYPES:'],
+      ['• Wholesale - Wholesale customers (15% discount)'],
+      ['• Retail - Retail customers (5% discount)'],
+      ['• Ecommerce - Online platform customers (10% discount)'],
+      ['• Staff - Company staff purchases (25% discount)'],
+      [''],
+      ['📋 VALID STATES:'],
+      ['• Andhra Pradesh (AP)'],
+      ['• Arunachal Pradesh (AR)'],
+      ['• Assam (AS)'],
+      ['• Bihar (BR)'],
+      ['• Chhattisgarh (CG)'],
+      ['• Delhi (DL)'],
+      ['• Goa (GA)'],
+      ['• Gujarat (GJ)'],
+      ['• Haryana (HR)'],
+      ['• Himachal Pradesh (HP)'],
+      ['• Jharkhand (JH)'],
+      ['• Karnataka (KA)'],
+      ['• Kerala (KL)'],
+      ['• Madhya Pradesh (MP)'],
+      ['• Maharashtra (MH)'],
+      ['• Manipur (MN)'],
+      ['• Meghalaya (ML)'],
+      ['• Mizoram (MZ)'],
+      ['• Nagaland (NL)'],
+      ['• Odisha (OR)'],
+      ['• Punjab (PB)'],
+      ['• Rajasthan (RJ)'],
+      ['• Sikkim (SK)'],
+      ['• Tamil Nadu (TN)'],
+      ['• Telangana (TS)'],
+      ['• Tripura (TR)'],
+      ['• Uttar Pradesh (UP)'],
+      ['• Uttarakhand (UK)'],
+      ['• West Bengal (WB)'],
+      [''],
+      ['📋 FORMAT REQUIREMENTS:'],
+      ['• Mobile: Must be at least 10 digits (e.g., 9876543210)'],
+      ['• Email: Must be valid format (e.g., user@domain.com)'],
+      ['• Pincode: Must be exactly 6 digits (e.g., 400001)'],
+      ['• GSTIN: Should be in format GSTINXXXXXXXXX (optional)'],
+      ['• Loyalty Points: Must be a number (default 0)'],
+      [''],
+      ['📋 COMMON CITIES AND STATES:'],
+      ['• Mumbai, Pune, Nagpur → Maharashtra'],
+      ['• Delhi → Delhi'],
+      ['• Bangalore, Mysore → Karnataka'],
+      ['• Chennai, Coimbatore → Tamil Nadu'],
+      ['• Ahmedabad, Surat → Gujarat'],
+      ['• Jaipur, Jodhpur → Rajasthan'],
+      ['• Kolkata, Howrah → West Bengal'],
+      ['• Hyderabad → Telangana'],
+      ['• Lucknow, Kanpur → Uttar Pradesh'],
+      [''],
+      ['⚠️ IMPORTANT NOTES:'],
+      ['• Do not change the column headers'],
+      ['• Use exact state names as listed above'],
+      ['• Use exact customer type names as listed above'],
+      ['• All required fields must be filled'],
+      ['• Save as CSV format before uploading'],
+      ['• Test with a few records first'],
+      [''],
+      ['📞 SUPPORT:'],
+      ['If you encounter any issues, check the error message for specific guidance.']
+    ];
+
+    const instructionsWorksheet = XLSX.utils.aoa_to_sheet(instructionsSheet);
+    XLSX.utils.book_append_sheet(workbook, instructionsWorksheet, 'Instructions');
+
+    // Create reference data sheet
+    const referenceSheet = [
+      ['REFERENCE DATA'],
+      [''],
+      ['CUSTOMER TYPES:'],
+      ['ID', 'Name', 'Description', 'Discount'],
+      [1, 'Wholesale', 'Wholesale customers', '15%'],
+      [2, 'Retail', 'Retail customers', '5%'],
+      [3, 'Ecommerce', 'Online platform customers', '10%'],
+      [4, 'Staff', 'Company staff purchases', '25%'],
+      [''],
+      ['STATES:'],
+      ['ID', 'Name', 'Code', 'Major Cities'],
+      [1, 'Andhra Pradesh', 'AP', 'Visakhapatnam, Vijayawada'],
+      [2, 'Arunachal Pradesh', 'AR', 'Itanagar'],
+      [3, 'Assam', 'AS', 'Guwahati'],
+      [4, 'Bihar', 'BR', 'Patna'],
+      [5, 'Chhattisgarh', 'CG', 'Raipur'],
+      [6, 'Delhi', 'DL', 'New Delhi'],
+      [7, 'Goa', 'GA', 'Panaji'],
+      [8, 'Gujarat', 'GJ', 'Ahmedabad, Surat'],
+      [9, 'Haryana', 'HR', 'Gurgaon, Chandigarh'],
+      [10, 'Himachal Pradesh', 'HP', 'Shimla'],
+      [11, 'Jharkhand', 'JH', 'Ranchi'],
+      [12, 'Karnataka', 'KA', 'Bangalore, Mysore'],
+      [13, 'Kerala', 'KL', 'Kochi, Trivandrum'],
+      [14, 'Madhya Pradesh', 'MP', 'Bhopal, Indore'],
+      [15, 'Maharashtra', 'MH', 'Mumbai, Pune, Nagpur'],
+      [16, 'Manipur', 'MN', 'Imphal'],
+      [17, 'Meghalaya', 'ML', 'Shillong'],
+      [18, 'Mizoram', 'MZ', 'Aizawl'],
+      [19, 'Nagaland', 'NL', 'Kohima'],
+      [20, 'Odisha', 'OR', 'Bhubaneswar'],
+      [21, 'Punjab', 'PB', 'Chandigarh, Ludhiana'],
+      [22, 'Rajasthan', 'RJ', 'Jaipur, Jodhpur'],
+      [23, 'Sikkim', 'SK', 'Gangtok'],
+      [24, 'Tamil Nadu', 'TN', 'Chennai, Coimbatore'],
+      [25, 'Telangana', 'TS', 'Hyderabad'],
+      [26, 'Tripura', 'TR', 'Agartala'],
+      [27, 'Uttar Pradesh', 'UP', 'Lucknow, Kanpur'],
+      [28, 'Uttarakhand', 'UK', 'Dehradun'],
+      [29, 'West Bengal', 'WB', 'Kolkata, Howrah']
+    ];
+
+    const referenceWorksheet = XLSX.utils.aoa_to_sheet(referenceSheet);
+    XLSX.utils.book_append_sheet(workbook, referenceWorksheet, 'Reference Data');
+
+    // Generate Excel file
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'customer_upload_template.xlsx';
+    a.click();
+    window.URL.revokeObjectURL(url);
+    toast({
+      title: "Success", 
+      description: "Excel template with multiple worksheets downloaded!",
+    });
+  };
+
   const handleBulkUpload = () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.csv';
+    input.accept = '.csv,.xlsx,.xls';
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) {
         const reader = new FileReader();
         reader.onload = async (event) => {
-          const csv = event.target?.result as string;
-          const lines = csv.split('\n');
-          const headers = lines[0].split(',');
-          
-          const customers = lines.slice(1).filter(line => line.trim()).map(line => {
-            const values = line.split(',');
-            return {
-              company_name: values[0]?.trim(),
-              contact_person: values[1]?.trim(),
-              phone: values[2]?.trim(),
-              email: values[3]?.trim(),
-              address: values[4]?.trim(),
-              city: values[5]?.trim(),
-              state: values[6]?.trim(),
-              pincode: values[7]?.trim(),
-              gstin: values[8]?.trim(),
-              pan: values[9]?.trim(),
-              customer_type: values[10]?.trim() as any || 'Retail',
-              customer_tier: values[11]?.trim() as any || 'bronze',
-              credit_limit: parseFloat(values[12]) || 0,
-              outstanding_amount: parseFloat(values[13]) || 0
-            };
-          });
-
           try {
-            const { error } = await supabase
-              .from('customers')
-              .insert(customers);
+            let dataLines: string[][] = [];
             
-            if (error) throw error;
-            toast({
-              title: "Success",
-              description: `Successfully uploaded ${customers.length} customers! 🎉`,
-            });
-            fetchCustomers();
+            console.log('File type detection:', file.name, 'endsWith .csv:', file.name.endsWith('.csv'));
+            
+            if (file.name.endsWith('.csv')) {
+              console.log('Processing as CSV file');
+              // Handle CSV file
+              const csv = event.target?.result as string;
+              const lines = csv.split('\n');
+              
+              console.log('CSV parsing debug:');
+              console.log('Total lines:', lines.length);
+              console.log('First 3 lines:', lines.slice(0, 3));
+              
+              // Find the data section (skip instructions)
+              let dataStartIndex = 0;
+              for (let i = 0; i < lines.length; i++) {
+                if (lines[i].includes('Company Name') && lines[i].includes('Customer Type')) {
+                  dataStartIndex = i;
+                  break;
+                }
+              }
+              
+              console.log('Data start index:', dataStartIndex);
+              console.log('Headers line:', lines[dataStartIndex]);
+              
+              const headers = lines[dataStartIndex].split(',');
+              console.log('Headers array:', headers);
+              
+              const rawDataLines = lines.slice(dataStartIndex + 1).filter(line => 
+                line.trim() && !line.startsWith('📋') && !line.startsWith('⚠️') && !line.startsWith('📞') && !line.startsWith('CUSTOMER')
+              );
+              
+              console.log('Raw data lines (first 2):', rawDataLines.slice(0, 2));
+              
+              dataLines = rawDataLines.map(line => {
+                // More robust CSV parsing that handles quoted values and commas within fields
+                const result = [];
+                let current = '';
+                let inQuotes = false;
+                
+                for (let i = 0; i < line.length; i++) {
+                  const char = line[i];
+                  if (char === '"') {
+                    inQuotes = !inQuotes;
+                  } else if (char === ',' && !inQuotes) {
+                    result.push(current.trim());
+                    current = '';
+                  } else {
+                    current += char;
+                  }
+                }
+                result.push(current.trim()); // Add the last field
+                return result;
+              });
+              
+              console.log('Processed data lines (first 2):', dataLines.slice(0, 2));
+              console.log('Column count check - Row 1 has', dataLines[0]?.length, 'columns');
+              console.log('Row 1 columns:', dataLines[0]);
+              
+              // Debug: Check if the data structure is correct
+              if (dataLines.length > 0 && dataLines[0]) {
+                console.log('DEBUG - Expected column structure:');
+                console.log('Column 0 (Company):', dataLines[0][0]);
+                console.log('Column 1 (GSTIN):', dataLines[0][1]);
+                console.log('Column 2 (Mobile):', dataLines[0][2]);
+                console.log('Column 3 (Email):', dataLines[0][3]);
+                console.log('Column 4 (Customer Type):', dataLines[0][4]);
+                console.log('Column 5 (Address):', dataLines[0][5]);
+                console.log('Column 6 (City):', dataLines[0][6]);
+                console.log('Column 7 (State):', dataLines[0][7]);
+                console.log('Column 8 (Pincode):', dataLines[0][8]);
+                console.log('Column 9 (Loyalty):', dataLines[0][9]);
+              }
+            } else {
+              console.log('Processing as Excel file');
+              // Handle Excel file
+              const data = new Uint8Array(event.target?.result as ArrayBuffer);
+              const workbook = XLSX.read(data, { type: 'array' });
+              const worksheet = workbook.Sheets['Data Entry'] || workbook.Sheets[workbook.SheetNames[0]];
+              const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as string[][];
+              
+              console.log('Excel parsing debug:');
+              console.log('Sheet names:', workbook.SheetNames);
+              console.log('Using worksheet:', workbook.Sheets['Data Entry'] ? 'Data Entry' : workbook.SheetNames[0]);
+              console.log('Raw JSON data (first 3 rows):', jsonData.slice(0, 3));
+              
+              // Skip header row and empty rows
+              dataLines = jsonData.slice(1).filter(row => row.some(cell => cell && cell.toString().trim()));
+              console.log('Processed data lines (first 2 rows):', dataLines.slice(0, 2));
+            }
+            
+            // First, fetch the reference data
+            const { data: customerTypes, error: customerTypesError } = await supabase.from('customer_types').select('id, name');
+            const { data: states, error: statesError } = await supabase.from('states').select('id, name');
+            
+            console.log('Customer Types from DB:', customerTypes);
+            console.log('States from DB:', states);
+            console.log('Customer Types Error:', customerTypesError);
+            console.log('States Error:', statesError);
+            
+            if (customerTypesError || statesError) {
+              console.error('Error fetching customer types:', customerTypesError);
+              console.error('Error fetching states:', statesError);
+              // Fallback to enum values if table doesn't exist
+              const fallbackCustomerTypes = [
+                { id: 1, name: 'Wholesale' },
+                { id: 2, name: 'Retail' },
+                { id: 3, name: 'Ecommerce' },
+                { id: 4, name: 'Staff' }
+              ];
+              const fallbackStates = [
+                { id: 1, name: 'Andhra Pradesh' },
+                { id: 2, name: 'Arunachal Pradesh' },
+                { id: 3, name: 'Assam' },
+                { id: 4, name: 'Bihar' },
+                { id: 5, name: 'Chhattisgarh' },
+                { id: 6, name: 'Delhi' },
+                { id: 7, name: 'Goa' },
+                { id: 8, name: 'Gujarat' },
+                { id: 9, name: 'Haryana' },
+                { id: 10, name: 'Himachal Pradesh' },
+                { id: 11, name: 'Jharkhand' },
+                { id: 12, name: 'Karnataka' },
+                { id: 13, name: 'Kerala' },
+                { id: 14, name: 'Madhya Pradesh' },
+                { id: 15, name: 'Maharashtra' },
+                { id: 16, name: 'Manipur' },
+                { id: 17, name: 'Meghalaya' },
+                { id: 18, name: 'Mizoram' },
+                { id: 19, name: 'Nagaland' },
+                { id: 20, name: 'Odisha' },
+                { id: 21, name: 'Punjab' },
+                { id: 22, name: 'Rajasthan' },
+                { id: 23, name: 'Sikkim' },
+                { id: 24, name: 'Tamil Nadu' },
+                { id: 25, name: 'Telangana' },
+                { id: 26, name: 'Tripura' },
+                { id: 27, name: 'Uttar Pradesh' },
+                { id: 28, name: 'Uttarakhand' },
+                { id: 29, name: 'West Bengal' }
+              ];
+              const customerTypeMap = new Map(fallbackCustomerTypes.map(ct => [ct.name.toLowerCase(), ct.id]));
+              const stateMap = new Map(fallbackStates.map(s => [s.name.toLowerCase(), s.id]));
+              
+              console.log('Using fallback customer types:', fallbackCustomerTypes);
+              console.log('Customer Type Map:', customerTypeMap);
+              
+              const customers = dataLines.map((values, index) => {
+                const customerTypeName = values[4]?.trim()?.toLowerCase();
+                const stateName = values[7]?.trim()?.toLowerCase();
+                
+                console.log(`Row ${index + 1}: Customer Type "${values[4]?.trim()}" -> "${customerTypeName}"`);
+                console.log(`Row ${index + 1}: State "${values[7]?.trim()}" -> "${stateName}"`);
+                
+                // Validate customer type
+                if (!customerTypeMap.has(customerTypeName)) {
+                  const validTypes = Array.from(customerTypeMap.keys()).map(k => k.charAt(0).toUpperCase() + k.slice(1));
+                  throw new Error(`Row ${index + 1}: Invalid Customer Type "${values[4]?.trim()}". Valid types: ${validTypes.join(', ')}`);
+                }
+                
+                // Validate state
+                if (!stateMap.has(stateName)) {
+                  const validStates = Array.from(stateMap.keys()).map(k => k.charAt(0).toUpperCase() + k.slice(1));
+                  throw new Error(`Row ${index + 1}: Invalid State "${values[7]?.trim()}". Valid states: ${validStates.join(', ')}`);
+                }
+                
+                return {
+                  company_name: values[0]?.trim(),
+                  gstin: values[1]?.trim() || null,
+                  mobile: values[2]?.trim(),
+                  email: values[3]?.trim(),
+                  customer_type_id: customerTypeMap.get(customerTypeName)!,
+                  address: values[5]?.trim(),
+                  city: values[6]?.trim(),
+                  state_id: stateMap.get(stateName)!,
+                  pincode: values[8]?.trim(),
+                  loyalty_points: parseInt(values[9]) || 0
+                };
+              });
+
+              // Validate required fields
+              const invalidCustomers = customers.filter(customer => 
+                !customer.company_name || !customer.mobile || !customer.email || !customer.address || !customer.city || !customer.pincode
+              );
+              
+              if (invalidCustomers.length > 0) {
+                throw new Error(`Invalid data found in ${invalidCustomers.length} rows. Please check required fields: Company Name, Mobile, Email, Address, City, Pincode`);
+              }
+
+              const { error } = await supabase
+                .from('customers')
+                .insert(customers);
+              
+              if (error) {
+                console.error('Supabase error details:', error);
+                if (error.message.includes('customer_type_id')) {
+                  throw new Error('Invalid Customer Type. Valid types: Wholesale, Retail, Ecommerce, Staff');
+                } else if (error.message.includes('state_id')) {
+                  throw new Error('Invalid State. Please use exact state names like "Maharashtra", "Delhi", "Karnataka", etc.');
+                } else if (error.message.includes('mobile')) {
+                  throw new Error('Mobile number must be at least 10 digits');
+                } else if (error.message.includes('email')) {
+                  throw new Error('Invalid email format');
+                } else if (error.message.includes('pincode')) {
+                  throw new Error('Pincode must be exactly 6 digits');
+                } else {
+                  throw error;
+                }
+              }
+              toast({
+                title: "Success",
+                description: `Successfully uploaded ${customers.length} customers! 🎉`,
+              });
+              fetchCustomers();
+            } else {
+              // Use actual database data
+              const customerTypeMap = new Map(customerTypes?.map(ct => [ct.name.toLowerCase(), ct.id]) || []);
+              const stateMap = new Map(states?.map(s => [s.name.toLowerCase(), s.id]) || []);
+              
+              console.log('Customer Type Map:', customerTypeMap);
+              console.log('State Map:', stateMap);
+              
+              const customers = dataLines.map((values, index) => {
+                const customerTypeName = values[4]?.trim()?.toLowerCase();
+                const stateName = values[7]?.trim()?.toLowerCase();
+                
+                console.log(`Row ${index + 1}: Customer Type "${values[4]?.trim()}" -> "${customerTypeName}"`);
+                console.log(`Row ${index + 1}: State "${values[7]?.trim()}" -> "${stateName}"`);
+                
+                // Validate customer type
+                if (!customerTypeMap.has(customerTypeName)) {
+                  const validTypes = Array.from(customerTypeMap.keys()).map(k => k.charAt(0).toUpperCase() + k.slice(1));
+                  throw new Error(`Row ${index + 1}: Invalid Customer Type "${values[4]?.trim()}". Valid types: ${validTypes.join(', ')}`);
+                }
+                
+                // Validate state
+                if (!stateMap.has(stateName)) {
+                  const validStates = Array.from(stateMap.keys()).map(k => k.charAt(0).toUpperCase() + k.slice(1));
+                  throw new Error(`Row ${index + 1}: Invalid State "${values[7]?.trim()}". Valid states: ${validStates.join(', ')}`);
+                }
+                
+                return {
+                  company_name: values[0]?.trim(),
+                  gstin: values[1]?.trim() || null,
+                  mobile: values[2]?.trim(),
+                  email: values[3]?.trim(),
+                  customer_type_id: customerTypeMap.get(customerTypeName)!,
+                  address: values[5]?.trim(),
+                  city: values[6]?.trim(),
+                  state_id: stateMap.get(stateName)!,
+                  pincode: values[8]?.trim(),
+                  loyalty_points: parseInt(values[9]) || 0
+                };
+              });
+
+              // Validate required fields
+              const invalidCustomers = customers.filter(customer => 
+                !customer.company_name || !customer.mobile || !customer.email || !customer.address || !customer.city || !customer.pincode
+              );
+              
+              if (invalidCustomers.length > 0) {
+                throw new Error(`Invalid data found in ${invalidCustomers.length} rows. Please check required fields: Company Name, Mobile, Email, Address, City, Pincode`);
+              }
+
+              const { error } = await supabase
+                .from('customers')
+                .insert(customers);
+              
+              if (error) {
+                console.error('Supabase error details:', error);
+                if (error.message.includes('customer_type_id')) {
+                  throw new Error('Invalid Customer Type. Valid types: Wholesale, Retail, Ecommerce, Staff');
+                } else if (error.message.includes('state_id')) {
+                  throw new Error('Invalid State. Please use exact state names like "Maharashtra", "Delhi", "Karnataka", etc.');
+                } else if (error.message.includes('mobile')) {
+                  throw new Error('Mobile number must be at least 10 digits');
+                } else if (error.message.includes('email')) {
+                  throw new Error('Invalid email format');
+                } else if (error.message.includes('pincode')) {
+                  throw new Error('Pincode must be exactly 6 digits');
+                } else {
+                  throw error;
+                }
+              }
+              toast({
+                title: "Success",
+                description: `Successfully uploaded ${customers.length} customers! 🎉`,
+              });
+              fetchCustomers();
+            }
           } catch (error) {
             console.error('Error uploading customers:', error);
             toast({
               title: "Error",
-              description: "Failed to upload customers. Please check the template format.",
+              description: error instanceof Error ? error.message : "Failed to upload customers. Please check the template format.",
               variant: "destructive",
             });
           }
         };
-        reader.readAsText(file);
+        
+        if (file.name.endsWith('.csv')) {
+          reader.readAsText(file);
+        } else {
+          reader.readAsArrayBuffer(file);
+        }
       }
     };
     input.click();
@@ -318,7 +738,7 @@ export function CustomerList() {
         <div className="flex items-center space-x-2">
           <Button variant="outline" onClick={downloadTemplate}>
             <Download className="w-4 h-4 mr-2" />
-            Download Template
+            Download Excel Template
           </Button>
           <Button variant="outline" onClick={exportCustomers}>
             <Download className="w-4 h-4 mr-2" />
@@ -376,7 +796,7 @@ export function CustomerList() {
                     <TableHead>Contact</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Location</TableHead>
-                    <TableHead>Credit Limit</TableHead>
+                    <TableHead>Loyalty Points</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -397,28 +817,27 @@ export function CustomerList() {
                       </TableCell>
                       <TableCell>
                         <div>
-                          <div className="text-sm font-medium">{customer.contact_person}</div>
-                          <div className="text-sm">{customer.phone}</div>
+                          <div className="text-sm">{customer.mobile}</div>
                           <div className="text-sm text-muted-foreground">{customer.email}</div>
                         </div>
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline">
-                          {customer.customer_type || 'Retail'}
+                          {customer.customer_type_name || 'Unknown'}
                         </Badge>
                       </TableCell>
                       <TableCell>
                         <div className="text-sm">
                           <div>{customer.city}</div>
                           <div className="text-muted-foreground">
-                            {customer.state} - {customer.pincode}
+                            {customer.state_name || 'Unknown'} - {customer.pincode}
                           </div>
                         </div>
                       </TableCell>
                       <TableCell>
                         <div className="space-y-1">
                           <Badge className="bg-accent text-accent-foreground">
-                            Credit: {formatCurrency(customer.credit_limit || 0)}
+                            Points: {customer.loyalty_points || 0}
                           </Badge>
                           <div className="text-xs text-muted-foreground">
                             LTV: {formatCurrency(customerLifetimeValues[customer.id] || 0)}

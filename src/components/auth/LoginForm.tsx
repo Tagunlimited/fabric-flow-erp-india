@@ -194,7 +194,7 @@ export function LoginForm() {
 
           <div className="mt-4 p-3 bg-muted rounded-lg">
             <p className="text-xs text-muted-foreground text-center">
-              Powered by: Sellers ka Central
+              Powered by: TECH PANDA
             </p>
           </div>
         </CardContent>
