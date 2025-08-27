@@ -26,6 +26,9 @@ import CrmPage from "./pages/CrmPage";
 import OrdersPage from "./pages/OrdersPage";
 import InventoryPage from "./pages/InventoryPage";
 import ProductionPage from "./pages/ProductionPage";
+import AssignOrdersPage from "./pages/production/AssignOrdersPage";
+import OrdersStatusPage from "./pages/production/OrdersStatusPage";
+import CuttingManagerPage from "./pages/production/CuttingManagerPage";
 import QualityPage from "./pages/QualityPage";
 import DispatchPage from "./pages/DispatchPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
@@ -41,6 +44,8 @@ import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
 import EmployeeDetailPage from "./pages/people/EmployeeDetailPage";
 import DepartmentsPage from "./pages/people/DepartmentsPage";
+import ProductionTeamPage from "./pages/people/ProductionTeamPage";
+import ProductionTeamDetailPage from "./pages/people/ProductionTeamDetailPage";
 import OrderDetailPage from "./pages/orders/OrderDetailPage";
 import { CustomerDashboard } from "./pages/customer/CustomerDashboard";
 import { CustomerAccessManagement } from "./pages/admin/CustomerAccessManagement";
@@ -180,6 +185,21 @@ const App = () => {
                     <ProductionPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/production/assign-orders" element={
+                  <ProtectedRoute>
+                    <AssignOrdersPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/production/orders-status" element={
+                  <ProtectedRoute>
+                    <OrdersStatusPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/production/cutting-manager" element={
+                  <ProtectedRoute>
+                    <CuttingManagerPage />
+                  </ProtectedRoute>
+                } />
                 <Route path="/design" element={
                   <ProtectedRoute>
                     <DesignPage />
@@ -267,6 +287,16 @@ const App = () => {
                     <DepartmentsPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/people/production-team" element={
+                  <ProtectedRoute>
+                    <ProductionTeamPage />
+                  </ProtectedRoute>
+                } />
+                        <Route path="/people/production-team/:id" element={
+          <ProtectedRoute>
+            <ProductionTeamDetailPage />
+          </ProtectedRoute>
+        } />
                 
                 {/* Customer Routes */}
                 <Route path="/customer" element={

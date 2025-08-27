@@ -20,7 +20,8 @@ import {
   Award,
   ChevronDown,
   ChevronRight,
-  AlertTriangle
+  AlertTriangle,
+  Scissors
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -92,7 +93,18 @@ function buildSidebarItems(currentPath: string): SidebarItem[] {
         { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList }
       ]
     },
-    { title: "Production", url: "/production", icon: Factory, badge: "300", badgeColor: "bg-warning" },
+    {
+      title: "Production",
+      icon: Factory,
+      badge: "300",
+      badgeColor: "bg-warning",
+      children: [
+        { title: "Production Dashboard", url: "/production", icon: Factory },
+        { title: "Assign Orders", url: "/production/assign-orders", icon: Users },
+        { title: "Orders Status", url: "/production/orders-status", icon: BarChart3 },
+        { title: "Cutting Manager", url: "/production/cutting-manager", icon: Scissors }
+      ]
+    },
     { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality" },
     {
       title: "People",
@@ -100,6 +112,7 @@ function buildSidebarItems(currentPath: string): SidebarItem[] {
       children: [
         { title: "Dashboard", url: "/people", icon: BarChart3 },
         { title: "Our People", url: "/people/employees", icon: Users },
+        { title: "Production Team", url: "/people/production-team", icon: Scissors },
         { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
         { title: "Incentive Programme", url: "/people/incentives", icon: Award },
         { title: "Departments", url: "/people/departments", icon: Building }
