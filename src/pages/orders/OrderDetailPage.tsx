@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import { ErpLayout } from "@/components/ErpLayout";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
+import { PaymentRecordDialog } from '@/components/orders/PaymentRecordDialog';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Input } from "@/components/ui/input";
@@ -121,6 +122,20 @@ interface OrderItem {
   attachments?: string[];
 }
 
+interface OrderActivity {
+  id: string;
+  order_id: string;
+  activity_type: string;
+  activity_description: string;
+  old_values?: any;
+  new_values?: any;
+  metadata?: any;
+  performed_at: string;
+  performed_by?: string;
+  user_email?: string;
+  user_name?: string;
+}
+
 // Helper function to extract images from specifications
 const extractImagesFromSpecifications = (specifications: any) => {
   if (!specifications) return { reference_images: [], mockup_images: [], attachments: [] };
@@ -185,10 +200,14 @@ export default function OrderDetailPage() {
     notes: string | null; 
   } | null>(null);
   const [editItems, setEditItems] = useState<Array<{ id: string; product_description: string; quantity: number; unit_price: number; gst_rate: number }>>([]);
+  const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
+  const [loadingActivities, setLoadingActivities] = useState(false);
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
 
   useEffect(() => {
     if (id) {
       fetchOrderDetails();
+      fetchOrderActivities();
     }
   }, [id]);
 
@@ -288,6 +307,27 @@ export default function OrderDetailPage() {
     }
   };
 
+  const fetchOrderActivities = async () => {
+    try {
+      setLoadingActivities(true);
+      
+      const { data: activitiesData, error: activitiesError } = await supabase
+        .from('order_lifecycle_view')
+        .select('*')
+        .eq('order_id', id)
+        .order('performed_at', { ascending: false });
+
+      if (activitiesError) throw activitiesError;
+      setOrderActivities(activitiesData || []);
+      
+    } catch (error) {
+      console.error('Error fetching order activities:', error);
+      toast.error('Failed to load order activities');
+    } finally {
+      setLoadingActivities(false);
+    }
+  };
+
   const handleCancelOrder = async () => {
     if (!order) return;
 
@@ -303,6 +343,7 @@ export default function OrderDetailPage() {
 
       toast.success('Order cancelled successfully');
       setOrder({ ...order, status: 'cancelled' });
+      await fetchOrderActivities();
       
     } catch (error) {
       console.error('Error cancelling order:', error);
@@ -390,6 +431,7 @@ export default function OrderDetailPage() {
       setEditOpen(false);
       // Refresh
       await fetchOrderDetails();
+      await fetchOrderActivities();
     } catch (e: any) {
       console.error('Update failed', e);
       toast.error(`Failed to update order: ${e?.message || 'Unknown error'}`);
@@ -427,8 +469,22 @@ export default function OrderDetailPage() {
 
       const { error: updErr } = await supabase.from('order_items').update({ specifications: updatedSpecs }).eq('id', orderItemId);
       if (updErr) throw updErr;
+      
+      // Log file upload activity for each uploaded file
+      for (const url of uploadedUrls) {
+        const fileName = url.split('/').pop() || 'Unknown file';
+        await supabase.rpc('log_file_upload_activity', {
+          p_order_id: order?.id,
+          p_file_type: type === 'mockup' ? 'Mockup Image' : 'Reference Image',
+          p_file_name: fileName,
+          p_file_url: url,
+          p_item_id: orderItemId
+        });
+      }
+      
       toast.success(`${type === 'mockup' ? 'Mockup' : 'Reference'} image${uploadedUrls.length > 1 ? 's' : ''} uploaded`);
       await fetchOrderDetails();
+      await fetchOrderActivities();
     } catch (e: any) {
       console.error('Upload failed', e);
       toast.error(e?.message || 'Upload failed');
@@ -448,8 +504,21 @@ export default function OrderDetailPage() {
       const updatedSpecs = { ...specs, [key]: updatedList };
       const { error } = await supabase.from('order_items').update({ specifications: updatedSpecs }).eq('id', orderItemId);
       if (error) throw error;
+      
+      // Log file removal activity
+      await supabase.rpc('log_custom_order_activity', {
+        p_order_id: order?.id,
+        p_activity_type: 'file_removed',
+        p_activity_description: `File removed: ${url.split('/').pop() || 'Unknown file'}`,
+        p_metadata: {
+          file_url: url,
+          item_id: orderItemId
+        }
+      });
+      
       toast.success('Image removed');
       await fetchOrderDetails();
+      await fetchOrderActivities();
     } catch (e: any) {
       console.error('Remove failed', e);
       toast.error(e?.message || 'Remove failed');
@@ -690,6 +759,48 @@ export default function OrderDetailPage() {
       case 'delivered': return 'bg-emerald-100 text-emerald-800';
       case 'cancelled': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getActivityIcon = (activityType: string) => {
+    switch (activityType) {
+      case 'order_created': return '📋';
+      case 'order_updated': return '✏️';
+      case 'status_changed': return '🔄';
+      case 'delivery_date_updated': return '📅';
+      case 'amount_updated': return '💰';
+      case 'sales_manager_changed': return '👤';
+      case 'item_added': return '➕';
+      case 'item_updated': return '✏️';
+      case 'quantity_updated': return '📊';
+      case 'price_updated': return '💰';
+      case 'specifications_updated': return '📋';
+      case 'item_removed': return '➖';
+      case 'payment_received': return '💳';
+      case 'file_uploaded': return '📎';
+      case 'order_deleted': return '🗑️';
+      default: return '📝';
+    }
+  };
+
+  const getActivityColor = (activityType: string) => {
+    switch (activityType) {
+      case 'order_created': return 'bg-green-100 text-green-800 border-green-200';
+      case 'order_updated': return 'bg-blue-100 text-blue-800 border-blue-200';
+      case 'status_changed': return 'bg-purple-100 text-purple-800 border-purple-200';
+      case 'delivery_date_updated': return 'bg-orange-100 text-orange-800 border-orange-200';
+      case 'amount_updated': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case 'sales_manager_changed': return 'bg-indigo-100 text-indigo-800 border-indigo-200';
+      case 'item_added': return 'bg-emerald-100 text-emerald-800 border-emerald-200';
+      case 'item_updated': return 'bg-cyan-100 text-cyan-800 border-cyan-200';
+      case 'quantity_updated': return 'bg-pink-100 text-pink-800 border-pink-200';
+      case 'price_updated': return 'bg-amber-100 text-amber-800 border-amber-200';
+      case 'specifications_updated': return 'bg-teal-100 text-teal-800 border-teal-200';
+      case 'item_removed': return 'bg-red-100 text-red-800 border-red-200';
+      case 'payment_received': return 'bg-green-100 text-green-800 border-green-200';
+      case 'file_uploaded': return 'bg-blue-100 text-blue-800 border-blue-200';
+      case 'order_deleted': return 'bg-red-100 text-red-800 border-red-200';
+      default: return 'bg-gray-100 text-gray-800 border-gray-200';
     }
   };
 
@@ -1547,6 +1658,18 @@ export default function OrderDetailPage() {
                     </span>
                   </div>
                   
+                  {order.balance_amount > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full mt-2"
+                      onClick={() => setPaymentDialogOpen(true)}
+                    >
+                      💳 Record Payment
+                    </Button>
+                  )}
+                  
                   {order.payment_channel && (
                     <div className="pt-2 border-t">
                       <div className="flex justify-between text-sm">
@@ -1565,73 +1688,219 @@ export default function OrderDetailPage() {
                 </CardContent>
               </Card>
 <Card>
-                 <CardHeader>
-                   <CardTitle className="flex items-center">
-                     <Calendar className="w-5 h-5 mr-2" />
-                     Order Lifecycle
-                   </CardTitle>
-                 </CardHeader>
-                 <CardContent>
-                   <div className="space-y-4">
-                     <div className="flex items-center space-x-4">
-                       <div className="w-4 h-4 bg-blue-500 rounded-full"></div>
-                       <div>
-                         <p className="font-semibold">Order Placed</p>
-                         <p className="text-sm text-muted-foreground">
-                           {new Date(order.order_date).toLocaleDateString('en-GB', {
-                             day: '2-digit',
-                             month: 'long',
-                             year: 'numeric'
-                           })}
-                         </p>
-                       </div>
-                     </div>
-                     
-                     {order.status !== 'pending' && order.status !== 'cancelled' && (
-                       <div className="flex items-center space-x-4">
-                         <div className="w-4 h-4 bg-green-500 rounded-full"></div>
-                         <div>
-                           <p className="font-semibold">Order Confirmed</p>
-                           <p className="text-sm text-muted-foreground">Processing started</p>
-                         </div>
-                       </div>
-                     )}
-                     
-                     {order.expected_delivery_date && (
-                       <div className="flex items-center space-x-4">
-                         <div className={`w-4 h-4 rounded-full ${order.status === 'delivered' ? 'bg-green-500' : 'bg-gray-300'}`}></div>
-                         <div>
-                           <p className="font-semibold">
-                             {order.status === 'delivered' ? 'Delivered' : 'Expected Delivery'}
-                           </p>
-                           <p className="text-sm text-muted-foreground">
-                             {new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
-                               day: '2-digit',
-                               month: 'long',
-                               year: 'numeric'
-                             })}
-                           </p>
-                         </div>
-                       </div>
-                     )}
-
-                     {order.status === 'cancelled' && (
-                       <div className="flex items-center space-x-4">
-                         <div className="w-4 h-4 bg-red-500 rounded-full"></div>
-                         <div>
-                           <p className="font-semibold text-red-600">Order Cancelled</p>
-                           <p className="text-sm text-muted-foreground">Order has been cancelled</p>
-                         </div>
-                       </div>
-                     )}
-                   </div>
-                 </CardContent>
-               </Card>
+  <CardHeader>
+    <CardTitle className="flex items-center justify-between">
+      <div className="flex items-center">
+        <Calendar className="w-5 h-5 mr-2" />
+        Order Lifecycle
+      </div>
+      <Badge variant="outline" className="text-xs">
+        {orderActivities.length} activities
+      </Badge>
+    </CardTitle>
+  </CardHeader>
+  <CardContent>
+    {loadingActivities ? (
+      <div className="flex items-center justify-center py-8">
+        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+      </div>
+    ) : orderActivities.length === 0 ? (
+      <div className="text-center py-8 text-muted-foreground">
+        <p>No activities recorded yet</p>
+      </div>
+    ) : (
+      <div className="space-y-4 max-h-96 overflow-y-auto">
+        {orderActivities.map((activity, index) => (
+          <div key={activity.id} className="relative">
+            {/* Timeline connector */}
+            {index < orderActivities.length - 1 && (
+              <div className="absolute left-6 top-8 w-0.5 h-8 bg-gray-200"></div>
+            )}
+            
+            <div className="flex items-start space-x-4">
+              {/* Activity icon */}
+              <div className={`flex-shrink-0 w-12 h-12 rounded-full border-2 flex items-center justify-center text-lg ${getActivityColor(activity.activity_type)}`}>
+                {getActivityIcon(activity.activity_type)}
+              </div>
+              
+              {/* Activity content */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between mb-1">
+                  <h4 className="font-semibold text-sm">{activity.activity_description}</h4>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(activity.performed_at).toLocaleString('en-GB', {
+                      day: '2-digit',
+                      month: 'short',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
+                </div>
+                
+                {/* User info */}
+                {activity.user_name && (
+                  <p className="text-xs text-muted-foreground mb-2">
+                    By: {activity.user_name} ({activity.user_email})
+                  </p>
+                )}
+                
+                {/* Activity details */}
+                {activity.metadata && (
+                  <div className="bg-muted/30 rounded-lg p-3 mt-2">
+                    {activity.activity_type === 'payment_received' && (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span>Amount:</span>
+                          <span className="font-medium">{formatCurrency(activity.metadata.payment_amount)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span>Method:</span>
+                          <span className="font-medium">{activity.metadata.payment_type}</span>
+                        </div>
+                        {activity.metadata.payment_reference && (
+                          <div className="flex justify-between text-xs">
+                            <span>Reference:</span>
+                            <span className="font-medium">{activity.metadata.payment_reference}</span>
+                          </div>
+                        )}
+                        {activity.metadata.notes && (
+                          <div className="text-xs mt-1">
+                            <span className="text-muted-foreground">Notes:</span> {activity.metadata.notes}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    {activity.activity_type === 'file_uploaded' && (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span>File:</span>
+                          <span className="font-medium">{activity.metadata.file_name}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span>Type:</span>
+                          <span className="font-medium">{activity.metadata.file_type}</span>
+                        </div>
+                        {activity.metadata.file_url && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="mt-2 h-6 text-xs"
+                            onClick={() => window.open(activity.metadata.file_url, '_blank')}
+                          >
+                            <Download className="w-3 h-3 mr-1" />
+                            View File
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    
+                    {activity.activity_type === 'status_changed' && activity.old_values && activity.new_values && (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span>From:</span>
+                          <Badge variant="outline" className="text-xs">
+                            {activity.old_values.status?.replace('_', ' ').toUpperCase()}
+                          </Badge>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span>To:</span>
+                          <Badge variant="outline" className="text-xs">
+                            {activity.new_values.status?.replace('_', ' ').toUpperCase()}
+                          </Badge>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {activity.activity_type === 'amount_updated' && activity.old_values && activity.new_values && (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span>From:</span>
+                          <span className="font-medium">{formatCurrency(activity.old_values.final_amount)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span>To:</span>
+                          <span className="font-medium">{formatCurrency(activity.new_values.final_amount)}</span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {activity.activity_type === 'delivery_date_updated' && activity.old_values && activity.new_values && (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span>From:</span>
+                          <span className="font-medium">
+                            {new Date(activity.old_values.expected_delivery_date).toLocaleDateString('en-GB')}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span>To:</span>
+                          <span className="font-medium">
+                            {new Date(activity.new_values.expected_delivery_date).toLocaleDateString('en-GB')}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {/* Show changes for other activity types */}
+                {activity.old_values && activity.new_values && !activity.metadata && (
+                  <div className="bg-muted/30 rounded-lg p-3 mt-2">
+                    <div className="text-xs text-muted-foreground mb-2">Changes made:</div>
+                    <div className="space-y-1">
+                      {Object.keys(activity.new_values).map(key => {
+                        if (activity.old_values[key] !== activity.new_values[key]) {
+                          return (
+                            <div key={key} className="flex justify-between text-xs">
+                              <span className="capitalize">{key.replace('_', ' ')}:</span>
+                              <div className="text-right">
+                                <div className="line-through text-red-600">
+                                  {typeof activity.old_values[key] === 'object' 
+                                    ? JSON.stringify(activity.old_values[key])
+                                    : String(activity.old_values[key] || 'N/A')}
+                                </div>
+                                <div className="text-green-600 font-medium">
+                                  {typeof activity.new_values[key] === 'object' 
+                                    ? JSON.stringify(activity.new_values[key])
+                                    : String(activity.new_values[key] || 'N/A')}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    )}
+  </CardContent>
+</Card>
 
             </div>
           </div>
         </div>
       </div>
+      
+      {/* Payment Record Dialog */}
+      <PaymentRecordDialog
+        open={paymentDialogOpen}
+        onOpenChange={setPaymentDialogOpen}
+        orderId={order.id}
+        orderNumber={order.order_number}
+        balanceAmount={order.balance_amount}
+        onPaymentRecorded={() => {
+          fetchOrderDetails();
+          fetchOrderActivities();
+        }}
+      />
     </ErpLayout>
   );
 }
