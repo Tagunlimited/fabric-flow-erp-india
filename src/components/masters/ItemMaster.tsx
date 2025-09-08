@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
-import { supabase } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/components/auth/AuthProvider";
 import Papa from "papaparse";
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";;
 import { Button } from "@/components/ui/button";;
@@ -12,7 +13,7 @@ import { Plus, Edit, Trash2, Search } from "lucide-react";
 
 const BULK_TEMPLATE_HEADERS = [
   "item_code",
-  "item_name",
+  "item_name", 
   "item_type",
   "description",
   "uom",
@@ -26,8 +27,9 @@ const BULK_TEMPLATE_HEADERS = [
   "lead_time",
   "cost_price",
   "gst_rate",
+  "image",
   "is_active",
-  "image"
+  "image_url"
 ];
 
 interface Item {
@@ -47,12 +49,17 @@ interface Item {
   lead_time?: number;
   cost_price?: number;
   gst_rate?: number;
-  is_active?: boolean;
   image?: string;
+  is_active?: boolean;
+  image_url?: string;
   created_at?: string;
+  updated_at?: string;
 }
 
 export function ItemMaster() {
+  // Auth context
+  const { user, profile } = useAuth();
+  
   // State management
   const [items, setItems] = useState<Item[]>([]);
   const [filteredItems, setFilteredItems] = useState<Item[]>([]);
@@ -69,7 +76,7 @@ export function ItemMaster() {
   const [bulkFile, setBulkFile] = useState<File | null>(null);
 
   // Form state
-  const [formData, setFormData] = useState<Omit<Item, 'id' | 'created_at'>>({
+  const [formData, setFormData] = useState<Omit<Item, 'id' | 'created_at' | 'updated_at'>>({
     item_code: "",
     item_name: "",
     item_type: "Material",
@@ -85,14 +92,17 @@ export function ItemMaster() {
     lead_time: 0,
     cost_price: 0,
     gst_rate: 0,
+    image: "",
     is_active: true,
-    image: ""
+    image_url: ""
   });
 
   // Initialize Supabase client only once
   useEffect(() => {
-    fetchItems();
-  }, []);
+    if (user) {
+      fetchItems();
+    }
+  }, [user]);
 
   // Filter items based on search term
   useEffect(() => {
@@ -102,7 +112,11 @@ export function ItemMaster() {
       const filtered = items.filter(item =>
         item.item_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.item_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.brand?.toLowerCase().includes(searchTerm.toLowerCase())
+        item.brand?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        item.item_type?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        item.material?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        item.color?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        item.description?.toLowerCase().includes(searchTerm.toLowerCase())
       );
       setFilteredItems(filtered);
     }
@@ -117,7 +131,10 @@ export function ItemMaster() {
         .select('*')
         .order('created_at', { ascending: false });
       
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase error:', error);
+        throw error;
+      }
       
       setItems(data || []);
       setFilteredItems(data || []);
@@ -148,9 +165,10 @@ export function ItemMaster() {
           min_stock_level: itemToEdit.min_stock_level || 0,
           lead_time: itemToEdit.lead_time || 0,
           cost_price: itemToEdit.cost_price || 0,
-          gst_rate: (itemToEdit as any).gst_rate || 0,
+          gst_rate: itemToEdit.gst_rate || 0,
+          image: itemToEdit.image || "",
           is_active: itemToEdit.is_active || true,
-          image: itemToEdit.image || ""
+          image_url: itemToEdit.image_url || ""
         });
       }
     }
@@ -159,6 +177,21 @@ export function ItemMaster() {
   // Handle form submission (both add and edit)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Basic validation
+    if (!formData.item_code.trim()) {
+      alert('Item Code is required');
+      return;
+    }
+    if (!formData.item_name.trim()) {
+      alert('Item Name is required');
+      return;
+    }
+    if (!formData.item_type.trim()) {
+      alert('Item Type is required');
+      return;
+    }
+    
     try {
       setLoading(true);
       
@@ -184,6 +217,7 @@ export function ItemMaster() {
       resetForm();
     } catch (error) {
       console.error('Error saving item:', error);
+      alert('Error saving item. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -207,8 +241,9 @@ export function ItemMaster() {
       lead_time: 0,
       cost_price: 0,
       gst_rate: 0,
+      image: "",
       is_active: true,
-      image: ""
+      image_url: ""
     });
     setEditMode(false);
     setCurrentItemId(null);
@@ -279,7 +314,9 @@ export function ItemMaster() {
         lead_time: item.lead_time ? Number(item.lead_time) : 0,
         cost_price: item.cost_price ? Number(item.cost_price) : 0,
         gst_rate: item.gst_rate ? Number(item.gst_rate) : 0,
-        is_active: item.is_active ? item.is_active.toString().toLowerCase() === 'true' : true
+        is_active: item.is_active ? item.is_active.toString().toLowerCase() === 'true' : true,
+        image: item.image || "",
+        image_url: item.image_url || ""
       }));
       
       const { error } = await supabase
@@ -318,7 +355,7 @@ export function ItemMaster() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="container mx-auto px-4 py-8 space-y-8">
       {/* Header and Controls */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
@@ -358,7 +395,7 @@ export function ItemMaster() {
         if (!open) resetForm();
         setShowDialog(open);
       }}>
-        <DialogContent className="max-w-4xl overflow-y-auto max-h-screen">
+        <DialogContent className="max-w-4xl overflow-y-auto max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>{editMode ? "Edit Item" : "Add New Item"}</DialogTitle>
           </DialogHeader>
@@ -391,6 +428,11 @@ export function ItemMaster() {
                   <option value="Material">Material</option>
                   <option value="Component">Component</option>
                   <option value="Finished Good">Finished Good</option>
+                  <option value="Raw Material">Raw Material</option>
+                  <option value="Semi-Finished">Semi-Finished</option>
+                  <option value="Accessory">Accessory</option>
+                  <option value="Tool">Tool</option>
+                  <option value="Equipment">Equipment</option>
                 </select>
               </div>
               <div>
@@ -403,10 +445,30 @@ export function ItemMaster() {
               </div>
               <div>
                 <Label>Unit of Measure</Label>
-                <Input
+                <select
                   value={formData.uom}
                   onChange={(e) => setFormData({...formData, uom: e.target.value})}
-                />
+                  className="w-full border rounded px-3 py-2"
+                >
+                  <option value="pcs">Pieces (pcs)</option>
+                  <option value="kg">Kilograms (kg)</option>
+                  <option value="g">Grams (g)</option>
+                  <option value="m">Meters (m)</option>
+                  <option value="cm">Centimeters (cm)</option>
+                  <option value="mm">Millimeters (mm)</option>
+                  <option value="l">Liters (l)</option>
+                  <option value="ml">Milliliters (ml)</option>
+                  <option value="sqm">Square Meters (sqm)</option>
+                  <option value="sqft">Square Feet (sqft)</option>
+                  <option value="box">Box</option>
+                  <option value="pack">Pack</option>
+                  <option value="set">Set</option>
+                  <option value="pair">Pair</option>
+                  <option value="dozen">Dozen</option>
+                  <option value="roll">Roll</option>
+                  <option value="sheet">Sheet</option>
+                  <option value="other">Other</option>
+                </select>
               </div>
             </div>
 
@@ -506,6 +568,13 @@ export function ItemMaster() {
                 />
               </div>
               <div>
+                <Label>Image URL (Alternative)</Label>
+                <Input
+                  value={formData.image_url}
+                  onChange={(e) => setFormData({...formData, image_url: e.target.value})}
+                />
+              </div>
+              <div>
                 <Label>Status</Label>
                 <div className="flex items-center space-x-2">
                   <input
@@ -574,7 +643,7 @@ export function ItemMaster() {
       </Dialog>
 
       {/* Items Table */}
-      <Card className="shadow-erp-md">
+      <Card className="shadow-lg">
         <CardHeader>
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <CardTitle className="text-2xl font-bold">Items ({filteredItems.length})</CardTitle>
@@ -590,24 +659,31 @@ export function ItemMaster() {
           </div>
         </CardHeader>
         <CardContent>
-          {loading ? (
+          {!user ? (
+            <div className="text-center text-muted-foreground py-8 text-lg">
+              Please log in to view items
+            </div>
+          ) : loading ? (
             <div className="flex items-center justify-center py-8">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
             </div>
           ) : filteredItems.length === 0 ? (
             <div className="text-center text-muted-foreground py-8 text-lg">
-              {items.length === 0 ? "No items found" : "No matching items found"}
+              {items.length === 0 ? "No items found. Click 'Add Item' to create your first item." : "No matching items found"}
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table className="min-w-[900px]">
+              <Table className="min-w-[1200px]">
                 <TableHeader>
                   <TableRow className="bg-muted">
                     <TableHead>Item</TableHead>
                     <TableHead>Code</TableHead>
                     <TableHead>Type</TableHead>
+                    <TableHead>UOM</TableHead>
                     <TableHead>Stock</TableHead>
                     <TableHead>Price</TableHead>
+                    <TableHead>GST %</TableHead>
+                    <TableHead>Weight</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
@@ -617,23 +693,38 @@ export function ItemMaster() {
                     <TableRow key={item.id} className="hover:bg-blue-50 transition-colors">
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          {item.image && (
-                            <img src={item.image} alt={item.item_name} className="h-11 w-11 rounded border object-cover" />
+                          {(item.image || item.image_url) && (
+                            <img 
+                              src={item.image_url || item.image} 
+                              alt={item.item_name} 
+                              className="h-24 w-24 rounded border object-cover" 
+                              onError={(e) => {
+                                // Fallback to other image if first one fails
+                                const target = e.target as HTMLImageElement;
+                                if (item.image && item.image_url && target.src === item.image_url) {
+                                  target.src = item.image;
+                                }
+                              }}
+                            />
                           )}
                           <div>
                             <div className="font-semibold">{item.item_name}</div>
                             {item.brand && (
                               <div className="text-xs text-muted-foreground">{item.brand}</div>
                             )}
+                            {item.description && (
+                              <div className="text-xs text-muted-foreground truncate max-w-[200px]">{item.description}</div>
+                            )}
                           </div>
                         </div>
                       </TableCell>
                       <TableCell>{item.item_code}</TableCell>
                       <TableCell>{item.item_type}</TableCell>
+                      <TableCell>{item.uom || 'N/A'}</TableCell>
                       <TableCell>
                         <div>
-                          <div>{item.current_stock} {item.uom}</div>
-                          {item.min_stock_level && item.current_stock <= item.min_stock_level && (
+                          <div>{item.current_stock || 0} {item.uom || ''}</div>
+                          {item.min_stock_level && item.current_stock && item.current_stock <= item.min_stock_level && (
                             <Badge variant="destructive" className="text-xs mt-1">
                               Low Stock
                             </Badge>
@@ -641,7 +732,13 @@ export function ItemMaster() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        ${item.cost_price?.toFixed(2)}
+                        ₹{item.cost_price?.toFixed(2) || '0.00'}
+                      </TableCell>
+                      <TableCell>
+                        {item.gst_rate?.toFixed(2) || '0.00'}%
+                      </TableCell>
+                      <TableCell>
+                        {item.weight ? `${item.weight} kg` : 'N/A'}
                       </TableCell>
                       <TableCell>
                         <Badge variant={item.is_active ? "default" : "destructive"}>
