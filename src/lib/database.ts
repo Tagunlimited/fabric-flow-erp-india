@@ -129,6 +129,20 @@ export async function getOrders(): Promise<Orders[]> {
   return data || [];
 }
 
+export async function getPendingOrdersCount(): Promise<number> {
+  const { count, error } = await supabase
+    .from('orders')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'pending');
+
+  if (error) {
+    console.error('Error fetching pending orders count:', error);
+    return 0;
+  }
+
+  return count || 0;
+}
+
 export async function getOrderById(id: string): Promise<Orders | null> {
   const { data, error } = await supabase
     .from('orders')

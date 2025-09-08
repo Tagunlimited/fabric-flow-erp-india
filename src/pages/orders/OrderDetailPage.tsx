@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import type { Database } from "@/integrations/supabase/types";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import { ErpLayout } from "@/components/ErpLayout";
@@ -212,60 +213,65 @@ export default function OrderDetailPage() {
   }, [id]);
 
   const fetchOrderDetails = async () => {
-    try {
-      setLoading(true);
-      
-      // Fetch order details
-      const { data: orderData, error: orderError } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('id', id)
-        .single();
+      try {
+        setLoading(true);
+        if (!id) {
+          toast.error('Missing order id');
+          return;
+        }
+        
+        // Fetch order details
+        const { data: orderData, error: orderError } = await (supabase as any)
+          .from('orders')
+          .select('*')
+          .eq('id', id as string)
+          .single();
 
-      if (orderError) throw orderError;
-      setOrder(orderData);
+        if (orderError) throw orderError;
+        if (!orderData) throw new Error('Order not found');
+        setOrder(orderData as unknown as Order);
 
-      // Fetch customer details
-      const { data: customerData, error: customerError } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('id', orderData.customer_id)
-        .single();
+        // Fetch customer details
+        const { data: customerData, error: customerError } = await (supabase as any)
+          .from('customers')
+          .select('*')
+          .eq('id', (orderData as any).customer_id)
+          .single();
 
-      if (customerError) throw customerError;
-      setCustomer(customerData);
+        if (customerError) throw customerError;
+        setCustomer(customerData as unknown as Customer);
 
-      // Fetch sales manager if exists
-      if (orderData.sales_manager) {
-        const { data: salesManagerData } = await supabase
+        // Fetch sales manager if exists
+        if ((orderData as any).sales_manager) {
+          const { data: salesManagerData } = await (supabase as any)
+            .from('employees')
+            .select('id, full_name')
+            .eq('id', (orderData as any).sales_manager)
+            .single();
+          
+          setSalesManager((salesManagerData as unknown as SalesManager) || null);
+        }
+
+        // Fetch employees for edit dropdown
+        const { data: employeesData } = await (supabase as any)
           .from('employees')
           .select('id, full_name')
-          .eq('id', orderData.sales_manager)
-          .single();
-        
-        setSalesManager(salesManagerData);
-      }
+          .order('full_name');
+        setEmployees((employeesData as unknown as SalesManager[]) || []);
 
-      // Fetch employees for edit dropdown
-      const { data: employeesData } = await supabase
-        .from('employees')
-        .select('id, full_name')
-        .order('full_name');
-      setEmployees(employeesData || []);
+        // Fetch order items
+        const { data: itemsData, error: itemsError } = await (supabase as any)
+          .from('order_items')
+          .select('*')
+          .eq('order_id', id as string);
 
-      // Fetch order items
-      const { data: itemsData, error: itemsError } = await supabase
-        .from('order_items')
-        .select('*')
-        .eq('order_id', id);
+        if (itemsError) throw itemsError;
+        setOrderItems((itemsData as unknown as OrderItem[]) || []);
 
-      if (itemsError) throw itemsError;
-      setOrderItems(itemsData || []);
-
-      // Fetch fabric details for all items
-      if (itemsData && itemsData.length > 0) {
-        const fabricIds = itemsData.map(item => item.fabric_id).filter(Boolean);
-        const categoryIds = itemsData.map(item => item.product_category_id).filter(Boolean);
+        // Fetch fabric details for all items
+        if (itemsData && (itemsData as any[]).length > 0) {
+          const fabricIds = ((itemsData || []) as any[]).map((item: any) => item.fabric_id).filter(Boolean);
+          const categoryIds = ((itemsData || []) as any[]).map((item: any) => item.product_category_id).filter(Boolean);
         
         if (fabricIds.length > 0) {
           const { data: fabricsData } = await supabase
@@ -274,8 +280,8 @@ export default function OrderDetailPage() {
             .in('id', fabricIds);
           
           if (fabricsData) {
-            const fabricsMap = fabricsData.reduce((acc, fabric) => {
-              acc[fabric.id] = fabric;
+            const fabricsMap = (fabricsData as any[]).reduce((acc: { [key: string]: Fabric }, fabric: any) => {
+              acc[fabric.id] = fabric as Fabric;
               return acc;
             }, {} as { [key: string]: Fabric });
             setFabrics(fabricsMap);
@@ -289,8 +295,8 @@ export default function OrderDetailPage() {
             .in('id', categoryIds);
           
           if (categoriesData) {
-            const categoriesMap = categoriesData.reduce((acc, category) => {
-              acc[category.id] = category;
+            const categoriesMap = (categoriesData as any[]).reduce((acc: { [key: string]: ProductCategory }, category: any) => {
+              acc[category.id] = category as ProductCategory;
               return acc;
             }, {} as { [key: string]: ProductCategory });
             setProductCategories(categoriesMap);
@@ -310,15 +316,19 @@ export default function OrderDetailPage() {
   const fetchOrderActivities = async () => {
     try {
       setLoadingActivities(true);
+      if (!id) {
+        toast.error('Missing order id');
+        return;
+      }
       
-      const { data: activitiesData, error: activitiesError } = await supabase
+      const { data: activitiesData, error: activitiesError } = await (supabase as any)
         .from('order_lifecycle_view')
         .select('*')
-        .eq('order_id', id)
+        .eq('order_id', id as string)
         .order('performed_at', { ascending: false });
 
       if (activitiesError) throw activitiesError;
-      setOrderActivities(activitiesData || []);
+      setOrderActivities((activitiesData as unknown as OrderActivity[]) || []);
       
     } catch (error) {
       console.error('Error fetching order activities:', error);
@@ -334,9 +344,9 @@ export default function OrderDetailPage() {
     try {
       setCancellingOrder(true);
       
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from('orders')
-        .update({ status: 'cancelled' })
+        .update({ status: 'cancelled' as Database['public']['Enums']['order_status'] } as Database['public']['Tables']['orders']['Update'])
         .eq('id', order.id);
 
       if (error) throw error;
@@ -394,7 +404,7 @@ export default function OrderDetailPage() {
       // Update order items
       await Promise.all(
         editItems.map(it =>
-          supabase
+          (supabase as any)
             .from('order_items')
             .update({
               quantity: it.quantity,
@@ -409,7 +419,7 @@ export default function OrderDetailPage() {
       const { subtotal, gstTotal, grandTotal } = computeDraftTotals();
       const balanceAmount = grandTotal - (order.advance_amount || 0);
 
-      const { error: orderUpdateError } = await supabase
+      const { error: orderUpdateError } = await (supabase as any)
         .from('orders')
         .update({
           order_date: new Date(editDraft.order_date).toISOString(),
@@ -467,7 +477,7 @@ export default function OrderDetailPage() {
       const updatedList: string[] = [...baseList, ...uploadedUrls];
       const updatedSpecs = { ...specs, [key]: updatedList };
 
-      const { error: updErr } = await supabase.from('order_items').update({ specifications: updatedSpecs }).eq('id', orderItemId);
+      const { error: updErr } = await (supabase as any).from('order_items').update({ specifications: updatedSpecs }).eq('id', orderItemId);
       if (updErr) throw updErr;
       
       // Log file upload activity for each uploaded file
@@ -502,7 +512,7 @@ export default function OrderDetailPage() {
       const currentList: string[] = Array.isArray(specs[key]) ? specs[key] : [];
       const updatedList = currentList.filter((p: string) => p !== url);
       const updatedSpecs = { ...specs, [key]: updatedList };
-      const { error } = await supabase.from('order_items').update({ specifications: updatedSpecs }).eq('id', orderItemId);
+      const { error } = await (supabase as any).from('order_items').update({ specifications: updatedSpecs }).eq('id', orderItemId);
       if (error) throw error;
       
       // Log file removal activity
@@ -801,6 +811,30 @@ export default function OrderDetailPage() {
       case 'file_uploaded': return 'bg-blue-100 text-blue-800 border-blue-200';
       case 'order_deleted': return 'bg-red-100 text-red-800 border-red-200';
       default: return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+  };
+
+  // Safe JSON parser for lifecycle fields that may be strings
+  const parseMaybeJson = (value: any) => {
+    if (value && typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  };
+
+  const formatDateTimeSafe = (value: any, options?: Intl.DateTimeFormatOptions) => {
+    try {
+      const d = new Date(value);
+      if (isNaN(d.getTime())) return 'N/A';
+      return d.toLocaleString('en-GB', options || {
+        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+    } catch {
+      return 'N/A';
     }
   };
 
@@ -1689,17 +1723,17 @@ export default function OrderDetailPage() {
               </Card>
 <Card>
   <CardHeader>
-    <CardTitle className="flex items-center justify-between">
+    <CardTitle className="flex items-center justify-between text-base sm:text-lg">
       <div className="flex items-center">
         <Calendar className="w-5 h-5 mr-2" />
         Order Lifecycle
       </div>
-      <Badge variant="outline" className="text-xs">
+      <Badge variant="outline" className="text-xs whitespace-nowrap">
         {orderActivities.length} activities
       </Badge>
     </CardTitle>
   </CardHeader>
-  <CardContent>
+  <CardContent className="overflow-x-hidden">
     {loadingActivities ? (
       <div className="flex items-center justify-center py-8">
         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
@@ -1709,64 +1743,61 @@ export default function OrderDetailPage() {
         <p>No activities recorded yet</p>
       </div>
     ) : (
-      <div className="space-y-4 max-h-96 overflow-y-auto">
+      <div className="space-y-4 max-h-96 overflow-y-auto overflow-x-hidden pr-1 sm:pr-2">
         {orderActivities.map((activity, index) => (
           <div key={activity.id} className="relative">
             {/* Timeline connector */}
             {index < orderActivities.length - 1 && (
-              <div className="absolute left-6 top-8 w-0.5 h-8 bg-gray-200"></div>
+              <div className="absolute left-[0.875rem] sm:left-[1.125rem] top-6 sm:top-7 w-0.5 h-6 sm:h-7 bg-gray-200"></div>
             )}
             
-            <div className="flex items-start space-x-4">
+            <div className="flex items-start gap-3 sm:gap-3">
               {/* Activity icon */}
-              <div className={`flex-shrink-0 w-12 h-12 rounded-full border-2 flex items-center justify-center text-lg ${getActivityColor(activity.activity_type)}`}>
+              <div className={`flex-shrink-0 w-7 h-7 sm:w-9 sm:h-9 rounded-full border-2 flex items-center justify-center text-sm sm:text-base ${getActivityColor(activity.activity_type)}`}>
                 {getActivityIcon(activity.activity_type)}
               </div>
               
               {/* Activity content */}
               <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between mb-1">
-                  <h4 className="font-semibold text-sm">{activity.activity_description}</h4>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(activity.performed_at).toLocaleString('en-GB', {
-                      day: '2-digit',
-                      month: 'short',
-                      year: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
-                  </span>
-                </div>
+                <div className="w-full rounded-lg border bg-muted/10 p-3 sm:p-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-1 gap-1">
+                    <h4 className="font-semibold text-xs sm:text-sm break-words break-all leading-snug">
+                      {activity.activity_description}
+                    </h4>
+                    <span className="text-[11px] sm:text-xs text-muted-foreground sm:max-w-[65%] whitespace-normal sm:whitespace-normal break-words break-all sm:text-right">
+                      {formatDateTimeSafe(activity.performed_at)}
+                    </span>
+                  </div>
                 
-                {/* User info */}
-                {activity.user_name && (
-                  <p className="text-xs text-muted-foreground mb-2">
-                    By: {activity.user_name} ({activity.user_email})
-                  </p>
-                )}
+                  {/* User info */}
+                  {activity.user_name && (
+                    <p className="text-[11px] sm:text-xs text-muted-foreground mb-2 break-words">
+                      By: {activity.user_name} {activity.user_email ? `(${activity.user_email})` : ''}
+                    </p>
+                  )}
                 
-                {/* Activity details */}
-                {activity.metadata && (
-                  <div className="bg-muted/30 rounded-lg p-3 mt-2">
+                  {/* Activity details */}
+                  {activity.metadata && (
+                    <div className="bg-muted/30 rounded-lg p-3 mt-2 text-[11px] sm:text-xs">
                     {activity.activity_type === 'payment_received' && (
                       <div className="space-y-1">
                         <div className="flex justify-between text-xs">
                           <span>Amount:</span>
-                          <span className="font-medium">{formatCurrency(activity.metadata.payment_amount)}</span>
+                          <span className="font-medium">{formatCurrency(parseMaybeJson(activity.metadata)?.payment_amount)}</span>
                         </div>
                         <div className="flex justify-between text-xs">
                           <span>Method:</span>
-                          <span className="font-medium">{activity.metadata.payment_type}</span>
+                          <span className="font-medium">{parseMaybeJson(activity.metadata)?.payment_type}</span>
                         </div>
-                        {activity.metadata.payment_reference && (
+                        {parseMaybeJson(activity.metadata)?.payment_reference && (
                           <div className="flex justify-between text-xs">
                             <span>Reference:</span>
-                            <span className="font-medium">{activity.metadata.payment_reference}</span>
+                            <span className="font-medium">{parseMaybeJson(activity.metadata)?.payment_reference}</span>
                           </div>
                         )}
-                        {activity.metadata.notes && (
+                        {parseMaybeJson(activity.metadata)?.notes && (
                           <div className="text-xs mt-1">
-                            <span className="text-muted-foreground">Notes:</span> {activity.metadata.notes}
+                            <span className="text-muted-foreground">Notes:</span> {parseMaybeJson(activity.metadata)?.notes}
                           </div>
                         )}
                       </div>
@@ -1774,70 +1805,70 @@ export default function OrderDetailPage() {
                     
                     {activity.activity_type === 'file_uploaded' && (
                       <div className="space-y-1">
-                        <div className="flex justify-between text-xs">
+                        <div className="flex flex-col sm:flex-row sm:justify-between text-xs">
                           <span>File:</span>
-                          <span className="font-medium">{activity.metadata.file_name}</span>
+                          <span className="font-medium break-words break-all sm:max-w-[65%]">{parseMaybeJson(activity.metadata)?.file_name}</span>
                         </div>
                         <div className="flex justify-between text-xs">
                           <span>Type:</span>
-                          <span className="font-medium">{activity.metadata.file_type}</span>
+                          <span className="font-medium">{parseMaybeJson(activity.metadata)?.file_type}</span>
                         </div>
-                        {activity.metadata.file_url && (
+                        {parseMaybeJson(activity.metadata)?.file_url && (
                           <Button
                             variant="outline"
                             size="sm"
-                            className="mt-2 h-6 text-xs"
-                            onClick={() => window.open(activity.metadata.file_url, '_blank')}
+                            className="mt-2 h-6 text-[10px] sm:text-xs"
+                            onClick={() => window.open(parseMaybeJson(activity.metadata)?.file_url, '_blank')}
                           >
                             <Download className="w-3 h-3 mr-1" />
-                            View File
+                            Download
                           </Button>
                         )}
                       </div>
                     )}
                     
                     {activity.activity_type === 'status_changed' && activity.old_values && activity.new_values && (
-                      <div className="space-y-1">
+                      <div className="space-y-1 text-[11px] sm:text-xs">
                         <div className="flex justify-between text-xs">
                           <span>From:</span>
                           <Badge variant="outline" className="text-xs">
-                            {activity.old_values.status?.replace('_', ' ').toUpperCase()}
+                            {parseMaybeJson(activity.old_values)?.status?.replace('_', ' ').toUpperCase()}
                           </Badge>
                         </div>
                         <div className="flex justify-between text-xs">
                           <span>To:</span>
                           <Badge variant="outline" className="text-xs">
-                            {activity.new_values.status?.replace('_', ' ').toUpperCase()}
+                            {parseMaybeJson(activity.new_values)?.status?.replace('_', ' ').toUpperCase()}
                           </Badge>
                         </div>
                       </div>
                     )}
                     
                     {activity.activity_type === 'amount_updated' && activity.old_values && activity.new_values && (
-                      <div className="space-y-1">
+                      <div className="space-y-1 text-[11px] sm:text-xs">
                         <div className="flex justify-between text-xs">
                           <span>From:</span>
-                          <span className="font-medium">{formatCurrency(activity.old_values.final_amount)}</span>
+                          <span className="font-medium">{formatCurrency(parseMaybeJson(activity.old_values)?.final_amount)}</span>
                         </div>
                         <div className="flex justify-between text-xs">
                           <span>To:</span>
-                          <span className="font-medium">{formatCurrency(activity.new_values.final_amount)}</span>
+                          <span className="font-medium">{formatCurrency(parseMaybeJson(activity.new_values)?.final_amount)}</span>
                         </div>
                       </div>
                     )}
                     
                     {activity.activity_type === 'delivery_date_updated' && activity.old_values && activity.new_values && (
-                      <div className="space-y-1">
+                      <div className="space-y-1 text-[11px] sm:text-xs">
                         <div className="flex justify-between text-xs">
                           <span>From:</span>
                           <span className="font-medium">
-                            {new Date(activity.old_values.expected_delivery_date).toLocaleDateString('en-GB')}
+                            {formatDateTimeSafe(parseMaybeJson(activity.old_values)?.expected_delivery_date, { day: '2-digit', month: 'short', year: 'numeric' })}
                           </span>
                         </div>
                         <div className="flex justify-between text-xs">
                           <span>To:</span>
                           <span className="font-medium">
-                            {new Date(activity.new_values.expected_delivery_date).toLocaleDateString('en-GB')}
+                            {formatDateTimeSafe(parseMaybeJson(activity.new_values)?.expected_delivery_date, { day: '2-digit', month: 'short', year: 'numeric' })}
                           </span>
                         </div>
                       </div>
@@ -1845,36 +1876,115 @@ export default function OrderDetailPage() {
                   </div>
                 )}
                 
-                {/* Show changes for other activity types */}
-                {activity.old_values && activity.new_values && !activity.metadata && (
-                  <div className="bg-muted/30 rounded-lg p-3 mt-2">
-                    <div className="text-xs text-muted-foreground mb-2">Changes made:</div>
-                    <div className="space-y-1">
-                      {Object.keys(activity.new_values).map(key => {
-                        if (activity.old_values[key] !== activity.new_values[key]) {
-                          return (
-                            <div key={key} className="flex justify-between text-xs">
-                              <span className="capitalize">{key.replace('_', ' ')}:</span>
-                              <div className="text-right">
-                                <div className="line-through text-red-600">
-                                  {typeof activity.old_values[key] === 'object' 
-                                    ? JSON.stringify(activity.old_values[key])
-                                    : String(activity.old_values[key] || 'N/A')}
+                  {/* Show changes for other activity types */}
+                  {activity.old_values && activity.new_values && !['status_changed', 'amount_updated', 'delivery_date_updated'].includes(activity.activity_type) && (
+                    <div className="bg-muted/30 rounded-lg p-3 mt-2">
+                      <div className="text-xs text-muted-foreground mb-2">Changes made:</div>
+                      <div className="space-y-2">
+                        {(() => {
+                          const oldObj: any = parseMaybeJson(activity.old_values) || {};
+                          const newObj: any = parseMaybeJson(activity.new_values) || {};
+                          const keys = Object.keys(newObj);
+                          const toArray = (v: any): string[] => Array.isArray(v) ? v : [];
+                          const fileName = (url: string) => {
+                            try { return (url || '').split('/').pop() || url; } catch { return String(url); }
+                          };
+                          return keys.map((key) => {
+                            const oldV: any = oldObj[key];
+                            const newV: any = newObj[key];
+                            if (JSON.stringify(oldV) === JSON.stringify(newV)) return null;
+
+                            if (["attachments", "mockup_images", "reference_images"].includes(key)) {
+                              const oldArr = toArray(oldV);
+                              const newArr = toArray(newV);
+                              const added = newArr.filter(u => !oldArr.includes(u));
+                              const removed = oldArr.filter(u => !newArr.includes(u));
+                              return (
+                                <div key={key} className="text-xs">
+                                  <div className="font-medium capitalize mb-1">{key.replace('_', ' ')}:</div>
+                                  {removed.length > 0 && (
+                                    <div className="mb-1">
+                                      <span className="text-red-600 mr-1">Removed:</span>
+                                      <ul className="ml-4 list-disc space-y-0.5 break-all">
+                                        {removed.map((u) => (
+                                          <li key={`rm-${u}`}>
+                                            <a className="underline text-red-700" href={u} target="_blank" rel="noreferrer">
+                                              {fileName(u)}
+                                            </a>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                                  {added.length > 0 && (
+                                    <div>
+                                      <span className="text-green-600 mr-1">Added:</span>
+                                      <ul className="ml-4 list-disc space-y-0.5 break-all">
+                                        {added.map((u) => (
+                                          <li key={`ad-${u}`}>
+                                            <a className="underline text-green-700" href={u} target="_blank" rel="noreferrer">
+                                              {fileName(u)}
+                                            </a>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                                  {(added.length === 0 && removed.length === 0) && (
+                                    <div className="text-muted-foreground">No link changes</div>
+                                  )}
                                 </div>
-                                <div className="text-green-600 font-medium">
-                                  {typeof activity.new_values[key] === 'object' 
-                                    ? JSON.stringify(activity.new_values[key])
-                                    : String(activity.new_values[key] || 'N/A')}
+                              );
+                            }
+
+                            if (key === 'specifications' && typeof newV === 'object') {
+                              const o = (typeof oldV === 'object' && oldV) ? oldV : {};
+                              const n = (typeof newV === 'object' && newV) ? newV : {};
+                              const specKeys = Object.keys(n).filter(k => !["attachments", "mockup_images", "reference_images"].includes(k));
+                              const changed = specKeys.filter(k => JSON.stringify(o[k]) !== JSON.stringify(n[k]));
+                              if (changed.length === 0) return null;
+                              return (
+                                <div key={key} className="text-xs">
+                                  <div className="font-medium mb-1">Specifications:</div>
+                                  <div className="space-y-1">
+                                    {changed.map(k => (
+                                      <div key={k} className="flex justify-between">
+                                        <span className="capitalize mr-2">{k.replace('_', ' ')}:</span>
+                                        <div className="text-right max-w-[100%] sm:max-w-[70%] break-words break-all">
+                                          <div className="line-through text-red-600">
+                                            {typeof o[k] === 'object' ? JSON.stringify(o[k]) : String(o[k] ?? 'N/A')}
+                                          </div>
+                                          <div className="text-green-600 font-medium">
+                                            {typeof n[k] === 'object' ? JSON.stringify(n[k]) : String(n[k] ?? 'N/A')}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // Generic fallback
+                            return (
+                              <div key={key} className="flex justify-between text-xs">
+                                <span className="capitalize">{key.replace('_', ' ')}:</span>
+                                <div className="text-right max-w-[100%] sm:max-w-[70%] break-words break-all">
+                                  <div className="line-through text-red-600">
+                                    {typeof oldV === 'object' ? JSON.stringify(oldV) : String(oldV ?? 'N/A')}
+                                  </div>
+                                  <div className="text-green-600 font-medium">
+                                    {typeof newV === 'object' ? JSON.stringify(newV) : String(newV ?? 'N/A')}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          );
-                        }
-                        return null;
-                      })}
+                            );
+                          });
+                        })()}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           </div>
