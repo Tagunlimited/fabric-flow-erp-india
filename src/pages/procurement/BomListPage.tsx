@@ -1,10 +1,10 @@
 import { ErpLayout } from '@/components/ErpLayout';
-import { BomList } from '@/components/purchase-orders/BomList';
+import { BomTabsPage } from '@/components/purchase-orders/BomTabsPage';
 
 const BomListPage = () => {
   return (
     <ErpLayout>
-      <BomList />
+      <BomTabsPage />
     </ErpLayout>
   );
 };

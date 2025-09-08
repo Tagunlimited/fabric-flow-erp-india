@@ -65,6 +65,7 @@ export function ItemMaster() {
   const [filteredItems, setFilteredItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
   const [showDialog, setShowDialog] = useState(false);
   const [bulkDialog, setBulkDialog] = useState(false);
   const [bulkLoading, setBulkLoading] = useState(false);
@@ -74,6 +75,8 @@ export function ItemMaster() {
   const [currentItemId, setCurrentItemId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   // Form state
   const [formData, setFormData] = useState<Omit<Item, 'id' | 'created_at' | 'updated_at'>>({
@@ -104,12 +107,18 @@ export function ItemMaster() {
     }
   }, [user]);
 
-  // Filter items based on search term
+  // Filter items based on search term and type filter
   useEffect(() => {
-    if (searchTerm.trim() === '') {
-      setFilteredItems(items);
-    } else {
-      const filtered = items.filter(item =>
+    let filtered = items;
+    
+    // Apply type filter
+    if (typeFilter) {
+      filtered = filtered.filter(item => item.item_type === typeFilter);
+    }
+    
+    // Apply search term filter
+    if (searchTerm.trim() !== '') {
+      filtered = filtered.filter(item =>
         item.item_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.item_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.brand?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -118,9 +127,10 @@ export function ItemMaster() {
         item.color?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.description?.toLowerCase().includes(searchTerm.toLowerCase())
       );
-      setFilteredItems(filtered);
     }
-  }, [searchTerm, items]);
+    
+    setFilteredItems(filtered);
+  }, [searchTerm, typeFilter, items]);
 
   // Fetch items from Supabase
   const fetchItems = async () => {
@@ -136,8 +146,15 @@ export function ItemMaster() {
         throw error;
       }
       
-      setItems(data || []);
-      setFilteredItems(data || []);
+      console.log('Fetched items data:', data);
+      const itemsData = (data as unknown as Item[]) || [];
+      console.log('Items with images:', itemsData.map(item => ({ 
+        name: item.item_name, 
+        image: item.image, 
+        image_url: item.image_url 
+      })));
+      setItems(itemsData);
+      setFilteredItems(itemsData);
     } catch (error) {
       console.error('Error fetching items:', error);
     } finally {
@@ -195,26 +212,59 @@ export function ItemMaster() {
     try {
       setLoading(true);
       
+      // Prepare data for submission
+      let submitData = { ...formData };
+      
+      // Handle image upload if a file is selected
+      console.log('Checking imageFile state:', imageFile);
+      if (imageFile) {
+        console.log('Uploading image file:', imageFile.name);
+        const imageUrl = await uploadImage(imageFile);
+        if (imageUrl) {
+          console.log('Image uploaded successfully, URL:', imageUrl);
+          submitData.image = imageUrl;
+          console.log('Updated submitData.image:', submitData.image);
+        } else {
+          console.error('Failed to upload image, but continuing with item creation');
+          // Don't return here, just continue without the image
+          alert('Image upload failed, but item will be saved without image. You can add the image later.');
+        }
+      } else {
+        console.log('No image file selected for upload');
+      }
+      
+      console.log('Final submitData before database operation:', submitData);
+      
       if (editMode && currentItemId) {
         // Update existing item
+        console.log('Updating existing item with ID:', currentItemId);
         const { error } = await supabase
           .from('item_master')
-          .update(formData)
-          .eq('id', currentItemId);
+          .update(submitData as any)
+          .eq('id', currentItemId as any);
         
-        if (error) throw error;
+        if (error) {
+          console.error('Update error:', error);
+          throw error;
+        }
+        console.log('Item updated successfully');
       } else {
         // Add new item
+        console.log('Adding new item to database');
         const { error } = await supabase
           .from('item_master')
-          .insert([formData]);
+          .insert([submitData as any]);
         
-        if (error) throw error;
+        if (error) {
+          console.error('Insert error:', error);
+          throw error;
+        }
+        console.log('Item added successfully');
       }
       
       setShowDialog(false);
       await fetchItems();
-      resetForm();
+      resetForm(true); // Clear image after successful submission
     } catch (error) {
       console.error('Error saving item:', error);
       alert('Error saving item. Please try again.');
@@ -224,7 +274,7 @@ export function ItemMaster() {
   };
 
   // Reset form to default values
-  const resetForm = () => {
+  const resetForm = (clearImage = true) => {
     setFormData({
       item_code: "",
       item_name: "",
@@ -247,6 +297,121 @@ export function ItemMaster() {
     });
     setEditMode(false);
     setCurrentItemId(null);
+    if (clearImage) {
+      setImageFile(null);
+      setImagePreview(null);
+    }
+  };
+
+  // Handle image file selection
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    console.log('Image file selected:', file);
+    if (file) {
+      console.log('Setting image file:', {
+        name: file.name,
+        size: file.size,
+        type: file.type
+      });
+      setImageFile(file);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        console.log('Image preview loaded');
+        setImagePreview(e.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      console.log('No file selected');
+    }
+  };
+
+  // Upload image to Supabase storage
+  const uploadImage = async (file: File): Promise<string | null> => {
+    try {
+      console.log('Starting image upload process...');
+      console.log('File details:', {
+        name: file.name,
+        size: file.size,
+        type: file.type
+      });
+
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        console.error('Invalid file type:', file.type);
+        alert('Please select an image file (JPG, PNG, GIF, etc.)');
+        return null;
+      }
+
+      // Validate file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        console.error('File too large:', file.size);
+        alert('File size must be less than 10MB');
+        return null;
+      }
+
+      const fileExt = file.name.split('.').pop() || 'jpg';
+      const fileName = `item-${Date.now()}.${fileExt}`;
+      const filePath = fileName; // Upload directly to bucket root
+
+      console.log('Uploading to path:', filePath);
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('item-images')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (uploadError) {
+        console.error('Upload error details:', {
+          error: uploadError,
+          message: uploadError.message,
+          statusCode: uploadError.statusCode
+        });
+        
+        // Show user-friendly error message
+        if (uploadError.message.includes('already exists')) {
+          alert('A file with this name already exists. Please try again.');
+        } else if (uploadError.message.includes('not found')) {
+          alert('Storage bucket not found. Please contact administrator.');
+        } else {
+          alert(`Upload failed: ${uploadError.message}`);
+        }
+        return null;
+      }
+
+      console.log('Upload successful, data:', uploadData);
+
+      const { data: urlData, error: urlError } = supabase.storage
+        .from('item-images')
+        .getPublicUrl(filePath);
+
+      if (urlError) {
+        console.error('URL generation error:', urlError);
+        alert('Failed to generate image URL. Please try again.');
+        return null;
+      }
+
+      console.log('Generated public URL:', urlData.publicUrl);
+      
+      // Test if the URL is accessible
+      try {
+        const response = await fetch(urlData.publicUrl, { method: 'HEAD' });
+        if (!response.ok) {
+          console.warn('Generated URL is not accessible:', response.status);
+        } else {
+          console.log('URL is accessible and working');
+        }
+      } catch (fetchError) {
+        console.warn('Could not test URL accessibility:', fetchError);
+      }
+      
+      return urlData.publicUrl;
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      alert('An unexpected error occurred during upload. Please try again.');
+      return null;
+    }
   };
 
   // Handle edit button click
@@ -264,7 +429,7 @@ export function ItemMaster() {
         const { error } = await supabase
           .from('item_master')
           .delete()
-          .eq('id', itemId);
+          .eq('id', itemId as any);
         
         if (error) throw error;
         
@@ -370,7 +535,7 @@ export function ItemMaster() {
           {/* Add Item Button */}
           <Button 
             onClick={() => {
-              resetForm();
+              resetForm(false); // Don't clear image when opening dialog
               setShowDialog(true);
             }}
             className="bg-gradient-to-r from-primary to-blue-500 text-white shadow-lg hover:scale-105 transition-transform"
@@ -387,6 +552,7 @@ export function ItemMaster() {
           >
             Bulk Upload
           </Button>
+
         </div>
       </div>
 
@@ -561,10 +727,29 @@ export function ItemMaster() {
                 />
               </div>
               <div>
+                <Label>Upload Image</Label>
+                <Input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageSelect}
+                  className="mb-2"
+                />
+                {imagePreview && (
+                  <div className="mt-2">
+                    <img
+                      src={imagePreview}
+                      alt="Preview"
+                      className="h-20 w-20 object-cover rounded border"
+                    />
+                  </div>
+                )}
+              </div>
+              <div>
                 <Label>Image URL</Label>
                 <Input
                   value={formData.image}
                   onChange={(e) => setFormData({...formData, image: e.target.value})}
+                  placeholder="Or enter image URL directly"
                 />
               </div>
               <div>
@@ -647,14 +832,31 @@ export function ItemMaster() {
         <CardHeader>
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <CardTitle className="text-2xl font-bold">Items ({filteredItems.length})</CardTitle>
-            <div className="relative w-full md:w-80">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-              <Input
-                placeholder="Search items..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10 rounded-full shadow"
-              />
+            <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+              <div className="relative w-full sm:w-80">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                <Input
+                  placeholder="Search items..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10 rounded-full shadow"
+                />
+              </div>
+              {/* <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-full shadow focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">All Types</option>
+                <option value="Material">Material</option>
+                <option value="Raw Material">Raw Material</option>
+                <option value="Semi-Finished">Semi-Finished</option>
+                <option value="Finished Product">Finished Product</option>
+                <option value="Accessory">Accessory</option>
+                <option value="Tool">Tool</option>
+                <option value="Equipment">Equipment</option>
+                <option value="Other">Other</option>
+              </select> */}
             </div>
           </div>
         </CardHeader>
@@ -693,20 +895,48 @@ export function ItemMaster() {
                     <TableRow key={item.id} className="hover:bg-blue-50 transition-colors">
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          {(item.image || item.image_url) && (
-                            <img 
-                              src={item.image_url || item.image} 
-                              alt={item.item_name} 
-                              className="h-24 w-24 rounded border object-cover" 
-                              onError={(e) => {
-                                // Fallback to other image if first one fails
-                                const target = e.target as HTMLImageElement;
-                                if (item.image && item.image_url && target.src === item.image_url) {
-                                  target.src = item.image;
-                                }
-                              }}
-                            />
-                          )}
+                          {(() => {
+                            const imageUrl = item.image || item.image_url;
+                            console.log(`Item ${item.item_name} - Image URL:`, imageUrl);
+                            
+                            if (imageUrl) {
+                              return (
+                                <div className="h-24 w-24 rounded border bg-gray-100 flex flex-col items-center justify-center relative">
+                                  <img 
+                                    src={imageUrl} 
+                                    alt={item.item_name} 
+                                    className="h-24 w-24 rounded border object-cover" 
+                                    onLoad={() => {
+                                      console.log('Image loaded successfully for', item.item_name, ':', imageUrl);
+                                    }}
+                                    onError={(e) => {
+                                      console.log('Image failed to load for', item.item_name, ':', imageUrl);
+                                      console.log('This is likely due to storage bucket permissions');
+                                      // Hide the broken image and show error message
+                                      const target = e.target as HTMLImageElement;
+                                      target.style.display = 'none';
+                                      
+                                      // Show error message
+                                      const errorDiv = document.createElement('div');
+                                      errorDiv.className = 'text-xs text-red-500 text-center p-2';
+                                      errorDiv.innerHTML = 'Image not accessible<br/>Check storage permissions';
+                                      target.parentNode?.appendChild(errorDiv);
+                                    }}
+                                  />
+                                  {/* <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-1 text-center">
+                                    Storage Issue
+                                  </div> */}
+                                </div>
+                              );
+                            } else {
+                              console.log(`No image URL for item ${item.item_name}`);
+                              return (
+                                <div className="h-24 w-24 rounded border bg-gray-100 flex items-center justify-center">
+                                  <span className="text-gray-400 text-xs">No Image</span>
+                                </div>
+                              );
+                            }
+                          })()}
                           <div>
                             <div className="font-semibold">{item.item_name}</div>
                             {item.brand && (
