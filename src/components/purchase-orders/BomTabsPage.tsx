@@ -119,7 +119,7 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
             quantity,
             unit_price,
             total_price,
-            product:products(name, code, category, image_url)
+            product:products(name, code, category)
           )
         `)
         .not('status', 'eq', 'cancelled')
@@ -196,7 +196,7 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
           <CardTitle className="flex items-center gap-2">
             <Package className="w-5 h-5" />
-            Orders with Receipts (No BOM) ({orders.length})
+            Orders with Receipts({orders.length})
           </CardTitle>
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -211,17 +211,77 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
             <Button variant="outline" size="sm" onClick={fetchOrdersWithoutBom}>
               Refresh
             </Button>
-            <Button 
+            {/* <Button 
               variant="outline" 
               size="sm" 
               onClick={async () => {
-                console.log('Testing database connection...');
-                const { data, error } = await supabase.from('orders').select('*').limit(1);
-                console.log('Direct DB test:', { data, error });
+                console.log('=== SHOWING ALL ORDERS (NO FILTERS) ===');
+                const { data: allOrders, error } = await supabase
+                  .from('orders')
+                  .select(`
+                    *,
+                    customer:customers(company_name, contact_person),
+                    order_items(
+                      id,
+                      product_id,
+                      quantity,
+                      unit_price,
+                      total_price,
+                      product:products(name, code, category)
+                    )
+                  `)
+                  .not('status', 'eq', 'cancelled')
+                  .order('order_date', { ascending: false });
+                
+                if (error) {
+                  console.error('Error fetching all orders:', error);
+                } else {
+                  console.log('All orders (no filters):', allOrders);
+                  setOrders(allOrders as unknown as Order[]);
+                }
               }}
             >
-              Test DB
-            </Button>
+              Show All Orders
+            </Button> */}
+            {/* <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={async () => {
+                console.log('=== DEBUGGING START ===');
+                
+                // Test 1: Check all orders
+                const { data: allOrders, error: ordersError } = await supabase
+                  .from('orders')
+                  .select('id, order_number, status')
+                  .limit(10);
+                console.log('1. All orders:', allOrders);
+                
+                // Test 2: Check all receipts
+                const { data: allReceipts, error: receiptsError } = await supabase
+                  .from('receipts')
+                  .select('reference_id, reference_number, reference_type')
+                  .limit(10);
+                console.log('2. All receipts:', allReceipts);
+                
+                // Test 3: Check for specific order
+                const { data: specificOrder, error: specificError } = await supabase
+                  .from('orders')
+                  .select('*')
+                  .eq('order_number', 'TUC/25-26/SEP/004');
+                console.log('3. Specific order TUC/25-26/SEP/004:', specificOrder);
+                
+                // Test 4: Check for receipts with this order number
+                const { data: specificReceipts, error: specificReceiptError } = await supabase
+                  .from('receipts')
+                  .select('*')
+                  .eq('reference_number', 'TUC/25-26/SEP/004');
+                console.log('4. Receipts for TUC/25-26/SEP/004:', specificReceipts);
+                
+                console.log('=== DEBUGGING END ===');
+              }}
+            >
+              Debug All
+            </Button> */}
           </div>
         </div>
       </CardHeader>
