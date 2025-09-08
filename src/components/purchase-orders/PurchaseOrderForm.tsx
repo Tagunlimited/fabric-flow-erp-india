@@ -379,19 +379,29 @@ export function PurchaseOrderForm() {
       const before = next[index];
       const after = { ...before, ...patch } as LineItem;
       
-      // Only recalculate if quantity or unit_price changed
-      const shouldRecalculate = patch.hasOwnProperty('quantity') || patch.hasOwnProperty('unit_price') || patch.hasOwnProperty('gst_rate');
-      
-      // For fabrics, auto-total quantity from fabricSelections
-      if (after.item_type === 'fabric' && Array.isArray(after.fabricSelections)) {
+      // For fabrics, auto-total quantity from fabricSelections (but don't override manual quantity changes)
+      if (after.item_type === 'fabric' && Array.isArray(after.fabricSelections) && !patch.hasOwnProperty('quantity')) {
         const sumQty = after.fabricSelections.reduce((s, fs) => s + (Number(fs.quantity) || 0), 0);
+        const quantityChanged = after.quantity !== sumQty;
         after.quantity = sumQty;
+        // If quantity changed due to fabric selections, we need to recalculate
+        if (quantityChanged) {
+          patch.quantity = sumQty;
+        }
       }
-      // For items, auto-total quantity from itemSelections
-      if (after.item_type === 'item' && Array.isArray(after.itemSelections)) {
+      // For items, auto-total quantity from itemSelections (but don't override manual quantity changes)
+      if (after.item_type === 'item' && Array.isArray(after.itemSelections) && !patch.hasOwnProperty('quantity')) {
         const sumQty = after.itemSelections.reduce((s, itSel) => s + (Number(itSel.quantity) || 0), 0);
+        const quantityChanged = after.quantity !== sumQty;
         after.quantity = sumQty;
+        // If quantity changed due to item selections, we need to recalculate
+        if (quantityChanged) {
+          patch.quantity = sumQty;
+        }
       }
+      
+      // Only recalculate if quantity, unit_price, gst_rate, or fabricSelections changed
+      const shouldRecalculate = patch.hasOwnProperty('quantity') || patch.hasOwnProperty('unit_price') || patch.hasOwnProperty('gst_rate') || patch.hasOwnProperty('fabricSelections') || patch.hasOwnProperty('itemSelections');
       
       // Only recalculate totals if necessary
       if (shouldRecalculate) {
@@ -613,55 +623,57 @@ export function PurchaseOrderForm() {
       const rows: any[] = [];
       for (const it of items) {
         if (it.item_type === 'fabric' && Array.isArray(it.fabricSelections) && it.fabricSelections.length > 0) {
-          for (const sel of it.fabricSelections) {
-            if (!sel.color || !sel.gsm) continue;
-            const qty = Number(sel.quantity) || 0;
-            const unitPrice = it.unit_price || 0;
-            const totalPrice = qty * unitPrice;
-            const gstRate = it.gst_rate ?? 0;
-            const gstAmount = totalPrice * (gstRate / 100);
-            const lineTotal = totalPrice + gstAmount;
-            rows.push({
-              po_id: poId,
-              item_type: 'fabric',
-              item_id: it.item_id || crypto.randomUUID(),
-              item_name: `${it.item_name} | ${sel.color} | ${sel.gsm}`,
-              item_image_url: it.item_image_url || null,
-              quantity: qty,
-              unit_price: unitPrice,
-              total_price: totalPrice,
-              gst_rate: gstRate,
-              gst_amount: gstAmount,
-              line_total: lineTotal,
-              unit_of_measure: it.unit_of_measure || 'MTR',
-              notes: it.notes || null,
-            });
-          }
+          // Use total quantity for calculation, but save individual fabric selections for reference
+          const totalQty = it.quantity || 0;
+          const unitPrice = it.unit_price || 0;
+          const totalPrice = totalQty * unitPrice;
+          const gstRate = it.gst_rate ?? 0;
+          const gstAmount = totalPrice * (gstRate / 100);
+          const lineTotal = totalPrice + gstAmount;
+          
+          // Create one row with total quantity and fabric details in name
+          const fabricDetails = it.fabricSelections.map(sel => `${sel.color} | ${sel.gsm} (${sel.quantity})`).join(', ');
+          rows.push({
+            po_id: poId,
+            item_type: 'fabric',
+            item_id: it.item_id || crypto.randomUUID(),
+            item_name: `${it.item_name} | ${fabricDetails}`,
+            item_image_url: it.item_image_url || null,
+            quantity: totalQty,
+            unit_price: unitPrice,
+            total_price: totalPrice,
+            gst_rate: gstRate,
+            gst_amount: gstAmount,
+            line_total: lineTotal,
+            unit_of_measure: it.unit_of_measure || 'MTR',
+            notes: it.notes || null,
+          });
         } else if (it.item_type === 'item' && Array.isArray(it.itemSelections) && it.itemSelections.length > 0) {
-          for (const sel of it.itemSelections) {
-            if (!sel.id) continue;
-            const qty = Number(sel.quantity) || 0;
-            const unitPrice = it.unit_price || 0;
-            const totalPrice = qty * unitPrice;
-            const gstRate = it.gst_rate ?? 0;
-            const gstAmount = totalPrice * (gstRate / 100);
-            const lineTotal = totalPrice + gstAmount;
-            rows.push({
-              po_id: poId,
-              item_type: it.item_category || 'item', // Use the selected item type (e.g., "Zipper", "Drawcord") instead of generic "item"
-              item_id: sel.id,
-              item_name: sel.label || it.item_name,
-              item_image_url: sel.image_url || it.item_image_url || null,
-              quantity: qty,
-              unit_price: unitPrice,
-              total_price: totalPrice,
-              gst_rate: gstRate,
-              gst_amount: gstAmount,
-              line_total: lineTotal,
-              unit_of_measure: it.unit_of_measure || 'pcs',
-              notes: it.notes || null,
-            });
-          }
+          // Use total quantity for calculation, but save individual item selections for reference
+          const totalQty = it.quantity || 0;
+          const unitPrice = it.unit_price || 0;
+          const totalPrice = totalQty * unitPrice;
+          const gstRate = it.gst_rate ?? 0;
+          const gstAmount = totalPrice * (gstRate / 100);
+          const lineTotal = totalPrice + gstAmount;
+          
+          // Create one row with total quantity and item details in name
+          const itemDetails = it.itemSelections.map(sel => `${sel.label} (${sel.quantity})`).join(', ');
+          rows.push({
+            po_id: poId,
+            item_type: it.item_category || 'item', // Use the selected item type (e.g., "Zipper", "Drawcord") instead of generic "item"
+            item_id: it.itemSelections[0].id, // Use first item's ID as primary
+            item_name: itemDetails,
+            item_image_url: it.itemSelections[0].image_url || it.item_image_url || null,
+            quantity: totalQty,
+            unit_price: unitPrice,
+            total_price: totalPrice,
+            gst_rate: gstRate,
+            gst_amount: gstAmount,
+            line_total: lineTotal,
+            unit_of_measure: it.unit_of_measure || 'pcs',
+            notes: it.notes || null,
+          });
         } else {
           // product or simple single entry
           const qty = it.quantity || 0;
@@ -705,6 +717,131 @@ export function PurchaseOrderForm() {
     }
   };
 
+  // Helper function to get default delivery address with company contact info
+  const getDefaultDeliveryAddress = () => {
+    if (!companySettings) return '';
+    
+    const addressParts = [
+      companySettings.address,
+      companySettings.city,
+      companySettings.state,
+      companySettings.pincode
+    ].filter(Boolean);
+    
+    const contactParts = [
+      `Phone: ${companySettings.contact_phone}`,
+      `Email: ${companySettings.contact_email}`
+    ].filter(part => !part.includes('undefined') && !part.includes('null'));
+    
+    return [
+      ...addressParts,
+      '',
+      ...contactParts
+    ].join('\n');
+  };
+
+  // Helper function to validate and clean delivery address and terms
+  const getValidDeliveryAddress = (deliveryAddress: string | null | undefined, supplierAddress: string) => {
+    if (!deliveryAddress || deliveryAddress.trim() === '') {
+      return getDefaultDeliveryAddress() || supplierAddress;
+    }
+    // Check if the content looks like promotional text (contains social media links, etc.)
+    if (deliveryAddress.includes('instagram.com') || deliveryAddress.includes('www.') || deliveryAddress.includes('TICKETS ARE GOING OUT')) {
+      return getDefaultDeliveryAddress() || supplierAddress; // Use company address as fallback
+    }
+    return deliveryAddress;
+  };
+
+  const getValidTermsConditions = (terms: string | null | undefined) => {
+    if (!terms || terms.trim() === '') {
+      return 'Standard terms and conditions apply. Payment terms as agreed. Quality as per specifications.';
+    }
+    // Check if the content looks like promotional text
+    if (terms.includes('instagram.com') || terms.includes('www.') || terms.includes('TICKETS ARE GOING OUT')) {
+      return 'Standard terms and conditions apply. Payment terms as agreed. Quality as per specifications.';
+    }
+    return terms;
+  };
+
+  // Helper function to expand line items into individual rows for export
+  const expandLineItemsForExport = (items: LineItem[]) => {
+    const expandedItems: any[] = [];
+    
+    items.forEach(item => {
+      if (item.item_type === 'fabric' && Array.isArray(item.fabricSelections) && item.fabricSelections.length > 0) {
+        // Create separate rows for each fabric selection
+        item.fabricSelections.forEach(sel => {
+          if (sel.color && sel.gsm) {
+            const qty = Number(sel.quantity) || 0;
+            const unitPrice = item.unit_price || 0;
+            const totalPrice = qty * unitPrice;
+            const gstRate = item.gst_rate ?? 0;
+            const gstAmount = totalPrice * (gstRate / 100);
+            const lineTotal = totalPrice + gstAmount;
+            
+            expandedItems.push({
+              item_name: `${item.item_name} | ${sel.color} | ${sel.gsm}`,
+              item_type: 'fabric',
+              quantity: qty,
+              unit_of_measure: item.unit_of_measure || 'MTR',
+              unit_price: unitPrice,
+              gst_rate: gstRate,
+              gst_amount: gstAmount,
+              line_total: lineTotal,
+              item_image_url: item.item_image_url
+            });
+          }
+        });
+      } else if (item.item_type === 'item' && Array.isArray(item.itemSelections) && item.itemSelections.length > 0) {
+        // Create separate rows for each item selection
+        item.itemSelections.forEach(sel => {
+          if (sel.id) {
+            const qty = Number(sel.quantity) || 0;
+            const unitPrice = item.unit_price || 0;
+            const totalPrice = qty * unitPrice;
+            const gstRate = item.gst_rate ?? 0;
+            const gstAmount = totalPrice * (gstRate / 100);
+            const lineTotal = totalPrice + gstAmount;
+            
+            expandedItems.push({
+              item_name: sel.label,
+              item_type: item.item_category || 'item',
+              quantity: qty,
+              unit_of_measure: item.unit_of_measure || 'pcs',
+              unit_price: unitPrice,
+              gst_rate: gstRate,
+              gst_amount: gstAmount,
+              line_total: lineTotal,
+              item_image_url: sel.image_url || item.item_image_url
+            });
+          }
+        });
+      } else {
+        // Single item (product or simple entry)
+        const qty = item.quantity || 0;
+        const unitPrice = item.unit_price || 0;
+        const totalPrice = qty * unitPrice;
+        const gstRate = item.gst_rate ?? 0;
+        const gstAmount = totalPrice * (gstRate / 100);
+        const lineTotal = totalPrice + gstAmount;
+        
+        expandedItems.push({
+          item_name: item.item_name,
+          item_type: item.item_type,
+          quantity: qty,
+          unit_of_measure: item.unit_of_measure || 'pcs',
+          unit_price: unitPrice,
+          gst_rate: gstRate,
+          gst_amount: gstAmount,
+          line_total: lineTotal,
+          item_image_url: item.item_image_url
+        });
+      }
+    });
+    
+    return expandedItems;
+  };
+
   // Export functions
   const exportToPDF = () => {
     const supplier = suppliers.find(s => s.id === po.supplier_id);
@@ -721,6 +858,9 @@ export function PurchaseOrderForm() {
       companySettings.state,
       companySettings.pincode
     ].filter(Boolean).join(', ') : '';
+    
+    // Expand line items for detailed export
+    const expandedItems = expandLineItemsForExport(items);
     
     const content = `
       <html>
@@ -752,13 +892,16 @@ export function PurchaseOrderForm() {
               body { margin: 10mm; }
               .no-print { display: none; }
             }
+            /* Hide any about:blank text */
+            body::after { display: none !important; }
+            *[href="about:blank"] { display: none !important; }
           </style>
         </head>
         <body>
           <div class="header">
             <div class="company-info">
               <div class="company-details">
-                ${companySettings?.logo_url ? `<img src="${companySettings.logo_url}" alt="Company Logo" class="company-logo" crossorigin="anonymous">` : ''}
+                ${companySettings?.logo_url ? `<img src="${companySettings.logo_url}" alt="Company Logo" class="company-logo" style="max-width: 100px; max-height: 60px; margin-bottom: 5px; object-fit: contain;" onerror="this.style.display='none';" onload="console.log('Logo loaded in PDF:', this.src);">` : ''}
                 <div class="company-name">${companySettings?.company_name || 'Company Name'}</div>
                 <div class="company-address">${companyAddress}</div>
                 <p>GSTIN: ${companySettings?.gstin || 'N/A'} | Phone: ${companySettings?.contact_phone || 'N/A'}</p>
@@ -785,7 +928,7 @@ export function PurchaseOrderForm() {
             </div>
             <div class="contact-section">
               <h3>Delivery Information</h3>
-              <p><strong>Delivery Address:</strong> ${po.delivery_address || supplierAddress}</p>
+              <p><strong>Delivery Address:</strong> ${getValidDeliveryAddress(po.delivery_address, supplierAddress)}</p>
               <p><strong>Expected Delivery:</strong> ${po.expected_delivery_date || 'Not specified'}</p>
             </div>
           </div>
@@ -805,7 +948,7 @@ export function PurchaseOrderForm() {
               </tr>
             </thead>
             <tbody>
-              ${items.map(item => `
+              ${expandedItems.map(item => `
                 <tr>
                   <td>${item.item_image_url ? `<img src="${item.item_image_url}" alt="Item" class="item-image">` : '<div style="width: 40px; height: 40px; background: #f0f0f0; border-radius: 3px;"></div>'}</td>
                   <td>${item.item_name}</td>
@@ -815,7 +958,7 @@ export function PurchaseOrderForm() {
                   <td>₹${item.unit_price?.toFixed(2) || '0.00'}</td>
                   <td>${item.gst_rate || 0}%</td>
                   <td>₹${(item.gst_amount || 0).toFixed(2)}</td>
-                  <td>₹${(item.line_total || (item.quantity * item.unit_price)).toFixed(2)}</td>
+                  <td>₹${(item.line_total || ((item.quantity * item.unit_price) + ((item.quantity * item.unit_price) * ((item.gst_rate || 0) / 100)))).toFixed(2)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -856,7 +999,7 @@ export function PurchaseOrderForm() {
           ${po.terms_conditions ? `
             <div class="footer">
               <h3>Terms & Conditions</h3>
-              <p style="white-space: pre-line;">${po.terms_conditions}</p>
+              <p style="white-space: pre-line;">${getValidTermsConditions(po.terms_conditions)}</p>
             </div>
           ` : ''}
         </body>
@@ -864,7 +1007,7 @@ export function PurchaseOrderForm() {
     `;
 
     // Open in new window and trigger print to PDF
-    const printWindow = window.open('', '_blank');
+    const printWindow = window.open('', '_blank', 'width=800,height=600');
     if (!printWindow) return;
     
     printWindow.document.write(content);
@@ -892,6 +1035,9 @@ export function PurchaseOrderForm() {
       companySettings.pincode
     ].filter(Boolean).join(', ') : '';
     
+    // Expand line items for detailed export
+    const expandedItems = expandLineItemsForExport(items);
+    
     // Create CSV content
     const csvContent = [
       ['Company Information'],
@@ -915,20 +1061,20 @@ export function PurchaseOrderForm() {
       ['Address', supplierAddress],
       [],
       ['Delivery Information'],
-      ['Delivery Address', po.delivery_address || supplierAddress],
+      ['Delivery Address', getValidDeliveryAddress(po.delivery_address, supplierAddress)],
       ['Expected Delivery', po.expected_delivery_date || 'Not specified'],
       [],
       ['Line Items'],
       ['Item Name', 'Type', 'Quantity', 'UOM', 'Unit Price', 'GST %', 'GST Amount', 'Total', 'Image URL'],
-      ...items.map(item => [
+      ...expandedItems.map(item => [
         item.item_name,
-        item.item_type === 'item' && item.item_category ? item.item_category : item.item_type,
+        item.item_type,
         item.quantity,
         item.unit_of_measure || '',
         item.unit_price?.toFixed(2) || '0.00',
         `${item.gst_rate || 0}%`,
         (item.gst_amount || 0).toFixed(2),
-        (item.line_total || (item.quantity * item.unit_price)).toFixed(2),
+        (item.line_total || ((item.quantity * item.unit_price) + ((item.quantity * item.unit_price) * ((item.gst_rate || 0) / 100)))).toFixed(2),
         item.item_image_url || ''
       ]),
       [],
@@ -938,7 +1084,7 @@ export function PurchaseOrderForm() {
       ['Grand Total', totals.grandTotal.toFixed(2)],
       [],
              ['Terms & Conditions'],
-       [(po.terms_conditions || 'Not specified').replace(/\n/g, ' ')]
+       [getValidTermsConditions(po.terms_conditions).replace(/\n/g, ' ')]
     ].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -968,12 +1114,15 @@ export function PurchaseOrderForm() {
       companySettings.pincode
     ].filter(Boolean).join(', ') : '';
     
-    const printWindow = window.open('', '_blank');
+    // Expand line items for detailed export
+    const expandedItems = expandLineItemsForExport(items);
+    
+    const printWindow = window.open('', '_blank', 'width=800,height=600');
     if (!printWindow) return;
     
-    // Add logo error handling with better fallback and print-specific styling
+    // Add logo with better error handling and print-specific styling
     const logoHtml = companySettings?.logo_url ? 
-      `<img src="${companySettings.logo_url}" alt="Company Logo" class="company-logo" crossorigin="anonymous" onerror="this.style.display='none'" style="max-width: 100px; max-height: 60px; margin-bottom: 5px; display: block !important; visibility: visible !important;">` : '';
+      `<img src="${companySettings.logo_url}" alt="Company Logo" class="company-logo" style="max-width: 100px; max-height: 60px; margin-bottom: 5px; display: block !important; visibility: visible !important; object-fit: contain;" onerror="this.style.display='none'; console.log('Logo failed to load:', this.src);" onload="console.log('Logo loaded successfully:', this.src);">` : '';
     
     printWindow.document.write(`
       <html>
@@ -1070,7 +1219,7 @@ export function PurchaseOrderForm() {
             </div>
             <div class="contact-section">
               <h3>Delivery Information</h3>
-              <p><strong>Delivery Address:</strong> ${po.delivery_address || supplierAddress}</p>
+              <p><strong>Delivery Address:</strong> ${getValidDeliveryAddress(po.delivery_address, supplierAddress)}</p>
               <p><strong>Expected Delivery:</strong> ${po.expected_delivery_date || 'Not specified'}</p>
             </div>
           </div>
@@ -1090,7 +1239,7 @@ export function PurchaseOrderForm() {
               </tr>
             </thead>
             <tbody>
-              ${items.map(item => `
+              ${expandedItems.map(item => `
                 <tr>
                   <td>${item.item_image_url ? `<img src="${item.item_image_url}" alt="Item" class="item-image">` : '<div style="width: 40px; height: 40px; background: #f0f0f0; border-radius: 3px;"></div>'}</td>
                   <td>${item.item_name}</td>
@@ -1100,7 +1249,7 @@ export function PurchaseOrderForm() {
                   <td>₹${item.unit_price?.toFixed(2) || '0.00'}</td>
                   <td>${item.gst_rate || 0}%</td>
                   <td>₹${(item.gst_amount || 0).toFixed(2)}</td>
-                  <td>₹${(item.line_total || (item.quantity * item.unit_price)).toFixed(2)}</td>
+                  <td>₹${(item.line_total || ((item.quantity * item.unit_price) + ((item.quantity * item.unit_price) * ((item.gst_rate || 0) / 100)))).toFixed(2)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -1141,7 +1290,7 @@ export function PurchaseOrderForm() {
                     ${po.terms_conditions ? `
             <div class="footer">
               <h3>Terms & Conditions</h3>
-              <p style="white-space: pre-line;">${po.terms_conditions}</p>
+              <p style="white-space: pre-line;">${getValidTermsConditions(po.terms_conditions)}</p>
             </div>
           ` : ''}
         </body>
@@ -1168,8 +1317,11 @@ export function PurchaseOrderForm() {
       companySettings.pincode
     ].filter(Boolean).join(', ') : '';
     
+    // Expand line items for detailed export
+    const expandedItems = expandLineItemsForExport(items);
+    
     // Create the specific message format as requested
-    const itemQty = items.map(item => `${item.item_name} - ${item.quantity} ${item.unit_of_measure || 'units'}`).join(', ');
+    const itemQty = expandedItems.map(item => `${item.item_name} - ${item.quantity} ${item.unit_of_measure || 'units'}`).join(', ');
     const shareMessage = `Dear ${supplier?.contact_person || supplierName}
 
 Please find attached PO ${po.po_number || 'Draft'}
@@ -1184,7 +1336,7 @@ ${companySettings?.company_name || 'Our Company'}`;
     
     // Generate the exact same HTML content as print/export functions
     const logoHtml = companySettings?.logo_url ? 
-      `<img src="${companySettings.logo_url}" alt="Company Logo" class="company-logo" crossorigin="anonymous" onerror="this.style.display='none'" style="max-width: 100px; max-height: 60px; margin-bottom: 5px; display: block !important; visibility: visible !important;">` : '';
+      `<img src="${companySettings.logo_url}" alt="Company Logo" class="company-logo" style="max-width: 100px; max-height: 60px; margin-bottom: 5px; object-fit: contain;" onerror="this.style.display='none';" onload="console.log('Logo loaded in share:', this.src);">` : '';
     
     const htmlContent = `
       <html>
@@ -1245,7 +1397,7 @@ ${companySettings?.company_name || 'Our Company'}`;
             </div>
             <div class="contact-section">
               <h3>Delivery Information</h3>
-              <p><strong>Delivery Address:</strong> ${po.delivery_address || supplierAddress}</p>
+              <p><strong>Delivery Address:</strong> ${getValidDeliveryAddress(po.delivery_address, supplierAddress)}</p>
               <p><strong>Expected Delivery:</strong> ${po.expected_delivery_date || 'Not specified'}</p>
             </div>
           </div>
@@ -1265,7 +1417,7 @@ ${companySettings?.company_name || 'Our Company'}`;
               </tr>
             </thead>
             <tbody>
-              ${items.map(item => `
+              ${expandedItems.map(item => `
                 <tr>
                   <td>${item.item_image_url ? `<img src="${item.item_image_url}" alt="Item" class="item-image">` : '<div style="width: 40px; height: 40px; background: #f0f0f0; border-radius: 3px;"></div>'}</td>
                   <td>${item.item_name}</td>
@@ -1275,7 +1427,7 @@ ${companySettings?.company_name || 'Our Company'}`;
                   <td>₹${item.unit_price?.toFixed(2) || '0.00'}</td>
                   <td>${item.gst_rate || 0}%</td>
                   <td>₹${(item.gst_amount || 0).toFixed(2)}</td>
-                  <td>₹${(item.line_total || (item.quantity * item.unit_price)).toFixed(2)}</td>
+                  <td>₹${(item.line_total || ((item.quantity * item.unit_price) + ((item.quantity * item.unit_price) * ((item.gst_rate || 0) / 100)))).toFixed(2)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -1316,7 +1468,7 @@ ${companySettings?.company_name || 'Our Company'}`;
           ${po.terms_conditions ? `
             <div class="footer">
               <h3>Terms & Conditions</h3>
-              <p style="white-space: pre-line;">${po.terms_conditions}</p>
+              <p style="white-space: pre-line;">${getValidTermsConditions(po.terms_conditions)}</p>
             </div>
           ` : ''}
         </body>
@@ -1452,11 +1604,23 @@ ${companySettings?.company_name || 'Our Company'}`;
 
           <div>
             <Label>Delivery Address</Label>
-            <Textarea value={po.delivery_address || ''} onChange={(e) => setPo({ ...po, delivery_address: e.target.value })} readOnly={isReadOnly} disabled={isReadOnly} />
+            <Textarea 
+              value={po.delivery_address || getDefaultDeliveryAddress()} 
+              onChange={(e) => setPo({ ...po, delivery_address: e.target.value })} 
+              readOnly={isReadOnly} 
+              disabled={isReadOnly}
+              placeholder="Enter delivery address or leave blank to use company address"
+            />
           </div>
           <div>
             <Label>Terms & Conditions</Label>
-            <Textarea value={po.terms_conditions || ''} onChange={(e) => setPo({ ...po, terms_conditions: e.target.value })} readOnly={isReadOnly} disabled={isReadOnly} />
+            <Textarea 
+              value={po.terms_conditions || ''} 
+              onChange={(e) => setPo({ ...po, terms_conditions: e.target.value })} 
+              readOnly={isReadOnly} 
+              disabled={isReadOnly}
+              placeholder="Enter terms and conditions or leave blank for default terms"
+            />
           </div>
         </CardContent>
       </Card>
@@ -1464,6 +1628,9 @@ ${companySettings?.company_name || 'Our Company'}`;
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Line Items ({items.length})</CardTitle>
+          {items.length === 0 && (
+            <p className="text-sm text-muted-foreground">No items added yet. Click "Add Item" to start.</p>
+          )}
           {!isReadOnly && (
           <Button variant="outline" onClick={addItem}>
             <Plus className="w-4 h-4 mr-2" /> Add Item
@@ -1789,7 +1956,17 @@ ${companySettings?.company_name || 'Our Company'}`;
                       )}
                     </TableCell>
                     <TableCell>
-                      <Input type="number" value={it.quantity} disabled className="w-40 bg-muted/50 text-right" />
+                      <Input 
+                        type="number" 
+                        value={it.quantity} 
+                        onChange={(e) => {
+                          const qty = parseFloat(e.target.value) || 0;
+                          updateItem(idx, { quantity: qty });
+                        }}
+                        disabled={isReadOnly} 
+                        className="w-40 text-right" 
+                        placeholder="Qty"
+                      />
                     </TableCell>
                     <TableCell>
                       <Input 
@@ -1826,7 +2003,7 @@ ${companySettings?.company_name || 'Our Company'}`;
                       />
                     </TableCell>
                     <TableCell>{(it.gst_amount ?? 0).toFixed(2)}</TableCell>
-                    <TableCell>{(it.line_total ?? (it.quantity * it.unit_price)).toFixed(2)}</TableCell>
+                    <TableCell>{(it.line_total ?? ((it.quantity * it.unit_price) + ((it.quantity * it.unit_price) * ((it.gst_rate || 0) / 100)))).toFixed(2)}</TableCell>
                     <TableCell>
                       {!isReadOnly && (
                       <Button variant="outline" size="sm" onClick={() => removeItem(idx)}>

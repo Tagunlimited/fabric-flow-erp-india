@@ -21,7 +21,8 @@ import {
   ChevronDown,
   ChevronRight,
   AlertTriangle,
-  Scissors
+  Scissors,
+  Shirt
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -59,7 +60,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       badge: currentPath === "/orders" ? "..." : pendingOrdersCount.toString(),
       badgeColor: "bg-manufacturing",
       children: [
-        { title: "Create/View Orders", url: "/orders", icon: ShoppingCart }
+        { title: "Custom Orders", url: "/orders", icon: ShoppingCart },
+        { title: "Stock Orders", url: "/stock-orders", icon: Shirt }
       ]
     },
     {

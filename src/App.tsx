@@ -47,6 +47,7 @@ import DepartmentsPage from "./pages/people/DepartmentsPage";
 import ProductionTeamPage from "./pages/people/ProductionTeamPage";
 import ProductionTeamDetailPage from "./pages/people/ProductionTeamDetailPage";
 import OrderDetailPage from "./pages/orders/OrderDetailPage";
+import StockOrdersPage from "./pages/orders/StockOrdersPage";
 import { CustomerDashboard } from "./pages/customer/CustomerDashboard";
 import { CustomerAccessManagement } from "./pages/admin/CustomerAccessManagement";
 import ProfileSettingsPage from "./pages/profile/ProfileSettingsPage";
@@ -120,6 +121,11 @@ const App = () => {
                 <Route path="/orders" element={
                   <ProtectedRoute>
                     <OrdersPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/stock-orders" element={
+                  <ProtectedRoute>
+                    <StockOrdersPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/orders/:id" element={
