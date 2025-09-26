@@ -69,7 +69,7 @@ function useDynamicFavicon() {
   const { config } = useCompanySettings();
   useEffect(() => {
     // Always set favicon from company settings, with fallback to default
-    const faviconUrl = config?.favicon_url || '/favicon.ico';
+    const faviconUrl = config?.favicon_url ;
     
     let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
     if (!link) {
