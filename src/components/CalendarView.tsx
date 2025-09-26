@@ -68,26 +68,10 @@ export function CalendarView() {
   // Fetch events from Supabase
   useEffect(() => {
     fetchEvents();
-    // Initialize departments and employees (static for now)
-    const departmentList = ['Production', 'Quality Control', 'Design', 'Management', 'Sales', 'Inventory', 'Export', 'Raw Materials', 'Packaging'];
-    setDepartments(departmentList);
-    const employeeList = [
-      { id: '1', name: 'John Smith', department: 'Production' },
-      { id: '2', name: 'Sarah Johnson', department: 'Production' },
-      { id: '3', name: 'Mike Wilson', department: 'Quality Control' },
-      { id: '4', name: 'Emily Davis', department: 'Quality Control' },
-      { id: '5', name: 'David Brown', department: 'Design' },
-      { id: '6', name: 'Lisa Garcia', department: 'Design' },
-      { id: '7', name: 'Robert Miller', department: 'Management' },
-      { id: '8', name: 'Jennifer Taylor', department: 'Sales' },
-      { id: '9', name: 'Christopher Anderson', department: 'Sales' },
-      { id: '10', name: 'Amanda Thomas', department: 'Inventory' },
-      { id: '11', name: 'James Martinez', department: 'Export' },
-      { id: '12', name: 'Maria Rodriguez', department: 'Raw Materials' },
-      { id: '13', name: 'Kevin Lee', department: 'Packaging' }
-    ];
-    setEmployees(employeeList);
-    setFilteredEmployees(employeeList);
+    // Initialize with empty arrays - data will be loaded from backend
+    setDepartments([]);
+    setEmployees([]);
+    setFilteredEmployees([]);
   }, []);
 
   const fetchEvents = async () => {

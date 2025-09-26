@@ -108,7 +108,6 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       children: [
         { title: "Production Dashboard", url: "/production", icon: Factory },
         { title: "Assign Orders", url: "/production/assign-orders", icon: Users },
-        { title: "Orders Status", url: "/production/orders-status", icon: BarChart3 },
         { title: "Cutting Manager", url: "/production/cutting-manager", icon: Scissors }
       ]
     },
@@ -120,8 +119,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Dashboard", url: "/people", icon: BarChart3 },
         { title: "Our People", url: "/people/employees", icon: Users },
         { title: "Production Team", url: "/people/production-team", icon: Scissors },
-        { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
-        { title: "Incentive Programme", url: "/people/incentives", icon: Award },
+        // { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
+        // { title: "Incentive Programme", url: "/people/incentives", icon: Award },
         { title: "Departments", url: "/people/departments", icon: Building }
       ]
     },

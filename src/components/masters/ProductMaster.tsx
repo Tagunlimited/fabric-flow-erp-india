@@ -229,21 +229,21 @@ export function ProductMaster() {
         // Fallback to known schema based on actual database
         const fallbackTemplate = [
           {
-            sku: "SKU001",
-            name: "Sample Product",
-            description: "Product description",
-            category: "Category Name",
-            images: "image1.jpg,image2.jpg",
-            hsn: "HSN123456",
-            gst_rate: "18.00",
-            mrp: "1000.00",
-            cost_price: "800.00",
-            selling_price: "900.00",
-            fabric: "Cotton",
-            gsm: "200",
-            min_stock: "10",
-            maximum_stock: "100",
-            sku_hierarchy: "1"
+            sku: "",
+            name: "",
+            description: "",
+            category: "",
+            images: "",
+            hsn: "",
+            gst_rate: "",
+            mrp: "",
+            cost_price: "",
+            selling_price: "",
+            fabric: "",
+            gsm: "",
+            min_stock: "",
+            maximum_stock: "",
+            sku_hierarchy: ""
           }
         ];
 
@@ -300,21 +300,21 @@ export function ProductMaster() {
       // Create template with actual column structure
       const template = [
         {
-          sku: "SKU001",
-          name: "Sample Product",
-          description: "Product description",
-          category: "Category Name",
-          images: "image1.jpg,image2.jpg",
-          hsn: "HSN123456",
-          gst_rate: "18.00",
-          mrp: "1000.00",
-          cost_price: "800.00",
-          selling_price: "900.00",
-          fabric: "Cotton",
-          gsm: "200",
-          min_stock: "10",
-          maximum_stock: "100",
-          sku_hierarchy: "1"
+          sku: "",
+          name: "",
+          description: "",
+          category: "",
+          images: "",
+          hsn: "",
+          gst_rate: "",
+          mrp: "",
+          cost_price: "",
+          selling_price: "",
+          fabric: "",
+          gsm: "",
+          min_stock: "",
+          maximum_stock: "",
+          sku_hierarchy: ""
         }
       ];
 

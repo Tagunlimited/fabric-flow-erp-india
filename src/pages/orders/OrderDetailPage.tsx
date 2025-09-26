@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -173,6 +173,7 @@ function calculateOrderSummary(orderItems: any[], order: Order | null) {
 export default function OrderDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const printRef = useRef<HTMLDivElement>(null);
   const { config: company } = useCompanySettings();
   
@@ -204,6 +205,16 @@ export default function OrderDetailPage() {
   const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+
+  // Handle back navigation based on referrer
+  const handleBackNavigation = () => {
+    const from = searchParams.get('from');
+    if (from === 'production') {
+      navigate('/production');
+    } else {
+      navigate('/orders');
+    }
+  };
 
   useEffect(() => {
     if (id) {
@@ -307,7 +318,7 @@ export default function OrderDetailPage() {
     } catch (error) {
       console.error('Error fetching order details:', error);
       toast.error('Failed to load order details');
-      navigate('/orders');
+      handleBackNavigation();
     } finally {
       setLoading(false);
     }
@@ -855,9 +866,9 @@ export default function OrderDetailPage() {
           <div className="text-center">
             <h2 className="text-2xl font-bold mb-2">Order Not Found</h2>
             <p className="text-muted-foreground mb-4">The requested order could not be found.</p>
-            <Button onClick={() => navigate('/orders')}>
+            <Button onClick={handleBackNavigation}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Orders
+              Back to {searchParams.get('from') === 'production' ? 'Production' : 'Orders'}
             </Button>
           </div>
         </div>
@@ -873,11 +884,11 @@ export default function OrderDetailPage() {
           <div className="flex items-center space-x-4">
             <Button 
               variant="ghost" 
-              onClick={() => navigate('/orders')}
+              onClick={handleBackNavigation}
               className="flex items-center"
             >
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Orders
+              Back to {searchParams.get('from') === 'production' ? 'Production' : 'Orders'}
             </Button>
             <div>
               <h1 className="text-3xl font-bold">Order Details</h1>

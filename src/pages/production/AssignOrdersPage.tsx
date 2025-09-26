@@ -39,52 +39,13 @@ const AssignOrdersPage = () => {
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
 
-  // Mock data - replace with actual data from your backend
-  const [assignments, setAssignments] = useState<OrderAssignment[]>([
-    {
-      id: "1",
-      orderNumber: "ORD-2024-001",
-      customerName: "Fashion House Ltd",
-      productName: "Cotton T-Shirt",
-      quantity: 500,
-      assignedTo: "John Smith",
-      assignedDate: "2024-01-15",
-      dueDate: "2024-01-25",
-      status: "assigned",
-      priority: "high"
-    },
-    {
-      id: "2",
-      orderNumber: "ORD-2024-002",
-      customerName: "Style Boutique",
-      productName: "Denim Jeans",
-      quantity: 200,
-      assignedTo: "Sarah Johnson",
-      assignedDate: "2024-01-16",
-      dueDate: "2024-01-30",
-      status: "in_progress",
-      priority: "medium"
-    },
-    {
-      id: "3",
-      orderNumber: "ORD-2024-003",
-      customerName: "Urban Wear",
-      productName: "Hoodie",
-      quantity: 300,
-      assignedTo: "",
-      assignedDate: "",
-      dueDate: "2024-02-05",
-      status: "pending",
-      priority: "urgent"
-    }
-  ]);
+  // Initialize with empty array - data will be loaded from backend
+  const [assignments, setAssignments] = useState<OrderAssignment[]>([]);
 
-  const workers = [
-    { id: "1", name: "John Smith", department: "Cutting", availability: "available" },
-    { id: "2", name: "Sarah Johnson", department: "Stitching", availability: "busy" },
-    { id: "3", name: "Mike Wilson", department: "Cutting", availability: "available" },
-    { id: "4", name: "Lisa Brown", department: "Quality", availability: "available" }
-  ];
+  // Initialize with empty array - data will be loaded from backend
+  const [workers, setWorkers] = useState([
+    // Workers data will be loaded from backend
+  ]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -178,7 +139,9 @@ const AssignOrdersPage = () => {
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-green-600">12</span>
+                <span className="text-2xl font-bold text-green-600">
+                  {assignments.filter(a => a.status === 'completed').length}
+                </span>
                 <CheckCircle className="w-5 h-5 text-green-600" />
               </div>
             </CardContent>

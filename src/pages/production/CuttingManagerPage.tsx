@@ -30,7 +30,8 @@ import {
   Settings,
   Zap
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { getCuttingManagers } from "@/lib/database";
 
 interface CuttingJob {
   id: string;
@@ -70,126 +71,28 @@ const CuttingManagerPage = () => {
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
 
-  // Mock data - replace with actual data from your backend
-  const [cuttingJobs, setCuttingJobs] = useState<CuttingJob[]>([
-    {
-      id: "1",
-      jobNumber: "CUT-2024-001",
-      orderNumber: "ORD-2024-001",
-      customerName: "Fashion House Ltd",
-      productName: "Cotton T-Shirt",
-      fabricType: "Cotton Jersey",
-      quantity: 500,
-      cutQuantity: 350,
-      assignedTo: "John Smith",
-      startDate: "2024-01-15",
-      dueDate: "2024-01-20",
-      status: "in_progress",
-      priority: "high",
-      cuttingPattern: "Lay Pattern A",
-      fabricConsumption: 2.5,
-      efficiency: 85,
-      notes: "Standard cutting process",
-      defects: 5,
-      reworkRequired: false
-    },
-    {
-      id: "2",
-      jobNumber: "CUT-2024-002",
-      orderNumber: "ORD-2024-002",
-      customerName: "Style Boutique",
-      productName: "Denim Jeans",
-      fabricType: "Denim",
-      quantity: 200,
-      cutQuantity: 200,
-      assignedTo: "Sarah Johnson",
-      startDate: "2024-01-16",
-      dueDate: "2024-01-18",
-      status: "completed",
-      priority: "medium",
-      cuttingPattern: "Lay Pattern B",
-      fabricConsumption: 1.8,
-      efficiency: 92,
-      notes: "Completed successfully",
-      defects: 2,
-      reworkRequired: false
-    },
-    {
-      id: "3",
-      jobNumber: "CUT-2024-003",
-      orderNumber: "ORD-2024-003",
-      customerName: "Urban Wear",
-      productName: "Hoodie",
-      fabricType: "Fleece",
-      quantity: 300,
-      cutQuantity: 0,
-      assignedTo: "",
-      startDate: "2024-01-20",
-      dueDate: "2024-01-25",
-      status: "pending",
-      priority: "urgent",
-      cuttingPattern: "Lay Pattern C",
-      fabricConsumption: 3.2,
-      efficiency: 0,
-      notes: "Awaiting fabric delivery",
-      defects: 0,
-      reworkRequired: false
-    },
-    {
-      id: "4",
-      jobNumber: "CUT-2024-004",
-      orderNumber: "ORD-2024-004",
-      customerName: "Sportswear Co",
-      productName: "Track Pants",
-      fabricType: "Polyester",
-      quantity: 150,
-      cutQuantity: 120,
-      assignedTo: "Mike Wilson",
-      startDate: "2024-01-18",
-      dueDate: "2024-01-22",
-      status: "quality_check",
-      priority: "high",
-      cuttingPattern: "Lay Pattern D",
-      fabricConsumption: 2.1,
-      efficiency: 78,
-      notes: "Quality issues detected - rework required",
-      defects: 15,
-      reworkRequired: true
-    }
-  ]);
+  // Initialize with empty array - data will be loaded from backend
+  const [cuttingJobs, setCuttingJobs] = useState<CuttingJob[]>([]);
 
-  const [cuttingMachines, setCuttingMachines] = useState<CuttingMachine[]>([
-    {
-      id: "1",
-      name: "Cutting Machine 1",
-      type: "Automatic Cutter",
-      status: "busy",
-      currentJob: "CUT-2024-001",
-      efficiency: 85,
-      lastMaintenance: "2024-01-10",
-      operator: "John Smith"
-    },
-    {
-      id: "2",
-      name: "Cutting Machine 2",
-      type: "Manual Cutter",
-      status: "available",
-      currentJob: null,
-      efficiency: 92,
-      lastMaintenance: "2024-01-12",
-      operator: "Sarah Johnson"
-    },
-    {
-      id: "3",
-      name: "Cutting Machine 3",
-      type: "Laser Cutter",
-      status: "maintenance",
-      currentJob: null,
-      efficiency: 88,
-      lastMaintenance: "2024-01-15",
-      operator: "Mike Wilson"
-    }
-  ]);
+  // Initialize with empty array - data will be loaded from backend
+  const [cuttingMachines, setCuttingMachines] = useState<CuttingMachine[]>([]);
+
+  // State for cutting managers
+  const [cuttingManagers, setCuttingManagers] = useState<any[]>([]);
+
+  // Fetch cutting managers data
+  useEffect(() => {
+    const fetchCuttingManagers = async () => {
+      try {
+        const managers = await getCuttingManagers();
+        setCuttingManagers(managers);
+      } catch (error) {
+        console.error('Error fetching cutting managers:', error);
+      }
+    };
+
+    fetchCuttingManagers();
+  }, []);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -342,6 +245,53 @@ const CuttingManagerPage = () => {
           </TabsList>
 
           <TabsContent value="jobs" className="space-y-4">
+            {/* Cutting Managers Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="w-5 h-5" />
+                  Cutting Managers
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {cuttingManagers.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Users className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <p>No cutting managers found</p>
+                    <p className="text-sm">Add cutting managers to the production team to see them here</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-4 justify-start">
+                    {cuttingManagers.map((manager) => (
+                      <div 
+                        key={manager.id} 
+                        className="relative group cursor-pointer"
+                        title={`${manager.full_name}${manager.is_batch_leader ? ' (Leader)' : ''}`}
+                        style={{ transitionDelay: '0ms' }}
+                      >
+                        {manager.avatar_url ? (
+                          <img
+                            src={manager.avatar_url}
+                            alt={manager.full_name}
+                            className="w-20 h-20 rounded-lg object-cover shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105 hover:-translate-y-1"
+                          />
+                        ) : (
+                          <div className="w-20 h-20 rounded-lg bg-primary/10 flex items-center justify-center shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105 hover:-translate-y-1">
+                            <Users className="w-10 h-10 text-primary/60" />
+                          </div>
+                        )}
+                        {manager.is_batch_leader && (
+                          <div className="absolute -top-1 -right-1 w-6 h-6 bg-yellow-500 rounded-full flex items-center justify-center border-2 border-white shadow-sm">
+                            <span className="text-xs text-white font-bold">L</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Filters */}
             <Card>
               <CardHeader>
@@ -572,33 +522,23 @@ const CuttingManagerPage = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">Machine 1</span>
-                      <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
-                          <div className="bg-blue-600 h-2 rounded-full" style={{ width: '85%' }}></div>
-                        </div>
-                        <span className="text-sm font-medium">85%</span>
+                    {cuttingMachines.length === 0 ? (
+                      <div className="text-center py-8 text-muted-foreground">
+                        No machine data available
                       </div>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">Machine 2</span>
-                      <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
-                          <div className="bg-green-600 h-2 rounded-full" style={{ width: '92%' }}></div>
+                    ) : (
+                      cuttingMachines.map((machine) => (
+                        <div key={machine.id} className="flex items-center justify-between">
+                          <span className="text-sm">{machine.name}</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-32 bg-gray-200 rounded-full h-2">
+                              <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${machine.efficiency}%` }}></div>
+                            </div>
+                            <span className="text-sm font-medium">{machine.efficiency}%</span>
+                          </div>
                         </div>
-                        <span className="text-sm font-medium">92%</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">Machine 3</span>
-                      <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
-                          <div className="bg-orange-600 h-2 rounded-full" style={{ width: '88%' }}></div>
-                        </div>
-                        <span className="text-sm font-medium">88%</span>
-                      </div>
-                    </div>
+                      ))
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -609,33 +549,47 @@ const CuttingManagerPage = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">Fabric Issues</span>
-                      <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
-                          <div className="bg-red-600 h-2 rounded-full" style={{ width: '40%' }}></div>
-                        </div>
-                        <span className="text-sm font-medium">40%</span>
+                    {cuttingJobs.length === 0 ? (
+                      <div className="text-center py-8 text-muted-foreground">
+                        No defect data available
                       </div>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">Cutting Errors</span>
-                      <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
-                          <div className="bg-orange-600 h-2 rounded-full" style={{ width: '35%' }}></div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm">Total Defects</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-32 bg-gray-200 rounded-full h-2">
+                              <div className="bg-red-600 h-2 rounded-full" style={{ 
+                                width: `${Math.min(100, (stats.totalDefects / Math.max(cuttingJobs.length * 10, 1)) * 100)}%` 
+                              }}></div>
+                            </div>
+                            <span className="text-sm font-medium">{stats.totalDefects}</span>
+                          </div>
                         </div>
-                        <span className="text-sm font-medium">35%</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm">Pattern Issues</span>
-                      <div className="flex items-center gap-2">
-                        <div className="w-32 bg-gray-200 rounded-full h-2">
-                          <div className="bg-yellow-600 h-2 rounded-full" style={{ width: '25%' }}></div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm">Rework Required</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-32 bg-gray-200 rounded-full h-2">
+                              <div className="bg-orange-600 h-2 rounded-full" style={{ 
+                                width: `${Math.round((stats.reworkJobs / Math.max(cuttingJobs.length, 1)) * 100)}%` 
+                              }}></div>
+                            </div>
+                            <span className="text-sm font-medium">{stats.reworkJobs}</span>
+                          </div>
                         </div>
-                        <span className="text-sm font-medium">25%</span>
-                      </div>
-                    </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm">Completed Jobs</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-32 bg-gray-200 rounded-full h-2">
+                              <div className="bg-green-600 h-2 rounded-full" style={{ 
+                                width: `${Math.round((stats.completed / Math.max(cuttingJobs.length, 1)) * 100)}%` 
+                              }}></div>
+                            </div>
+                            <span className="text-sm font-medium">{stats.completed}</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </CardContent>
               </Card>

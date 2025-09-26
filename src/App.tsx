@@ -29,7 +29,6 @@ import OrdersPage from "./pages/OrdersPage";
 import InventoryPage from "./pages/InventoryPage";
 import ProductionPage from "./pages/ProductionPage";
 import AssignOrdersPage from "./pages/production/AssignOrdersPage";
-import OrdersStatusPage from "./pages/production/OrdersStatusPage";
 import CuttingManagerPage from "./pages/production/CuttingManagerPage";
 import QualityPage from "./pages/QualityPage";
 import DispatchPage from "./pages/DispatchPage";
@@ -208,11 +207,6 @@ const App = () => {
                 <Route path="/production/assign-orders" element={
                   <ProtectedRoute>
                     <AssignOrdersPage />
-                  </ProtectedRoute>
-                } />
-                <Route path="/production/orders-status" element={
-                  <ProtectedRoute>
-                    <OrdersStatusPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/production/cutting-manager" element={

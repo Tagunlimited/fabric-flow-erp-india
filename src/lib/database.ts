@@ -268,6 +268,40 @@ export async function getEmployeeById(id: string): Promise<Employees | null> {
   return data;
 }
 
+// Production Team Management
+export async function getProductionTeam(): Promise<any[]> {
+  const { data, error } = await supabase
+    .from('production_team')
+    .select('*')
+    .order('full_name');
+
+  if (error) {
+    console.error('Error fetching production team:', error);
+    return [];
+  }
+
+  return data || [];
+}
+
+export async function getCuttingManagers(): Promise<any[]> {
+  console.log('Querying production_team for Cutting Manager...');
+  
+  // Query by designation field instead of tailor_type
+  const { data, error } = await supabase
+    .from('production_team')
+    .select('*')
+    .eq('designation', 'Cutting Manager')
+    .order('full_name');
+
+  if (error) {
+    console.error('Error fetching cutting managers:', error);
+    return [];
+  }
+
+  console.log('Cutting managers found:', data);
+  return data || [];
+}
+
 // Production Management
 export async function getProductionOrders(): Promise<ProductionOrders[]> {
   const { data, error } = await supabase
