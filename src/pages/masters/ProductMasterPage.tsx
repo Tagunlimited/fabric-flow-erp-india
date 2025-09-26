@@ -1,10 +1,10 @@
 import { ErpLayout } from "@/components/ErpLayout";
-import { ProductMaster } from "@/components/masters/ProductMaster";
+import { ProductMasterNew } from "@/components/masters/ProductMasterNew";
 
 const ProductMasterPage = () => {
   return (
     <ErpLayout>
-      <ProductMaster />
+      <ProductMasterNew />
     </ErpLayout>
   );
 };

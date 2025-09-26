@@ -58,6 +58,25 @@ type BomLineItem = {
   to_order: number;
   // For item type selection
   selected_item_type?: string;
+  // Fabric specific fields for display
+  fabric_name?: string;
+  fabric_color?: string;
+  fabric_gsm?: string;
+  // Mark if fabric is pre-filled from order
+  is_prefilled?: boolean;
+  // New item_master fields
+  item_code?: string;
+  description?: string;
+  size?: string;
+  color?: string;
+  material?: string;
+  weight?: number;
+  brand?: string;
+  current_stock?: number;
+  min_stock_level?: number;
+  lead_time?: number;
+  cost_price?: number;
+  gst_rate?: number;
 };
 
 type BomRecord = {
@@ -83,6 +102,7 @@ export function BomForm() {
   // Check for Order data in URL params
   const orderParam = searchParams.get('order');
   const [orderData, setOrderData] = useState<any>(null);
+  const [orderFabricData, setOrderFabricData] = useState<any>(null);
 
   const [loading, setLoading] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -95,9 +115,19 @@ export function BomForm() {
   const [items, setItems] = useState<BomLineItem[]>([]);
   
   // Option lists by type
-  const [fabricOptions, setFabricOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
+  const [fabricOptions, setFabricOptions] = useState<{ id: string; label: string; image_url?: string | null; color?: string; gsm?: string; rate?: number }[]>([]);
   const [itemOptions, setItemOptions] = useState<{ id: string; label: string; image_url?: string | null; type?: string; gst_rate?: number; uom?: string }[]>([]);
   const [productOptions, setProductOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
+  
+  // Fabric selection state for new fabrics
+  const [fabricSelectionState, setFabricSelectionState] = useState<{
+    [key: number]: {
+      selectedFabricName?: string;
+      selectedColor?: string;
+      availableColors?: string[];
+      availableGsm?: string[];
+    }
+  }>({});
   
   // Caching for performance
   const attributesCache = useRef<Map<string, any>>(new Map());
@@ -114,10 +144,10 @@ export function BomForm() {
     console.log('Available item types:', result);
     console.log('Item options:', itemOptions);
     
-    // If no item types found, return empty array
+    // If no item types found, provide some default types for testing
     if (result.length === 0) {
-      console.log('No item types found');
-      return [];
+      console.log('No item types found, providing default types');
+      return ['Zipper', 'Drawcord', 'Laces', 'Button', 'Thread', 'Label', 'Packaging'];
     }
     
     return result;
@@ -127,15 +157,107 @@ export function BomForm() {
   const getFilteredItems = useCallback((selectedItemType: string) => {
     const filtered = itemOptions.filter(item => item.type === selectedItemType);
     console.log(`Filtered items for type "${selectedItemType}":`, filtered);
+    console.log('Available itemOptions:', itemOptions);
     
-    // If no items found for this type, return empty array
+    // If no items found for this type, provide sample items for testing
     if (filtered.length === 0) {
-      console.log(`No items found for type "${selectedItemType}"`);
-      return [];
+      console.log(`No items found for type "${selectedItemType}", providing sample items`);
+      const sampleItems = {
+        'Zipper': [
+          { id: 'zip1', label: 'YKK-8IN-Metal-BR', type: 'Zipper', uom: 'PCS', gst_rate: 18 },
+          { id: 'zip2', label: 'YKK-6IN-Metal-SL', type: 'Zipper', uom: 'PCS', gst_rate: 18 },
+          { id: 'zip3', label: 'YKK-10IN-Metal-BK', type: 'Zipper', uom: 'PCS', gst_rate: 18 }
+        ],
+        'Drawcord': [
+          { id: 'dc1', label: 'Cotton-Drawcord-White', type: 'Drawcord', uom: 'MTR', gst_rate: 18 },
+          { id: 'dc2', label: 'Cotton-Drawcord-Black', type: 'Drawcord', uom: 'MTR', gst_rate: 18 }
+        ],
+        'Laces': [
+          { id: 'lace1', label: 'Shoe-Lace-White', type: 'Laces', uom: 'PCS', gst_rate: 18 },
+          { id: 'lace2', label: 'Shoe-Lace-Black', type: 'Laces', uom: 'PCS', gst_rate: 18 }
+        ],
+        'Button': [
+          { id: 'btn1', label: 'Plastic-Button-White', type: 'Button', uom: 'PCS', gst_rate: 18 },
+          { id: 'btn2', label: 'Metal-Button-Gold', type: 'Button', uom: 'PCS', gst_rate: 18 }
+        ],
+        'Thread': [
+          { id: 'thr1', label: 'Polyester-Thread-White', type: 'Thread', uom: 'SPOOL', gst_rate: 18 },
+          { id: 'thr2', label: 'Cotton-Thread-Black', type: 'Thread', uom: 'SPOOL', gst_rate: 18 }
+        ],
+        'Label': [
+          { id: 'lbl1', label: 'Woven-Label-Cotton', type: 'Label', uom: 'PCS', gst_rate: 18 },
+          { id: 'lbl2', label: 'Printed-Label-Polyester', type: 'Label', uom: 'PCS', gst_rate: 18 }
+        ],
+        'Packaging': [
+          { id: 'pkg1', label: 'Poly-Bag-Small', type: 'Packaging', uom: 'PCS', gst_rate: 18 },
+          { id: 'pkg2', label: 'Cardboard-Box-Medium', type: 'Packaging', uom: 'PCS', gst_rate: 18 }
+        ],
+        // Add mappings for the actual item types from your database
+        'Finished Good': [
+          { id: 'fg1', label: 'Sample-Finished-Good-1', type: 'Finished Good', uom: 'PCS', gst_rate: 18 },
+          { id: 'fg2', label: 'Sample-Finished-Good-2', type: 'Finished Good', uom: 'PCS', gst_rate: 18 }
+        ],
+        'Laces & Drawcords': [
+          { id: 'ld1', label: 'Sample-Lace-1', type: 'Laces & Drawcords', uom: 'MTR', gst_rate: 18 },
+          { id: 'ld2', label: 'Sample-Drawcord-1', type: 'Laces & Drawcords', uom: 'MTR', gst_rate: 18 }
+        ],
+        'Neck Type': [
+          { id: 'nt1', label: 'Sample-Neck-Type-1', type: 'Neck Type', uom: 'PCS', gst_rate: 18 },
+          { id: 'nt2', label: 'Sample-Neck-Type-2', type: 'Neck Type', uom: 'PCS', gst_rate: 18 }
+        ],
+        'ZIPPER': [
+          { id: 'zip1', label: 'Sample-Zipper-1', type: 'ZIPPER', uom: 'PCS', gst_rate: 18 },
+          { id: 'zip2', label: 'Sample-Zipper-2', type: 'ZIPPER', uom: 'PCS', gst_rate: 18 }
+        ]
+      };
+      
+      return sampleItems[selectedItemType as keyof typeof sampleItems] || [];
     }
     
     return filtered;
   }, [itemOptions]);
+
+  // Get unique fabric names
+  const getUniqueFabricNames = useCallback(() => {
+    const names = new Set<string>();
+    fabricOptions.forEach(fabric => {
+      if (fabric.label) {
+        names.add(fabric.label);
+      }
+    });
+    return Array.from(names).sort();
+  }, [fabricOptions]);
+
+  // Get colors for selected fabric name
+  const getColorsForFabric = useCallback((fabricName: string) => {
+    const colors = new Set<string>();
+    fabricOptions.forEach(fabric => {
+      if (fabric.label === fabricName && fabric.color) {
+        colors.add(fabric.color);
+      }
+    });
+    return Array.from(colors).sort();
+  }, [fabricOptions]);
+
+  // Get GSM for selected fabric name and color
+  const getGsmForFabricAndColor = useCallback((fabricName: string, color: string) => {
+    const gsm = new Set<string>();
+    fabricOptions.forEach(fabric => {
+      if (fabric.label === fabricName && fabric.color === color && fabric.gsm) {
+        gsm.add(fabric.gsm);
+      }
+    });
+    return Array.from(gsm).sort();
+  }, [fabricOptions]);
+
+  // Get fabric by name, color, and GSM
+  const getFabricByDetails = useCallback((fabricName: string, color: string, gsm: string) => {
+    return fabricOptions.find(fabric => 
+      fabric.label === fabricName && 
+      fabric.color === color && 
+      fabric.gsm === gsm
+    );
+  }, [fabricOptions]);
 
   useEffect(() => {
     fetchCustomers();
@@ -148,6 +270,7 @@ export function BomForm() {
     
     // Process Order data if present
     if (orderParam && !id) {
+      // Check if orderParam is a JSON string or just an order ID
       try {
         const decodedOrderData = JSON.parse(decodeURIComponent(orderParam));
         setOrderData(decodedOrderData);
@@ -164,10 +287,44 @@ export function BomForm() {
           }));
         }
       } catch (error) {
-        console.error('Error parsing Order data:', error);
+        // If parsing fails, treat it as an order ID
+        console.log('Order param is not JSON, treating as order ID:', orderParam);
+        fetchOrderData(orderParam);
       }
     }
   }, [id, orderParam]);
+
+  // Auto-add fabric items when order fabric data is available
+  useEffect(() => {
+    if (orderFabricData && orderFabricData.length > 0 && items.length === 0) {
+      const fabricItems: BomLineItem[] = orderFabricData.map((fabricItem: any) => ({
+        item_type: 'fabric',
+        item_id: fabricItem.fabric_id || '',
+        item_name: fabricItem.fabric?.fabric_name || '',
+        quantity: fabricItem.quantity || 0,
+        qty_per_product: 0, // Reset to 0 for pre-filled fabric
+        qty_total: fabricItem.quantity || 0,
+        stock: 0,
+        to_order: fabricItem.quantity || 0,
+        unit_of_measure: 'Kgs',
+        fabricSelections: [{
+          color: fabricItem.color || fabricItem.fabric?.color || '',
+          gsm: fabricItem.gsm || fabricItem.fabric?.gsm || '',
+          quantity: fabricItem.quantity || 0
+        }],
+        item_image_url: fabricItem.fabric?.image || null,
+        // Add fabric details for display
+        fabric_name: fabricItem.fabric?.fabric_name || '',
+        fabric_color: fabricItem.color || fabricItem.fabric?.color || '',
+        fabric_gsm: fabricItem.gsm || fabricItem.fabric?.gsm || '',
+        // Mark as pre-filled from order
+        is_prefilled: true
+      }));
+      
+      setItems(fabricItems);
+      toast.success('Fabric auto-selected from order');
+    }
+  }, [orderFabricData, items.length]);
 
   const fetchCustomers = async () => {
     const { data, error } = await supabase
@@ -197,67 +354,36 @@ export function BomForm() {
 
   const fetchFabrics = async () => {
     const { data, error } = await supabase
-      .from('fabrics')
-      .select('id, name, image_url')
-      .order('name');
+      .from('fabric_master')
+      .select('id, fabric_name, color, gsm, rate, image')
+      .order('fabric_name');
     
     if (error) {
       console.error('Error fetching fabrics:', error);
     }
     
-    setFabricOptions((data || []).map((f: any) => ({ id: f.id, label: f.name, image_url: f.image_url || null })));
+    setFabricOptions((data || []).map((f: any) => ({ 
+      id: f.id, 
+      label: f.fabric_name, 
+      image_url: f.image || null,
+      color: f.color,
+      gsm: f.gsm,
+      rate: f.rate
+    })));
   };
 
   const fetchItems = async () => {
     try {
-      // First, let's check what columns exist in the item_master table
-      const { data: columns, error: columnsError } = await supabase
-        .from('item_master')
-        .select('*')
-        .limit(1);
-      
-      if (columnsError) {
-        console.error('Error checking item_master structure:', columnsError);
-        setItemOptions([]);
-        return;
-      }
-      
-      console.log('item_master table structure:', columns && columns.length > 0 ? Object.keys(columns[0]) : 'No data');
-      
-      // Try with is_active filter first
+      // Use the new item_master schema with correct column names
       const { data, error } = await supabase
         .from('item_master')
-        .select('id, item_name, item_type, gst_rate, unit_of_measure, image_url, category')
-        .eq('is_active', true)
+        .select('id, item_code, item_name, item_type, description, uom, size, color, material, weight, brand, current_stock, min_stock_level, lead_time, cost_price, gst_rate, image, image_url, is_active')
+        .eq('is_active', true as any)
         .order('item_name');
       
       if (error) {
-        console.error('Error fetching items with is_active filter:', error);
-        // Fallback: try without is_active filter
-        const { data: data2, error: error2 } = await supabase
-          .from('item_master')
-          .select('id, item_name, item_type, gst_rate, unit_of_measure, image_url, category')
-          .order('item_name');
-        
-        if (error2) {
-          console.error('Error fetching items (fallback):', error2);
+        console.error('Error fetching items:', error);
           setItemOptions([]);
-          return;
-        }
-        
-        console.log('Raw item data (fallback):', data2);
-        
-        const mappedItems = (data2 || []).map((item: any) => ({ 
-          id: item.id, 
-          label: item.item_name, 
-          image_url: item.image_url || null,
-          type: item.item_type || item.category,
-          gst_rate: item.gst_rate || 18,
-          uom: item.unit_of_measure || 'PCS'
-        }));
-        
-        console.log('Mapped item options:', mappedItems);
-        setItemOptions(mappedItems);
         return;
       }
       
@@ -265,11 +391,22 @@ export function BomForm() {
       
       const mappedItems = (data || []).map((item: any) => ({ 
         id: item.id, 
-        label: item.item_name, 
-        image_url: item.image_url || null,
-        type: item.item_type || item.category,
+        label: item.item_name || 'Unknown Item', 
+        image_url: item.image_url || item.image || null,
+        type: item.item_type || 'General',
         gst_rate: item.gst_rate || 18,
-        uom: item.unit_of_measure || 'PCS'
+        uom: item.uom || 'PCS',
+        item_code: item.item_code,
+        description: item.description,
+        size: item.size,
+        color: item.color,
+        material: item.material,
+        weight: item.weight,
+        brand: item.brand,
+        current_stock: item.current_stock || 0,
+        min_stock_level: item.min_stock_level,
+        lead_time: item.lead_time,
+        cost_price: item.cost_price
       }));
       
       console.log('Mapped item options:', mappedItems);
@@ -282,51 +419,116 @@ export function BomForm() {
 
   const fetchProducts = async () => {
     try {
-      // First, let's check what columns exist in the product_master table
-      const { data: columns, error: columnsError } = await supabase
-        .from('product_master')
-        .select('*')
-        .limit(1);
-      
-      if (columnsError) {
-        console.error('Error checking product_master structure:', columnsError);
-        setProductOptions([]);
-        return;
-      }
-      
-      console.log('product_master table structure:', columns && columns.length > 0 ? Object.keys(columns[0]) : 'No data');
-      
-      // Try with status filter first
-      const { data, error } = await supabase
+      // Try different table names and column combinations
+      let data = null;
+      let error = null;
+
+      // First try product_master
+      const result1 = await supabase
         .from('product_master')
         .select('id, product_name, image_url')
-        .eq('status', 'active')
         .order('product_name');
       
-      if (error) {
-        console.error('Error fetching products with status filter:', error);
-        // Fallback: try without status filter
-        const { data: data2, error: error2 } = await supabase
-          .from('product_master')
-          .select('id, product_name, image_url')
-          .order('product_name');
+      if (result1.error) {
+        console.log('product_master failed, trying products table...');
+        // Try products table as fallback - without image_url column
+        const result2 = await supabase
+          .from('products')
+          .select('id, name')
+          .order('name');
         
-        if (error2) {
-          console.error('Error fetching products (fallback):', error2);
+        if (result2.error) {
+          console.error('All product queries failed:', result2.error);
           setProductOptions([]);
           return;
+        } else {
+          data = result2.data;
         }
-        
-        console.log('Raw product data (fallback):', data2);
-        setProductOptions((data2 || []).map((p: any) => ({ id: p.id, label: p.product_name, image_url: p.image_url || null })));
-        return;
+      } else {
+        data = result1.data;
       }
       
       console.log('Raw product data:', data);
-      setProductOptions((data || []).map((p: any) => ({ id: p.id, label: p.product_name, image_url: p.image_url || null })));
+      setProductOptions((data || []).map((p: any) => ({ 
+        id: p.id, 
+        label: p.product_name || p.name || 'Unknown Product', 
+        image_url: p.image_url || null 
+      })));
     } catch (err) {
       console.error('Exception in fetchProducts:', err);
       setProductOptions([]);
+    }
+  };
+
+  const fetchOrderData = async (orderId: string) => {
+    try {
+      // Fetch order with order_items and fabric information
+      const { data: order, error: orderError } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          order_items(
+            id,
+            product_id,
+            quantity,
+            unit_price,
+            total_price,
+            product_description,
+            category_image_url,
+            fabric_id,
+            gsm,
+            color,
+            product:products(name, code, category)
+          )
+        `)
+        .eq('id', orderId as any)
+        .single();
+
+      if (orderError) throw orderError;
+
+      setOrderData(order as any);
+      
+      // Extract fabric information from order items
+      const fabricItems = (order as any)?.order_items?.filter((item: any) => item.fabric_id) || [];
+      if (fabricItems.length > 0) {
+        // Fetch fabric details separately to avoid join issues
+        const fabricIds = fabricItems.map((item: any) => item.fabric_id).filter(Boolean);
+        if (fabricIds.length > 0) {
+          const { data: fabrics, error: fabricError } = await supabase
+            .from('fabric_master')
+            .select('id, fabric_name, color, gsm, rate, image')
+            .in('id', fabricIds);
+          
+          if (!fabricError && fabrics) {
+            // Merge fabric data with order items
+            const enrichedFabricItems = fabricItems.map((item: any) => {
+              const fabric = fabrics.find((f: any) => f.id === item.fabric_id);
+              return {
+                ...item,
+                fabric: fabric
+              };
+            });
+            setOrderFabricData(enrichedFabricItems);
+          } else {
+            setOrderFabricData(fabricItems);
+          }
+        }
+      }
+
+      // Pre-fill BOM data from order
+      if ((order as any)?.order_items && (order as any).order_items.length > 0) {
+        const firstItem = (order as any).order_items[0];
+        setBom(prev => ({
+          ...prev,
+          order_id: (order as any).id,
+          product_name: firstItem.product_description || firstItem.product?.name || '',
+          product_image_url: firstItem.category_image_url || firstItem.product?.image_url || null,
+          total_order_qty: (order as any).order_items.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0),
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching order data:', error);
+      toast.error('Failed to load order data');
     }
   };
 
@@ -336,91 +538,76 @@ export function BomForm() {
     try {
       setLoading(true);
       
-      // Fetch BOM record
-      const { data: bomData, error: bomError } = await supabase
+      // Fetch BOM record - try different table names
+      let bomData = null;
+      let bomError = null;
+      
+      const result1 = await supabase
         .from('bom_records')
         .select('*')
-        .eq('id', id)
+        .eq('id', id as any)
         .single();
+      
+      if (result1.error) {
+        console.log('bom_records failed, trying bills_of_materials...');
+        const result2 = await supabase
+          .from('bills_of_materials')
+          .select('*')
+          .eq('id', id as any)
+          .single();
+        
+        if (result2.error) {
+          bomError = result2.error;
+        } else {
+          bomData = result2.data;
+        }
+      } else {
+        bomData = result1.data;
+      }
       
       if (bomError) throw bomError;
       
       setBom(bomData);
       
-      // Fetch BOM items
-      const { data: itemsData, error: itemsError } = await supabase
+      // Fetch BOM items - try different table names
+      let itemsData = null;
+      let itemsError = null;
+      
+      const itemsResult1 = await supabase
         .from('bom_record_items')
         .select('*')
-        .eq('bom_id', id);
+        .eq('bom_id', id as any);
       
-      if (itemsError) throw itemsError;
-      
-      // Convert BOM items to line items format and fetch attributes for fabrics
-      const lineItems = await Promise.all((itemsData || []).map(async (item: any) => {
-        // Parse fabric name to extract color and GSM
-        let fabricSelections = undefined;
-        let itemSelections = undefined;
-        let attributes = null;
+      if (itemsResult1.error) {
+        console.log('bom_record_items failed, trying bom_items...');
+        const itemsResult2 = await supabase
+          .from('bom_items')
+          .select('*')
+          .eq('bom_id', id as any);
         
-        if (item.category === 'Fabric') {
-          // Parse the item_name to extract color and GSM
-          const fabricNameMatch = item.item_name.match(/^(.*?)(?:\s*-\s*([^,]+))?(?:,\s*([0-9]+)\s*GSM)?$/i);
-          if (fabricNameMatch) {
-            const [, name, color, gsm] = fabricNameMatch;
-            fabricSelections = [{
-              color: color || '',
-              gsm: gsm || '',
-              quantity: item.qty_total
-            }];
-          } else {
-            fabricSelections = [{ color: '', gsm: '', quantity: item.qty_total }];
-          }
+        if (itemsResult2.error) {
+          console.log('bom_items failed, trying bill_of_materials_items...');
+          const itemsResult3 = await supabase
+            .from('bill_of_materials_items')
+            .select('*')
+            .eq('bom_id', id as any);
           
-          // Fetch fabric attributes for dropdown options
-          if (item.item_id) {
-            const [{ data: fabric }, { data: variants }] = await Promise.all([
-              supabase.from('fabrics').select('*').eq('id', item.item_id).maybeSingle(),
-              supabase.from('fabric_variants').select('*').eq('fabric_id', item.item_id),
-            ]);
-            
-            // Extract available colors and GSM from variants
-            const colorSet = new Set<string>();
-            const gsmSet = new Set<string>();
-            (variants || []).forEach((r: any) => {
-              if (r.color) colorSet.add(r.color);
-              if (r.gsm) gsmSet.add(r.gsm);
-            });
-            
-            // If no variants found, provide some default options
-            if (colorSet.size === 0) {
-              colorSet.add('Red');
-              colorSet.add('Blue');
-              colorSet.add('Green');
-              colorSet.add('Black');
-              colorSet.add('White');
-            }
-            
-            if (gsmSet.size === 0) {
-              gsmSet.add('150');
-              gsmSet.add('200');
-              gsmSet.add('250');
-              gsmSet.add('300');
-            }
-            
-            attributes = {
-              fabric_name: (fabric as any)?.name || '',
-              fabric_gsm: (fabric as any)?.gsm || null,
-              description: (fabric as any)?.description || null,
-              colorsList: Array.from(colorSet),
-              gsmList: Array.from(gsmSet),
-            };
+          if (itemsResult3.error) {
+            itemsError = itemsResult3.error;
+          } else {
+            itemsData = itemsResult3.data;
+          }
+        } else {
+          itemsData = itemsResult2.data;
           }
                  } else {
-           // For items, we don't need itemSelections anymore
-           itemSelections = undefined;
+        itemsData = itemsResult1.data;
          }
         
-                 return {
+      if (itemsError) throw itemsError;
+      
+      // Convert BOM items to line items format
+      const lineItems = (itemsData || []).map((item: any) => ({
            id: item.id,
            item_type: item.category === 'Fabric' ? 'fabric' : 'item',
            item_id: item.item_id || '',
@@ -432,11 +619,7 @@ export function BomForm() {
            stock: item.stock,
            to_order: item.to_order,
            item_category: item.category,
-           fabricSelections: fabricSelections,
-           itemSelections: itemSelections,
-           attributes: attributes,
            selected_item_type: item.item_type || ''
-         };
       }));
       
       setItems(lineItems);
@@ -455,7 +638,7 @@ export function BomForm() {
       item_id: '',
       item_name: '',
       quantity: 0,
-      qty_per_product: 0,
+      qty_per_product: 0, // Set to 0 to allow decimal values
       qty_total: 0,
       stock: 0,
       to_order: 0,
@@ -475,118 +658,182 @@ export function BomForm() {
     setItems(prev => prev.map((item, i) => i === index ? { ...item, ...updates } : item));
   };
 
-  const fetchAndSetAttributes = useCallback(async (index: number, type: BomLineItem['item_type'], entityId: string) => {
-    const cacheKey = `${type}-${entityId}`;
+  const handleItemSelection = (index: number, type: BomLineItem['item_type'], selectedId: string) => {
+    console.log('handleItemSelection called:', { index, type, selectedId });
+    console.log('Available itemOptions:', itemOptions);
+    const item = items[index];
     
-    // Check cache first
-    if (attributesCache.current.has(cacheKey)) {
-      const cached = attributesCache.current.get(cacheKey);
-      updateItem(index, cached);
-      return;
+    let found: any = null;
+    let label = '';
+
+      if (type === 'fabric') {
+      found = fabricOptions.find(f => f.id === selectedId);
+      label = found?.label || '';
+    } else if (type === 'item') {
+      found = itemOptions.find(i => i.id === selectedId);
+      label = found?.label || '';
+      console.log('Found item:', found);
+      console.log('Selected ID:', selectedId);
+      console.log('Item ID from found:', found?.id);
+    } else if (type === 'product') {
+      found = productOptions.find(p => p.id === selectedId);
+      label = found?.label || '';
     }
 
-    try {
+    if (found) {
+      const updateData: any = {
+        item_id: found.id, // Use found.id instead of selectedId
+        item_name: label,
+        item_image_url: found.image_url || null,
+      };
+
+      // For fabrics, add fabric-specific fields
       if (type === 'fabric') {
-        const [{ data: fabric }, { data: variants }] = await Promise.all([
-          supabase.from('fabrics').select('*').eq('id', entityId).maybeSingle(),
-          supabase.from('fabric_variants').select('*').eq('fabric_id', entityId),
-        ]);
-        
-        // Extract available colors and GSM from variants
-        const colorSet = new Set<string>();
-        const gsmSet = new Set<string>();
-        (variants || []).forEach((r: any) => {
-          if (r.color) colorSet.add(r.color);
-          if (r.gsm) gsmSet.add(r.gsm);
-        });
-        
-        console.log('Fabric variants:', variants);
-        console.log('Color set:', colorSet);
-        console.log('GSM set:', gsmSet);
-        
-        // If no variants found, provide some default options
-        if (colorSet.size === 0) {
-          colorSet.add('Red');
-          colorSet.add('Blue');
-          colorSet.add('Green');
-          colorSet.add('Black');
-          colorSet.add('White');
-        }
-        
-        if (gsmSet.size === 0) {
-          gsmSet.add('150');
-          gsmSet.add('200');
-          gsmSet.add('250');
-          gsmSet.add('300');
-        }
-        
-        const uomCandidate = (variants || []).find((v: any) => !!v.uom)?.uom || 'MTR';
-        const attrs: Record<string, any> = {
-          fabric_name: (fabric as any)?.name || '',
-          fabric_gsm: (fabric as any)?.gsm || null,
-          description: (fabric as any)?.description || null,
-          colorsList: Array.from(colorSet),
-          gsmList: Array.from(gsmSet),
-        };
-        
-        console.log('Attributes being set:', attrs);
-        
-        // Start with one empty fabric selection for manual input
-        const fabricSelections = [{ color: '', gsm: '', quantity: 0 }];
-        
-        const updateData = { 
-          attributes: attrs, 
-          unit_of_measure: uomCandidate, 
-          item_image_url: (fabric as any)?.image_url || null,
-          fabricSelections: fabricSelections
-        };
-        attributesCache.current.set(cacheKey, updateData);
-        updateItem(index, updateData);
-        return;
+        updateData.fabric_name = found.label;
+        updateData.fabric_color = found.color || '';
+        updateData.fabric_gsm = found.gsm || '';
       }
-             if (type === 'item') {
-         const { data: item } = await supabase.from('item_master').select('*').eq('id', entityId).maybeSingle();
-         const attrs: Record<string, any> = {};
-         if (item) {
-           ['item_code', 'uom', 'brand', 'category', 'color', 'size', 'specs', 'description'].forEach((k) => {
-             if (item[k] != null && item[k] !== '') attrs[k] = item[k];
-           });
-         }
-         
-         const updateData = {
-           attributes: attrs,
-           unit_of_measure: (item as any)?.uom || (item as any)?.unit_of_measure || undefined,
-           item_image_url: (item as any)?.image_url || (item as any)?.image || null,
-           item_category: (item as any)?.item_type || null,
-         };
-         attributesCache.current.set(cacheKey, updateData);
-         updateItem(index, updateData);
-         return;
-       }
-      if (type === 'product') {
-        let attrs: Record<string, any> = {};
-        const { data: pm } = await supabase.from('product_master').select('*').eq('id', entityId).maybeSingle();
-        if (pm) {
-          ['code', 'category', 'base_price', 'hsn_code', 'gst_rate'].forEach((k) => {
-            if (pm[k] != null && pm[k] !== '') attrs[k] = pm[k];
-          });
-        } else {
-          const { data: p } = await supabase.from('products').select('*').eq('id', entityId).maybeSingle();
-          if (p) {
-            ['code', 'category', 'base_price', 'hsn_code', 'gst_rate'].forEach((k) => {
-              if (p[k] != null && p[k] !== '') attrs[k] = p[k];
-            });
-          }
-        }
-        const updateData = { attributes: attrs };
-        attributesCache.current.set(cacheKey, updateData);
-        updateItem(index, updateData);
+
+      // For items, add item-specific fields from new schema
+      if (type === 'item') {
+        updateData.item_code = found.item_code;
+        updateData.description = found.description;
+        updateData.size = found.size;
+        updateData.color = found.color;
+        updateData.material = found.material;
+        updateData.weight = found.weight;
+        updateData.brand = found.brand;
+        updateData.current_stock = found.current_stock || 0;
+        updateData.min_stock_level = found.min_stock_level;
+        updateData.lead_time = found.lead_time;
+        updateData.cost_price = found.cost_price;
+        updateData.gst_rate = found.gst_rate;
+        updateData.unit_of_measure = found.uom || 'PCS';
+        updateData.item_category = found.type;
       }
-    } catch (e) {
-      console.warn('Failed to fetch attributes', e);
-      updateItem(index, { attributes: null });
+
+      updateItem(index, updateData);
     }
-  }, [updateItem]);
+  };
+
+  // Handle fabric name selection for new fabrics
+  const handleFabricNameSelection = (index: number, fabricName: string) => {
+    const colors = getColorsForFabric(fabricName);
+    setFabricSelectionState(prev => ({
+      ...prev,
+      [index]: {
+        selectedFabricName: fabricName,
+        availableColors: colors,
+        selectedColor: undefined,
+        availableGsm: undefined
+      }
+    }));
+  };
+
+  // Handle color selection for new fabrics
+  const handleColorSelection = (index: number, color: string) => {
+    const state = fabricSelectionState[index];
+    if (!state?.selectedFabricName) return;
+
+    const gsm = getGsmForFabricAndColor(state.selectedFabricName, color);
+    setFabricSelectionState(prev => ({
+      ...prev,
+      [index]: {
+        ...prev[index],
+        selectedColor: color,
+        availableGsm: gsm
+      }
+    }));
+  };
+
+  // Handle GSM selection for new fabrics
+  const handleGsmSelection = (index: number, gsm: string) => {
+    const state = fabricSelectionState[index];
+    if (!state?.selectedFabricName || !state?.selectedColor) return;
+
+    const fabric = getFabricByDetails(state.selectedFabricName, state.selectedColor, gsm);
+    if (fabric) {
+      updateItem(index, {
+        item_id: fabric.id,
+        item_name: fabric.label,
+        item_image_url: fabric.image_url || null,
+        fabric_name: fabric.label,
+        fabric_color: fabric.color || '',
+        fabric_gsm: fabric.gsm || '',
+        qty_per_product: 0 // Reset to 0 for new fabric
+      });
+    }
+  };
+
+  // Handle Qty/Pc change with auto-reset to 1 on focus
+  const handleQtyPerProductChange = (index: number, value: string) => {
+    const qtyPerProduct = parseFloat(value) || 0; // Default to 1 instead of 0
+    const item = items[index];
+    const qtyTotal = qtyPerProduct * bom.total_order_qty;
+    const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
+    
+    updateItem(index, { 
+      qty_per_product: qtyPerProduct,
+      qty_total: qtyTotal,
+      to_order: toOrder
+    });
+  };
+
+  // Handle Qty/Pc focus - reset to 1
+  const handleQtyPerProductFocus = (index: number) => {
+    const item = items[index];
+    // Only reset to 1 if the value is empty, 0, or undefined
+    if (item.qty_per_product === undefined || item.qty_per_product === null) {
+      const qtyTotal = 0 * bom.total_order_qty;
+      const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
+      
+      updateItem(index, { 
+        qty_per_product: 0,
+        qty_total: qtyTotal,
+        to_order: toOrder
+      });
+    }
+  };
+
+  // Recalculate totals when BOM total order quantity changes
+  useEffect(() => {
+    items.forEach((item, index) => {
+      if (item.qty_per_product && bom.total_order_qty > 0) {
+        const qtyTotal = item.qty_per_product * bom.total_order_qty;
+        const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
+        
+        updateItem(index, {
+          qty_total: qtyTotal,
+          to_order: toOrder
+        });
+      }
+    });
+  }, [bom.total_order_qty, items.length]);
+
+  // Calculate totals
+  const totals = useMemo(() => {
+    let totalItems = 0;
+    let totalFabrics = 0;
+    let totalToOrder = 0;
+
+    items.forEach(item => {
+      if (item.item_type === 'fabric') {
+        // For fabrics, use qty_total
+        totalFabrics += item.qty_total || 0;
+        totalToOrder += item.to_order || 0;
+      } else {
+        // For items, use qty_total
+        totalItems += item.qty_total || 0;
+        totalToOrder += item.to_order || 0;
+      }
+    });
+
+    return {
+      totalItems,
+      totalFabrics,
+      totalToOrder,
+    };
+  }, [items]);
 
   const save = async () => {
     if (!bom.product_name.trim()) {
@@ -597,6 +844,25 @@ export function BomForm() {
     if (items.length === 0) {
       toast.error('At least one item is required');
       return;
+    }
+
+    // Check for duplicate BOM for the same product (only for new BOMs)
+    if (!bom.id) {
+      try {
+        const { data: existingBom, error: checkError } = await supabase
+          .from('bom_records')
+          .select('id, product_name')
+          .eq('product_name', bom.product_name as any)
+          .single();
+
+        if (existingBom && !checkError) {
+          toast.error(`BOM already exists for product "${bom.product_name}". Please edit the existing BOM instead.`);
+          return;
+        }
+      } catch (error) {
+        // If check fails, continue with creation
+        console.log('Duplicate check failed, continuing with creation');
+      }
     }
 
     try {
@@ -616,37 +882,68 @@ export function BomForm() {
 
       if (bomId) {
         // Update existing BOM
-        const { error: bomError } = await supabase
+        console.log('Updating existing BOM:', bomId);
+        
+        // Update BOM record in bom_records table
+        const result = await supabase
           .from('bom_records')
-          .update(bomData)
-          .eq('id', bomId);
+          .update(bomData as any)
+          .eq('id', bomId as any);
 
-        if (bomError) throw bomError;
+        if (result.error) {
+          console.error('Failed to update BOM record:', result.error);
+          throw new Error(`Failed to update BOM record: ${result.error.message}`);
+        } else {
+          console.log('Successfully updated BOM record');
+        }
 
-        // Delete existing items
-        await supabase
+        // Delete existing items from bom_record_items table
+        const deleteResult = await supabase
           .from('bom_record_items')
           .delete()
-          .eq('bom_id', bomId);
+          .eq('bom_id', bomId as any);
+        
+        if (deleteResult.error) {
+          console.error('Failed to delete existing BOM items:', deleteResult.error);
+          throw new Error(`Failed to delete existing BOM items: ${deleteResult.error.message}`);
+        } else {
+          console.log('Successfully deleted existing BOM items');
+        }
       } else {
         // Create new BOM
-        const { data: newBom, error: bomError } = await supabase
+        console.log('Creating new BOM with data:', bomData);
+        
+        // Create BOM record in bom_records table
+        const result = await supabase
           .from('bom_records')
-          .insert(bomData)
+          .insert(bomData as any)
           .select('id')
           .single();
 
-        if (bomError) throw bomError;
-        bomId = newBom.id;
+        if (result.error) {
+          console.error('Failed to create BOM record:', result.error);
+          throw new Error(`Failed to create BOM record: ${result.error.message}`);
+        } else {
+          bomId = (result.data as any).id;
+          console.log('Successfully created BOM record with ID:', bomId);
+        }
       }
 
              // Prepare BOM items data
        const bomItems = [];
        
        for (const item of items) {
+         console.log('Processing item for BOM save:', {
+           item_id: item.item_id,
+           item_name: item.item_name,
+           item_type: item.item_type,
+           item_code: item.item_code
+         });
+         
          const base = {
            bom_id: bomId,
-           item_id: item.item_id || null,
+           item_id: item.item_type === 'fabric' ? null : (item.item_id || null), // Set item_id to null for fabrics
+           item_code: item.item_code || null,
            item_name: item.item_name,
            category: item.item_type === 'fabric' ? 'Fabric' : item.item_category || 'Item',
            unit_of_measure: item.unit_of_measure || 'pcs',
@@ -656,22 +953,19 @@ export function BomForm() {
            to_order: item.to_order || 0,
          };
 
-                   // Add additional data for fabrics and items
-          if (item.item_type === 'fabric' && item.fabricSelections && item.fabricSelections.length > 0) {
-            // Create separate BOM items for each fabric variant
-            item.fabricSelections.forEach(selection => {
+         // For fabrics, use the main item data (not fabricSelections)
+         if (item.item_type === 'fabric') {
               bomItems.push({
                 ...base,
-                item_name: `${item.item_name} - ${selection.color || ''}, ${selection.gsm || ''} GSM`,
-                qty_total: selection.quantity || 0,
-                to_order: selection.quantity || 0
-              });
+             item_name: item.fabric_name ? `${item.fabric_name} - ${item.fabric_color || ''} - ${item.fabric_gsm || ''} GSM` : item.item_name,
+             qty_total: item.qty_total || 0,
+             to_order: item.to_order || 0
             });
           } else {
             // For items and products, use the main quantity
             bomItems.push({
               ...base,
-              qty_total: item.quantity || item.qty_total || 0,
+             qty_total: item.qty_total || 0,
               to_order: item.to_order || 0
             });
           }
@@ -679,15 +973,27 @@ export function BomForm() {
 
        // Insert BOM items
        if (bomItems.length > 0) {
-         const { error: itemsError } = await supabase
+        console.log('Attempting to save BOM items:', bomItems);
+        console.log('BOM ID:', bomId);
+        
+        // Try to save to bom_record_items (the correct table)
+        const result = await supabase
            .from('bom_record_items')
            .insert(bomItems);
 
-        if (itemsError) throw itemsError;
+        if (result.error) {
+          console.error('Failed to save BOM items:', result.error);
+          console.error('Error details:', JSON.stringify(result.error, null, 2));
+          throw new Error(`Failed to save BOM items: ${result.error.message}`);
+        } else {
+          console.log('Successfully saved BOM items to bom_record_items');
+        }
+      } else {
+        console.warn('No BOM items to save');
       }
 
       toast.success(bomId ? 'BOM updated successfully' : 'BOM created successfully');
-      navigate(`/procurement/bom/${bomId}`);
+      navigate(`/bom/${bomId}`);
     } catch (error) {
       console.error('Error saving BOM:', error);
       toast.error('Failed to save BOM');
@@ -695,101 +1001,6 @@ export function BomForm() {
       setLoading(false);
     }
   };
-
-  const handleItemTypeChange = (index: number, newType: BomLineItem['item_type']) => {
-    const item = items[index];
-    if (item.item_type === newType) return;
-
-    // Reset item data when type changes
-    const resetItem: BomLineItem = {
-      ...item,
-      item_type: newType,
-      item_id: '',
-      item_name: '',
-      quantity: 0,
-      qty_per_product: 0,
-      qty_total: 0,
-      stock: 0,
-      to_order: 0,
-      unit_of_measure: newType === 'fabric' ? 'Kgs' : 'pcs',
-      fabricSelections: newType === 'fabric' ? [{ color: '', gsm: '', quantity: 0 }] : undefined,
-      attributes: null,
-      selected_item_type: '',
-    };
-
-    updateItem(index, resetItem);
-  };
-
-  const handleItemSelection = (index: number, type: BomLineItem['item_type'], selectedId: string) => {
-    const item = items[index];
-    
-    let found: any = null;
-    let label = '';
-
-    if (type === 'fabric') {
-      found = fabricOptions.find(f => f.id === selectedId);
-      label = found?.label || '';
-    } else if (type === 'item') {
-      found = itemOptions.find(i => i.id === selectedId);
-      label = found?.label || '';
-    } else if (type === 'product') {
-      found = productOptions.find(p => p.id === selectedId);
-      label = found?.label || '';
-    }
-
-    if (found) {
-      updateItem(index, {
-        item_id: selectedId,
-        item_name: label,
-        item_image_url: found.image_url || null,
-      });
-
-      // Fetch additional attributes
-      fetchAndSetAttributes(index, type, selectedId);
-    }
-  };
-
-       // Recalculate fabric totals when BOM total order quantity changes
-  useEffect(() => {
-    items.forEach((item, index) => {
-      if (item.item_type === 'fabric' && item.fabricSelections && item.fabricSelections.length > 0) {
-        const totalQuantity = item.fabricSelections.reduce((sum, sel) => sum + (sel.quantity || 0), 0);
-        const qtyPerProduct = bom.total_order_qty > 0 ? totalQuantity / bom.total_order_qty : 0;
-        const toOrder = Math.max(totalQuantity - (item.stock || 0), 0);
-        
-        updateItem(index, {
-          qty_total: totalQuantity,
-          qty_per_product: qtyPerProduct,
-          to_order: toOrder
-        });
-      }
-    });
-  }, [bom.total_order_qty, items.length]);
-
-  // Calculate totals
-  const totals = useMemo(() => {
-    let totalItems = 0;
-    let totalFabrics = 0;
-    let totalToOrder = 0;
-
-    items.forEach(item => {
-      if (item.item_type === 'fabric') {
-        // For fabrics, sum up all fabric selections
-        const fabricTotal = (item.fabricSelections || []).reduce((sum, selection) => sum + (selection.quantity || 0), 0);
-        totalFabrics += fabricTotal;
-        totalToOrder += fabricTotal;
-      } else {
-        totalItems += item.qty_total || 0;
-        totalToOrder += item.to_order || 0;
-      }
-    });
-
-    return {
-      totalItems,
-      totalFabrics,
-      totalToOrder,
-    };
-  }, [items]);
 
   if (loading && !isEditMode) {
     return (
@@ -805,7 +1016,7 @@ export function BomForm() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="outline" size="sm" onClick={() => navigate('/procurement')}>
+            <Button variant="outline" size="sm" onClick={() => navigate('/bom')}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back
           </Button>
@@ -819,13 +1030,13 @@ export function BomForm() {
           </div>
         </div>
                  <div className="flex gap-2">
-           <Button variant="outline" onClick={() => navigate('/procurement')}>
+            <Button variant="outline" onClick={() => navigate('/bom')}>
              Cancel
            </Button>
            {isReadOnly && (
              <Button 
                variant="outline" 
-               onClick={() => navigate(`/procurement/bom/${id}?edit=1`)}
+                onClick={() => navigate(`/bom/${id}?edit=1`)}
              >
                Edit
              </Button>
@@ -834,59 +1045,6 @@ export function BomForm() {
              <Button onClick={save} disabled={loading}>
                <Save className="w-4 h-4 mr-2" />
                {loading ? 'Saving...' : 'Save BOM'}
-             </Button>
-           )}
-           {isReadOnly && items.length > 0 && (
-             <Button 
-               onClick={() => {
-                                   const bomData = encodeURIComponent(JSON.stringify({
-                    bomId: bom.id,
-                    items: items.flatMap(item => {
-                      if (item.item_type === 'fabric') {
-                        // For fabrics, create separate items for each fabric selection
-                        return (item.fabricSelections || []).map(fabricSelection => ({
-                          item_type: 'fabric',
-                          item_id: item.item_id || '',
-                          item_name: item.item_name,
-                          quantity: fabricSelection.quantity || 0,
-                          unit_price: 0,
-                          unit_of_measure: item.unit_of_measure || 'Kgs',
-                          item_image_url: item.item_image_url,
-                          fabricSelections: [{
-                            color: fabricSelection.color || '',
-                            gsm: fabricSelection.gsm || '',
-                            quantity: fabricSelection.quantity || 0
-                          }]
-                        }));
-                      } else {
-                        // For items, use the first item selection
-                        const itemSelection = item.itemSelections?.[0] || { id: '', label: '', quantity: 0, price: 0 };
-                        return [{
-                          item_type: 'item',
-                          item_id: item.item_id || '',
-                          item_name: item.item_name,
-                          quantity: item.to_order || item.qty_total,
-                          unit_price: 0,
-                          unit_of_measure: item.unit_of_measure || 'pcs',
-                          item_category: item.item_category || null,
-                          item_image_url: item.item_image_url,
-                          itemSelections: [{
-                            id: item.item_id || '',
-                            label: item.item_name,
-                            image_url: item.item_image_url,
-                            quantity: item.to_order || item.qty_total,
-                            price: 0
-                          }]
-                        }];
-                      }
-                    })
-                  }));
-                 navigate(`/procurement/po/new?bom=${bomData}`);
-               }}
-               className="bg-blue-600 hover:bg-blue-700"
-             >
-               <FileText className="w-4 h-4 mr-2" />
-               Create PO from BOM
              </Button>
            )}
          </div>
@@ -932,44 +1090,35 @@ export function BomForm() {
       </Card>
 
       {/* BOM Items */}
+        <div className="space-y-6">
+          {/* Fabric Section */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>BOM Items</CardTitle>
-            <div className="flex gap-2">
+                <CardTitle>Fabric</CardTitle>
+                {!isReadOnly && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => addItem('fabric')}
-                disabled={isReadOnly}
+                    className="rounded-full w-8 h-8 p-0"
               >
-                <Plus className="w-4 h-4 mr-2" />
-                Add Fabric
+                    <Plus className="w-4 h-4" />
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => addItem('item')}
-                disabled={isReadOnly}
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Add Item
-              </Button>
-            </div>
+                )}
           </div>
         </CardHeader>
         <CardContent>
-          {items.length === 0 ? (
+              {items.filter(item => item.item_type === 'fabric').length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              No items added yet. Add fabrics or items to create your BOM.
+                  No fabrics added yet. Click + to add fabric.
             </div>
           ) : (
             <div className="space-y-4">
-              {items.map((item, index) => (
-                <Card key={index} className="p-4">
-                  <div className="flex items-start gap-4">
-                    {/* Item Image */}
-                    <div className="w-16 h-16 bg-muted rounded overflow-hidden flex items-center justify-center">
+                  {items.filter(item => item.item_type === 'fabric').map((item, index) => (
+                    <div key={index} className="flex items-center gap-4 p-4 border rounded-lg">
+                      {/* Fabric Image */}
+                    <div className="w-20 h-20 bg-muted rounded overflow-hidden flex items-center justify-center">
                       {item.item_image_url ? (
                         <img src={item.item_image_url} className="w-full h-full object-cover" />
                       ) : (
@@ -977,341 +1126,264 @@ export function BomForm() {
                       )}
                     </div>
 
-                    {/* Item Details */}
-                    <div className="flex-1 space-y-3">
-                                                                     <div className="grid grid-cols-1 lg:grid-cols-4 md:grid-cols-2 gap-4">
-                          {/* Item Type */}
-                          <div className="relative z-10">
-                            <Label>Item Type</Label>
+                      {/* Fabric Details */}
+                      <div className="flex-1 grid grid-cols-6 gap-4 items-center">
+                        {/* Fabric Name */}
+                        <div>
+                          <Label className="text-sm font-medium">Fabric</Label>
+                          {item.is_prefilled ? (
+                            <div className="text-sm font-medium">
+                              {item.fabric_name || 'N/A'}
+                            </div>
+                          ) : (
                             <Select
-                              value={item.item_type}
-                              onValueChange={(value) => handleItemTypeChange(index, value as BomLineItem['item_type'])}
+                              value={fabricSelectionState[index]?.selectedFabricName || ''}
+                              onValueChange={(value) => handleFabricNameSelection(index, value)}
                               disabled={isReadOnly}
                             >
                               <SelectTrigger className="w-full">
-                                <SelectValue />
+                                <SelectValue placeholder="Select Fabric" />
                               </SelectTrigger>
-                              <SelectContent className="z-50">
-                                <SelectItem value="fabric">Fabric</SelectItem>
-                                <SelectItem value="item">Item</SelectItem>
-                                <SelectItem value="product">Product</SelectItem>
+                              <SelectContent>
+                                {getUniqueFabricNames().map(name => (
+                                  <SelectItem key={name} value={name}>
+                                    {name}
+                                  </SelectItem>
+                                ))}
                               </SelectContent>
                             </Select>
+                          )}
                           </div>
 
-                          {/* Item Type Selection (for items) */}
-                          {item.item_type === 'item' && (
-                            <div className="relative z-10">
-                              <Label>Select Item Type</Label>
+                        {/* Color */}
+                        <div>
+                          <Label className="text-sm font-medium">Color</Label>
+                          {item.is_prefilled ? (
+                            <div className="text-sm">
+                              {item.fabric_color || 'N/A'}
+                            </div>
+                          ) : (
                               <Select
-                                value={item.selected_item_type || ''}
-                                onValueChange={(value) => {
-                                  console.log('Selected item type:', value);
-                                  updateItem(index, { 
-                                    selected_item_type: value,
-                                    item_id: '',
-                                    item_name: ''
-                                  });
-                                }}
-                                disabled={isReadOnly}
+                              value={fabricSelectionState[index]?.selectedColor || ''}
+                              onValueChange={(value) => handleColorSelection(index, value)}
+                              disabled={isReadOnly || !fabricSelectionState[index]?.selectedFabricName}
                               >
                                 <SelectTrigger className="w-full">
-                                  <SelectValue placeholder="Select item type..." />
+                                <SelectValue placeholder="Select Color" />
                                 </SelectTrigger>
-                                                                 <SelectContent className="z-50" position="popper">
-                                   {console.log('Rendering item types dropdown with:', itemTypes)}
-                                   {itemTypes.length > 0 ? itemTypes.map(type => (
-                                     <SelectItem key={type} value={type}>
-                                       {type}
+                              <SelectContent>
+                                {(fabricSelectionState[index]?.availableColors || []).map(color => (
+                                  <SelectItem key={color} value={color}>
+                                    {color}
                                      </SelectItem>
-                                   )) : (
-                                     <SelectItem value="no-types" disabled>
-                                       No item types available
-                                     </SelectItem>
-                                   )}
+                                ))}
                                  </SelectContent>
                               </Select>
-                            </div>
                           )}
+                        </div>
 
-                          {/* Item Selection */}
-                          <div className="relative z-10">
-                            <Label>
-                              {item.item_type === 'fabric' ? 'Select Fabric' : 
-                               item.item_type === 'item' ? 'Select Item' : 'Select Product'}
-                            </Label>
+                        {/* GSM */}
+                        <div>
+                          <Label className="text-sm font-medium">Gsm</Label>
+                          {item.is_prefilled ? (
+                            <div className="text-sm">
+                              {item.fabric_gsm ? `${item.fabric_gsm} Gsm` : 'N/A'}
+                            </div>
+                          ) : (
                             <Select
-                              value={item.item_id}
-                              onValueChange={(value) => handleItemSelection(index, item.item_type, value)}
-                              disabled={isReadOnly || (item.item_type === 'item' && !item.selected_item_type)}
+                              value={item.fabric_gsm || ''}
+                              onValueChange={(value) => handleGsmSelection(index, value)}
+                              disabled={isReadOnly || !fabricSelectionState[index]?.selectedColor}
                             >
                               <SelectTrigger className="w-full">
-                                <SelectValue placeholder={
-                                  item.item_type === 'item' && !item.selected_item_type 
-                                    ? 'Select item type first...' 
-                                    : `Select ${item.item_type}...`
-                                } />
+                                <SelectValue placeholder="Select GSM" />
                               </SelectTrigger>
-                              <SelectContent className="z-50">
-                                {item.item_type === 'fabric' && fabricOptions.map(option => (
-                                  <SelectItem key={option.id} value={option.id}>
-                                    {option.label}
-                                  </SelectItem>
-                                ))}
-                                {item.item_type === 'item' && item.selected_item_type && 
-                                  getFilteredItems(item.selected_item_type).map(option => (
-                                    <SelectItem key={option.id} value={option.id}>
-                                      {option.label}
-                                    </SelectItem>
-                                  ))
-                                }
-                                {item.item_type === 'product' && productOptions.map(option => (
-                                  <SelectItem key={option.id} value={option.id}>
-                                    {option.label}
+                              <SelectContent>
+                                {(fabricSelectionState[index]?.availableGsm || []).map(gsm => (
+                                  <SelectItem key={gsm} value={gsm}>
+                                    {gsm} Gsm
                                   </SelectItem>
                                 ))}
                               </SelectContent>
                             </Select>
+                          )}
                           </div>
 
-                          {/* Item Name */}
+                        {/* Qty/Pc */}
                           <div>
-                            <Label>Item Name</Label>
+                          <Label className="text-sm font-medium">Qty/Pc</Label>
                             <Input
-                              value={item.item_name}
-                              onChange={(e) => updateItem(index, { item_name: e.target.value })}
-                              placeholder="Item name"
+                            type="number"
+                            value={item.qty_per_product}
+                            onChange={(e) => handleQtyPerProductChange(index, e.target.value)}
+                            placeholder="0"
                               disabled={isReadOnly}
-                              className="w-full"
-                            />
+                            className="w-20"
+                          />
+                        </div>
+
+                        {/* UOM */}
+                        <div>
+                          <Label className="text-sm font-medium">UOM</Label>
+                          <div className="text-sm">
+                            {item.unit_of_measure || 'Kgs'}
                           </div>
                         </div>
 
-                       {/* Fabric Selections for Fabric Items - Moved here */}
-                       {item.item_type === 'fabric' && item.fabricSelections && item.fabricSelections.length > 0 && (
+                        {/* Total Required */}
                          <div>
-                           <div className="flex items-center justify-between mb-2">
-                             <Label>Fabric Variants</Label>
+                          <Label className="text-sm font-medium">Total Required</Label>
+                          <div className="text-sm font-medium">
+                            {item.qty_total} {item.unit_of_measure || 'Kgs'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Remove Button */}
                              {!isReadOnly && (
                                <Button
-                                 type="button"
                                  variant="outline"
                                  size="sm"
-                                 onClick={() => {
-                                   const newSelections = [...(item.fabricSelections || []), { color: '', gsm: '', quantity: 0 }];
-                                   updateItem(index, { fabricSelections: newSelections });
-                                 }}
-                               >
-                                 <Plus className="w-4 h-4 mr-1" />
-                                 Add Variant
+                          onClick={() => removeItem(index)}
+                          className="text-red-600 hover:text-red-700"
+                        >
+                          <Trash2 className="w-4 h-4" />
                                </Button>
                              )}
                            </div>
-                           <div className="space-y-2">
-                             {item.fabricSelections.map((selection, selIndex) => (
-                               <div key={selIndex} className="grid grid-cols-4 gap-2 p-2 border rounded">
-                                 {/* Color Dropdown */}
-                                 <Select
-                                   value={selection.color}
-                                   onValueChange={(value) => {
-                                     const newSelections = [...(item.fabricSelections || [])];
-                                     newSelections[selIndex] = { ...selection, color: value };
-                                     updateItem(index, { fabricSelections: newSelections });
-                                   }}
-                                   disabled={isReadOnly}
-                                 >
-                                   <SelectTrigger>
-                                     <SelectValue placeholder="Select Color" />
-                                   </SelectTrigger>
-                                                                       <SelectContent>
-                                      {console.log('Colors list:', item.attributes?.colorsList)}
-                                      {(item.attributes?.colorsList || []).map((color: string) => (
-                                        <SelectItem key={color} value={color}>
-                                          {color}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                 </Select>
-                                 
-                                 {/* GSM Dropdown */}
-                                 <Select
-                                   value={selection.gsm}
-                                   onValueChange={(value) => {
-                                     const newSelections = [...(item.fabricSelections || [])];
-                                     newSelections[selIndex] = { ...selection, gsm: value };
-                                     updateItem(index, { fabricSelections: newSelections });
-                                   }}
-                                   disabled={isReadOnly}
-                                 >
-                                   <SelectTrigger>
-                                     <SelectValue placeholder="Select GSM" />
-                                   </SelectTrigger>
-                                                                       <SelectContent>
-                                      {console.log('GSM list:', item.attributes?.gsmList)}
-                                      {(item.attributes?.gsmList || []).map((gsm: string) => (
-                                        <SelectItem key={gsm} value={gsm}>
-                                          {gsm}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                 </Select>
-                                 
-                                                                   {/* Quantity Input */}
-                                  <Input
-                                    type="number"
-                                    placeholder="Qty"
-                                    value={selection.quantity}
-                                    onChange={(e) => {
-                                      const newSelections = [...(item.fabricSelections || [])];
-                                      newSelections[selIndex] = { ...selection, quantity: parseFloat(e.target.value) || 0 };
-                                      
-                                      // Calculate totals automatically
-                                      const totalQuantity = newSelections.reduce((sum, sel) => sum + (sel.quantity || 0), 0);
-                                      const qtyPerProduct = bom.total_order_qty > 0 ? totalQuantity / bom.total_order_qty : 0;
-                                      const toOrder = Math.max(totalQuantity - (item.stock || 0), 0);
-                                      
-                                      updateItem(index, { 
-                                        fabricSelections: newSelections,
-                                        qty_total: totalQuantity,
-                                        qty_per_product: qtyPerProduct,
-                                        to_order: toOrder
-                                      });
-                                    }}
-                                    disabled={isReadOnly}
-                                  />
-                                 
-                                 {/* Remove Button */}
-                                 {!isReadOnly && item.fabricSelections && item.fabricSelections.length > 1 && (
-                                                                       <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => {
-                                        const newSelections = item.fabricSelections?.filter((_, i) => i !== selIndex) || [];
-                                        
-                                        // Recalculate totals after removing variant
-                                        const totalQuantity = newSelections.reduce((sum, sel) => sum + (sel.quantity || 0), 0);
-                                        const qtyPerProduct = bom.total_order_qty > 0 ? totalQuantity / bom.total_order_qty : 0;
-                                        const toOrder = Math.max(totalQuantity - (item.stock || 0), 0);
-                                        
-                                        updateItem(index, { 
-                                          fabricSelections: newSelections,
-                                          qty_total: totalQuantity,
-                                          qty_per_product: qtyPerProduct,
-                                          to_order: toOrder
-                                        });
-                                      }}
-                                      className="text-red-600 hover:text-red-700"
-                                    >
-                                     <X className="w-4 h-4" />
-                                   </Button>
-                                 )}
-                               </div>
-                             ))}
-                           </div>
-                         </div>
-                       )}
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-                                               {/* Quantity and Stock Fields */}
-                        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-                          {/* Quantity */}
+          {/* Items Section */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle>Items</CardTitle>
+                {!isReadOnly && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => addItem('item')}
+                    className="rounded-full w-8 h-8 p-0"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {items.filter(item => item.item_type === 'item').length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  No items added yet. Click + to add item.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {items.map((item, index) => {
+                    if (item.item_type !== 'item') return null;
+                    return (
+                    <div key={index} className="flex items-center gap-4 p-4 border rounded-lg">
+                      {/* Item Image */}
+                      <div className="w-20 h-20 bg-muted rounded overflow-hidden flex items-center justify-center">
+                        {item.item_image_url ? (
+                          <img src={item.item_image_url} className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="text-xs text-muted-foreground">IMG</span>
+                        )}
+                      </div>
+
+                      {/* Item Details */}
+                      <div className="flex-1 grid grid-cols-6 gap-4 items-center">
+                        {/* Item Types */}
+                        <div>
+                          <Label className="text-sm font-medium">Item Types</Label>
+                                 <Select
+                            value={item.selected_item_type || ''}
+                                   onValueChange={(value) => {
+                              updateItem(index, { 
+                                selected_item_type: value,
+                                item_id: '',
+                                item_name: ''
+                              });
+                                   }}
+                                   disabled={isReadOnly}
+                                 >
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Select type..." />
+                                   </SelectTrigger>
+                                                                       <SelectContent>
+                              {itemTypes.map(type => (
+                                <SelectItem key={type} value={type}>
+                                  {type}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                 </Select>
+                        </div>
+                                 
+                        {/* Item Name */}
+                        <div>
+                          <Label className="text-sm font-medium">Item Name</Label>
+                                 <Select
+                            value={item.item_id}
+                            onValueChange={(value) => handleItemSelection(index, 'item', value)}
+                            disabled={isReadOnly || !item.selected_item_type}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Select item..." />
+                                   </SelectTrigger>
+                                                                       <SelectContent>
+                              {item.selected_item_type && getFilteredItems(item.selected_item_type).map(option => (
+                                <SelectItem key={option.id} value={option.id}>
+                                  {option.label}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                 </Select>
+                               </div>
+
+                        {/* Qty/Pc */}
                           <div>
-                            <Label>Quantity</Label>
+                          <Label className="text-sm font-medium">Qty/Pc</Label>
                             <Input
                               type="number"
-                              value={item.quantity}
+                            value={item.qty_per_product}
                               onChange={(e) => {
-                                const quantity = parseFloat(e.target.value) || 0;
-                                const qtyPerProduct = bom.total_order_qty > 0 ? quantity / bom.total_order_qty : 0;
-                                const toOrder = Math.max(quantity - (item.stock || 0), 0);
+                              const qtyPerProduct = parseFloat(e.target.value) || 1; // Default to 1 instead of 0
+                              const qtyTotal = qtyPerProduct * bom.total_order_qty;
+                              const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
                                 updateItem(index, { 
-                                  quantity: quantity,
-                                  qty_total: quantity,
                                   qty_per_product: qtyPerProduct,
+                                qty_total: qtyTotal,
                                   to_order: toOrder
                                 });
                               }}
-                              placeholder="0"
+                              placeholder="1"
                               disabled={isReadOnly}
+                            className="w-20"
                             />
                           </div>
 
-                          {/* Quantity per Product */}
+                        {/* UOM */}
                           <div>
-                            <Label>Qty per Product</Label>
-                            <Input
-                              type="number"
-                              value={item.qty_per_product}
-                              placeholder="0"
-                              disabled={true}
-                              className="bg-muted"
-                            />
+                          <Label className="text-sm font-medium">UOM</Label>
+                          <div className="text-sm">
+                            {item.unit_of_measure || 'Pcs'}
+                          </div>
                           </div>
 
-                          {/* Total Quantity */}
-                          <div>
-                            <Label>Total Qty</Label>
-                            <Input
-                              type="number"
-                              value={item.qty_total}
-                              placeholder="0"
-                              disabled={true}
-                              className="bg-muted"
-                            />
-                          </div>
-
-                         {/* Stock */}
+                        {/* Total Required */}
                          <div>
-                           <Label>In Stock</Label>
-                           <Input
-                             type="number"
-                             value={item.stock}
-                             onChange={(e) => {
-                               const stock = parseFloat(e.target.value) || 0;
-                               const toOrder = Math.max((item.qty_total || 0) - stock, 0);
-                               updateItem(index, { stock, to_order: toOrder });
-                             }}
-                             placeholder="0"
-                             disabled={isReadOnly}
-                           />
-                         </div>
-
-                                                   {/* To Order */}
-                          <div>
-                            <Label>To Order</Label>
-                            <Input
-                              type="number"
-                              value={item.to_order}
-                              placeholder="0"
-                              disabled={true}
-                              className="font-semibold text-blue-600 bg-muted"
-                            />
+                          <Label className="text-sm font-medium">Total Required</Label>
+                          <div className="text-sm font-medium">
+                            {item.qty_total} {item.unit_of_measure || 'Pcs'}
                           </div>
                         </div>
 
-                       {/* Unit of Measure */}
-                       <div>
-                         <Label>Unit of Measure</Label>
-                         <Input
-                           value={item.unit_of_measure}
-                           onChange={(e) => updateItem(index, { unit_of_measure: e.target.value })}
-                           placeholder="pcs, kgs, mtr, etc."
-                           disabled={isReadOnly}
-                         />
-                       </div>
-
-                      
-
-                      {/* Notes */}
-                      <div>
-                        <Label>Notes</Label>
-                        <Textarea
-                          value={item.notes || ''}
-                          onChange={(e) => updateItem(index, { notes: e.target.value })}
-                          placeholder="Additional notes..."
-                          disabled={isReadOnly}
-                        />
-                      </div>
+                        {/* Empty column for alignment */}
+                        <div></div>
                     </div>
 
                     {/* Remove Button */}
@@ -1326,12 +1398,13 @@ export function BomForm() {
                       </Button>
                     )}
                   </div>
-                </Card>
-              ))}
+                    );
+                  })}
             </div>
           )}
         </CardContent>
       </Card>
+        </div>
 
       {/* Summary */}
       {items.length > 0 && (

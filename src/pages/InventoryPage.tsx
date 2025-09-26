@@ -5,7 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Package, AlertTriangle, CheckCircle, TrendingDown, Grid, Ruler } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { ProductCategoryManager } from "@/components/inventory/ProductCategoryManager";
-import { FabricManager } from "@/components/inventory/FabricManager";
+import { FabricManagerNew } from "@/components/inventory/FabricManagerNew";
 import { SizeTypeManager } from "@/components/inventory/SizeTypeManager";
 
 const InventoryPage = () => {
@@ -122,7 +122,7 @@ const InventoryPage = () => {
           </TabsContent>
 
           <TabsContent value="fabrics" className="space-y-6">
-            <FabricManager />
+            <FabricManagerNew />
           </TabsContent>
 
           <TabsContent value="sizes" className="space-y-6">

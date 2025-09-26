@@ -22,6 +22,8 @@ interface Order {
   total_amount: number;
   final_amount: number;
   advance_amount?: number;
+  total_receipts?: number;
+  pending_amount?: number;
   customer: {
     company_name: string;
     contact_person?: string;
@@ -90,17 +92,39 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
       const ordersWithBom = new Set((bomRecords || []).map((bom: any) => bom.order_id));
       console.log('Orders with BOMs:', Array.from(ordersWithBom));
       
-      // Get all receipts linked to orders
+      // Get all receipts linked to orders with amounts
       const { data: receiptRecords, error: receiptError } = await supabase
         .from('receipts')
-        .select('reference_id, reference_number, reference_type')
+        .select('reference_id, reference_number, reference_type, amount')
         .eq('reference_type', 'order' as any);
       
       if (receiptError) throw receiptError;
       
       console.log('All receipt records:', receiptRecords);
       
-      // Create sets for both reference_id and reference_number matching
+      // Create a map to store total receipts per order (by both ID and number)
+      const orderReceiptTotals = new Map<string, number>();
+      
+      // Process receipts and sum amounts by order
+      (receiptRecords || []).forEach((receipt: any) => {
+        const amount = Number(receipt.amount) || 0;
+        
+        // Add to total by order ID
+        if (receipt.reference_id) {
+          const currentTotal = orderReceiptTotals.get(receipt.reference_id) || 0;
+          orderReceiptTotals.set(receipt.reference_id, currentTotal + amount);
+        }
+        
+        // Add to total by order number
+        if (receipt.reference_number) {
+          const currentTotal = orderReceiptTotals.get(receipt.reference_number) || 0;
+          orderReceiptTotals.set(receipt.reference_number, currentTotal + amount);
+        }
+      });
+      
+      console.log('Order receipt totals:', Object.fromEntries(orderReceiptTotals));
+      
+      // Create sets for orders that have receipts
       const ordersWithReceiptsById = new Set((receiptRecords || []).map((receipt: any) => receipt.reference_id));
       const ordersWithReceiptsByNumber = new Set((receiptRecords || []).map((receipt: any) => receipt.reference_number));
       
@@ -142,21 +166,23 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
         return hasReceipt && !hasBom;
       });
       
-      console.log('Eligible orders (with receipts, without BOMs):', eligibleOrders.length);
-      console.log('Eligible orders details:', eligibleOrders);
+      // Add receipt totals to each order for pending amount calculation
+      const ordersWithReceiptTotals = eligibleOrders.map((order: any) => {
+        const totalReceiptsById = orderReceiptTotals.get(order.id) || 0;
+        const totalReceiptsByNumber = orderReceiptTotals.get(order.order_number) || 0;
+        const totalReceipts = Math.max(totalReceiptsById, totalReceiptsByNumber); // Use the higher value
+        
+        return {
+          ...order,
+          total_receipts: totalReceipts,
+          pending_amount: (order.final_amount || order.total_amount) - totalReceipts
+        };
+      });
       
-      // Check specifically for the order from the image
-      const targetOrder = (allOrders || []).find((order: any) => order.order_number === 'TUC/25-26/SEP/004');
-      if (targetOrder) {
-        console.log('Found target order TUC/25-26/SEP/004:', targetOrder);
-        const hasReceiptById = ordersWithReceiptsById.has((targetOrder as any).id);
-        const hasReceiptByNumber = ordersWithReceiptsByNumber.has((targetOrder as any).order_number);
-        console.log('Target order receipt check:', { hasReceiptById, hasReceiptByNumber, orderId: (targetOrder as any).id, orderNumber: (targetOrder as any).order_number });
-      } else {
-        console.log('Target order TUC/25-26/SEP/004 NOT FOUND in orders');
-      }
+      console.log('Eligible orders (with receipts, without BOMs):', ordersWithReceiptTotals.length);
+      console.log('Eligible orders details:', ordersWithReceiptTotals);
       
-      setOrders(eligibleOrders as unknown as Order[]);
+      setOrders(ordersWithReceiptTotals as unknown as Order[]);
     } catch (error) {
       console.error('Error fetching orders without BOM:', error);
     } finally {
@@ -190,9 +216,64 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
     }
   };
 
+  // Calculate totals
+  const totals = filteredOrders.reduce((acc, order) => {
+    const totalAmount = order.final_amount || order.total_amount;
+    const pendingAmount = order.pending_amount || (totalAmount - (order.advance_amount || 0));
+    acc.totalAmount += totalAmount;
+    acc.pendingAmount += pendingAmount;
+    return acc;
+  }, { totalAmount: 0, pendingAmount: 0 });
+
   return (
-    <Card>
-      <CardHeader>
+    <div className="space-y-4">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Total Orders</p>
+                <p className="text-2xl font-bold">{filteredOrders.length}</p>
+              </div>
+              <div className="h-8 w-8 bg-blue-100 rounded-full flex items-center justify-center">
+                <span className="text-blue-600 text-sm font-bold">{filteredOrders.length}</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Total Amount</p>
+                <p className="text-2xl font-bold text-green-600">{formatCurrency(totals.totalAmount)}</p>
+              </div>
+              <div className="h-8 w-8 bg-green-100 rounded-full flex items-center justify-center">
+                <span className="text-green-600 text-sm font-bold">₹</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Pending Amount</p>
+                <p className="text-2xl font-bold text-orange-600">{formatCurrency(totals.pendingAmount)}</p>
+              </div>
+              <div className="h-8 w-8 bg-orange-100 rounded-full flex items-center justify-center">
+                <span className="text-orange-600 text-sm font-bold">₹</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
           <CardTitle className="flex items-center gap-2">
             <Package className="w-5 h-5" />
@@ -298,7 +379,8 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
                   <TableHead>Order #</TableHead>
                   <TableHead>Customer</TableHead>
                   <TableHead>Products</TableHead>
-                  <TableHead>Total Amount</TableHead>
+                  <TableHead className="text-right">Total Amount</TableHead>
+                  <TableHead className="text-right">Pending Amount</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Order Date</TableHead>
                   <TableHead>Delivery Date</TableHead>
@@ -344,14 +426,14 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
                         )}
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <div className="text-right">
-                        <div className="font-medium">{formatCurrency(order.final_amount || order.total_amount)}</div>
-                        {order.advance_amount && order.advance_amount > 0 && (
-                          <div className="text-xs text-muted-foreground">
-                            Advance: {formatCurrency(order.advance_amount)}
-                          </div>
-                        )}
+                    <TableCell className="text-right">
+                      <div className="font-medium text-green-600">
+                        {formatCurrency(order.final_amount || order.total_amount)}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="font-medium text-orange-600">
+                        {formatCurrency(order.pending_amount || ((order.final_amount || order.total_amount) - (order.advance_amount || 0)))}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -405,6 +487,7 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
         )}
       </CardContent>
     </Card>
+    </div>
   );
 }
 
@@ -413,7 +496,7 @@ export function BomTabsPage() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const handleCreateBom = (orderId: string) => {
-    navigate(`/procurement/bom/new?order=${orderId}`);
+    navigate(`/bom/new?order=${orderId}`);
   };
 
   const handleRefresh = () => {
@@ -435,7 +518,7 @@ export function BomTabsPage() {
             <Search className="w-4 h-4 mr-2" /> Refresh
           </Button>
           <Button 
-            onClick={() => navigate('/procurement/bom/new')} 
+            onClick={() => navigate('/bom/new')} 
             className="bg-emerald-600 hover:bg-emerald-700"
           >
             <Plus className="w-4 h-4 mr-2" /> Create New BOM

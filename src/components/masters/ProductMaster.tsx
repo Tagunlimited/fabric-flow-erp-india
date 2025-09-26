@@ -68,7 +68,7 @@ export function ProductMaster() {
       }
       
       console.log('Sample product data:', data);
-      setProducts(data || []);
+      setProducts((data as any) || []);
     } catch (error) {
       console.error('Error fetching products:', error);
       toast.error('Failed to fetch products');
@@ -116,8 +116,8 @@ export function ProductMaster() {
       if (editingProduct) {
         const { error } = await supabase
           .from('product_master')
-          .update(productData)
-          .eq('id', editingProduct.id);
+          .update(productData as any)
+          .eq('id', editingProduct.id as any);
         
         if (error) {
           if (error.code === '23505') {
@@ -130,7 +130,7 @@ export function ProductMaster() {
       } else {
         const { error } = await supabase
           .from('product_master')
-          .insert([productData]);
+          .insert([productData] as any);
         
         if (error) {
           if (error.code === '23505') {
@@ -199,7 +199,7 @@ export function ProductMaster() {
       const { error } = await supabase
         .from('product_master')
         .delete()
-        .eq('id', id);
+        .eq('id', id as any);
       
       if (error) throw error;
       toast.success('Product deleted successfully!');
@@ -500,7 +500,7 @@ export function ProductMaster() {
 
         const { error } = await supabase
           .from('product_master')
-          .insert([productData]);
+          .insert([productData] as any);
 
         if (error) {
           if (error.code === '23505') {

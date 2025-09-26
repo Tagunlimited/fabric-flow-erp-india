@@ -275,8 +275,8 @@ export default function OrderDetailPage() {
         
         if (fabricIds.length > 0) {
           const { data: fabricsData } = await supabase
-            .from('fabrics')
-            .select('id, name')
+            .from('fabric_master')
+            .select('id, fabric_name')
             .in('id', fabricIds);
           
           if (fabricsData) {

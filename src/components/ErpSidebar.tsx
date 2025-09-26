@@ -44,6 +44,7 @@ interface SidebarItem {
 }
 
 
+
 function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0): SidebarItem[] {
   return [
     { title: "Dashboard", url: "/", icon: Home },
@@ -62,6 +63,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       children: [
         { title: "Custom Orders", url: "/orders", icon: ShoppingCart },
         { title: "Stock Orders", url: "/stock-orders", icon: Shirt }
+        
       ]
     },
     {
@@ -79,7 +81,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       title: "Procurement",
       icon: ShoppingBag,
       children: [
-        { title: "Bills of Materials", url: "/procurement/bom", icon: ClipboardList },
+        { title: "Bills of Materials", url: "/bom", icon: ClipboardList },
         { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingBag },
         { title: "Goods Receipt Note", url: "/procurement/grn", icon: ClipboardList },
         { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
@@ -93,7 +95,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       badgeColor: "bg-inventory",
       children: [
         { title: "Dashboard", url: "/inventory", icon: BarChart3 },
-        { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList }
+        { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList },
+        { title: "Warehouse Inventory", url: "/warehouse/inventory", icon: Building }
       ]
     },
     {

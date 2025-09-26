@@ -331,7 +331,7 @@ export async function getInventory(): Promise<Inventory[]> {
 
 export async function getFabrics(): Promise<Fabrics[]> {
   const { data, error } = await supabase
-    .from('fabrics')
+    .from('fabric_master')
     .select('*')
     .order('created_at', { ascending: false });
 

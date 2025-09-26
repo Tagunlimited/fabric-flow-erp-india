@@ -14,11 +14,13 @@ import CustomersPage from "./pages/crm/CustomersPage";
 import CustomerDetailPage from "./pages/crm/CustomerDetailPage";
 import ProductCategoriesPage from "./pages/inventory/ProductCategoriesPage";
 import SizeTypesPage from "./pages/inventory/SizeTypesPage";
-import FabricsPage from "./pages/inventory/FabricsPage";
+// import FabricsPage from "./pages/inventory/FabricsPage"; // Removed - using new FabricManagerNew
+import { FabricManagerNew } from "./components/inventory/FabricManagerNew";
 import MastersPage from "./pages/masters/MastersPage";
 import ProductMasterPage from "./pages/masters/ProductMasterPage";
 import ItemMasterPage from "./pages/masters/ItemMasterPage";
 import WarehouseMasterPage from "./pages/masters/WarehouseMasterPage";
+import WarehouseInventoryPage from "./pages/warehouse/WarehouseInventoryPage";
 import CustomerTypeMasterPage from "./pages/masters/CustomerTypeMasterPage";
 import SupplierMasterPage from "./pages/masters/SupplierMasterPage";
 import NotFound from "./pages/NotFound";
@@ -39,6 +41,9 @@ import PurchaseOrderListPage from "./pages/procurement/PurchaseOrderListPage";
 import PurchaseOrderFormPage from "./pages/procurement/PurchaseOrderFormPage";
 import BomListPage from "./pages/procurement/BomListPage";
 import { BomForm } from "./components/purchase-orders/BomForm";
+import { BomCreator } from "./components/purchase-orders/BomCreator";
+import { GRNList } from "./components/goods-receipt-notes/GRNList";
+import { GRNForm } from "./components/goods-receipt-notes/GRNForm";
 import CompanyConfigPage from "./pages/admin/CompanyConfigPage";
 import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
@@ -58,19 +63,21 @@ import { CompanySettingsProvider } from "@/hooks/CompanySettingsContext";
 import EmployeeAccessManagementPage from "./pages/admin/EmployeeAccessManagement";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
 import { useEffect } from "react";
+import { ErpLayout } from "@/components/ErpLayout";
 
 function useDynamicFavicon() {
   const { config } = useCompanySettings();
   useEffect(() => {
-    if (config?.favicon_url) {
-      let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
-      if (!link) {
-        link = document.createElement('link');
-        link.rel = 'icon';
-        document.head.appendChild(link);
-      }
-      link.href = config.favicon_url;
+    // Always set favicon from company settings, with fallback to default
+    const faviconUrl = config?.favicon_url || '/favicon.ico';
+    
+    let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
     }
+    link.href = faviconUrl;
   }, [config?.favicon_url]);
 }
 
@@ -145,7 +152,9 @@ const App = () => {
                 } />
                 <Route path="/inventory/fabrics" element={
                   <ProtectedRoute>
-                    <FabricsPage />
+                    <ErpLayout>
+                      <FabricManagerNew />
+                    </ErpLayout>
                   </ProtectedRoute>
                 } />
                 <Route path="/inventory/size-types" element={
@@ -173,6 +182,11 @@ const App = () => {
                 <Route path="/masters/warehouses" element={
                   <ProtectedRoute>
                     <WarehouseMasterPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/warehouse/inventory" element={
+                  <ProtectedRoute>
+                    <WarehouseInventoryPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/masters/customer-types" element={
@@ -231,19 +245,49 @@ const App = () => {
                     <PurchaseOrderFormPage />
                   </ProtectedRoute>
                 } />
-                <Route path="/procurement/bom" element={
+                <Route path="/bom" element={
                   <ProtectedRoute>
                     <BomListPage />
                   </ProtectedRoute>
                 } />
-                <Route path="/procurement/bom/new" element={
+                <Route path="/bom/create" element={
+                  <ProtectedRoute>
+                    <ErpLayout>
+                      <BomCreator />
+                    </ErpLayout>
+                  </ProtectedRoute>
+                } />
+                <Route path="/bom/new" element={
                   <ProtectedRoute>
                     <BomForm />
                   </ProtectedRoute>
                 } />
-                <Route path="/procurement/bom/:id" element={
+                <Route path="/bom/:id" element={
                   <ProtectedRoute>
                     <BomForm />
+                  </ProtectedRoute>
+                } />
+                
+                {/* GRN Routes */}
+                <Route path="/procurement/grn" element={
+                  <ProtectedRoute>
+                    <ErpLayout>
+                      <GRNList />
+                    </ErpLayout>
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/grn/new" element={
+                  <ProtectedRoute>
+                    <ErpLayout>
+                      <GRNForm />
+                    </ErpLayout>
+                  </ProtectedRoute>
+                } />
+                <Route path="/procurement/grn/:id" element={
+                  <ProtectedRoute>
+                    <ErpLayout>
+                      <GRNForm />
+                    </ErpLayout>
                   </ProtectedRoute>
                 } />
                 <Route path="/quality" element={

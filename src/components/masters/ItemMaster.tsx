@@ -351,12 +351,12 @@ export function ItemMaster() {
 
       const fileExt = file.name.split('.').pop() || 'jpg';
       const fileName = `item-${Date.now()}.${fileExt}`;
-      const filePath = fileName; // Upload directly to bucket root
+      const filePath = `items/${fileName}`; // Upload to items folder for better organization
 
       console.log('Uploading to path:', filePath);
 
       const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('item-images')
+        .from('company-assets')
         .upload(filePath, file, {
           cacheControl: '3600',
           upsert: false
@@ -374,6 +374,10 @@ export function ItemMaster() {
           alert('A file with this name already exists. Please try again.');
         } else if (uploadError.message.includes('not found')) {
           alert('Storage bucket not found. Please contact administrator.');
+        } else if (uploadError.message.includes('permission')) {
+          alert('Permission denied. Please check your storage permissions.');
+        } else if (uploadError.message.includes('size')) {
+          alert('File size exceeds the limit. Please choose a smaller image.');
         } else {
           alert(`Upload failed: ${uploadError.message}`);
         }
@@ -383,7 +387,7 @@ export function ItemMaster() {
       console.log('Upload successful, data:', uploadData);
 
       const { data: urlData, error: urlError } = supabase.storage
-        .from('item-images')
+        .from('company-assets')
         .getPublicUrl(filePath);
 
       if (urlError) {
@@ -911,21 +915,24 @@ export function ItemMaster() {
                                     }}
                                     onError={(e) => {
                                       console.log('Image failed to load for', item.item_name, ':', imageUrl);
-                                      console.log('This is likely due to storage bucket permissions');
+                                      console.log('This is likely due to storage bucket permissions or invalid URL');
                                       // Hide the broken image and show error message
                                       const target = e.target as HTMLImageElement;
                                       target.style.display = 'none';
                                       
+                                      // Check if it's a storage URL vs external URL
+                                      const isStorageUrl = imageUrl.includes('supabase') || imageUrl.includes('storage');
+                                      const errorMessage = isStorageUrl 
+                                        ? 'Image not accessible<br/>Check storage permissions'
+                                        : 'Image not accessible<br/>Check URL validity';
+                                      
                                       // Show error message
                                       const errorDiv = document.createElement('div');
                                       errorDiv.className = 'text-xs text-red-500 text-center p-2';
-                                      errorDiv.innerHTML = 'Image not accessible<br/>Check storage permissions';
+                                      errorDiv.innerHTML = errorMessage;
                                       target.parentNode?.appendChild(errorDiv);
                                     }}
                                   />
-                                  {/* <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-1 text-center">
-                                    Storage Issue
-                                  </div> */}
                                 </div>
                               );
                             } else {
