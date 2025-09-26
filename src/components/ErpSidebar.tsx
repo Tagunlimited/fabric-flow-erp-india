@@ -94,9 +94,10 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       badge: "500",
       badgeColor: "bg-inventory",
       children: [
-        { title: "Dashboard", url: "/inventory", icon: BarChart3 },
-        { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList },
-        { title: "Warehouse Inventory", url: "/warehouse/inventory", icon: Building }
+        { title: "Dashboard", url: "/warehouse/inventory", icon: Building },
+        // { title: "Dashboard", url: "/inventory", icon: BarChart3 },
+        // { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList }
+        
       ]
     },
     {

@@ -758,9 +758,25 @@ const GRNForm = () => {
       
       // Update inventory when GRN is approved or partially approved
       if (newStatus === 'approved' || newStatus === 'partially_approved') {
+        // Server-side trigger will insert into warehouse_inventory.
+        // Client-side, ensure idempotency: do not double-insert.
         const approvedItems = grnItems.filter(item => item.quality_status === 'approved');
         if (approvedItems.length > 0) {
-          await updateInventory(approvedItems);
+          try {
+            const { data: existingInventory } = await supabase
+              .from('warehouse_inventory')
+              .select('grn_item_id')
+              .in('grn_item_id', approvedItems.map(i => i.id as any));
+
+            const existingSet = new Set((existingInventory || []).map((r: any) => r.grn_item_id));
+            const missing = approvedItems.filter(i => i.id && !existingSet.has(i.id));
+
+            if (missing.length > 0) {
+              await updateInventory(missing);
+            }
+          } catch (e) {
+            console.warn('Skipping client-side inventory insert; DB trigger should handle it.', e);
+          }
         }
       }
       

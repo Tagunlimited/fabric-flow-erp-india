@@ -55,6 +55,25 @@ export interface WarehouseInventory {
       };
     };
   };
+  grn_item?: {
+    fabric_color?: string | null;
+    fabric_gsm?: string | null;
+    fabric_name?: string | null;
+    item_color?: string | null;
+    item_name?: string | null;
+    item_image_url?: string | null;
+    unit_of_measure?: string | null;
+    received_quantity?: number | null;
+    approved_quantity?: number | null;
+    rejected_quantity?: number | null;
+    gst_rate?: number | null;
+    gst_amount?: number | null;
+    line_total?: number | null;
+    batch_number?: string | null;
+    expiry_date?: string | null;
+    condition_notes?: string | null;
+    inspection_notes?: string | null;
+  };
 }
 
 export interface InventoryMovement {

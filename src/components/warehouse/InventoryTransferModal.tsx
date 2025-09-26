@@ -42,7 +42,7 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
   const loadAvailableBins = async () => {
     try {
       const { data, error } = await supabase
-        .from('bins')
+        .from('bins' as any)
         .select(`
           id,
           bin_code,
@@ -61,12 +61,12 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
             )
           )
         `)
-        .eq('location_type', 'STORAGE')
-        .eq('is_active', true)
+        .eq('location_type', 'STORAGE' as any)
+        .eq('is_active', true as any)
         .order('bin_code');
 
       if (error) throw error;
-      setAvailableBins(data || []);
+      setAvailableBins(((data as unknown) as Bin[]) || []);
     } catch (error) {
       console.error('Error loading bins:', error);
       toast.error('Failed to load available storage bins');
@@ -101,7 +101,7 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
 
       // Start a transaction
       const { data: transferData, error: transferError } = await supabase
-        .from('inventory_movements')
+        .from('inventory_movements' as any)
         .insert({
           inventory_id: inventory.id,
           from_bin_id: inventory.bin_id,
@@ -110,26 +110,63 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
           movement_type: 'TRANSFER',
           reason: reason || 'Transfer to storage',
           notes: notes
-        })
+        } as any)
         .select()
         .single();
 
       if (transferError) throw transferError;
 
-      // Update inventory status and location
-      const { error: updateError } = await supabase
-        .from('warehouse_inventory')
-        .update({
-          bin_id: selectedBinId,
-          status: 'IN_STORAGE',
-          moved_to_storage_date: new Date().toISOString(),
-          notes: notes
-        })
-        .eq('id', inventory.id);
+      const remainingQty = Number(inventory.quantity) - Number(transferQuantity);
 
-      if (updateError) throw updateError;
+      if (remainingQty > 0) {
+        // Partial transfer: split into two rows
+        // 1) Reduce quantity on the original (keep RECEIVED in receiving bin)
+        const { error: reduceError } = await supabase
+          .from('warehouse_inventory' as any)
+          .update({
+            quantity: remainingQty,
+            status: 'RECEIVED',
+            notes: notes || inventory.notes
+          } as any)
+          .eq('id', inventory.id as any);
+        if (reduceError) throw reduceError;
+
+        // 2) Insert a new row for the moved quantity in storage
+        const { error: insertError } = await supabase
+          .from('warehouse_inventory' as any)
+          .insert({
+            grn_id: inventory.grn_id,
+            grn_item_id: inventory.grn_item_id,
+            item_type: inventory.item_type as any,
+            item_id: inventory.item_id,
+            item_name: inventory.item_name,
+            item_code: inventory.item_code,
+            quantity: transferQuantity,
+            unit: inventory.unit,
+            bin_id: selectedBinId,
+            status: 'IN_STORAGE',
+            moved_to_storage_date: new Date().toISOString(),
+            notes: notes || `Split from ${inventory.bin?.bin_code}`
+          } as any);
+        if (insertError) throw insertError;
+      } else {
+        // Full transfer: move the existing row to storage
+        const { error: updateError } = await supabase
+          .from('warehouse_inventory' as any)
+          .update({
+            bin_id: selectedBinId,
+            status: 'IN_STORAGE',
+            moved_to_storage_date: new Date().toISOString(),
+            notes: notes
+          } as any)
+          .eq('id', inventory.id as any);
+        if (updateError) throw updateError;
+      }
 
       toast.success('Item transferred to storage successfully');
+
+      // Notify other views to refresh
+      try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
 
       onTransferComplete?.();
       onOpenChange(false);
@@ -148,7 +185,7 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ArrowRight className="h-5 w-5" />
