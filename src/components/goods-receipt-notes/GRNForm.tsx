@@ -793,8 +793,11 @@ const GRNForm = () => {
             if (missing.length > 0) {
               await updateInventory(missing);
             }
+            // Notify warehouse views to refresh
+            try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
           } catch (e) {
             console.warn('Skipping client-side inventory insert; DB trigger should handle it.', e);
+            try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
           }
         }
       }

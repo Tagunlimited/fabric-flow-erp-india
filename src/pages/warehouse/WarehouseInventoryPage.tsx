@@ -88,7 +88,19 @@ const WarehouseInventoryPage: React.FC = () => {
     loadTotals();
     const handler = () => loadTotals();
     window.addEventListener('warehouse-inventory-updated', handler as any);
-    return () => window.removeEventListener('warehouse-inventory-updated', handler as any);
+    // Realtime subscription to auto-refresh when warehouse_inventory changes
+    const channel = supabase
+      .channel('warehouse_inventory_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'warehouse_inventory' } as any, () => {
+        loadTotals();
+        try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
+      })
+      .subscribe();
+
+    return () => {
+      window.removeEventListener('warehouse-inventory-updated', handler as any);
+      try { supabase.removeChannel(channel); } catch {}
+    };
   }, []);
 
   const loadRelatedDetails = async (inv: WarehouseInventory) => {
