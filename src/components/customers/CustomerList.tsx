@@ -5,7 +5,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Search, Plus, Edit, Trash2, Download, Upload } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, Download, Upload, X, FileText } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
@@ -18,12 +21,12 @@ interface Customer {
   customer_id: string;
   company_name: string;
   gstin?: string;
-  mobile: string;
+  phone: string;
   email: string;
-  customer_type_id: number;
+  customer_type: number;
   address: string;
   city: string;
-  state_id: number;
+  state: number;
   pincode: string;
   loyalty_points: number;
   created_by?: string;
@@ -43,6 +46,10 @@ export function CustomerList() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [showBulkUpload, setShowBulkUpload] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -61,20 +68,16 @@ export function CustomerList() {
       // Fetch customers with joined data
       const { data, error } = await supabase
         .from('customers')
-        .select(`
-          *,
-          customer_types!customers_customer_type_id_fkey(name),
-          states!customers_state_id_fkey(name)
-        `)
+        .select('*')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
       
-      // Transform the data to include the names
+      // Transform the data to include the names (using enum values directly)
       const transformedData = (data || []).map(customer => ({
         ...customer,
-        customer_type_name: customer.customer_types?.name || 'Unknown',
-        state_name: customer.states?.name || 'Unknown'
+        customer_type_name: customer.customer_type || 'Unknown',
+        state_name: customer.state || 'Unknown'
       }));
       
       setCustomers(transformedData);
@@ -136,7 +139,7 @@ export function CustomerList() {
       filtered = filtered.filter(customer =>
         customer.company_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         customer.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        customer.mobile?.includes(searchTerm) ||
+        customer.phone?.includes(searchTerm) ||
         customer.gstin?.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
@@ -198,7 +201,7 @@ export function CustomerList() {
       ...filteredCustomers.map(customer => [
         customer.company_name,
         customer.gstin || '',
-        customer.mobile || '',
+        customer.phone || '',
         customer.email || '',
         customer.customer_type_name || 'Unknown',
         customer.address || '',
@@ -226,18 +229,18 @@ export function CustomerList() {
     // Create workbook
     const workbook = XLSX.utils.book_new();
 
-    // Create data sheet
+    // Create data sheet with all database columns
     const dataSheet = [
-      ['Company Name', 'GSTIN', 'Mobile', 'Email', 'Customer Type', 'Address', 'City', 'State', 'Pincode', 'Loyalty Points'],
-      ['Example Company', 'GSTIN123456789', '9876543210', 'example@email.com', 'Wholesale', '123 Main St', 'Mumbai', 'Maharashtra', '400001', '0'],
-      ['ABC Textiles', 'GSTIN987654321', '9876543211', 'contact@abctextiles.com', 'Retail', '456 Industrial Area', 'Delhi', 'Delhi', '110001', '0'],
-      ['Fashion Hub', 'GSTIN456789123', '9876543212', 'sales@fashionhub.com', 'Ecommerce', '789 Commercial Plaza', 'Bangalore', 'Karnataka', '560001', '0'],
-      ['', '', '', '', '', '', '', '', '', ''],
-      ['', '', '', '', '', '', '', '', '', ''],
-      ['', '', '', '', '', '', '', '', '', ''],
-      ['', '', '', '', '', '', '', '', '', ''],
-      ['', '', '', '', '', '', '', '', '', ''],
-      ['', '', '', '', '', '', '', '', '', '']
+      ['Company Name', 'Contact Person', 'Email', 'Phone', 'Address', 'City', 'State', 'Pincode', 'GSTIN', 'PAN', 'Customer Type', 'Customer Tier', 'Credit Limit', 'Outstanding Amount', 'Total Orders', 'Last Order Date'],
+      ['Example Company', 'John Doe', 'example@email.com', '9876543210', '123 Main St', 'Mumbai', 'Maharashtra', '400001', 'GSTIN123456789', 'ABCDE1234F', 'Wholesale', 'gold', '100000', '0', '0', ''],
+      ['ABC Textiles', 'Jane Smith', 'contact@abctextiles.com', '9876543211', '456 Industrial Area', 'Delhi', 'Delhi', '110001', 'GSTIN987654321', 'FGHIJ5678K', 'Retail', 'silver', '50000', '0', '0', ''],
+      ['Fashion Hub', 'Mike Johnson', 'sales@fashionhub.com', '9876543212', '789 Commercial Plaza', 'Bangalore', 'Karnataka', '560001', 'GSTIN456789123', 'LMNOP9012Q', 'Corporate', 'bronze', '25000', '0', '0', ''],
+      ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']
     ];
 
     const dataWorksheet = XLSX.utils.aoa_to_sheet(dataSheet);
@@ -249,61 +252,57 @@ export function CustomerList() {
       [''],
       ['📋 REQUIRED FIELDS:'],
       ['• Company Name: Required, cannot be empty'],
-      ['• Mobile: Required, must be at least 10 digits'],
       ['• Email: Required, must be valid email format'],
-      ['• Customer Type: Required, must be one of the valid types'],
+      ['• Phone: Required, must be at least 10 digits'],
       ['• Address: Required, cannot be empty'],
       ['• City: Required, cannot be empty'],
       ['• State: Required, must be one of the valid states'],
       ['• Pincode: Required, must be exactly 6 digits'],
       [''],
       ['📋 OPTIONAL FIELDS:'],
+      ['• Contact Person: Optional, contact person name'],
       ['• GSTIN: Optional but recommended for business customers'],
-      ['• Loyalty Points: Optional, defaults to 0'],
+      ['• PAN: Optional, PAN number for business customers'],
+      ['• Customer Type: Optional, defaults to Retail'],
+      ['• Customer Tier: Optional, defaults to Bronze'],
+      ['• Credit Limit: Optional, defaults to 0'],
+      ['• Outstanding Amount: Optional, defaults to 0'],
+      ['• Total Orders: Optional, defaults to 0'],
+      ['• Last Order Date: Optional, format: YYYY-MM-DD'],
       [''],
       ['📋 VALID CUSTOMER TYPES:'],
-      ['• Wholesale - Wholesale customers (15% discount)'],
-      ['• Retail - Retail customers (5% discount)'],
-      ['• Ecommerce - Online platform customers (10% discount)'],
-      ['• Staff - Company staff purchases (25% discount)'],
+      ['• Retail - Retail customers'],
+      ['• Wholesale - Wholesale customers'],
+      ['• Corporate - Corporate customers'],
+      ['• B2B - Business to Business customers'],
+      ['• B2C - Business to Consumer customers'],
+      ['• Enterprise - Enterprise customers'],
+      [''],
+      ['📋 VALID CUSTOMER TIERS:'],
+      ['• Bronze - Basic tier customers'],
+      ['• Silver - Mid-tier customers'],
+      ['• Gold - Premium tier customers'],
+      ['• Platinum - VIP tier customers'],
       [''],
       ['📋 VALID STATES:'],
-      ['• Andhra Pradesh (AP)'],
-      ['• Arunachal Pradesh (AR)'],
-      ['• Assam (AS)'],
-      ['• Bihar (BR)'],
-      ['• Chhattisgarh (CG)'],
-      ['• Delhi (DL)'],
-      ['• Goa (GA)'],
-      ['• Gujarat (GJ)'],
-      ['• Haryana (HR)'],
-      ['• Himachal Pradesh (HP)'],
-      ['• Jharkhand (JH)'],
-      ['• Karnataka (KA)'],
-      ['• Kerala (KL)'],
-      ['• Madhya Pradesh (MP)'],
-      ['• Maharashtra (MH)'],
-      ['• Manipur (MN)'],
-      ['• Meghalaya (ML)'],
-      ['• Mizoram (MZ)'],
-      ['• Nagaland (NL)'],
-      ['• Odisha (OR)'],
-      ['• Punjab (PB)'],
-      ['• Rajasthan (RJ)'],
-      ['• Sikkim (SK)'],
-      ['• Tamil Nadu (TN)'],
-      ['• Telangana (TS)'],
-      ['• Tripura (TR)'],
-      ['• Uttar Pradesh (UP)'],
-      ['• Uttarakhand (UK)'],
-      ['• West Bengal (WB)'],
+      ['• Andhra Pradesh, Arunachal Pradesh, Assam, Bihar'],
+      ['• Chhattisgarh, Delhi, Goa, Gujarat, Haryana'],
+      ['• Himachal Pradesh, Jharkhand, Karnataka, Kerala'],
+      ['• Madhya Pradesh, Maharashtra, Manipur, Meghalaya'],
+      ['• Mizoram, Nagaland, Odisha, Punjab, Rajasthan'],
+      ['• Sikkim, Tamil Nadu, Telangana, Tripura'],
+      ['• Uttar Pradesh, Uttarakhand, West Bengal'],
       [''],
       ['📋 FORMAT REQUIREMENTS:'],
-      ['• Mobile: Must be at least 10 digits (e.g., 9876543210)'],
+      ['• Phone: Must be at least 10 digits (e.g., 9876543210)'],
       ['• Email: Must be valid format (e.g., user@domain.com)'],
       ['• Pincode: Must be exactly 6 digits (e.g., 400001)'],
       ['• GSTIN: Should be in format GSTINXXXXXXXXX (optional)'],
-      ['• Loyalty Points: Must be a number (default 0)'],
+      ['• PAN: Should be in format ABCDE1234F (optional)'],
+      ['• Credit Limit: Must be a number (default 0)'],
+      ['• Outstanding Amount: Must be a number (default 0)'],
+      ['• Total Orders: Must be a number (default 0)'],
+      ['• Last Order Date: Format YYYY-MM-DD (optional)'],
       [''],
       ['📋 COMMON CITIES AND STATES:'],
       ['• Mumbai, Pune, Nagpur → Maharashtra'],
@@ -319,9 +318,9 @@ export function CustomerList() {
       ['⚠️ IMPORTANT NOTES:'],
       ['• Do not change the column headers'],
       ['• Use exact state names as listed above'],
-      ['• Use exact customer type names as listed above'],
+      ['• Use exact customer type and tier names as listed above'],
       ['• All required fields must be filled'],
-      ['• Save as CSV format before uploading'],
+      ['• Save as CSV or Excel format before uploading'],
       ['• Test with a few records first'],
       [''],
       ['📞 SUPPORT:'],
@@ -336,43 +335,52 @@ export function CustomerList() {
       ['REFERENCE DATA'],
       [''],
       ['CUSTOMER TYPES:'],
-      ['ID', 'Name', 'Description', 'Discount'],
-      [1, 'Wholesale', 'Wholesale customers', '15%'],
-      [2, 'Retail', 'Retail customers', '5%'],
-      [3, 'Ecommerce', 'Online platform customers', '10%'],
-      [4, 'Staff', 'Company staff purchases', '25%'],
+      ['Name', 'Description'],
+      ['Retail', 'Retail customers'],
+      ['Wholesale', 'Wholesale customers'],
+      ['Corporate', 'Corporate customers'],
+      ['B2B', 'Business to Business customers'],
+      ['B2C', 'Business to Consumer customers'],
+      ['Enterprise', 'Enterprise customers'],
+      [''],
+      ['CUSTOMER TIERS:'],
+      ['Name', 'Description'],
+      ['Bronze', 'Basic tier customers'],
+      ['Silver', 'Mid-tier customers'],
+      ['Gold', 'Premium tier customers'],
+      ['Platinum', 'VIP tier customers'],
       [''],
       ['STATES:'],
-      ['ID', 'Name', 'Code', 'Major Cities'],
-      [1, 'Andhra Pradesh', 'AP', 'Visakhapatnam, Vijayawada'],
-      [2, 'Arunachal Pradesh', 'AR', 'Itanagar'],
-      [3, 'Assam', 'AS', 'Guwahati'],
-      [4, 'Bihar', 'BR', 'Patna'],
-      [5, 'Chhattisgarh', 'CG', 'Raipur'],
-      [6, 'Delhi', 'DL', 'New Delhi'],
-      [7, 'Goa', 'GA', 'Panaji'],
-      [8, 'Gujarat', 'GJ', 'Ahmedabad, Surat'],
-      [9, 'Haryana', 'HR', 'Gurgaon, Chandigarh'],
-      [10, 'Himachal Pradesh', 'HP', 'Shimla'],
-      [11, 'Jharkhand', 'JH', 'Ranchi'],
-      [12, 'Karnataka', 'KA', 'Bangalore, Mysore'],
-      [13, 'Kerala', 'KL', 'Kochi, Trivandrum'],
-      [14, 'Madhya Pradesh', 'MP', 'Bhopal, Indore'],
-      [15, 'Maharashtra', 'MH', 'Mumbai, Pune, Nagpur'],
-      [16, 'Manipur', 'MN', 'Imphal'],
-      [17, 'Meghalaya', 'ML', 'Shillong'],
-      [18, 'Mizoram', 'MZ', 'Aizawl'],
-      [19, 'Nagaland', 'NL', 'Kohima'],
-      [20, 'Odisha', 'OR', 'Bhubaneswar'],
-      [21, 'Punjab', 'PB', 'Chandigarh, Ludhiana'],
-      [22, 'Rajasthan', 'RJ', 'Jaipur, Jodhpur'],
-      [23, 'Sikkim', 'SK', 'Gangtok'],
-      [24, 'Tamil Nadu', 'TN', 'Chennai, Coimbatore'],
-      [25, 'Telangana', 'TS', 'Hyderabad'],
-      [26, 'Tripura', 'TR', 'Agartala'],
-      [27, 'Uttar Pradesh', 'UP', 'Lucknow, Kanpur'],
-      [28, 'Uttarakhand', 'UK', 'Dehradun'],
-      [29, 'West Bengal', 'WB', 'Kolkata, Howrah']
+      ['Name', 'Major Cities'],
+      ['Andhra Pradesh', 'Visakhapatnam, Vijayawada'],
+      ['Arunachal Pradesh', 'Itanagar'],
+      ['Assam', 'Guwahati'],
+      ['Bihar', 'Patna'],
+      ['Chhattisgarh', 'Raipur'],
+      ['Delhi', 'New Delhi'],
+      ['Goa', 'Panaji'],
+      ['Gujarat', 'Ahmedabad, Surat'],
+      ['Haryana', 'Gurgaon, Chandigarh'],
+      ['Himachal Pradesh', 'Shimla'],
+      ['Jharkhand', 'Ranchi'],
+      ['Karnataka', 'Bangalore, Mysore'],
+      ['Kerala', 'Kochi, Trivandrum'],
+      ['Madhya Pradesh', 'Bhopal, Indore'],
+      ['Maharashtra', 'Mumbai, Pune, Nagpur'],
+      ['Manipur', 'Imphal'],
+      ['Meghalaya', 'Shillong'],
+      ['Mizoram', 'Aizawl'],
+      ['Nagaland', 'Kohima'],
+      ['Odisha', 'Bhubaneswar'],
+      ['Punjab', 'Chandigarh, Ludhiana'],
+      ['Rajasthan', 'Jaipur, Jodhpur'],
+      ['Sikkim', 'Gangtok'],
+      ['Tamil Nadu', 'Chennai, Coimbatore'],
+      ['Telangana', 'Hyderabad'],
+      ['Tripura', 'Agartala'],
+      ['Uttar Pradesh', 'Lucknow, Kanpur'],
+      ['Uttarakhand', 'Dehradun'],
+      ['West Bengal', 'Kolkata, Howrah']
     ];
 
     const referenceWorksheet = XLSX.utils.aoa_to_sheet(referenceSheet);
@@ -394,12 +402,24 @@ export function CustomerList() {
   };
 
   const handleBulkUpload = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.csv,.xlsx,.xls';
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
+    setShowBulkUpload(true);
+  };
+
+  const handleFileUpload = async () => {
+    if (!bulkFile) {
+      toast({
+        title: "Error",
+        description: "Please select a file to upload",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    try {
+      const file = bulkFile;
         const reader = new FileReader();
         reader.onload = async (event) => {
           try {
@@ -420,7 +440,7 @@ export function CustomerList() {
               // Find the data section (skip instructions)
               let dataStartIndex = 0;
               for (let i = 0; i < lines.length; i++) {
-                if (lines[i].includes('Company Name') && lines[i].includes('Customer Type')) {
+                if (lines[i].includes('Company Name') && lines[i].includes('Contact Person')) {
                   dataStartIndex = i;
                   break;
                 }
@@ -466,16 +486,22 @@ export function CustomerList() {
               // Debug: Check if the data structure is correct
               if (dataLines.length > 0 && dataLines[0]) {
                 console.log('DEBUG - Expected column structure:');
-                console.log('Column 0 (Company):', dataLines[0][0]);
-                console.log('Column 1 (GSTIN):', dataLines[0][1]);
-                console.log('Column 2 (Mobile):', dataLines[0][2]);
-                console.log('Column 3 (Email):', dataLines[0][3]);
-                console.log('Column 4 (Customer Type):', dataLines[0][4]);
-                console.log('Column 5 (Address):', dataLines[0][5]);
-                console.log('Column 6 (City):', dataLines[0][6]);
-                console.log('Column 7 (State):', dataLines[0][7]);
-                console.log('Column 8 (Pincode):', dataLines[0][8]);
-                console.log('Column 9 (Loyalty):', dataLines[0][9]);
+                console.log('Column 0 (Company Name):', dataLines[0][0]);
+                console.log('Column 1 (Contact Person):', dataLines[0][1]);
+                console.log('Column 2 (Email):', dataLines[0][2]);
+                console.log('Column 3 (Phone):', dataLines[0][3]);
+                console.log('Column 4 (Address):', dataLines[0][4]);
+                console.log('Column 5 (City):', dataLines[0][5]);
+                console.log('Column 6 (State):', dataLines[0][6]);
+                console.log('Column 7 (Pincode):', dataLines[0][7]);
+                console.log('Column 8 (GSTIN):', dataLines[0][8]);
+                console.log('Column 9 (PAN):', dataLines[0][9]);
+                console.log('Column 10 (Customer Type):', dataLines[0][10]);
+                console.log('Column 11 (Customer Tier):', dataLines[0][11]);
+                console.log('Column 12 (Credit Limit):', dataLines[0][12]);
+                console.log('Column 13 (Outstanding Amount):', dataLines[0][13]);
+                console.log('Column 14 (Total Orders):', dataLines[0][14]);
+                console.log('Column 15 (Last Order Date):', dataLines[0][15]);
               }
             } else {
               console.log('Processing as Excel file');
@@ -495,103 +521,75 @@ export function CustomerList() {
               console.log('Processed data lines (first 2 rows):', dataLines.slice(0, 2));
             }
             
-            // First, fetch the reference data
-            const { data: customerTypes, error: customerTypesError } = await supabase.from('customer_types').select('id, name');
-            const { data: states, error: statesError } = await supabase.from('states').select('id, name');
+            // Process data directly with enum validation (no database lookup needed)
+            console.log('Processing customer data with enum validation');
             
-            console.log('Customer Types from DB:', customerTypes);
-            console.log('States from DB:', states);
-            console.log('Customer Types Error:', customerTypesError);
-            console.log('States Error:', statesError);
+            // Skip old database lookup logic
             
-            if (customerTypesError || statesError) {
-              console.error('Error fetching customer types:', customerTypesError);
-              console.error('Error fetching states:', statesError);
-              // Fallback to enum values if table doesn't exist
-              const fallbackCustomerTypes = [
-                { id: 1, name: 'Wholesale' },
-                { id: 2, name: 'Retail' },
-                { id: 3, name: 'Ecommerce' },
-                { id: 4, name: 'Staff' }
-              ];
-              const fallbackStates = [
-                { id: 1, name: 'Andhra Pradesh' },
-                { id: 2, name: 'Arunachal Pradesh' },
-                { id: 3, name: 'Assam' },
-                { id: 4, name: 'Bihar' },
-                { id: 5, name: 'Chhattisgarh' },
-                { id: 6, name: 'Delhi' },
-                { id: 7, name: 'Goa' },
-                { id: 8, name: 'Gujarat' },
-                { id: 9, name: 'Haryana' },
-                { id: 10, name: 'Himachal Pradesh' },
-                { id: 11, name: 'Jharkhand' },
-                { id: 12, name: 'Karnataka' },
-                { id: 13, name: 'Kerala' },
-                { id: 14, name: 'Madhya Pradesh' },
-                { id: 15, name: 'Maharashtra' },
-                { id: 16, name: 'Manipur' },
-                { id: 17, name: 'Meghalaya' },
-                { id: 18, name: 'Mizoram' },
-                { id: 19, name: 'Nagaland' },
-                { id: 20, name: 'Odisha' },
-                { id: 21, name: 'Punjab' },
-                { id: 22, name: 'Rajasthan' },
-                { id: 23, name: 'Sikkim' },
-                { id: 24, name: 'Tamil Nadu' },
-                { id: 25, name: 'Telangana' },
-                { id: 26, name: 'Tripura' },
-                { id: 27, name: 'Uttar Pradesh' },
-                { id: 28, name: 'Uttarakhand' },
-                { id: 29, name: 'West Bengal' }
-              ];
-              const customerTypeMap = new Map(fallbackCustomerTypes.map(ct => [ct.name.toLowerCase(), ct.id]));
-              const stateMap = new Map(fallbackStates.map(s => [s.name.toLowerCase(), s.id]));
-              
-              console.log('Using fallback customer types:', fallbackCustomerTypes);
-              console.log('Customer Type Map:', customerTypeMap);
-              
+            // Process data with new enum-based approach
+            
+            // Use actual database data - Updated for new schema
               const customers = dataLines.map((values, index) => {
-                const customerTypeName = values[4]?.trim()?.toLowerCase();
-                const stateName = values[7]?.trim()?.toLowerCase();
+                // Helper function to safely get string value
+                const getStringValue = (value: any): string => {
+                  if (value === null || value === undefined) return '';
+                  return String(value).trim();
+                };
+
+                // Helper function to safely get string value or null
+                const getStringValueOrNull = (value: any): string | null => {
+                  const str = getStringValue(value);
+                  return str === '' ? null : str;
+                };
+
+                const customerTypeName = getStringValue(values[10]) || 'Retail';
+                const customerTierName = (getStringValue(values[11]) || 'bronze').toLowerCase();
                 
-                console.log(`Row ${index + 1}: Customer Type "${values[4]?.trim()}" -> "${customerTypeName}"`);
-                console.log(`Row ${index + 1}: State "${values[7]?.trim()}" -> "${stateName}"`);
+                console.log(`Row ${index + 1}: Customer Type "${getStringValue(values[10])}" -> "${customerTypeName}"`);
+                console.log(`Row ${index + 1}: Customer Tier "${getStringValue(values[11])}" -> "${customerTierName}"`);
                 
                 // Validate customer type
-                if (!customerTypeMap.has(customerTypeName)) {
-                  const validTypes = Array.from(customerTypeMap.keys()).map(k => k.charAt(0).toUpperCase() + k.slice(1));
-                  throw new Error(`Row ${index + 1}: Invalid Customer Type "${values[4]?.trim()}". Valid types: ${validTypes.join(', ')}`);
+                const validTypes = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
+                if (!validTypes.includes(customerTypeName)) {
+                  throw new Error(`Row ${index + 1}: Invalid Customer Type "${getStringValue(values[10])}". Valid types: ${validTypes.join(', ')}`);
                 }
                 
-                // Validate state
-                if (!stateMap.has(stateName)) {
-                  const validStates = Array.from(stateMap.keys()).map(k => k.charAt(0).toUpperCase() + k.slice(1));
-                  throw new Error(`Row ${index + 1}: Invalid State "${values[7]?.trim()}". Valid states: ${validStates.join(', ')}`);
+                // Validate customer tier (case-insensitive input, but store as lowercase)
+                const validTiers = ['bronze', 'silver', 'gold', 'platinum'];
+                if (!validTiers.includes(customerTierName)) {
+                  throw new Error(`Row ${index + 1}: Invalid Customer Tier "${getStringValue(values[11])}". Valid tiers: ${validTiers.join(', ')}`);
                 }
                 
                 return {
-                  company_name: values[0]?.trim(),
-                  gstin: values[1]?.trim() || null,
-                  mobile: values[2]?.trim(),
-                  email: values[3]?.trim(),
-                  customer_type_id: customerTypeMap.get(customerTypeName)!,
-                  address: values[5]?.trim(),
-                  city: values[6]?.trim(),
-                  state_id: stateMap.get(stateName)!,
-                  pincode: values[8]?.trim(),
-                  loyalty_points: parseInt(values[9]) || 0
+                  company_name: getStringValue(values[0]),
+                  contact_person: getStringValueOrNull(values[1]),
+                  email: getStringValue(values[2]),
+                  phone: getStringValue(values[3]),
+                  address: getStringValue(values[4]),
+                  city: getStringValue(values[5]),
+                  state: getStringValue(values[6]),
+                  pincode: getStringValue(values[7]),
+                  gstin: getStringValueOrNull(values[8]),
+                  pan: getStringValueOrNull(values[9]),
+                  customer_type: customerTypeName,
+                  customer_tier: customerTierName,
+                  credit_limit: parseFloat(getStringValue(values[12])) || 0,
+                  outstanding_amount: parseFloat(getStringValue(values[13])) || 0,
+                  total_orders: parseInt(getStringValue(values[14])) || 0,
+                  last_order_date: getStringValueOrNull(values[15])
                 };
               });
 
               // Validate required fields
               const invalidCustomers = customers.filter(customer => 
-                !customer.company_name || !customer.mobile || !customer.email || !customer.address || !customer.city || !customer.pincode
+                !customer.company_name || !customer.phone || !customer.email || !customer.address || !customer.city || !customer.pincode
               );
               
               if (invalidCustomers.length > 0) {
-                throw new Error(`Invalid data found in ${invalidCustomers.length} rows. Please check required fields: Company Name, Mobile, Email, Address, City, Pincode`);
+                throw new Error(`Invalid data found in ${invalidCustomers.length} rows. Please check required fields: Company Name, Phone, Email, Address, City, Pincode`);
               }
+
+              console.log('About to insert customers:', customers.slice(0, 2)); // Log first 2 customers for debugging
 
               const { error } = await supabase
                 .from('customers')
@@ -599,11 +597,14 @@ export function CustomerList() {
               
               if (error) {
                 console.error('Supabase error details:', error);
-                if (error.message.includes('customer_type_id')) {
-                  throw new Error('Invalid Customer Type. Valid types: Wholesale, Retail, Ecommerce, Staff');
-                } else if (error.message.includes('state_id')) {
+                console.error('Error message:', error.message);
+                console.error('Error details:', error.details);
+                console.error('Error hint:', error.hint);
+                if (error.message.includes('customer_type')) {
+                  throw new Error('Invalid Customer Type. Valid types: Retail, Wholesale, Corporate, B2B, B2C, Enterprise');
+                } else if (error.message.includes('state')) {
                   throw new Error('Invalid State. Please use exact state names like "Maharashtra", "Delhi", "Karnataka", etc.');
-                } else if (error.message.includes('mobile')) {
+                } else if (error.message.includes('phone')) {
                   throw new Error('Mobile number must be at least 10 digits');
                 } else if (error.message.includes('email')) {
                   throw new Error('Invalid email format');
@@ -613,87 +614,14 @@ export function CustomerList() {
                   throw error;
                 }
               }
+              setUploadProgress(100);
               toast({
                 title: "Success",
                 description: `Successfully uploaded ${customers.length} customers! 🎉`,
               });
               fetchCustomers();
-            } else {
-              // Use actual database data
-              const customerTypeMap = new Map(customerTypes?.map(ct => [ct.name.toLowerCase(), ct.id]) || []);
-              const stateMap = new Map(states?.map(s => [s.name.toLowerCase(), s.id]) || []);
-              
-              console.log('Customer Type Map:', customerTypeMap);
-              console.log('State Map:', stateMap);
-              
-              const customers = dataLines.map((values, index) => {
-                const customerTypeName = values[4]?.trim()?.toLowerCase();
-                const stateName = values[7]?.trim()?.toLowerCase();
-                
-                console.log(`Row ${index + 1}: Customer Type "${values[4]?.trim()}" -> "${customerTypeName}"`);
-                console.log(`Row ${index + 1}: State "${values[7]?.trim()}" -> "${stateName}"`);
-                
-                // Validate customer type
-                if (!customerTypeMap.has(customerTypeName)) {
-                  const validTypes = Array.from(customerTypeMap.keys()).map(k => k.charAt(0).toUpperCase() + k.slice(1));
-                  throw new Error(`Row ${index + 1}: Invalid Customer Type "${values[4]?.trim()}". Valid types: ${validTypes.join(', ')}`);
-                }
-                
-                // Validate state
-                if (!stateMap.has(stateName)) {
-                  const validStates = Array.from(stateMap.keys()).map(k => k.charAt(0).toUpperCase() + k.slice(1));
-                  throw new Error(`Row ${index + 1}: Invalid State "${values[7]?.trim()}". Valid states: ${validStates.join(', ')}`);
-                }
-                
-                return {
-                  company_name: values[0]?.trim(),
-                  gstin: values[1]?.trim() || null,
-                  mobile: values[2]?.trim(),
-                  email: values[3]?.trim(),
-                  customer_type_id: customerTypeMap.get(customerTypeName)!,
-                  address: values[5]?.trim(),
-                  city: values[6]?.trim(),
-                  state_id: stateMap.get(stateName)!,
-                  pincode: values[8]?.trim(),
-                  loyalty_points: parseInt(values[9]) || 0
-                };
-              });
-
-              // Validate required fields
-              const invalidCustomers = customers.filter(customer => 
-                !customer.company_name || !customer.mobile || !customer.email || !customer.address || !customer.city || !customer.pincode
-              );
-              
-              if (invalidCustomers.length > 0) {
-                throw new Error(`Invalid data found in ${invalidCustomers.length} rows. Please check required fields: Company Name, Mobile, Email, Address, City, Pincode`);
-              }
-
-              const { error } = await supabase
-                .from('customers')
-                .insert(customers);
-              
-              if (error) {
-                console.error('Supabase error details:', error);
-                if (error.message.includes('customer_type_id')) {
-                  throw new Error('Invalid Customer Type. Valid types: Wholesale, Retail, Ecommerce, Staff');
-                } else if (error.message.includes('state_id')) {
-                  throw new Error('Invalid State. Please use exact state names like "Maharashtra", "Delhi", "Karnataka", etc.');
-                } else if (error.message.includes('mobile')) {
-                  throw new Error('Mobile number must be at least 10 digits');
-                } else if (error.message.includes('email')) {
-                  throw new Error('Invalid email format');
-                } else if (error.message.includes('pincode')) {
-                  throw new Error('Pincode must be exactly 6 digits');
-                } else {
-                  throw error;
-                }
-              }
-              toast({
-                title: "Success",
-                description: `Successfully uploaded ${customers.length} customers! 🎉`,
-              });
-              fetchCustomers();
-            }
+              setShowBulkUpload(false);
+              setBulkFile(null);
           } catch (error) {
             console.error('Error uploading customers:', error);
             toast({
@@ -701,6 +629,9 @@ export function CustomerList() {
               description: error instanceof Error ? error.message : "Failed to upload customers. Please check the template format.",
               variant: "destructive",
             });
+          } finally {
+            setIsUploading(false);
+            setUploadProgress(0);
           }
         };
         
@@ -709,9 +640,16 @@ export function CustomerList() {
         } else {
           reader.readAsArrayBuffer(file);
         }
-      }
-    };
-    input.click();
+    } catch (error) {
+      console.error('Error uploading customers:', error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to upload customers. Please check the template format.",
+        variant: "destructive",
+      });
+      setIsUploading(false);
+      setUploadProgress(0);
+    }
   };
 
   if (showForm) {
@@ -736,10 +674,6 @@ export function CustomerList() {
           </p>
         </div>
         <div className="flex items-center space-x-2">
-          <Button variant="outline" onClick={downloadTemplate}>
-            <Download className="w-4 h-4 mr-2" />
-            Download Excel Template
-          </Button>
           <Button variant="outline" onClick={exportCustomers}>
             <Download className="w-4 h-4 mr-2" />
             Export Data
@@ -817,7 +751,7 @@ export function CustomerList() {
                       </TableCell>
                       <TableCell>
                         <div>
-                          <div className="text-sm">{customer.mobile}</div>
+                          <div className="text-sm">{customer.phone}</div>
                           <div className="text-sm text-muted-foreground">{customer.email}</div>
                         </div>
                       </TableCell>
@@ -871,6 +805,103 @@ export function CustomerList() {
           )}
         </CardContent>
       </Card>
+
+      {/* Bulk Upload Modal */}
+      <Dialog open={showBulkUpload} onOpenChange={setShowBulkUpload}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Bulk Upload Customers</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* Download Template Button */}
+            <Button 
+              onClick={downloadTemplate} 
+              variant="secondary"
+              className="w-full"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Download Excel Template
+            </Button>
+
+            {/* Instructions */}
+            <div className="text-sm text-muted-foreground">
+              <div className="flex items-start space-x-2">
+                <FileText className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-medium mb-2">Instructions:</p>
+                  <ul className="list-disc pl-4 space-y-1">
+                    <li>Download the template and fill all required columns</li>
+                    <li>Required: Company Name, Email, Phone, Address, City, State, Pincode</li>
+                    <li>Optional: Contact Person, GSTIN, PAN, Customer Type, Customer Tier, etc.</li>
+                    <li>File must be in CSV or Excel format</li>
+                    <li>Customer Type: Retail, Wholesale, Corporate, B2B, B2C, Enterprise</li>
+                    <li>Customer Tier: bronze, silver, gold, platinum (case-insensitive)</li>
+                    <li>Use exact state names as shown in template</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* File Upload */}
+            <div className="space-y-2">
+              <Label>Select File *</Label>
+              <Input 
+                type="file" 
+                accept=".csv,.xlsx,.xls" 
+                onChange={e => setBulkFile(e.target.files?.[0] || null)} 
+                disabled={isUploading}
+              />
+              {bulkFile && (
+                <div className="text-sm flex items-center gap-2 mt-1">
+                  <span>Selected: {bulkFile.name}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setBulkFile(null)}
+                    className="h-6 p-1 text-muted-foreground"
+                    disabled={isUploading}
+                  >
+                    <X className="w-3 h-3" />
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {/* Upload Progress */}
+            {isUploading && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span>Uploading customers...</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <Progress value={uploadProgress} className="w-full" />
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex gap-2 justify-end">
+              <Button 
+                variant="outline" 
+                onClick={() => {
+                  setShowBulkUpload(false);
+                  setBulkFile(null);
+                  setUploadProgress(0);
+                }}
+                disabled={isUploading}
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleFileUpload}
+                disabled={!bulkFile || isUploading}
+              >
+                {isUploading ? 'Uploading...' : 'Upload Customers'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

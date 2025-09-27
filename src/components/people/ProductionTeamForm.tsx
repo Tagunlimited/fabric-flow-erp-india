@@ -20,6 +20,10 @@ interface ProductionTeamFormProps {
 export function ProductionTeamForm({ onSuccess, onCancel, editMode = false, memberData }: ProductionTeamFormProps) {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const [departments, setDepartments] = useState<Array<{ id: string; name: string }>>([]);
+  const [allDesignations, setAllDesignations] = useState<Array<{ id: string; name: string; departments: Array<{ id: string; name: string }> }>>([]);
+  const [filteredDesignations, setFilteredDesignations] = useState<Array<{ id: string; name: string }>>([]);
+  const [loadingData, setLoadingData] = useState(true);
   
   const [formData, setFormData] = useState({
     employee_code: "",
@@ -32,6 +36,7 @@ export function ProductionTeamForm({ onSuccess, onCancel, editMode = false, memb
     city: "",
     state: "",
     pincode: "",
+    department: "",
     designation: "",
     tailor_type: "",
     is_batch_leader: false,
@@ -57,6 +62,80 @@ export function ProductionTeamForm({ onSuccess, onCancel, editMode = false, memb
     const timestamp = Date.now().toString().slice(-6);
     const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     return `${prefix}${timestamp}${random}`;
+  };
+
+  // Fetch departments and designations from database
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoadingData(true);
+        
+        // Fetch departments
+        const { data: departmentsData, error: departmentsError } = await supabase
+          .from('departments')
+          .select('id, name')
+          .order('name');
+        
+        if (departmentsError) {
+          console.error('Error fetching departments:', departmentsError);
+        } else {
+          setDepartments(departmentsData || []);
+        }
+
+        // Fetch designations with their departments
+        const { data: designationsData, error: designationsError } = await supabase
+          .from('designations_with_departments')
+          .select('*')
+          .eq('is_active', true)
+          .order('name');
+
+        if (designationsError) {
+          console.error('Error fetching designations:', designationsError);
+        } else {
+          setAllDesignations(designationsData || []);
+          // Initially show all designations
+          setFilteredDesignations(designationsData || []);
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load departments and designations",
+          variant: "destructive",
+        });
+      } finally {
+        setLoadingData(false);
+      }
+    };
+
+    fetchData();
+  }, [toast]);
+
+  // Filter designations based on selected department
+  const filterDesignationsByDepartment = (departmentName: string) => {
+    if (!departmentName) {
+      // If no department selected, show all designations
+      setFilteredDesignations(allDesignations);
+      return;
+    }
+
+    // Filter designations that are linked to the selected department
+    const filtered = allDesignations.filter(designation => {
+      // If designation has no departments, show it (company-wide roles)
+      if (!designation.departments || designation.departments.length === 0) {
+        return true;
+      }
+      
+      // Check if any of the designation's departments match the selected department
+      return designation.departments.some(dept => dept.name === departmentName);
+    });
+
+    setFilteredDesignations(filtered);
+    
+    // Clear designation selection if current selection is not available for the new department
+    if (formData.designation && !filtered.some(d => d.name === formData.designation)) {
+      handleInputChange('designation', '');
+    }
   };
 
   // Fetch batch leaders for tailors
@@ -382,20 +461,49 @@ export function ProductionTeamForm({ onSuccess, onCancel, editMode = false, memb
                 </Select>
               </div>
               
-                             <div className="space-y-2">
-                 <Label htmlFor="designation">Designation *</Label>
-                 <Select value={formData.designation} onValueChange={(value) => handleInputChange('designation', value)}>
-                   <SelectTrigger>
-                     <SelectValue placeholder="Select designation" />
-                   </SelectTrigger>
-                   <SelectContent>
-                     <SelectItem value="Pattern Master">Pattern Master</SelectItem>
-                     <SelectItem value="Cutting Manager">Cutting Manager</SelectItem>
-                     <SelectItem value="Single Needle Tailor">Single Needle Tailor</SelectItem>
-                     <SelectItem value="Overlock/Flatlock Tailor">Overlock/Flatlock Tailor</SelectItem>
-                   </SelectContent>
-                 </Select>
-               </div>
+              <div className="space-y-2">
+                <Label htmlFor="department">Department *</Label>
+                <Select 
+                  value={formData.department} 
+                  onValueChange={(value) => {
+                    handleInputChange('department', value);
+                    filterDesignationsByDepartment(value);
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={loadingData ? "Loading..." : "Select department"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {departments.map(department => (
+                      <SelectItem key={department.id} value={department.name}>{department.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="designation">Designation *</Label>
+                <Select 
+                  value={formData.designation} 
+                  onValueChange={(value) => handleInputChange('designation', value)}
+                  disabled={!formData.department}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={
+                      !formData.department 
+                        ? "Select department first" 
+                        : loadingData 
+                          ? "Loading..." 
+                          : "Select designation"
+                    } />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {filteredDesignations.map(designation => (
+                      <SelectItem key={designation.id} value={designation.name}>{designation.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </CardContent>
         </Card>

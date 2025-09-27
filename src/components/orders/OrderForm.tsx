@@ -340,7 +340,12 @@ export function OrderForm() {
       if (fabricsRes.data) setFabrics(fabricsRes.data as any);
       if (employeesRes.data) {
         console.log('Employees fetched:', employeesRes.data);
-        setEmployees(employeesRes.data);
+        // Filter employees to only show those from Sales Department
+        const salesEmployees = employeesRes.data.filter(emp => 
+          emp.department && emp.department.toLowerCase().includes('sales')
+        );
+        console.log('Sales employees filtered:', salesEmployees);
+        setEmployees(salesEmployees);
       } else {
         console.log('No employees found or error:', employeesRes.error);
       }

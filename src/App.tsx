@@ -48,6 +48,8 @@ import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
 import EmployeeDetailPage from "./pages/people/EmployeeDetailPage";
 import DepartmentsPage from "./pages/people/DepartmentsPage";
+import DepartmentDetailPage from "./pages/people/DepartmentDetailPage";
+import DesignationsPage from "./pages/people/DesignationsPage";
 import ProductionTeamPage from "./pages/people/ProductionTeamPage";
 import ProductionTeamDetailPage from "./pages/people/ProductionTeamDetailPage";
 import OrderDetailPage from "./pages/orders/OrderDetailPage";
@@ -329,6 +331,16 @@ const App = () => {
                 <Route path="/people/departments" element={
                   <ProtectedRoute>
                     <DepartmentsPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/people/departments/:id" element={
+                  <ProtectedRoute>
+                    <DepartmentDetailPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/people/designations" element={
+                  <ProtectedRoute>
+                    <DesignationsPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/people/production-team" element={

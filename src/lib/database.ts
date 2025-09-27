@@ -302,6 +302,34 @@ export async function getCuttingManagers(): Promise<any[]> {
   return data || [];
 }
 
+// Get department count
+export async function getDepartmentCount(): Promise<number> {
+  const { count, error } = await supabase
+    .from('departments')
+    .select('*', { count: 'exact', head: false });
+
+  if (error) {
+    console.error('Error fetching department count:', error);
+    return 0;
+  }
+  return count || 0;
+}
+
+// Get recent activities
+export async function getRecentActivities(limit: number = 10): Promise<any[]> {
+  const { data, error } = await supabase
+    .from('order_lifecycle_view')
+    .select('*')
+    .order('performed_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('Error fetching recent activities:', error);
+    return [];
+  }
+  return data || [];
+}
+
 // Production Management
 export async function getProductionOrders(): Promise<ProductionOrders[]> {
   const { data, error } = await supabase

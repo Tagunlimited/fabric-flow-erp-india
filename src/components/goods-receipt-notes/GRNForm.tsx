@@ -697,6 +697,17 @@ const GRNForm = () => {
     }
 
     try {
+      // First, check if grn_master table exists
+      const { data: tableCheck, error: tableError } = await supabase
+        .from('grn_master')
+        .select('id')
+        .limit(1);
+      
+      if (tableError) {
+        console.error('GRN master table error:', tableError);
+        toast.error('GRN tables are not set up. Please run the GRN setup script in Supabase.');
+        return;
+      }
       // Validate status transition
       const currentStatus = grn.status || 'draft';
       const validTransitions: Record<string, string[]> = {
@@ -747,12 +758,20 @@ const GRNForm = () => {
         updateData.approved_at = new Date().toISOString();
       }
 
+      console.log('Updating GRN with data:', updateData);
+      console.log('GRN ID:', grn.id);
+      
       const { error } = await supabase
         .from('grn_master')
         .update(updateData)
         .eq('id', grn.id as any);
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error updating GRN status:', error);
+        console.error('Update data:', updateData);
+        console.error('GRN ID:', grn.id);
+        throw error;
+      }
       
       setGrn(prev => ({ ...prev, ...updateData }));
       
@@ -872,11 +891,12 @@ const GRNForm = () => {
         if (grnError) throw grnError;
 
         // Insert GRN items
+        console.log('GRN items to insert:', grnItems);
         const itemsToInsert = grnItems.map(item => ({
           grn_id: (grnData as any).id,
           po_item_id: item.po_item_id,
           item_type: item.item_type,
-          item_id: item.item_id,
+          item_id: item.item_id || null, // Allow null for items without specific item_id
           item_name: item.item_name,
           item_image_url: item.item_image_url,
           ordered_quantity: item.ordered_quantity,
@@ -901,29 +921,50 @@ const GRNForm = () => {
           item_color: item.item_color
         }));
 
+        console.log('Items to insert:', itemsToInsert);
         const { error: itemsError } = await supabase
           .from('grn_items')
           .insert(itemsToInsert as any);
 
-        if (itemsError) throw itemsError;
+        if (itemsError) {
+          console.error('Error inserting GRN items:', itemsError);
+          throw itemsError;
+        }
 
         toast.success('GRN created successfully');
         navigate(`/procurement/grn/${(grnData as any).id}`);
       } else {
         // Update existing GRN
+        console.log('Updating GRN with data:', grn);
+        console.log('GRN totals:', totals);
         const { error: grnError } = await supabase
           .from('grn_master')
           .update({
-            ...grn,
+            po_id: grn.po_id,
+            supplier_id: grn.supplier_id,
+            grn_date: grn.grn_date,
+            received_date: grn.received_date,
+            received_by: grn.received_by,
+            received_at_location: grn.received_at_location,
+            status: grn.status,
             total_items_received: totals.totalItems,
             total_items_approved: grnItems.filter(item => item.quality_status === 'approved').length,
             total_items_rejected: grnItems.filter(item => item.quality_status === 'rejected' || item.quality_status === 'damaged').length,
             total_amount_received: totals.totalAmount,
-            total_amount_approved: totals.approvedAmount
+            total_amount_approved: totals.approvedAmount,
+            quality_inspector: grn.quality_inspector,
+            inspection_date: grn.inspection_date,
+            inspection_notes: grn.inspection_notes,
+            approved_by: grn.approved_by,
+            approved_at: grn.approved_at,
+            rejection_reason: grn.rejection_reason
           } as any)
           .eq('id', id as any);
 
-        if (grnError) throw grnError;
+        if (grnError) {
+          console.error('Error updating GRN:', grnError);
+          throw grnError;
+        }
 
         // Update GRN items
         for (const item of grnItems) {
@@ -946,8 +987,27 @@ const GRNForm = () => {
             const { error } = await supabase
               .from('grn_items')
               .insert({ 
-                ...item, 
                 grn_id: id,
+                po_item_id: item.po_item_id,
+                item_type: item.item_type,
+                item_id: item.item_id || null, // Allow null for items without specific item_id
+                item_name: item.item_name,
+                item_image_url: item.item_image_url,
+                ordered_quantity: item.ordered_quantity,
+                received_quantity: item.received_quantity,
+                approved_quantity: item.approved_quantity,
+                rejected_quantity: item.rejected_quantity,
+                unit_of_measure: item.unit_of_measure,
+                unit_price: item.unit_price,
+                total_price: item.total_price,
+                gst_rate: item.gst_rate,
+                gst_amount: item.gst_amount,
+                line_total: item.line_total,
+                quality_status: item.quality_status,
+                batch_number: item.batch_number,
+                expiry_date: item.expiry_date,
+                condition_notes: item.condition_notes,
+                inspection_notes: item.inspection_notes,
                 // Ensure fabric details are included in insert
                 fabric_color: item.fabric_color,
                 fabric_gsm: item.fabric_gsm,
@@ -1116,6 +1176,143 @@ const GRNForm = () => {
           </div>
         </div>
       </div>
+      
+      {/* GRN Status Management Section */}
+      {!isNew && grnItems.length > 0 && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Package className="w-5 h-5" />
+              GRN Status Management
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-3">
+              {grn.status === 'draft' && (
+                <Button 
+                  onClick={() => updateGrnStatus('received')} 
+                  variant="outline"
+                  className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                >
+                  <CheckCircle className="w-4 h-4 mr-2" />
+                  Mark as Received
+                </Button>
+              )}
+              
+              {grn.status === 'received' && (
+                <>
+                  <Button 
+                    onClick={() => updateGrnStatus('under_inspection')} 
+                    variant="outline"
+                    className="bg-yellow-50 hover:bg-yellow-100 text-yellow-700 border-yellow-200"
+                  >
+                    <AlertCircle className="w-4 h-4 mr-2" />
+                    Move to Inspection
+                  </Button>
+                  <Button 
+                    onClick={() => updateGrnStatus('approved')} 
+                    variant="outline"
+                    className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+                    disabled={!grnItems.some(item => item.quality_status === 'approved')}
+                  >
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Approve GRN
+                  </Button>
+                </>
+              )}
+              
+              {grn.status === 'under_inspection' && (
+                <>
+                  <Button 
+                    onClick={() => updateGrnStatus('approved')} 
+                    variant="outline"
+                    className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+                    disabled={!grnItems.some(item => item.quality_status === 'approved')}
+                  >
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Approve GRN
+                  </Button>
+                  <Button 
+                    onClick={() => updateGrnStatus('partially_approved')} 
+                    variant="outline"
+                    className="bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200"
+                    disabled={!grnItems.some(item => item.quality_status === 'approved')}
+                  >
+                    <AlertCircle className="w-4 h-4 mr-2" />
+                    Partial Approval
+                  </Button>
+                  <Button 
+                    onClick={() => updateGrnStatus('rejected')} 
+                    variant="outline"
+                    className="bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
+                    disabled={!grnItems.some(item => item.quality_status === 'rejected' || item.quality_status === 'damaged')}
+                  >
+                    <XCircle className="w-4 h-4 mr-2" />
+                    Reject GRN
+                  </Button>
+                </>
+              )}
+              
+              {grn.status === 'partially_approved' && (
+                <>
+                  <Button 
+                    onClick={() => updateGrnStatus('approved')} 
+                    variant="outline"
+                    className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+                  >
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Full Approval
+                  </Button>
+                  <Button 
+                    onClick={() => updateGrnStatus('rejected')} 
+                    variant="outline"
+                    className="bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
+                  >
+                    <XCircle className="w-4 h-4 mr-2" />
+                    Reject GRN
+                  </Button>
+                </>
+              )}
+              
+              {(grn.status === 'approved' || grn.status === 'rejected' || grn.status === 'partially_approved') && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <CheckCircle className="w-4 h-4 text-green-600" />
+                  <span>GRN is {grn.status.replace('_', ' ')} and items have been moved to receiving zone</span>
+                </div>
+              )}
+            </div>
+            
+            {/* Status Information */}
+            <div className="mt-4 p-3 bg-muted/50 rounded-lg">
+              <div className="text-sm text-muted-foreground">
+                <strong>Current Status:</strong> {grn.status?.replace('_', ' ').toUpperCase()}
+              </div>
+              <div className="text-sm text-muted-foreground mt-1">
+                <strong>Approved Items:</strong> {grnItems.filter(item => item.quality_status === 'approved').length} / {grnItems.length}
+              </div>
+              {grn.status === 'approved' && (
+                <div className="text-sm text-green-600 mt-1">
+                  ✓ Approved items have been added to warehouse inventory in the receiving zone
+                </div>
+              )}
+              
+              {/* Warehouse Status */}
+              {grn.status === 'approved' && (
+                <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center gap-2 text-green-700">
+                    <Package className="w-4 h-4" />
+                    <span className="font-medium">Items in Receiving Zone</span>
+                  </div>
+                  <div className="text-sm text-green-600 mt-1">
+                    Approved items are now available in the warehouse inventory system. 
+                    They can be moved to storage zones or dispatched as needed.
+                  </div>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
       {/* Preview Dialog */}
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="max-w-5xl w-[95vw]">
