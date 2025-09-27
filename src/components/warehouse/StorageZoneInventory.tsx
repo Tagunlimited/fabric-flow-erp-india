@@ -126,7 +126,18 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     loadInventory();
     const handler = () => loadInventory();
     window.addEventListener('warehouse-inventory-updated', handler as any);
-    return () => window.removeEventListener('warehouse-inventory-updated', handler as any);
+    // Live updates: listen to realtime changes for storage items
+    const channel = supabase
+      .channel('storage_inventory_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'warehouse_inventory' } as any, () => {
+        loadInventory();
+      })
+      .subscribe();
+
+    return () => {
+      window.removeEventListener('warehouse-inventory-updated', handler as any);
+      try { supabase.removeChannel(channel); } catch {}
+    };
   }, []);
 
   const getStatusConfig = (status: string) => {

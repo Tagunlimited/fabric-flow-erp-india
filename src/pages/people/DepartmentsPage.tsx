@@ -7,7 +7,9 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Edit, Trash, Plus, Users } from 'lucide-react';
+import { Loader2, Edit, Trash, Plus, Users, User } from 'lucide-react';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { ErpLayout } from '@/components/ErpLayout';
 
 interface Department {
   id: string;
@@ -15,16 +17,17 @@ interface Department {
   description: string;
   head_id: string | null;
   created_at: string;
-}
-
-interface Employee {
-  id: string;
-  full_name: string;
+  employee_count?: number;
+  head_info?: {
+    id: string;
+    full_name: string;
+    avatar_url?: string;
+  };
 }
 
 export default function DepartmentsPage() {
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [allEmployees, setAllEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
   const [editing, setEditing] = useState<Department | null>(null);
@@ -41,16 +44,60 @@ export default function DepartmentsPage() {
   const fetchDepartments = async () => {
     setLoading(true);
     setError(null);
-    const { data, error } = await supabase.from('departments').select('*').order('created_at');
-    if (error) setError(error.message);
-    setDepartments(data || []);
-    setLoading(false);
+    
+    try {
+      // Fetch departments
+      const { data: departmentsData, error: departmentsError } = await supabase
+        .from('departments')
+        .select('*')
+        .order('created_at');
+      
+      if (departmentsError) {
+        setError(departmentsError.message);
+        return;
+      }
+
+      // Fetch employee counts for each department
+      const departmentsWithCounts = await Promise.all(
+        (departmentsData || []).map(async (dept) => {
+          // Get employee count for this department
+          const { count: employeeCount } = await supabase
+            .from('employees')
+            .select('*', { count: 'exact', head: true })
+            .eq('department', dept.name);
+
+          // Get head information if head_id exists
+          let headInfo = null;
+          if (dept.head_id) {
+            const { data: headData } = await supabase
+              .from('employees')
+              .select('id, full_name, avatar_url')
+              .eq('id', dept.head_id)
+              .single();
+            headInfo = headData;
+          }
+
+          return {
+            ...dept,
+            employee_count: employeeCount || 0,
+            head_info: headInfo
+          };
+        })
+      );
+
+      setDepartments(departmentsWithCounts);
+    } catch (error) {
+      console.error('Error fetching departments:', error);
+      setError('Failed to fetch departments');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fetchEmployees = async () => {
     const { data, error } = await supabase.from('employees').select('id, full_name');
     if (error) setError(error.message);
-    setEmployees(data || []);
+    setAllEmployees(data || []);
   };
 
   const handleOpenDialog = (dept?: Department) => {
@@ -97,7 +144,8 @@ export default function DepartmentsPage() {
   };
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <ErpLayout>
+      <div className="space-y-6">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-3xl font-bold flex items-center gap-2"><Users className="w-7 h-7" /> Departments</h1>
         <Button onClick={() => handleOpenDialog()}><Plus className="w-4 h-4 mr-2" />Add Department</Button>
@@ -129,14 +177,44 @@ export default function DepartmentsPage() {
               </thead>
               <tbody>
                 {departments.map((dept) => (
-                  <tr key={dept.id} className="border-t">
-                    <td className="py-2 font-semibold cursor-pointer text-primary hover:underline" onClick={() => navigate(`/people/departments/${dept.id}`)}>{dept.name}</td>
-                    <td className="py-2">{dept.description}</td>
-                    <td className="py-2">{employees.find(e => e.id === dept.head_id)?.full_name || '-'}</td>
-                    <td className="py-2">{/* TODO: Show employee count in department dashboard */}-</td>
-                    <td className="py-2 flex gap-2">
-                      <Button size="icon" variant="outline" onClick={() => handleOpenDialog(dept)}><Edit className="w-4 h-4" /></Button>
-                      <Button size="icon" variant="destructive" onClick={() => handleDelete(dept.id)}><Trash className="w-4 h-4" /></Button>
+                  <tr key={dept.id} className="border-t hover:bg-muted/50">
+                    <td className="py-3 font-semibold cursor-pointer text-primary hover:underline" onClick={() => navigate(`/people/departments/${dept.id}`)}>
+                      {dept.name}
+                    </td>
+                    <td className="py-3 text-muted-foreground">{dept.description}</td>
+                    <td className="py-3">
+                      {dept.head_info ? (
+                        <div className="flex items-center space-x-2">
+                          <Avatar className="w-8 h-8">
+                            <AvatarImage src={dept.head_info.avatar_url} alt={dept.head_info.full_name} />
+                            <AvatarFallback className="text-xs bg-gradient-primary text-white">
+                              {dept.head_info.full_name.split(' ').map(n => n[0]).join('').toUpperCase()}
+                            </AvatarFallback>
+                          </Avatar>
+                          <span className="text-sm font-medium">{dept.head_info.full_name}</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center space-x-2 text-muted-foreground">
+                          <User className="w-4 h-4" />
+                          <span className="text-sm">No head assigned</span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-3">
+                      <div className="flex items-center space-x-2">
+                        <Users className="w-4 h-4 text-muted-foreground" />
+                        <span className="text-sm font-medium">{dept.employee_count || 0}</span>
+                      </div>
+                    </td>
+                    <td className="py-3">
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => handleOpenDialog(dept)}>
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => handleDelete(dept.id)}>
+                          <Trash className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -163,7 +241,7 @@ export default function DepartmentsPage() {
               <Label>Department Head</Label>
               <select className="w-full border rounded p-2" value={form.head_id} onChange={e => setForm(f => ({ ...f, head_id: e.target.value }))}>
                 <option value="">-- None --</option>
-                {employees.map(emp => (
+                {allEmployees.map(emp => (
                   <option key={emp.id} value={emp.id}>{emp.full_name}</option>
                 ))}
               </select>
@@ -175,6 +253,7 @@ export default function DepartmentsPage() {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+      </div>
+    </ErpLayout>
   );
 } 

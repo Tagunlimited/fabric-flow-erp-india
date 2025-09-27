@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,15 +22,7 @@ const INDIAN_STATES = [
   "Uttarakhand", "West Bengal", "Delhi"
 ];
 
-const DEPARTMENTS = [
-  "Production", "Quality Control", "Sales & Marketing", "Accounts & Finance", 
-  "Human Resources", "Procurement", "Dispatch", "Administration"
-];
-
-const DESIGNATIONS = [
-  "Manager", "Assistant Manager", "Supervisor", "Team Lead", "Senior Executive", 
-  "Executive", "Junior Executive", "Operator", "Helper", "Trainee"
-];
+// Removed hardcoded arrays - now fetching from database
 
 interface EmployeeFormProps {
   onSuccess: () => void;
@@ -41,6 +33,11 @@ interface EmployeeFormProps {
 
 export function EmployeeForm({ onSuccess, initialData, isEditing = false, employeeId }: EmployeeFormProps) {
   const { user } = useAuth();
+  const [departments, setDepartments] = useState<Array<{ id: string; name: string }>>([]);
+  const [allDesignations, setAllDesignations] = useState<Array<{ id: string; name: string; departments: Array<{ id: string; name: string }> }>>([]);
+  const [filteredDesignations, setFilteredDesignations] = useState<Array<{ id: string; name: string }>>([]);
+  const [loadingData, setLoadingData] = useState(true);
+  
   const [formData, setFormData] = useState({
     full_name: initialData?.full_name || "",
     date_of_birth: initialData?.date_of_birth ? new Date(initialData.date_of_birth) : undefined,
@@ -65,6 +62,80 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
   const [loading, setLoading] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState(initialData?.avatar_url || null);
   const { toast } = useToast();
+
+  // Fetch departments and designations from database
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoadingData(true);
+        
+        // Fetch departments
+        const { data: departmentsData, error: departmentsError } = await supabase
+          .from('departments')
+          .select('id, name')
+          .order('name');
+        
+        if (departmentsError) {
+          console.error('Error fetching departments:', departmentsError);
+        } else {
+          setDepartments(departmentsData || []);
+        }
+
+        // Fetch designations with their departments
+        const { data: designationsData, error: designationsError } = await supabase
+          .from('designations_with_departments')
+          .select('*')
+          .eq('is_active', true)
+          .order('name');
+        
+        if (designationsError) {
+          console.error('Error fetching designations:', designationsError);
+        } else {
+          setAllDesignations(designationsData || []);
+          // Initially show all designations
+          setFilteredDesignations(designationsData || []);
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load departments and designations",
+          variant: "destructive",
+        });
+      } finally {
+        setLoadingData(false);
+      }
+    };
+
+    fetchData();
+  }, [toast]);
+
+  // Filter designations based on selected department
+  const filterDesignationsByDepartment = (departmentName: string) => {
+    if (!departmentName) {
+      // If no department selected, show all designations
+      setFilteredDesignations(allDesignations);
+      return;
+    }
+
+    // Filter designations that are linked to the selected department
+    const filtered = allDesignations.filter(designation => {
+      // If designation has no departments, show it (company-wide roles)
+      if (!designation.departments || designation.departments.length === 0) {
+        return true;
+      }
+      
+      // Check if any of the designation's departments match the selected department
+      return designation.departments.some(dept => dept.name === departmentName);
+    });
+
+    setFilteredDesignations(filtered);
+    
+    // Clear designation selection if current selection is not available for the new department
+    if (formData.designation && !filtered.some(d => d.name === formData.designation)) {
+      setFormData(prev => ({ ...prev, designation: "" }));
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -355,28 +426,44 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
           </CardHeader>
           <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <Label htmlFor="designation">Designation *</Label>
-              <Select value={formData.designation} onValueChange={(value) => setFormData(prev => ({ ...prev, designation: value }))}>
+              <Label htmlFor="department">Department *</Label>
+              <Select 
+                value={formData.department} 
+                onValueChange={(value) => {
+                  setFormData(prev => ({ ...prev, department: value }));
+                  filterDesignationsByDepartment(value);
+                }}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select designation" />
+                  <SelectValue placeholder={loadingData ? "Loading..." : "Select department"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {DESIGNATIONS.map(designation => (
-                    <SelectItem key={designation} value={designation}>{designation}</SelectItem>
+                  {departments.map(department => (
+                    <SelectItem key={department.id} value={department.name}>{department.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
 
             <div>
-              <Label htmlFor="department">Department *</Label>
-              <Select value={formData.department} onValueChange={(value) => setFormData(prev => ({ ...prev, department: value }))}>
+              <Label htmlFor="designation">Designation *</Label>
+              <Select 
+                value={formData.designation} 
+                onValueChange={(value) => setFormData(prev => ({ ...prev, designation: value }))}
+                disabled={!formData.department}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select department" />
+                  <SelectValue placeholder={
+                    !formData.department 
+                      ? "Select department first" 
+                      : loadingData 
+                        ? "Loading..." 
+                        : "Select designation"
+                  } />
                 </SelectTrigger>
                 <SelectContent>
-                  {DEPARTMENTS.map(department => (
-                    <SelectItem key={department} value={department}>{department}</SelectItem>
+                  {filteredDesignations.map(designation => (
+                    <SelectItem key={designation.id} value={designation.name}>{designation.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

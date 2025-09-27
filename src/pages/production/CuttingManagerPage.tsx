@@ -9,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
+import { useNavigate } from "react-router-dom";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { 
   Scissors, 
   Clock, 
@@ -20,18 +22,14 @@ import {
   TrendingUp,
   Package,
   Factory,
-  Users,
   Target,
-  BarChart3,
+  Users,
   Eye,
   Edit,
-  Plus,
-  FileText,
-  Settings,
-  Zap
+  Plus
 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { getCuttingManagers } from "@/lib/database";
+import { supabase } from "@/integrations/supabase/client";
 
 interface CuttingJob {
   id: string;
@@ -43,6 +41,7 @@ interface CuttingJob {
   quantity: number;
   cutQuantity: number;
   assignedTo: string;
+  patternMasterName?: string;
   startDate: string;
   dueDate: string;
   status: 'pending' | 'in_progress' | 'completed' | 'on_hold' | 'quality_check';
@@ -55,16 +54,6 @@ interface CuttingJob {
   reworkRequired: boolean;
 }
 
-interface CuttingMachine {
-  id: string;
-  name: string;
-  type: string;
-  status: 'available' | 'busy' | 'maintenance' | 'offline';
-  currentJob: string | null;
-  efficiency: number;
-  lastMaintenance: string;
-  operator: string;
-}
 
 const CuttingManagerPage = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -74,25 +63,116 @@ const CuttingManagerPage = () => {
   // Initialize with empty array - data will be loaded from backend
   const [cuttingJobs, setCuttingJobs] = useState<CuttingJob[]>([]);
 
-  // Initialize with empty array - data will be loaded from backend
-  const [cuttingMachines, setCuttingMachines] = useState<CuttingMachine[]>([]);
+  const navigate = useNavigate();
+  const LOCAL_STORAGE_KEY = 'production-assignments';
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const [updateJob, setUpdateJob] = useState<CuttingJob | null>(null);
+  const [updateCutQty, setUpdateCutQty] = useState<number>(0);
 
-  // State for cutting managers
-  const [cuttingManagers, setCuttingManagers] = useState<any[]>([]);
+  const formatDateDDMMYY = (value?: string) => {
+    if (!value) return '';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return '';
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yy = String(d.getFullYear()).slice(-2);
+    return `${dd}-${mm}-${yy}`;
+  };
 
-  // Fetch cutting managers data
+  // Load assigned cutting jobs from Assign Orders (local storage) and enrich with order/customer/BOM
   useEffect(() => {
-    const fetchCuttingManagers = async () => {
+    const loadCuttingJobs = async () => {
       try {
-        const managers = await getCuttingManagers();
-        setCuttingManagers(managers);
-      } catch (error) {
-        console.error('Error fetching cutting managers:', error);
+        const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+        const map = raw ? JSON.parse(raw) : {};
+        const orderIds: string[] = Object.keys(map).filter(id => !!map[id]?.cuttingMasterId);
+        if (orderIds.length === 0) {
+          setCuttingJobs([]);
+          return;
+        }
+
+        // Fetch orders
+        const { data: orders } = await supabase
+          .from('orders' as any)
+          .select('id, order_number, expected_delivery_date, customer_id')
+          .in('id', orderIds as any);
+
+        // Fetch customers
+        const customerIds = Array.from(new Set((orders || []).map((o: any) => o.customer_id).filter(Boolean)));
+        let customersMap: Record<string, { company_name?: string }> = {};
+        if (customerIds.length > 0) {
+          const { data: customers } = await supabase
+            .from('customers' as any)
+            .select('id, company_name')
+            .in('id', customerIds as any);
+          (customers || []).forEach((c: any) => { if (c?.id) customersMap[c.id] = { company_name: c.company_name }; });
+        }
+
+        // Fetch BOM headers for product name and qty
+        const { data: boms } = await supabase
+          .from('bom_records' as any)
+          .select('order_id, product_name, total_order_qty')
+          .in('order_id', orderIds as any);
+        const bomByOrder: Record<string, { product_name?: string; qty: number }> = {};
+        (boms || []).forEach((b: any) => {
+          const key = b.order_id as string;
+          const prev = bomByOrder[key]?.qty || 0;
+          bomByOrder[key] = { product_name: bomByOrder[key]?.product_name || b.product_name, qty: prev + (b.total_order_qty || 0) };
+        });
+
+        const computePriority = (dueDateStr?: string | null): CuttingJob['priority'] => {
+          if (!dueDateStr) return 'medium';
+          const today = new Date();
+          const due = new Date(dueDateStr);
+          const diffDays = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays <= 2) return 'urgent';
+          if (diffDays <= 7) return 'high';
+          return 'medium';
+        };
+
+        const jobs: CuttingJob[] = (orders || []).map((o: any) => {
+          const p: any = map[o.id] || {};
+          const bom: any = bomByOrder[o.id] || { product_name: undefined, qty: 0 };
+          return {
+            id: o.id,
+            jobNumber: o.order_number,
+            orderNumber: o.order_number,
+            customerName: customersMap[o.customer_id]?.company_name || '',
+            productName: (bom as any).product_name || 'Product',
+            fabricType: '-',
+            quantity: Number((bom as any).qty || 0),
+            cutQuantity: Number(p.cutQuantity || 0),
+            assignedTo: p.cuttingMasterName || '',
+            patternMasterName: p.patternMasterName || '',
+            startDate: p.cuttingWorkDate || '',
+            dueDate: o.expected_delivery_date || '',
+            status: 'pending',
+            priority: computePriority(o.expected_delivery_date),
+            cuttingPattern: '',
+            fabricConsumption: 0,
+            efficiency: 0,
+            notes: '',
+            defects: 0,
+            reworkRequired: false,
+          };
+        });
+
+        setCuttingJobs(jobs);
+      } catch (err) {
+        console.error('Error loading cutting jobs:', err);
+        setCuttingJobs([]);
       }
     };
 
-    fetchCuttingManagers();
+    loadCuttingJobs();
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LOCAL_STORAGE_KEY) loadCuttingJobs();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, []);
+
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -115,15 +195,6 @@ const CuttingManagerPage = () => {
     }
   };
 
-  const getMachineStatusColor = (status: string) => {
-    switch (status) {
-      case 'available': return 'bg-green-100 text-green-800';
-      case 'busy': return 'bg-blue-100 text-blue-800';
-      case 'maintenance': return 'bg-orange-100 text-orange-800';
-      case 'offline': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
 
   const filteredJobs = cuttingJobs.filter(job => {
     const matchesSearch = job.jobNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -153,7 +224,6 @@ const CuttingManagerPage = () => {
     inProgress: cuttingJobs.filter(j => j.status === 'in_progress').length,
     completed: cuttingJobs.filter(j => j.status === 'completed').length,
     pending: cuttingJobs.filter(j => j.status === 'pending').length,
-    avgEfficiency: Math.round(cuttingJobs.reduce((acc, job) => acc + job.efficiency, 0) / cuttingJobs.length),
     totalDefects: cuttingJobs.reduce((acc, job) => acc + job.defects, 0),
     reworkJobs: cuttingJobs.filter(j => j.reworkRequired).length
   };
@@ -204,21 +274,7 @@ const CuttingManagerPage = () => {
             </CardContent>
           </Card>
 
-          <Card className="shadow-erp-md">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Avg. Efficiency
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-green-600">
-                  {stats.avgEfficiency}%
-                </span>
-                <TrendingUp className="w-5 h-5 text-green-600" />
-              </div>
-            </CardContent>
-          </Card>
+          
 
           <Card className="shadow-erp-md">
             <CardHeader className="pb-2">
@@ -238,59 +294,11 @@ const CuttingManagerPage = () => {
         </div>
 
         <Tabs defaultValue="jobs" className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-1">
             <TabsTrigger value="jobs">Cutting Jobs</TabsTrigger>
-            <TabsTrigger value="machines">Machines</TabsTrigger>
-            <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
 
           <TabsContent value="jobs" className="space-y-4">
-            {/* Cutting Managers Section */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="w-5 h-5" />
-                  Cutting Managers
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {cuttingManagers.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Users className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>No cutting managers found</p>
-                    <p className="text-sm">Add cutting managers to the production team to see them here</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap gap-4 justify-start">
-                    {cuttingManagers.map((manager) => (
-                      <div 
-                        key={manager.id} 
-                        className="relative group cursor-pointer"
-                        title={`${manager.full_name}${manager.is_batch_leader ? ' (Leader)' : ''}`}
-                        style={{ transitionDelay: '0ms' }}
-                      >
-                        {manager.avatar_url ? (
-                          <img
-                            src={manager.avatar_url}
-                            alt={manager.full_name}
-                            className="w-20 h-20 rounded-lg object-cover shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105 hover:-translate-y-1"
-                          />
-                        ) : (
-                          <div className="w-20 h-20 rounded-lg bg-primary/10 flex items-center justify-center shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105 hover:-translate-y-1">
-                            <Users className="w-10 h-10 text-primary/60" />
-                          </div>
-                        )}
-                        {manager.is_batch_leader && (
-                          <div className="absolute -top-1 -right-1 w-6 h-6 bg-yellow-500 rounded-full flex items-center justify-center border-2 border-white shadow-sm">
-                            <span className="text-xs text-white font-bold">L</span>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
 
             {/* Filters */}
             <Card>
@@ -374,8 +382,8 @@ const CuttingManagerPage = () => {
                         <TableHead>Customer</TableHead>
                         <TableHead>Product</TableHead>
                         <TableHead>Progress</TableHead>
-                        <TableHead>Assigned To</TableHead>
-                        <TableHead>Efficiency</TableHead>
+                        <TableHead>Cutting Master</TableHead>
+                        <TableHead>Pattern Master</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Due Date</TableHead>
                         <TableHead>Actions</TableHead>
@@ -413,15 +421,16 @@ const CuttingManagerPage = () => {
                             )}
                           </TableCell>
                           <TableCell>
-                            <div className="flex items-center">
-                              <span className={`text-sm font-medium ${
-                                job.efficiency >= 90 ? 'text-green-600' :
-                                job.efficiency >= 75 ? 'text-orange-600' : 'text-red-600'
-                              }`}>
-                                {job.efficiency}%
-                              </span>
-                            </div>
+                            {job.patternMasterName ? (
+                              <div className="flex items-center">
+                                <Users className="w-4 h-4 mr-2 text-muted-foreground" />
+                                {job.patternMasterName}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">Unassigned</span>
+                            )}
                           </TableCell>
+                          
                           <TableCell>
                             <Badge className={getStatusColor(job.status)}>
                               {job.status.replace('_', ' ')}
@@ -433,18 +442,18 @@ const CuttingManagerPage = () => {
                             )}
                           </TableCell>
                           <TableCell>
-                            <div className="flex items-center">
-                              <Calendar className="w-4 h-4 mr-2 text-muted-foreground" />
-                              {job.dueDate}
-                            </div>
+                        <div className="flex items-center">
+                          <Calendar className="w-4 h-4 mr-2 text-muted-foreground" />
+                          {formatDateDDMMYY(job.dueDate)}
+                        </div>
                           </TableCell>
                           <TableCell>
                             <div className="flex gap-2">
-                              <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" onClick={() => navigate(`/orders/${job.id}?from=production`)}>
                                 <Eye className="w-4 h-4 mr-2" />
                                 View
                               </Button>
-                              <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" onClick={() => { setUpdateJob(job); setUpdateCutQty(job.cutQuantity); setUpdateOpen(true); }}>
                                 <Edit className="w-4 h-4 mr-2" />
                                 Update
                               </Button>
@@ -459,172 +468,39 @@ const CuttingManagerPage = () => {
             </Card>
           </TabsContent>
 
-          <TabsContent value="machines" className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {cuttingMachines.map((machine) => (
-                <Card key={machine.id} className="shadow-erp-md">
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-lg">{machine.name}</CardTitle>
-                      <Badge className={getMachineStatusColor(machine.status)}>
-                        {machine.status}
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-muted-foreground">{machine.type}</p>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div>
-                      <div className="flex justify-between text-sm mb-1">
-                        <span>Efficiency</span>
-                        <span>{machine.efficiency}%</span>
-                      </div>
-                      <Progress value={machine.efficiency} className="h-2" />
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span>Operator:</span>
-                        <span className="font-medium">{machine.operator}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span>Current Job:</span>
-                        <span className="font-medium">
-                          {machine.currentJob || 'None'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span>Last Maintenance:</span>
-                        <span className="font-medium">{machine.lastMaintenance}</span>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" className="flex-1">
-                        <Settings className="w-4 h-4 mr-2" />
-                        Settings
-                      </Button>
-                      <Button variant="outline" size="sm" className="flex-1">
-                        <FileText className="w-4 h-4 mr-2" />
-                        Logs
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </TabsContent>
-
-          <TabsContent value="analytics" className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Efficiency Trends</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {cuttingMachines.length === 0 ? (
-                      <div className="text-center py-8 text-muted-foreground">
-                        No machine data available
-                      </div>
-                    ) : (
-                      cuttingMachines.map((machine) => (
-                        <div key={machine.id} className="flex items-center justify-between">
-                          <span className="text-sm">{machine.name}</span>
-                          <div className="flex items-center gap-2">
-                            <div className="w-32 bg-gray-200 rounded-full h-2">
-                              <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${machine.efficiency}%` }}></div>
-                            </div>
-                            <span className="text-sm font-medium">{machine.efficiency}%</span>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Defect Analysis</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {cuttingJobs.length === 0 ? (
-                      <div className="text-center py-8 text-muted-foreground">
-                        No defect data available
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm">Total Defects</span>
-                          <div className="flex items-center gap-2">
-                            <div className="w-32 bg-gray-200 rounded-full h-2">
-                              <div className="bg-red-600 h-2 rounded-full" style={{ 
-                                width: `${Math.min(100, (stats.totalDefects / Math.max(cuttingJobs.length * 10, 1)) * 100)}%` 
-                              }}></div>
-                            </div>
-                            <span className="text-sm font-medium">{stats.totalDefects}</span>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm">Rework Required</span>
-                          <div className="flex items-center gap-2">
-                            <div className="w-32 bg-gray-200 rounded-full h-2">
-                              <div className="bg-orange-600 h-2 rounded-full" style={{ 
-                                width: `${Math.round((stats.reworkJobs / Math.max(cuttingJobs.length, 1)) * 100)}%` 
-                              }}></div>
-                            </div>
-                            <span className="text-sm font-medium">{stats.reworkJobs}</span>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm">Completed Jobs</span>
-                          <div className="flex items-center gap-2">
-                            <div className="w-32 bg-gray-200 rounded-full h-2">
-                              <div className="bg-green-600 h-2 rounded-full" style={{ 
-                                width: `${Math.round((stats.completed / Math.max(cuttingJobs.length, 1)) * 100)}%` 
-                              }}></div>
-                            </div>
-                            <span className="text-sm font-medium">{stats.completed}</span>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Performance Metrics</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="text-center">
-                    <div className="text-3xl font-bold text-blue-600 mb-2">
-                      {stats.avgEfficiency}%
-                    </div>
-                    <div className="text-sm text-muted-foreground">Average Efficiency</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-3xl font-bold text-green-600 mb-2">
-                      {stats.completed}
-                    </div>
-                    <div className="text-sm text-muted-foreground">Jobs Completed</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-3xl font-bold text-red-600 mb-2">
-                      {stats.reworkJobs}
-                    </div>
-                    <div className="text-sm text-muted-foreground">Rework Required</div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
         </Tabs>
       </div>
+      {/* Update Progress Dialog */}
+      <Dialog open={updateOpen} onOpenChange={setUpdateOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Update Cutting Progress</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Cut Quantity</Label>
+              <Input type="number" min={0} value={updateCutQty} onChange={(e) => setUpdateCutQty(Number(e.target.value || 0))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUpdateOpen(false)}>Cancel</Button>
+            <Button onClick={() => {
+              if (!updateJob) { setUpdateOpen(false); return; }
+              const newQty = Math.min(updateCutQty, updateJob.quantity);
+              // Update local table state
+              setCuttingJobs(prev => prev.map(j => j.id === updateJob.id ? { ...j, cutQuantity: newQty } : j));
+              // Persist to local storage used by Assign Orders/Cutting Manager
+              try {
+                const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+                const map = raw ? JSON.parse(raw) : {};
+                map[updateJob.id] = { ...(map[updateJob.id] || {}), cutQuantity: newQty };
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(map));
+              } catch {}
+              setUpdateOpen(false);
+            }}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </ErpLayout>
   );
 };

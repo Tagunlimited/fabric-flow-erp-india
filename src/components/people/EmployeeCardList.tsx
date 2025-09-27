@@ -208,68 +208,44 @@ export function EmployeeCardList() {
               <p className="text-muted-foreground">Try adjusting your search criteria or add a new employee.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {filteredEmployees.map((employee) => (
                 <Card 
                   key={employee.id} 
-                  className="cursor-pointer hover:shadow-lg transition-all duration-300 hover:scale-105 border-0 bg-gradient-to-br from-card to-card/80"
+                  className="cursor-pointer hover:shadow-lg transition-all duration-300 border-0 bg-gradient-to-r from-card to-card/80"
                   onClick={() => handleCardClick(employee.id)}
                 >
-                  <CardHeader className="pb-4">
-                    <div className="flex items-center justify-between">
-                      <Avatar className="w-16 h-16">
+                  <CardContent className="p-4">
+                    <div className="flex items-center space-x-3">
+                      {/* Avatar */}
+                      <Avatar className="w-16 h-16 flex-shrink-0">
                         <AvatarImage src={getAvatarUrl(employee)} alt={employee.full_name} />
                         <AvatarFallback className="text-lg font-bold bg-gradient-primary text-white">
                           {employee.full_name.split(' ').map(n => n[0]).join('').toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
-                      <Edit className="w-4 h-4 text-muted-foreground hover:text-primary" />
-                    </div>
-                    <div className="space-y-1">
-                      <h3 className="font-bold text-lg text-primary leading-tight">
-                        {employee.full_name.toUpperCase()}
-                      </h3>
-                      <p className="text-sm text-muted-foreground">Role: {employee.designation}</p>
-                      <p className="text-sm font-medium">{employee.department}</p>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="flex items-center text-sm">
-                      <Phone className="w-4 h-4 mr-2 text-primary" />
-                      <span className="font-medium">{employee.personal_phone}</span>
-                    </div>
-                    
-                    {employee.personal_email && (
-                      <div className="flex items-center text-sm">
-                        <Mail className="w-4 h-4 mr-2 text-primary" />
-                        <span className="truncate">{employee.personal_email}</span>
+                      
+                      {/* Employee Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="space-y-1">
+                          <h3 className="font-bold text-lg text-primary leading-tight truncate">
+                            {employee.full_name}
+                          </h3>
+                          <p className="text-xs font-medium text-muted-foreground truncate">
+                            {employee.designation}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {employee.department}
+                          </p>
+                          <div className="flex items-center text-xs">
+                            <Phone className="w-3 h-3 mr-1 text-primary flex-shrink-0" />
+                            <span className="font-medium truncate">{employee.personal_phone}</span>
+                          </div>
+                        </div>
                       </div>
-                    )}
-                    
-                    <div className="flex items-center text-sm text-success">
-                      <div className="w-2 h-2 bg-success rounded-full mr-2"></div>
-                      <span>Active Since ({getExperienceText(employee.joining_date)})</span>
-                    </div>
-                    
-                    <div className="flex items-center text-sm text-muted-foreground">
-                      <Calendar className="w-4 h-4 mr-2" />
-                      <span>{format(new Date(employee.date_of_birth), 'dd-MMM-yyyy')}</span>
-                    </div>
-                    
-                    <div className="flex items-center text-sm text-muted-foreground">
-                      <Briefcase className="w-4 h-4 mr-2" />
-                      <span>{format(new Date(employee.joining_date), 'dd-MMM-yyyy')}</span>
-                    </div>
-                    
-                    <div className="flex items-center text-sm">
-                      <MapPin className="w-4 h-4 mr-2 text-primary" />
-                      <span className="truncate">{employee.city}, {employee.state}</span>
-                    </div>
-                    
-                    <div className="pt-2">
-                      <Badge variant={getEmploymentTypeBadgeVariant(employee.employment_type)} className="w-full justify-center">
-                        {employee.employment_type}
-                      </Badge>
+                      
+                      {/* Edit Icon */}
+                      <Edit className="w-4 h-4 text-muted-foreground hover:text-primary flex-shrink-0" />
                     </div>
                   </CardContent>
                 </Card>

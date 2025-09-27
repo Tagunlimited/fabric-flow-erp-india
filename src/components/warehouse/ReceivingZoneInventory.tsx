@@ -155,7 +155,18 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
     loadInventory();
     const handler = () => loadInventory();
     window.addEventListener('warehouse-inventory-updated', handler as any);
-    return () => window.removeEventListener('warehouse-inventory-updated', handler as any);
+    // Live updates: listen to realtime changes for receiving items
+    const channel = supabase
+      .channel('receiving_inventory_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'warehouse_inventory' } as any, () => {
+        loadInventory();
+      })
+      .subscribe();
+
+    return () => {
+      window.removeEventListener('warehouse-inventory-updated', handler as any);
+      try { supabase.removeChannel(channel); } catch {}
+    };
   }, []);
 
   const getStatusConfig = (status: string) => {

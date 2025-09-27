@@ -263,12 +263,17 @@ export default function OrderDetailPage() {
           setSalesManager((salesManagerData as unknown as SalesManager) || null);
         }
 
-        // Fetch employees for edit dropdown
+        // Fetch employees for edit dropdown (only Sales Department)
         const { data: employeesData } = await (supabase as any)
           .from('employees')
-          .select('id, full_name')
+          .select('id, full_name, department')
           .order('full_name');
-        setEmployees((employeesData as unknown as SalesManager[]) || []);
+        
+        // Filter to only show employees from Sales Department
+        const salesEmployees = (employeesData || []).filter((emp: any) => 
+          emp.department && emp.department.toLowerCase().includes('sales')
+        );
+        setEmployees((salesEmployees as unknown as SalesManager[]) || []);
 
         // Fetch order items
         const { data: itemsData, error: itemsError } = await (supabase as any)

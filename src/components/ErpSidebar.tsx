@@ -121,7 +121,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Production Team", url: "/people/production-team", icon: Scissors },
         // { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
         // { title: "Incentive Programme", url: "/people/incentives", icon: Award },
-        { title: "Departments", url: "/people/departments", icon: Building }
+        { title: "Departments", url: "/people/departments", icon: Building },
+        { title: "Designations", url: "/people/designations", icon: Award }
       ]
     },
     {

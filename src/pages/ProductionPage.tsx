@@ -353,21 +353,21 @@ const ProductionPage = () => {
                             {order.customer?.company_name || 'N/A'}
                           </TableCell>
                           <TableCell>
-                            <div className="flex flex-wrap gap-3">
+                            <div className="flex flex-wrap gap-2 justify-start">
                               {order.order_items?.map((item: any, index: number) => (
-                                <div key={index} className="flex flex-col items-center gap-1">
+                                <div key={index} className="flex flex-col items-center gap-1 min-w-0">
                                   {item.category_image_url ? (
                                     <img
                                       src={item.category_image_url}
                                       alt={item.product_description || 'Product'}
-                                      className="w-12 h-12 rounded object-cover border shadow-sm"
+                                      className="w-12 h-12 rounded object-cover border shadow-sm flex-shrink-0"
                                     />
                                   ) : (
-                                    <div className="w-12 h-12 rounded bg-gray-100 border flex items-center justify-center shadow-sm">
+                                    <div className="w-12 h-12 rounded bg-gray-100 border flex items-center justify-center shadow-sm flex-shrink-0">
                                       <span className="text-xs text-gray-500">IMG</span>
                                     </div>
                                   )}
-                                  <span className="text-xs text-muted-foreground text-center max-w-16 truncate">
+                                  <span className="text-xs text-muted-foreground text-center w-16 truncate">
                                     {item.product_description || 'Product'}
                                   </span>
                                 </div>

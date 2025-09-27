@@ -30,7 +30,7 @@ import {
   ToggleLeft,
   ToggleRight
 } from "lucide-react";
-import { getDashboardData, type DashboardData } from "@/lib/database";
+import { getDashboardData, getDepartmentCount, getRecentActivities, type DashboardData } from "@/lib/database";
 import { cn } from "@/lib/utils";
 import { Link, useNavigate } from "react-router-dom";
 import { CalendarView } from "@/components/CalendarView";
@@ -68,6 +68,8 @@ interface ModuleCard {
 
 export function EnhancedDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [departmentCount, setDepartmentCount] = useState<number>(0);
+  const [recentActivities, setRecentActivities] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'dashboard' | 'calendar'>('dashboard');
   const [dashboardSettings, setDashboardSettings] = useState<DashboardSettingsType>({
@@ -91,14 +93,45 @@ export function EnhancedDashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
+  // Helper function to format time ago
+  const formatTimeAgo = (dateString: string) => {
+    const now = new Date();
+    const date = new Date(dateString);
+    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+    
+    if (diffInSeconds < 60) return `${diffInSeconds} sec ago`;
+    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} min ago`;
+    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} hr ago`;
+    return `${Math.floor(diffInSeconds / 86400)} day${Math.floor(diffInSeconds / 86400) > 1 ? 's' : ''} ago`;
+  };
+
+  // Helper function to get activity type color
+  const getActivityTypeColor = (activityType: string) => {
+    if (activityType.includes('order')) return 'bg-blue-500';
+    if (activityType.includes('production')) return 'bg-orange-500';
+    if (activityType.includes('quality')) return 'bg-green-500';
+    if (activityType.includes('dispatch')) return 'bg-purple-500';
+    if (activityType.includes('customer')) return 'bg-cyan-500';
+    if (activityType.includes('payment')) return 'bg-yellow-500';
+    return 'bg-gray-500';
+  };
+
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
         console.log('Fetching dashboard data...');
-        const dashboardData = await getDashboardData();
+        const [dashboardData, deptCount, activities] = await Promise.all([
+          getDashboardData(),
+          getDepartmentCount(),
+          getRecentActivities(10)
+        ]);
         console.log('Dashboard data received:', dashboardData);
+        console.log('Department count received:', deptCount);
+        console.log('Recent activities received:', activities);
         setData(dashboardData);
+        setDepartmentCount(deptCount);
+        setRecentActivities(activities);
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
       } finally {
@@ -270,7 +303,7 @@ export function EnhancedDashboard() {
       link: "/people",
       stats: [
         { label: "Employees", value: data.summary.totalEmployees.toString() },
-        { label: "Departments", value: "8" }
+        { label: "Departments", value: departmentCount.toString() }
       ]
     },
     {
@@ -603,62 +636,41 @@ export function EnhancedDashboard() {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-3">
-                      {[
-                        {
-                          user: "System Administrator",
-                          action: "Created new order",
-                          time: "5 min ago",
-                          department: "Sales",
-                          type: "order"
-                        },
-                        {
-                          user: "Production Manager",
-                          action: "Updated production stage",
-                          time: "12 min ago",
-                          department: "Production",
-                          type: "production"
-                        },
-                        {
-                          user: "Quality Inspector",
-                          action: "Completed QC check",
-                          time: "25 min ago",
-                          department: "Quality",
-                          type: "quality"
-                        },
-                        {
-                          user: "Dispatch Manager",
-                          action: "Scheduled delivery",
-                          time: "1 hr ago",
-                          department: "Dispatch",
-                          type: "dispatch"
-                        },
-                        {
-                          user: "Sales Manager",
-                          action: "Added new customer",
-                          time: "2 hr ago",
-                          department: "Sales",
-                          type: "customer"
-                        }
-                      ].slice(0, dashboardSettings.compactMode ? 3 : 5).map((activity, index) => (
-                        <div key={index} className="flex items-start space-x-3 p-2 hover:bg-muted/50 rounded-lg transition-colors">
+                      {recentActivities.length === 0 ? (
+                        <div className="text-center py-8 text-muted-foreground">
+                          <Activity className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                          <p>No recent activity found</p>
+                          <p className="text-sm">Activity will appear here as users interact with the system</p>
+                        </div>
+                      ) : (
+                        recentActivities.slice(0, dashboardSettings.compactMode ? 3 : 5).map((activity, index) => (
+                        <div key={activity.id} className="flex items-start space-x-3 p-2 hover:bg-muted/50 rounded-lg transition-colors">
                           <div className={cn(
                             "w-2 h-2 rounded-full mt-2 flex-shrink-0",
-                            activity.type === 'order' ? 'bg-blue-500' :
-                            activity.type === 'production' ? 'bg-orange-500' :
-                            activity.type === 'quality' ? 'bg-green-500' :
-                            activity.type === 'dispatch' ? 'bg-purple-500' :
-                            'bg-gray-500'
+                            getActivityTypeColor(activity.activity_type)
                           )} />
                           <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium">{activity.user}</p>
-                            <p className="text-xs text-muted-foreground">{activity.action}</p>
+                            <p className="text-sm font-medium">
+                              {activity.user_name || activity.user_email || 'System'}
+                            </p>
+                            <p className="text-xs text-muted-foreground">{activity.activity_description}</p>
                             <div className="flex items-center justify-between mt-1">
-                              <span className="text-xs text-muted-foreground">{activity.department}</span>
-                              <span className="text-xs text-muted-foreground">{activity.time}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {activity.activity_type.replace('_', ' ')}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {formatTimeAgo(activity.performed_at)}
+                              </span>
                             </div>
+                            {activity.order_number && (
+                              <p className="text-xs text-blue-600 font-medium mt-1">
+                                Order: {activity.order_number}
+                              </p>
+                            )}
                           </div>
                         </div>
-                      ))}
+                      ))
+                      )}
                     </div>
                   </CardContent>
                 </Card>

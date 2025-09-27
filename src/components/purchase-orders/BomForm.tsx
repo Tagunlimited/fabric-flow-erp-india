@@ -955,12 +955,26 @@ export function BomForm() {
 
          // For fabrics, use the main item data (not fabricSelections)
          if (item.item_type === 'fabric') {
+              // Get fabric details from selection state or item data
+              const fabricState = fabricSelectionState[items.indexOf(item)];
+              const fabricName = fabricState?.selectedFabricName || item.fabric_name || item.item_name;
+              const fabricColor = fabricState?.selectedColor || item.fabric_color || '';
+              const fabricGsm = item.fabric_gsm || '';
+              
+              const fabricDisplayName = fabricName && fabricColor && fabricGsm 
+                ? `${fabricName} - ${fabricColor} - ${fabricGsm} GSM`
+                : item.item_name || fabricName || 'Unknown Fabric';
+              
               bomItems.push({
                 ...base,
-             item_name: item.fabric_name ? `${item.fabric_name} - ${item.fabric_color || ''} - ${item.fabric_gsm || ''} GSM` : item.item_name,
-             qty_total: item.qty_total || 0,
-             to_order: item.to_order || 0
-            });
+                item_name: fabricDisplayName,
+                qty_total: item.qty_total || 0,
+                to_order: item.to_order || 0,
+                // Add fabric-specific fields for better data integrity
+                fabric_name: fabricName,
+                fabric_color: fabricColor,
+                fabric_gsm: fabricGsm
+              });
           } else {
             // For items and products, use the main quantity
             bomItems.push({
