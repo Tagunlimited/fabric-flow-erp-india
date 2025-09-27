@@ -20,18 +20,12 @@ import {
   TrendingUp,
   Package,
   Factory,
-  Users,
   Target,
-  BarChart3,
   Eye,
   Edit,
-  Plus,
-  FileText,
-  Settings,
-  Zap
+  Plus
 } from "lucide-react";
-import { useState, useEffect } from "react";
-import { getCuttingManagers } from "@/lib/database";
+import { useState } from "react";
 
 interface CuttingJob {
   id: string;
@@ -55,16 +49,6 @@ interface CuttingJob {
   reworkRequired: boolean;
 }
 
-interface CuttingMachine {
-  id: string;
-  name: string;
-  type: string;
-  status: 'available' | 'busy' | 'maintenance' | 'offline';
-  currentJob: string | null;
-  efficiency: number;
-  lastMaintenance: string;
-  operator: string;
-}
 
 const CuttingManagerPage = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -74,25 +58,7 @@ const CuttingManagerPage = () => {
   // Initialize with empty array - data will be loaded from backend
   const [cuttingJobs, setCuttingJobs] = useState<CuttingJob[]>([]);
 
-  // Initialize with empty array - data will be loaded from backend
-  const [cuttingMachines, setCuttingMachines] = useState<CuttingMachine[]>([]);
 
-  // State for cutting managers
-  const [cuttingManagers, setCuttingManagers] = useState<any[]>([]);
-
-  // Fetch cutting managers data
-  useEffect(() => {
-    const fetchCuttingManagers = async () => {
-      try {
-        const managers = await getCuttingManagers();
-        setCuttingManagers(managers);
-      } catch (error) {
-        console.error('Error fetching cutting managers:', error);
-      }
-    };
-
-    fetchCuttingManagers();
-  }, []);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -115,15 +81,6 @@ const CuttingManagerPage = () => {
     }
   };
 
-  const getMachineStatusColor = (status: string) => {
-    switch (status) {
-      case 'available': return 'bg-green-100 text-green-800';
-      case 'busy': return 'bg-blue-100 text-blue-800';
-      case 'maintenance': return 'bg-orange-100 text-orange-800';
-      case 'offline': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
 
   const filteredJobs = cuttingJobs.filter(job => {
     const matchesSearch = job.jobNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -238,59 +195,11 @@ const CuttingManagerPage = () => {
         </div>
 
         <Tabs defaultValue="jobs" className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-1">
             <TabsTrigger value="jobs">Cutting Jobs</TabsTrigger>
-            <TabsTrigger value="machines">Machines</TabsTrigger>
-            <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
 
           <TabsContent value="jobs" className="space-y-4">
-            {/* Cutting Managers Section */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="w-5 h-5" />
-                  Cutting Managers
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {cuttingManagers.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Users className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>No cutting managers found</p>
-                    <p className="text-sm">Add cutting managers to the production team to see them here</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap gap-4 justify-start">
-                    {cuttingManagers.map((manager) => (
-                      <div 
-                        key={manager.id} 
-                        className="relative group cursor-pointer"
-                        title={`${manager.full_name}${manager.is_batch_leader ? ' (Leader)' : ''}`}
-                        style={{ transitionDelay: '0ms' }}
-                      >
-                        {manager.avatar_url ? (
-                          <img
-                            src={manager.avatar_url}
-                            alt={manager.full_name}
-                            className="w-20 h-20 rounded-lg object-cover shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105 hover:-translate-y-1"
-                          />
-                        ) : (
-                          <div className="w-20 h-20 rounded-lg bg-primary/10 flex items-center justify-center shadow-md hover:shadow-lg transition-all duration-200 hover:scale-105 hover:-translate-y-1">
-                            <Users className="w-10 h-10 text-primary/60" />
-                          </div>
-                        )}
-                        {manager.is_batch_leader && (
-                          <div className="absolute -top-1 -right-1 w-6 h-6 bg-yellow-500 rounded-full flex items-center justify-center border-2 border-white shadow-sm">
-                            <span className="text-xs text-white font-bold">L</span>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
 
             {/* Filters */}
             <Card>
@@ -459,170 +368,6 @@ const CuttingManagerPage = () => {
             </Card>
           </TabsContent>
 
-          <TabsContent value="machines" className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {cuttingMachines.map((machine) => (
-                <Card key={machine.id} className="shadow-erp-md">
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-lg">{machine.name}</CardTitle>
-                      <Badge className={getMachineStatusColor(machine.status)}>
-                        {machine.status}
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-muted-foreground">{machine.type}</p>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div>
-                      <div className="flex justify-between text-sm mb-1">
-                        <span>Efficiency</span>
-                        <span>{machine.efficiency}%</span>
-                      </div>
-                      <Progress value={machine.efficiency} className="h-2" />
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span>Operator:</span>
-                        <span className="font-medium">{machine.operator}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span>Current Job:</span>
-                        <span className="font-medium">
-                          {machine.currentJob || 'None'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span>Last Maintenance:</span>
-                        <span className="font-medium">{machine.lastMaintenance}</span>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" className="flex-1">
-                        <Settings className="w-4 h-4 mr-2" />
-                        Settings
-                      </Button>
-                      <Button variant="outline" size="sm" className="flex-1">
-                        <FileText className="w-4 h-4 mr-2" />
-                        Logs
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </TabsContent>
-
-          <TabsContent value="analytics" className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Efficiency Trends</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {cuttingMachines.length === 0 ? (
-                      <div className="text-center py-8 text-muted-foreground">
-                        No machine data available
-                      </div>
-                    ) : (
-                      cuttingMachines.map((machine) => (
-                        <div key={machine.id} className="flex items-center justify-between">
-                          <span className="text-sm">{machine.name}</span>
-                          <div className="flex items-center gap-2">
-                            <div className="w-32 bg-gray-200 rounded-full h-2">
-                              <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${machine.efficiency}%` }}></div>
-                            </div>
-                            <span className="text-sm font-medium">{machine.efficiency}%</span>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Defect Analysis</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {cuttingJobs.length === 0 ? (
-                      <div className="text-center py-8 text-muted-foreground">
-                        No defect data available
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm">Total Defects</span>
-                          <div className="flex items-center gap-2">
-                            <div className="w-32 bg-gray-200 rounded-full h-2">
-                              <div className="bg-red-600 h-2 rounded-full" style={{ 
-                                width: `${Math.min(100, (stats.totalDefects / Math.max(cuttingJobs.length * 10, 1)) * 100)}%` 
-                              }}></div>
-                            </div>
-                            <span className="text-sm font-medium">{stats.totalDefects}</span>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm">Rework Required</span>
-                          <div className="flex items-center gap-2">
-                            <div className="w-32 bg-gray-200 rounded-full h-2">
-                              <div className="bg-orange-600 h-2 rounded-full" style={{ 
-                                width: `${Math.round((stats.reworkJobs / Math.max(cuttingJobs.length, 1)) * 100)}%` 
-                              }}></div>
-                            </div>
-                            <span className="text-sm font-medium">{stats.reworkJobs}</span>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm">Completed Jobs</span>
-                          <div className="flex items-center gap-2">
-                            <div className="w-32 bg-gray-200 rounded-full h-2">
-                              <div className="bg-green-600 h-2 rounded-full" style={{ 
-                                width: `${Math.round((stats.completed / Math.max(cuttingJobs.length, 1)) * 100)}%` 
-                              }}></div>
-                            </div>
-                            <span className="text-sm font-medium">{stats.completed}</span>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Performance Metrics</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="text-center">
-                    <div className="text-3xl font-bold text-blue-600 mb-2">
-                      {stats.avgEfficiency}%
-                    </div>
-                    <div className="text-sm text-muted-foreground">Average Efficiency</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-3xl font-bold text-green-600 mb-2">
-                      {stats.completed}
-                    </div>
-                    <div className="text-sm text-muted-foreground">Jobs Completed</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-3xl font-bold text-red-600 mb-2">
-                      {stats.reworkJobs}
-                    </div>
-                    <div className="text-sm text-muted-foreground">Rework Required</div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
         </Tabs>
       </div>
     </ErpLayout>

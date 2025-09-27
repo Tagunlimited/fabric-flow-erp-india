@@ -587,66 +587,79 @@ const GRNForm = () => {
       
       for (const item of approvedItems) {
         if (item.quality_status === 'approved' && item.approved_quantity > 0) {
-          if (item.item_type === 'fabric') {
-            // Get current fabric inventory
-            const { data: fabricData, error: fetchError } = await supabase
-              .from('fabric_master')
-              .select('inventory')
-              .eq('id', item.item_id)
-              .single();
+          // Only update master table inventory if item_id exists
+          if (item.item_id && item.item_type === 'fabric') {
+            try {
+              // Get current fabric inventory
+              const { data: fabricData, error: fetchError } = await supabase
+                .from('fabric_master')
+                .select('inventory')
+                .eq('id', item.item_id)
+                .single();
 
-            if (fetchError) {
-              console.error('Error fetching fabric inventory:', fetchError);
-              throw new Error(`Failed to fetch fabric inventory: ${fetchError.message}`);
+              if (fetchError) {
+                console.error('Error fetching fabric inventory:', fetchError);
+                console.log('Skipping fabric inventory update for item:', item.item_name);
+              } else {
+                const currentInventory = (fabricData as any)?.inventory || 0;
+                const newInventory = currentInventory + item.approved_quantity;
+
+                // Update fabric_master inventory
+                const { error: fabricError } = await supabase
+                  .from('fabric_master')
+                  .update({
+                    inventory: newInventory
+                  } as any)
+                  .eq('id', item.item_id as any);
+
+                if (fabricError) {
+                  console.error('Error updating fabric inventory:', fabricError);
+                  console.log('Skipping fabric inventory update for item:', item.item_name);
+                } else {
+                  console.log(`Updated fabric inventory for ${item.item_name}: ${currentInventory} + ${item.approved_quantity} = ${newInventory}`);
+                }
+              }
+            } catch (error) {
+              console.error('Error processing fabric inventory update:', error);
+              console.log('Continuing with warehouse inventory insertion...');
             }
+          } else if (item.item_id && (item.item_type === 'item' || item.item_type === 'product')) {
+            try {
+              // Get current item inventory
+              const { data: itemData, error: fetchError } = await supabase
+                .from('item_master')
+                .select('current_stock')
+                .eq('id', item.item_id)
+                .single();
 
-            const currentInventory = (fabricData as any)?.inventory || 0;
-            const newInventory = currentInventory + item.approved_quantity;
+              if (fetchError) {
+                console.error('Error fetching item inventory:', fetchError);
+                console.log('Skipping item inventory update for item:', item.item_name);
+              } else {
+                const currentStock = (itemData as any)?.current_stock || 0;
+                const newStock = currentStock + item.approved_quantity;
 
-            // Update fabric_master inventory
-            const { error: fabricError } = await supabase
-              .from('fabric_master')
-              .update({
-                inventory: newInventory
-              } as any)
-              .eq('id', item.item_id as any);
+                // Update item_master inventory
+                const { error: itemError } = await supabase
+                  .from('item_master')
+                  .update({
+                    current_stock: newStock
+                  } as any)
+                  .eq('id', item.item_id as any);
 
-            if (fabricError) {
-              console.error('Error updating fabric inventory:', fabricError);
-              throw new Error(`Failed to update fabric inventory: ${fabricError.message}`);
+                if (itemError) {
+                  console.error('Error updating item inventory:', itemError);
+                  console.log('Skipping item inventory update for item:', item.item_name);
+                } else {
+                  console.log(`Updated item inventory for ${item.item_name}: ${currentStock} + ${item.approved_quantity} = ${newStock}`);
+                }
+              }
+            } catch (error) {
+              console.error('Error processing item inventory update:', error);
+              console.log('Continuing with warehouse inventory insertion...');
             }
-            
-            console.log(`Updated fabric inventory for ${item.item_name}: ${currentInventory} + ${item.approved_quantity} = ${newInventory}`);
-          } else if (item.item_type === 'item' || item.item_type === 'product') {
-            // Get current item inventory
-            const { data: itemData, error: fetchError } = await supabase
-              .from('item_master')
-              .select('current_stock')
-              .eq('id', item.item_id)
-              .single();
-
-            if (fetchError) {
-              console.error('Error fetching item inventory:', fetchError);
-              throw new Error(`Failed to fetch item inventory: ${fetchError.message}`);
-            }
-
-            const currentStock = (itemData as any)?.current_stock || 0;
-            const newStock = currentStock + item.approved_quantity;
-
-            // Update item_master inventory
-            const { error: itemError } = await supabase
-              .from('item_master')
-              .update({
-                current_stock: newStock
-              } as any)
-              .eq('id', item.item_id as any);
-
-            if (itemError) {
-              console.error('Error updating item inventory:', itemError);
-              throw new Error(`Failed to update item inventory: ${itemError.message}`);
-            }
-            
-            console.log(`Updated item inventory for ${item.item_name}: ${currentStock} + ${item.approved_quantity} = ${newStock}`);
+          } else {
+            console.log(`Skipping master table inventory update for ${item.item_name} - no item_id or custom item`);
           }
 
           // Add item to warehouse inventory tracking
@@ -658,7 +671,7 @@ const GRNForm = () => {
                 grn_item_id: item.id,
                 item_type: (item.item_type === 'fabric' ? 'FABRIC' : 
                           item.item_type === 'product' ? 'PRODUCT' : 'ITEM') as any,
-                item_id: item.item_id,
+                item_id: item.item_id || null, // Allow null for custom items
                 item_name: item.item_name,
                 item_code: item.item_code || item.item_name,
                 quantity: item.approved_quantity,

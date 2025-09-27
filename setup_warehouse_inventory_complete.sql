@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS warehouse_inventory (
   grn_id UUID REFERENCES grn_master(id) ON DELETE CASCADE,
   grn_item_id UUID REFERENCES grn_items(id) ON DELETE CASCADE,
   item_type warehouse_item_type NOT NULL,
-  item_id UUID, -- Reference to fabric_master or item_master (nullable)
+  item_id UUID, -- Reference to fabric_master or item_master (nullable for custom items)
   item_name TEXT NOT NULL,
   item_code TEXT NOT NULL,
   quantity DECIMAL(10,3) NOT NULL,
