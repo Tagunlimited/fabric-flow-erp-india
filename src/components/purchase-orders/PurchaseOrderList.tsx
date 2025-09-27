@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback, memo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,7 @@ import { Plus, RefreshCw, Eye, Pencil, Trash2, ClipboardList } from 'lucide-reac
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { format } from 'date-fns';
+import { ItemImage } from '@/components/ui/OptimizedImage';
 
 type PurchaseOrder = {
   id: string;
@@ -28,90 +29,22 @@ type Supplier = { id: string; supplier_name: string; supplier_code: string };
 type FirstItemImage = { po_id: string; item_image_url: string | null };
 type ItemRowLite = { po_id: string; item_image_url: string | null; line_total: number | null; total_price: number | null; gst_amount: number | null; gst_rate: number | null };
 
-export function PurchaseOrderList() {
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
-  const [suppliers, setSuppliers] = useState<Record<string, Supplier>>({});
-  const [firstItemImageByPoId, setFirstItemImageByPoId] = useState<Record<string, string | null>>({});
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | PurchaseOrder['status']>('all');
-
-  useEffect(() => {
-    fetchAll();
-  }, []);
-
-  const fetchAll = async () => {
-    try {
-      setLoading(true);
-      const { data: poData, error: poErr } = await supabase
-        .from('purchase_orders')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (poErr) throw poErr;
-
-      const supplierIds = Array.from(new Set((poData || []).map((p) => p.supplier_id))).filter(Boolean) as string[];
-      const { data: supplierData, error: supErr } = await supabase
-        .from('supplier_master')
-        .select('id, supplier_name, supplier_code')
-        .in('id', supplierIds);
-      if (supErr) throw supErr;
-
-      const supplierMap: Record<string, Supplier> = {};
-      (supplierData || []).forEach((s) => (supplierMap[s.id] = s as Supplier));
-
-      const poIds = (poData || []).map((p) => p.id);
-      const { data: itemsData } = await supabase
-        .from('purchase_order_items')
-        .select('po_id, item_image_url, line_total, total_price, gst_amount, gst_rate')
-        .in('po_id', poIds);
-      const firstImageMap: Record<string, string | null> = {};
-      const totalsMap: Record<string, number> = {};
-      (itemsData as ItemRowLite[] | null || []).forEach((row) => {
-        // Pick first non-null image only
-        if (firstImageMap[row.po_id] == null && row.item_image_url) {
-          firstImageMap[row.po_id] = row.item_image_url;
-        }
-        // Compute line total fallback
-        const tp = row.total_price || 0;
-        const ga = row.gst_amount != null ? row.gst_amount : tp * ((row.gst_rate || 0) / 100);
-        const lt = row.line_total != null ? row.line_total : tp + ga;
-        totalsMap[row.po_id] = (totalsMap[row.po_id] || 0) + lt;
-      });
-
-      const merged = (poData || []).map((po) => {
-        const computed = totalsMap[po.id];
-        if ((po.total_amount == null || po.total_amount === 0) && computed > 0) {
-          return { ...po, total_amount: computed } as PurchaseOrder;
-        }
-        return po as PurchaseOrder;
-      });
-      setPurchaseOrders(merged);
-      setSuppliers(supplierMap);
-      setFirstItemImageByPoId(firstImageMap);
-    } catch (e) {
-      console.error('Failed to fetch purchase orders', e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const filteredPOs = useMemo(() => {
-    return purchaseOrders.filter((po) => {
-      const s = suppliers[po.supplier_id];
-      const text = `${po.po_number} ${(s?.supplier_name || '')} ${(s?.supplier_code || '')}`.toLowerCase();
-      const matchesSearch = !search || text.includes(search.toLowerCase());
-      const matchesStatus = statusFilter === 'all' || po.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    });
-  }, [purchaseOrders, suppliers, search, statusFilter]);
-
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this purchase order?')) return;
-    await supabase.from('purchase_orders').delete().eq('id', id);
-    fetchAll();
-  };
-
+// Memoized row component for better performance
+const PurchaseOrderRow = memo(function PurchaseOrderRow({ 
+  po, 
+  supplier, 
+  imageUrl, 
+  onView, 
+  onEdit, 
+  onDelete 
+}: {
+  po: PurchaseOrder;
+  supplier: Supplier | undefined;
+  imageUrl: string | null;
+  onView: (id: string) => void;
+  onEdit: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
   const statusBadge = (status: PurchaseOrder['status']) => {
     const map: Record<PurchaseOrder['status'], string> = {
       draft: 'bg-gray-100 text-gray-800 border-gray-200',
@@ -123,6 +56,153 @@ export function PurchaseOrderList() {
     };
     return <Badge variant="outline" className={`font-medium ${map[status]}`}>{status.replace('_',' ')}</Badge>;
   };
+
+  return (
+    <TableRow>
+      <TableCell className="font-medium">{po.po_number}</TableCell>
+      <TableCell>
+        <div className="text-sm">
+          <div className="font-medium">{supplier?.supplier_name || '-'}</div>
+          <div className="text-xs text-muted-foreground">{supplier?.supplier_code || ''}</div>
+        </div>
+      </TableCell>
+      <TableCell>{po.order_date ? format(new Date(po.order_date), 'dd MMM yyyy') : '-'}</TableCell>
+      <TableCell>
+        <ItemImage 
+          src={imageUrl} 
+          alt="item" 
+          className="w-12 h-12 object-cover rounded"
+        />
+      </TableCell>
+      <TableCell>{po.total_amount != null ? po.total_amount.toFixed(2) : '-'}</TableCell>
+      <TableCell>{statusBadge(po.status)}</TableCell>
+      <TableCell>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => onView(po.id)}>
+            <Eye className="w-4 h-4" />
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => onEdit(po.id)}>
+            <Pencil className="w-4 h-4" />
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => onDelete(po.id)}>
+            <Trash2 className="w-4 h-4" />
+          </Button>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+});
+
+const PurchaseOrderList = memo(function PurchaseOrderList() {
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const [suppliers, setSuppliers] = useState<Record<string, Supplier>>({});
+  const [firstItemImageByPoId, setFirstItemImageByPoId] = useState<Record<string, string | null>>({});
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | PurchaseOrder['status']>('all');
+
+  const fetchAll = useCallback(async () => {
+    try {
+      setLoading(true);
+      
+      // Use a single query with joins to reduce database round trips
+      const { data: poData, error: poErr } = await supabase
+        .from('purchase_orders')
+        .select(`
+          *,
+          supplier:supplier_master(id, supplier_name, supplier_code),
+          items:purchase_order_items(po_id, item_image_url, line_total, total_price, gst_amount, gst_rate)
+        `)
+        .order('created_at', { ascending: false });
+      
+      if (poErr) throw poErr;
+
+      // Process the joined data
+      const supplierMap: Record<string, Supplier> = {};
+      const firstImageMap: Record<string, string | null> = {};
+      const totalsMap: Record<string, number> = {};
+      const processedPOs: PurchaseOrder[] = [];
+
+      (poData || []).forEach((po: any) => {
+        // Process supplier data
+        if (po.supplier) {
+          supplierMap[po.supplier.id] = {
+            id: po.supplier.id,
+            supplier_name: po.supplier.supplier_name,
+            supplier_code: po.supplier.supplier_code
+          };
+        }
+
+        // Process items data
+        if (po.items && Array.isArray(po.items)) {
+          po.items.forEach((item: ItemRowLite) => {
+            // Pick first non-null image only
+            if (firstImageMap[item.po_id] == null && item.item_image_url) {
+              firstImageMap[item.po_id] = item.item_image_url;
+            }
+            // Compute line total fallback
+            const tp = item.total_price || 0;
+            const ga = item.gst_amount != null ? item.gst_amount : tp * ((item.gst_rate || 0) / 100);
+            const lt = item.line_total != null ? item.line_total : tp + ga;
+            totalsMap[item.po_id] = (totalsMap[item.po_id] || 0) + lt;
+          });
+        }
+
+        // Process PO data
+        const computed = totalsMap[po.id];
+        const processedPO: PurchaseOrder = {
+          id: po.id,
+          po_number: po.po_number,
+          supplier_id: po.supplier_id,
+          order_date: po.order_date,
+          expected_delivery_date: po.expected_delivery_date,
+          subtotal: po.subtotal,
+          tax_amount: po.tax_amount,
+          total_amount: (po.total_amount == null || po.total_amount === 0) && computed > 0 ? computed : po.total_amount,
+          status: po.status,
+          created_at: po.created_at
+        };
+        processedPOs.push(processedPO);
+      });
+
+      setPurchaseOrders(processedPOs);
+      setSuppliers(supplierMap);
+      setFirstItemImageByPoId(firstImageMap);
+    } catch (e) {
+      console.error('Failed to fetch purchase orders', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
+
+  const filteredPOs = useMemo(() => {
+    return purchaseOrders.filter((po) => {
+      const s = suppliers[po.supplier_id];
+      const text = `${po.po_number} ${(s?.supplier_name || '')} ${(s?.supplier_code || '')}`.toLowerCase();
+      const matchesSearch = !search || text.includes(search.toLowerCase());
+      const matchesStatus = statusFilter === 'all' || po.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [purchaseOrders, suppliers, search, statusFilter]);
+
+  const handleDelete = useCallback(async (id: string) => {
+    if (!confirm('Delete this purchase order?')) return;
+    await supabase.from('purchase_orders').delete().eq('id', id);
+    fetchAll();
+  }, [fetchAll]);
+
+  const handleView = useCallback((id: string) => {
+    navigate(`/procurement/po/${id}`);
+  }, [navigate]);
+
+  const handleEdit = useCallback((id: string) => {
+    navigate(`/procurement/po/${id}?edit=1`);
+  }, [navigate]);
 
   return (
     <div className="space-y-6">
@@ -196,38 +276,15 @@ export function PurchaseOrderList() {
                     const sup = suppliers[po.supplier_id];
                     const img = firstItemImageByPoId[po.id];
                     return (
-                      <TableRow key={po.id}>
-                        <TableCell className="font-medium">{po.po_number}</TableCell>
-                        <TableCell>
-                          <div className="text-sm">
-                            <div className="font-medium">{sup?.supplier_name || '-'}</div>
-                            <div className="text-xs text-muted-foreground">{sup?.supplier_code || ''}</div>
-                          </div>
-                        </TableCell>
-                        <TableCell>{po.order_date ? format(new Date(po.order_date), 'dd MMM yyyy') : '-'}</TableCell>
-                        <TableCell>
-                          {img ? (
-                            <img src={img} alt="item" className="w-12 h-12 object-cover rounded" />
-                          ) : (
-                            <div className="w-12 h-12 rounded bg-muted" />
-                          )}
-                        </TableCell>
-                        <TableCell>{po.total_amount != null ? po.total_amount.toFixed(2) : '-'}</TableCell>
-                        <TableCell>{statusBadge(po.status)}</TableCell>
-                        <TableCell>
-                          <div className="flex gap-2">
-                            <Button variant="outline" size="sm" onClick={() => navigate(`/procurement/po/${po.id}`)}>
-                              <Eye className="w-4 h-4" />
-                            </Button>
-                            <Button variant="outline" size="sm" onClick={() => navigate(`/procurement/po/${po.id}?edit=1`)}>
-                              <Pencil className="w-4 h-4" />
-                            </Button>
-                            <Button variant="outline" size="sm" onClick={() => handleDelete(po.id)}>
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
+                      <PurchaseOrderRow
+                        key={po.id}
+                        po={po}
+                        supplier={sup}
+                        imageUrl={img}
+                        onView={handleView}
+                        onEdit={handleEdit}
+                        onDelete={handleDelete}
+                      />
                     );
                   })}
                 </TableBody>
@@ -238,6 +295,8 @@ export function PurchaseOrderList() {
       </Card>
     </div>
   );
-}
+});
+
+export { PurchaseOrderList };
 
 

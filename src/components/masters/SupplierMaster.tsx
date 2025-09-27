@@ -161,10 +161,29 @@ export function SupplierMaster() {
       items?.forEach(i => options.push({ id: i.id, name: i.item_name, type: 'item' as const }));
 
       // Fetch products
-      const { data: products } = await supabase
-        .from('product_master')
-        .select('id, product_name');
-      products?.forEach(p => options.push({ id: p.id, name: p.product_name, type: 'product' as const }));
+      let products = null;
+      try {
+        const { data, error } = await supabase
+          .from('products')
+          .select('id, name');
+        if (error) {
+          // Try product_master as fallback
+          const { data: fallbackData } = await supabase
+            .from('product_master')
+            .select('id, product_name');
+          products = fallbackData;
+        } else {
+          products = data;
+        }
+      } catch (err) {
+        console.log('Error fetching products:', err);
+      }
+      
+      products?.forEach(p => options.push({ 
+        id: p.id, 
+        name: p.product_name || p.name, 
+        type: 'product' as const 
+      }));
 
       setSpecializationOptions(options);
     } catch (error) {

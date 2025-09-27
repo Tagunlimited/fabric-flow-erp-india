@@ -21,7 +21,8 @@ import {
   ChevronDown,
   ChevronRight,
   AlertTriangle,
-  Scissors
+  Scissors,
+  Shirt
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { supabase } from '@/integrations/supabase/client';
+import { getPendingOrdersCount } from '@/lib/database';
 
 interface SidebarItem {
   title: string;
@@ -42,7 +44,8 @@ interface SidebarItem {
 }
 
 
-function buildSidebarItems(currentPath: string): SidebarItem[] {
+
+function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0): SidebarItem[] {
   return [
     { title: "Dashboard", url: "/", icon: Home },
     {
@@ -55,10 +58,12 @@ function buildSidebarItems(currentPath: string): SidebarItem[] {
     {
       title: "Orders",
       icon: ShoppingCart,
-      badge: currentPath === "/orders" ? "..." : "0",
+      badge: currentPath === "/orders" ? "..." : pendingOrdersCount.toString(),
       badgeColor: "bg-manufacturing",
       children: [
-        { title: "Create/View Orders", url: "/orders", icon: ShoppingCart }
+        { title: "Custom Orders", url: "/orders", icon: ShoppingCart },
+        { title: "Stock Orders", url: "/stock-orders", icon: Shirt }
+        
       ]
     },
     {
@@ -76,7 +81,7 @@ function buildSidebarItems(currentPath: string): SidebarItem[] {
       title: "Procurement",
       icon: ShoppingBag,
       children: [
-        { title: "Bills of Materials", url: "/procurement", icon: ClipboardList },
+        { title: "Bills of Materials", url: "/bom", icon: ClipboardList },
         { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingBag },
         { title: "Goods Receipt Note", url: "/procurement/grn", icon: ClipboardList },
         { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
@@ -89,8 +94,10 @@ function buildSidebarItems(currentPath: string): SidebarItem[] {
       badge: "500",
       badgeColor: "bg-inventory",
       children: [
-        { title: "Dashboard", url: "/inventory", icon: BarChart3 },
-        { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList }
+        { title: "Dashboard", url: "/warehouse/inventory", icon: Building },
+        // { title: "Dashboard", url: "/inventory", icon: BarChart3 },
+        // { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList }
+        
       ]
     },
     {
@@ -101,7 +108,6 @@ function buildSidebarItems(currentPath: string): SidebarItem[] {
       children: [
         { title: "Production Dashboard", url: "/production", icon: Factory },
         { title: "Assign Orders", url: "/production/assign-orders", icon: Users },
-        { title: "Orders Status", url: "/production/orders-status", icon: BarChart3 },
         { title: "Cutting Manager", url: "/production/cutting-manager", icon: Scissors }
       ]
     },
@@ -113,8 +119,8 @@ function buildSidebarItems(currentPath: string): SidebarItem[] {
         { title: "Dashboard", url: "/people", icon: BarChart3 },
         { title: "Our People", url: "/people/employees", icon: Users },
         { title: "Production Team", url: "/people/production-team", icon: Scissors },
-        { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
-        { title: "Incentive Programme", url: "/people/incentives", icon: Award },
+        // { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
+        // { title: "Incentive Programme", url: "/people/incentives", icon: Award },
         { title: "Departments", url: "/people/departments", icon: Building }
       ]
     },
@@ -328,6 +334,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
     can_view_quotations: boolean;
   }>(null);
   const [portalLoading, setPortalLoading] = useState(false);
+  const [pendingOrdersCount, setPendingOrdersCount] = useState(0);
   // Use sidebar_logo_url if available, else logo_url
   const companyLogo = config.sidebar_logo_url || config.logo_url || 'https://i.postimg.cc/3JbMq1Fw/6732e31fc8403c1a709ad1e0-256-1.png';
   
@@ -341,26 +348,26 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
       if (!user || userRole !== 'customer') return;
       try {
         setPortalLoading(true);
-        const { data: link, error: linkErr } = await supabase
+        const { data: link, error: linkErr } = await (supabase as any)
           .from('customer_users')
           .select('customer_id')
-          .eq('user_id', user.id)
+          .eq('user_id', user.id as any)
           .maybeSingle();
         if (linkErr) throw linkErr;
         if (!link?.customer_id) {
           setPortalSettings({ can_view_orders: false, can_view_invoices: false, can_view_quotations: false });
           return;
         }
-        const { data: settings, error: settingsErr } = await supabase
+        const { data: settings, error: settingsErr } = await (supabase as any)
           .from('customer_portal_settings')
           .select('can_view_orders, can_view_invoices, can_view_quotations')
-          .eq('customer_id', link.customer_id)
+          .eq('customer_id', link.customer_id as any)
           .maybeSingle();
         if (settingsErr) throw settingsErr;
         setPortalSettings({
-          can_view_orders: !!settings?.can_view_orders,
-          can_view_invoices: !!settings?.can_view_invoices,
-          can_view_quotations: !!settings?.can_view_quotations,
+          can_view_orders: !!(settings as any)?.can_view_orders,
+          can_view_invoices: !!(settings as any)?.can_view_invoices,
+          can_view_quotations: !!(settings as any)?.can_view_quotations,
         });
       } catch (e) {
         setPortalSettings({ can_view_orders: false, can_view_invoices: false, can_view_quotations: false });
@@ -371,8 +378,41 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
     fetchPortalSettings();
   }, [user?.id, userRole]);
 
+  // Fetch pending orders count
+  useEffect(() => {
+    const fetchPendingOrdersCount = async () => {
+      try {
+        const count = await getPendingOrdersCount();
+        setPendingOrdersCount(count);
+      } catch (error) {
+        console.error('Error fetching pending orders count:', error);
+        setPendingOrdersCount(0);
+      }
+    };
+
+    fetchPendingOrdersCount();
+  }, []);
+
+  // Refresh pending orders count when location changes (e.g., after creating/updating orders)
+  useEffect(() => {
+    const fetchPendingOrdersCount = async () => {
+      try {
+        const count = await getPendingOrdersCount();
+        setPendingOrdersCount(count);
+      } catch (error) {
+        console.error('Error fetching pending orders count:', error);
+        setPendingOrdersCount(0);
+      }
+    };
+
+    // Only refresh if we're not on the orders page (to avoid unnecessary calls)
+    if (location.pathname !== '/orders') {
+      fetchPendingOrdersCount();
+    }
+  }, [location.pathname]);
+
   // Build items based on role
-  const sidebarItems = buildSidebarItems(location.pathname);
+  const sidebarItems = buildSidebarItems(location.pathname, pendingOrdersCount);
   let filteredItems = sidebarItems.filter(item => !item.adminOnly || userRole === 'admin');
 
   if (userRole === 'customer' && portalSettings !== null) {

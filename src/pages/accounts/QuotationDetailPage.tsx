@@ -134,8 +134,8 @@ export default function QuotationDetailPage() {
         const categoryIds = itemsData.map(item => item.product_category_id).filter(Boolean);
         if (fabricIds.length > 0) {
           const { data: fabricsData } = await supabase
-            .from('fabrics')
-            .select('id, name')
+            .from('fabric_master')
+            .select('id, fabric_name')
             .in('id', fabricIds);
           if (fabricsData) {
             const fabricsMap = fabricsData.reduce((acc, fabric) => {

@@ -31,7 +31,7 @@ const defaultConfig: CompanyConfig = {
   logo_url: '/placeholder.svg',
   sidebar_logo_url: '/placeholder.svg',
   header_logo_url: '/placeholder.svg',
-  favicon_url: '/favicon.ico',
+  favicon_url: undefined,
   address: '',
   city: '',
   state: '',

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
-import { supabase } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/components/auth/AuthProvider";
 import Papa from "papaparse";
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";;
 import { Button } from "@/components/ui/button";;
@@ -12,7 +13,7 @@ import { Plus, Edit, Trash2, Search } from "lucide-react";
 
 const BULK_TEMPLATE_HEADERS = [
   "item_code",
-  "item_name",
+  "item_name", 
   "item_type",
   "description",
   "uom",
@@ -26,8 +27,9 @@ const BULK_TEMPLATE_HEADERS = [
   "lead_time",
   "cost_price",
   "gst_rate",
+  "image",
   "is_active",
-  "image"
+  "image_url"
 ];
 
 interface Item {
@@ -47,17 +49,23 @@ interface Item {
   lead_time?: number;
   cost_price?: number;
   gst_rate?: number;
-  is_active?: boolean;
   image?: string;
+  is_active?: boolean;
+  image_url?: string;
   created_at?: string;
+  updated_at?: string;
 }
 
 export function ItemMaster() {
+  // Auth context
+  const { user, profile } = useAuth();
+  
   // State management
   const [items, setItems] = useState<Item[]>([]);
   const [filteredItems, setFilteredItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
   const [showDialog, setShowDialog] = useState(false);
   const [bulkDialog, setBulkDialog] = useState(false);
   const [bulkLoading, setBulkLoading] = useState(false);
@@ -67,9 +75,11 @@ export function ItemMaster() {
   const [currentItemId, setCurrentItemId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   // Form state
-  const [formData, setFormData] = useState<Omit<Item, 'id' | 'created_at'>>({
+  const [formData, setFormData] = useState<Omit<Item, 'id' | 'created_at' | 'updated_at'>>({
     item_code: "",
     item_name: "",
     item_type: "Material",
@@ -85,28 +95,42 @@ export function ItemMaster() {
     lead_time: 0,
     cost_price: 0,
     gst_rate: 0,
+    image: "",
     is_active: true,
-    image: ""
+    image_url: ""
   });
 
   // Initialize Supabase client only once
   useEffect(() => {
-    fetchItems();
-  }, []);
+    if (user) {
+      fetchItems();
+    }
+  }, [user]);
 
-  // Filter items based on search term
+  // Filter items based on search term and type filter
   useEffect(() => {
-    if (searchTerm.trim() === '') {
-      setFilteredItems(items);
-    } else {
-      const filtered = items.filter(item =>
+    let filtered = items;
+    
+    // Apply type filter
+    if (typeFilter) {
+      filtered = filtered.filter(item => item.item_type === typeFilter);
+    }
+    
+    // Apply search term filter
+    if (searchTerm.trim() !== '') {
+      filtered = filtered.filter(item =>
         item.item_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.item_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.brand?.toLowerCase().includes(searchTerm.toLowerCase())
+        item.brand?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        item.item_type?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        item.material?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        item.color?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        item.description?.toLowerCase().includes(searchTerm.toLowerCase())
       );
-      setFilteredItems(filtered);
     }
-  }, [searchTerm, items]);
+    
+    setFilteredItems(filtered);
+  }, [searchTerm, typeFilter, items]);
 
   // Fetch items from Supabase
   const fetchItems = async () => {
@@ -117,10 +141,20 @@ export function ItemMaster() {
         .select('*')
         .order('created_at', { ascending: false });
       
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase error:', error);
+        throw error;
+      }
       
-      setItems(data || []);
-      setFilteredItems(data || []);
+      console.log('Fetched items data:', data);
+      const itemsData = (data as unknown as Item[]) || [];
+      console.log('Items with images:', itemsData.map(item => ({ 
+        name: item.item_name, 
+        image: item.image, 
+        image_url: item.image_url 
+      })));
+      setItems(itemsData);
+      setFilteredItems(itemsData);
     } catch (error) {
       console.error('Error fetching items:', error);
     } finally {
@@ -148,9 +182,10 @@ export function ItemMaster() {
           min_stock_level: itemToEdit.min_stock_level || 0,
           lead_time: itemToEdit.lead_time || 0,
           cost_price: itemToEdit.cost_price || 0,
-          gst_rate: (itemToEdit as any).gst_rate || 0,
+          gst_rate: itemToEdit.gst_rate || 0,
+          image: itemToEdit.image || "",
           is_active: itemToEdit.is_active || true,
-          image: itemToEdit.image || ""
+          image_url: itemToEdit.image_url || ""
         });
       }
     }
@@ -159,38 +194,87 @@ export function ItemMaster() {
   // Handle form submission (both add and edit)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Basic validation
+    if (!formData.item_code.trim()) {
+      alert('Item Code is required');
+      return;
+    }
+    if (!formData.item_name.trim()) {
+      alert('Item Name is required');
+      return;
+    }
+    if (!formData.item_type.trim()) {
+      alert('Item Type is required');
+      return;
+    }
+    
     try {
       setLoading(true);
       
+      // Prepare data for submission
+      let submitData = { ...formData };
+      
+      // Handle image upload if a file is selected
+      console.log('Checking imageFile state:', imageFile);
+      if (imageFile) {
+        console.log('Uploading image file:', imageFile.name);
+        const imageUrl = await uploadImage(imageFile);
+        if (imageUrl) {
+          console.log('Image uploaded successfully, URL:', imageUrl);
+          submitData.image = imageUrl;
+          console.log('Updated submitData.image:', submitData.image);
+        } else {
+          console.error('Failed to upload image, but continuing with item creation');
+          // Don't return here, just continue without the image
+          alert('Image upload failed, but item will be saved without image. You can add the image later.');
+        }
+      } else {
+        console.log('No image file selected for upload');
+      }
+      
+      console.log('Final submitData before database operation:', submitData);
+      
       if (editMode && currentItemId) {
         // Update existing item
+        console.log('Updating existing item with ID:', currentItemId);
         const { error } = await supabase
           .from('item_master')
-          .update(formData)
-          .eq('id', currentItemId);
+          .update(submitData as any)
+          .eq('id', currentItemId as any);
         
-        if (error) throw error;
+        if (error) {
+          console.error('Update error:', error);
+          throw error;
+        }
+        console.log('Item updated successfully');
       } else {
         // Add new item
+        console.log('Adding new item to database');
         const { error } = await supabase
           .from('item_master')
-          .insert([formData]);
+          .insert([submitData as any]);
         
-        if (error) throw error;
+        if (error) {
+          console.error('Insert error:', error);
+          throw error;
+        }
+        console.log('Item added successfully');
       }
       
       setShowDialog(false);
       await fetchItems();
-      resetForm();
+      resetForm(true); // Clear image after successful submission
     } catch (error) {
       console.error('Error saving item:', error);
+      alert('Error saving item. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
   // Reset form to default values
-  const resetForm = () => {
+  const resetForm = (clearImage = true) => {
     setFormData({
       item_code: "",
       item_name: "",
@@ -207,11 +291,131 @@ export function ItemMaster() {
       lead_time: 0,
       cost_price: 0,
       gst_rate: 0,
+      image: "",
       is_active: true,
-      image: ""
+      image_url: ""
     });
     setEditMode(false);
     setCurrentItemId(null);
+    if (clearImage) {
+      setImageFile(null);
+      setImagePreview(null);
+    }
+  };
+
+  // Handle image file selection
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    console.log('Image file selected:', file);
+    if (file) {
+      console.log('Setting image file:', {
+        name: file.name,
+        size: file.size,
+        type: file.type
+      });
+      setImageFile(file);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        console.log('Image preview loaded');
+        setImagePreview(e.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      console.log('No file selected');
+    }
+  };
+
+  // Upload image to Supabase storage
+  const uploadImage = async (file: File): Promise<string | null> => {
+    try {
+      console.log('Starting image upload process...');
+      console.log('File details:', {
+        name: file.name,
+        size: file.size,
+        type: file.type
+      });
+
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        console.error('Invalid file type:', file.type);
+        alert('Please select an image file (JPG, PNG, GIF, etc.)');
+        return null;
+      }
+
+      // Validate file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        console.error('File too large:', file.size);
+        alert('File size must be less than 10MB');
+        return null;
+      }
+
+      const fileExt = file.name.split('.').pop() || 'jpg';
+      const fileName = `item-${Date.now()}.${fileExt}`;
+      const filePath = `items/${fileName}`; // Upload to items folder for better organization
+
+      console.log('Uploading to path:', filePath);
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('company-assets')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (uploadError) {
+        console.error('Upload error details:', {
+          error: uploadError,
+          message: uploadError.message,
+          statusCode: uploadError.statusCode
+        });
+        
+        // Show user-friendly error message
+        if (uploadError.message.includes('already exists')) {
+          alert('A file with this name already exists. Please try again.');
+        } else if (uploadError.message.includes('not found')) {
+          alert('Storage bucket not found. Please contact administrator.');
+        } else if (uploadError.message.includes('permission')) {
+          alert('Permission denied. Please check your storage permissions.');
+        } else if (uploadError.message.includes('size')) {
+          alert('File size exceeds the limit. Please choose a smaller image.');
+        } else {
+          alert(`Upload failed: ${uploadError.message}`);
+        }
+        return null;
+      }
+
+      console.log('Upload successful, data:', uploadData);
+
+      const { data: urlData, error: urlError } = supabase.storage
+        .from('company-assets')
+        .getPublicUrl(filePath);
+
+      if (urlError) {
+        console.error('URL generation error:', urlError);
+        alert('Failed to generate image URL. Please try again.');
+        return null;
+      }
+
+      console.log('Generated public URL:', urlData.publicUrl);
+      
+      // Test if the URL is accessible
+      try {
+        const response = await fetch(urlData.publicUrl, { method: 'HEAD' });
+        if (!response.ok) {
+          console.warn('Generated URL is not accessible:', response.status);
+        } else {
+          console.log('URL is accessible and working');
+        }
+      } catch (fetchError) {
+        console.warn('Could not test URL accessibility:', fetchError);
+      }
+      
+      return urlData.publicUrl;
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      alert('An unexpected error occurred during upload. Please try again.');
+      return null;
+    }
   };
 
   // Handle edit button click
@@ -229,7 +433,7 @@ export function ItemMaster() {
         const { error } = await supabase
           .from('item_master')
           .delete()
-          .eq('id', itemId);
+          .eq('id', itemId as any);
         
         if (error) throw error;
         
@@ -279,7 +483,9 @@ export function ItemMaster() {
         lead_time: item.lead_time ? Number(item.lead_time) : 0,
         cost_price: item.cost_price ? Number(item.cost_price) : 0,
         gst_rate: item.gst_rate ? Number(item.gst_rate) : 0,
-        is_active: item.is_active ? item.is_active.toString().toLowerCase() === 'true' : true
+        is_active: item.is_active ? item.is_active.toString().toLowerCase() === 'true' : true,
+        image: item.image || "",
+        image_url: item.image_url || ""
       }));
       
       const { error } = await supabase
@@ -318,7 +524,7 @@ export function ItemMaster() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="container mx-auto px-4 py-8 space-y-8">
       {/* Header and Controls */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
@@ -333,7 +539,7 @@ export function ItemMaster() {
           {/* Add Item Button */}
           <Button 
             onClick={() => {
-              resetForm();
+              resetForm(false); // Don't clear image when opening dialog
               setShowDialog(true);
             }}
             className="bg-gradient-to-r from-primary to-blue-500 text-white shadow-lg hover:scale-105 transition-transform"
@@ -350,6 +556,7 @@ export function ItemMaster() {
           >
             Bulk Upload
           </Button>
+
         </div>
       </div>
 
@@ -358,7 +565,7 @@ export function ItemMaster() {
         if (!open) resetForm();
         setShowDialog(open);
       }}>
-        <DialogContent className="max-w-4xl overflow-y-auto max-h-screen">
+        <DialogContent className="max-w-4xl overflow-y-auto max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>{editMode ? "Edit Item" : "Add New Item"}</DialogTitle>
           </DialogHeader>
@@ -391,6 +598,11 @@ export function ItemMaster() {
                   <option value="Material">Material</option>
                   <option value="Component">Component</option>
                   <option value="Finished Good">Finished Good</option>
+                  <option value="Raw Material">Raw Material</option>
+                  <option value="Semi-Finished">Semi-Finished</option>
+                  <option value="Accessory">Accessory</option>
+                  <option value="Tool">Tool</option>
+                  <option value="Equipment">Equipment</option>
                 </select>
               </div>
               <div>
@@ -403,10 +615,30 @@ export function ItemMaster() {
               </div>
               <div>
                 <Label>Unit of Measure</Label>
-                <Input
+                <select
                   value={formData.uom}
                   onChange={(e) => setFormData({...formData, uom: e.target.value})}
-                />
+                  className="w-full border rounded px-3 py-2"
+                >
+                  <option value="pcs">Pieces (pcs)</option>
+                  <option value="kg">Kilograms (kg)</option>
+                  <option value="g">Grams (g)</option>
+                  <option value="m">Meters (m)</option>
+                  <option value="cm">Centimeters (cm)</option>
+                  <option value="mm">Millimeters (mm)</option>
+                  <option value="l">Liters (l)</option>
+                  <option value="ml">Milliliters (ml)</option>
+                  <option value="sqm">Square Meters (sqm)</option>
+                  <option value="sqft">Square Feet (sqft)</option>
+                  <option value="box">Box</option>
+                  <option value="pack">Pack</option>
+                  <option value="set">Set</option>
+                  <option value="pair">Pair</option>
+                  <option value="dozen">Dozen</option>
+                  <option value="roll">Roll</option>
+                  <option value="sheet">Sheet</option>
+                  <option value="other">Other</option>
+                </select>
               </div>
             </div>
 
@@ -499,10 +731,36 @@ export function ItemMaster() {
                 />
               </div>
               <div>
+                <Label>Upload Image</Label>
+                <Input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageSelect}
+                  className="mb-2"
+                />
+                {imagePreview && (
+                  <div className="mt-2">
+                    <img
+                      src={imagePreview}
+                      alt="Preview"
+                      className="h-20 w-20 object-cover rounded border"
+                    />
+                  </div>
+                )}
+              </div>
+              <div>
                 <Label>Image URL</Label>
                 <Input
                   value={formData.image}
                   onChange={(e) => setFormData({...formData, image: e.target.value})}
+                  placeholder="Or enter image URL directly"
+                />
+              </div>
+              <div>
+                <Label>Image URL (Alternative)</Label>
+                <Input
+                  value={formData.image_url}
+                  onChange={(e) => setFormData({...formData, image_url: e.target.value})}
                 />
               </div>
               <div>
@@ -574,40 +832,64 @@ export function ItemMaster() {
       </Dialog>
 
       {/* Items Table */}
-      <Card className="shadow-erp-md">
+      <Card className="shadow-lg">
         <CardHeader>
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <CardTitle className="text-2xl font-bold">Items ({filteredItems.length})</CardTitle>
-            <div className="relative w-full md:w-80">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-              <Input
-                placeholder="Search items..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10 rounded-full shadow"
-              />
+            <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+              <div className="relative w-full sm:w-80">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                <Input
+                  placeholder="Search items..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10 rounded-full shadow"
+                />
+              </div>
+              {/* <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-full shadow focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">All Types</option>
+                <option value="Material">Material</option>
+                <option value="Raw Material">Raw Material</option>
+                <option value="Semi-Finished">Semi-Finished</option>
+                <option value="Finished Product">Finished Product</option>
+                <option value="Accessory">Accessory</option>
+                <option value="Tool">Tool</option>
+                <option value="Equipment">Equipment</option>
+                <option value="Other">Other</option>
+              </select> */}
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {loading ? (
+          {!user ? (
+            <div className="text-center text-muted-foreground py-8 text-lg">
+              Please log in to view items
+            </div>
+          ) : loading ? (
             <div className="flex items-center justify-center py-8">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
             </div>
           ) : filteredItems.length === 0 ? (
             <div className="text-center text-muted-foreground py-8 text-lg">
-              {items.length === 0 ? "No items found" : "No matching items found"}
+              {items.length === 0 ? "No items found. Click 'Add Item' to create your first item." : "No matching items found"}
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table className="min-w-[900px]">
+              <Table className="min-w-[1200px]">
                 <TableHeader>
                   <TableRow className="bg-muted">
                     <TableHead>Item</TableHead>
                     <TableHead>Code</TableHead>
                     <TableHead>Type</TableHead>
+                    <TableHead>UOM</TableHead>
                     <TableHead>Stock</TableHead>
                     <TableHead>Price</TableHead>
+                    <TableHead>GST %</TableHead>
+                    <TableHead>Weight</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
@@ -617,23 +899,69 @@ export function ItemMaster() {
                     <TableRow key={item.id} className="hover:bg-blue-50 transition-colors">
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          {item.image && (
-                            <img src={item.image} alt={item.item_name} className="h-11 w-11 rounded border object-cover" />
-                          )}
+                          {(() => {
+                            const imageUrl = item.image || item.image_url;
+                            console.log(`Item ${item.item_name} - Image URL:`, imageUrl);
+                            
+                            if (imageUrl) {
+                              return (
+                                <div className="h-24 w-24 rounded border bg-gray-100 flex flex-col items-center justify-center relative">
+                                  <img 
+                                    src={imageUrl} 
+                                    alt={item.item_name} 
+                                    className="h-24 w-24 rounded border object-cover" 
+                                    onLoad={() => {
+                                      console.log('Image loaded successfully for', item.item_name, ':', imageUrl);
+                                    }}
+                                    onError={(e) => {
+                                      console.log('Image failed to load for', item.item_name, ':', imageUrl);
+                                      console.log('This is likely due to storage bucket permissions or invalid URL');
+                                      // Hide the broken image and show error message
+                                      const target = e.target as HTMLImageElement;
+                                      target.style.display = 'none';
+                                      
+                                      // Check if it's a storage URL vs external URL
+                                      const isStorageUrl = imageUrl.includes('supabase') || imageUrl.includes('storage');
+                                      const errorMessage = isStorageUrl 
+                                        ? 'Image not accessible<br/>Check storage permissions'
+                                        : 'Image not accessible<br/>Check URL validity';
+                                      
+                                      // Show error message
+                                      const errorDiv = document.createElement('div');
+                                      errorDiv.className = 'text-xs text-red-500 text-center p-2';
+                                      errorDiv.innerHTML = errorMessage;
+                                      target.parentNode?.appendChild(errorDiv);
+                                    }}
+                                  />
+                                </div>
+                              );
+                            } else {
+                              console.log(`No image URL for item ${item.item_name}`);
+                              return (
+                                <div className="h-24 w-24 rounded border bg-gray-100 flex items-center justify-center">
+                                  <span className="text-gray-400 text-xs">No Image</span>
+                                </div>
+                              );
+                            }
+                          })()}
                           <div>
                             <div className="font-semibold">{item.item_name}</div>
                             {item.brand && (
                               <div className="text-xs text-muted-foreground">{item.brand}</div>
+                            )}
+                            {item.description && (
+                              <div className="text-xs text-muted-foreground truncate max-w-[200px]">{item.description}</div>
                             )}
                           </div>
                         </div>
                       </TableCell>
                       <TableCell>{item.item_code}</TableCell>
                       <TableCell>{item.item_type}</TableCell>
+                      <TableCell>{item.uom || 'N/A'}</TableCell>
                       <TableCell>
                         <div>
-                          <div>{item.current_stock} {item.uom}</div>
-                          {item.min_stock_level && item.current_stock <= item.min_stock_level && (
+                          <div>{item.current_stock || 0} {item.uom || ''}</div>
+                          {item.min_stock_level && item.current_stock && item.current_stock <= item.min_stock_level && (
                             <Badge variant="destructive" className="text-xs mt-1">
                               Low Stock
                             </Badge>
@@ -641,7 +969,13 @@ export function ItemMaster() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        ${item.cost_price?.toFixed(2)}
+                        ₹{item.cost_price?.toFixed(2) || '0.00'}
+                      </TableCell>
+                      <TableCell>
+                        {item.gst_rate?.toFixed(2) || '0.00'}%
+                      </TableCell>
+                      <TableCell>
+                        {item.weight ? `${item.weight} kg` : 'N/A'}
                       </TableCell>
                       <TableCell>
                         <Badge variant={item.is_active ? "default" : "destructive"}>

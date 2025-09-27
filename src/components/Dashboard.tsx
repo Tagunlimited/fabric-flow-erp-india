@@ -85,32 +85,32 @@ export function Dashboard() {
     {
       title: "Total Revenue",
       value: `₹${(data.summary.totalRevenue / 100000).toFixed(1)}L`,
-      change: "+12.5%",
-      trend: "up",
+      change: "N/A",
+      trend: "neutral",
       icon: DollarSign,
       color: "text-success"
     },
     {
       title: "Active Orders",
       value: (data.summary.pendingOrders + data.summary.inProductionOrders).toString(),
-      change: "+8.2%",
-      trend: "up",
+      change: "N/A",
+      trend: "neutral",
       icon: ShoppingCart,
       color: "text-manufacturing"
     },
     {
       title: "Production Efficiency",
       value: `${Math.round(data.productionOrders.reduce((sum, order) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%`,
-      change: "-2.1%",
-      trend: "down",
+      change: "N/A",
+      trend: "neutral",
       icon: Factory,
       color: "text-warning"
     },
     {
       title: "Quality Pass Rate",
       value: `${Math.round((data.qualityChecks.filter((qc) => qc.status === 'passed').length / Math.max(data.qualityChecks.length, 1)) * 100)}%`,
-      change: "+5.3%",
-      trend: "up",
+      change: "N/A",
+      trend: "neutral",
       icon: CheckCircle,
       color: "text-quality"
     }

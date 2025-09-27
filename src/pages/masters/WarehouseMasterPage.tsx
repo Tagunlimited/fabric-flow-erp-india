@@ -1,10 +1,10 @@
 import { ErpLayout } from "@/components/ErpLayout";
-import { SimplifiedWarehouseMaster } from "@/components/masters/SimplifiedWarehouseMaster";
+import { WarehouseMaster } from "@/components/warehouse/WarehouseMaster";
 
 const WarehouseMasterPage = () => {
   return (
     <ErpLayout>
-      <SimplifiedWarehouseMaster />
+      <WarehouseMaster />
     </ErpLayout>
   );
 };

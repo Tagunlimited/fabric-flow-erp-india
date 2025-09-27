@@ -54,6 +54,14 @@ export default function ProcurementPage() {
       });
   }, [orders, filterStatus, searchTerm]);
 
+  const totals = useMemo(() => {
+    return filteredOrders.reduce((acc, order) => {
+      acc.totalAmount += order.final_amount || 0;
+      acc.pendingAmount += order.balance_amount || 0;
+      return acc;
+    }, { totalAmount: 0, pendingAmount: 0 });
+  }, [filteredOrders]);
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-yellow-100 text-yellow-800';
@@ -72,9 +80,62 @@ export default function ProcurementPage() {
           <h1 className="text-3xl font-bold">Procurement</h1>
           <p className="text-muted-foreground mt-1">Orders with receipts for procurement actions</p>
         </div>
-        <Button onClick={() => navigate('/procurement/bom/new')} className="rounded-full bg-emerald-600 hover:bg-emerald-700">
-          <PlusCircle className="w-4 h-4 mr-2" /> Create BOM
-        </Button>
+        <div className="flex gap-3">
+          <Button onClick={() => navigate('/bom/new')} className="rounded-full bg-emerald-600 hover:bg-emerald-700">
+            <PlusCircle className="w-4 h-4 mr-2" /> Create BOM
+          </Button>
+          <Button onClick={() => navigate('/procurement/po')} variant="outline">
+            Purchase Orders
+          </Button>
+          <Button onClick={() => navigate('/procurement/grn')} variant="outline">
+            Goods Receipt Notes
+          </Button>
+        </div>
+
+        {/* Summary Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Total Orders</p>
+                  <p className="text-2xl font-bold">{filteredOrders.length}</p>
+                </div>
+                <div className="h-8 w-8 bg-blue-100 rounded-full flex items-center justify-center">
+                  <span className="text-blue-600 text-sm font-bold">{filteredOrders.length}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Total Amount</p>
+                  <p className="text-2xl font-bold text-green-600">₹{totals.totalAmount.toFixed(2)}</p>
+                </div>
+                <div className="h-8 w-8 bg-green-100 rounded-full flex items-center justify-center">
+                  <span className="text-green-600 text-sm font-bold">₹</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Pending Amount</p>
+                  <p className="text-2xl font-bold text-orange-600">₹{totals.pendingAmount.toFixed(2)}</p>
+                </div>
+                <div className="h-8 w-8 bg-orange-100 rounded-full flex items-center justify-center">
+                  <span className="text-orange-600 text-sm font-bold">₹</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
 
         <Card>
           <CardHeader>
@@ -121,8 +182,8 @@ export default function ProcurementPage() {
                       <TableHead>Customer</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Amount</TableHead>
-                      <TableHead>Balance</TableHead>
+                      <TableHead className="text-right">Total Amount</TableHead>
+                      <TableHead className="text-right">Pending Amount</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -135,8 +196,12 @@ export default function ProcurementPage() {
                         <TableCell>
                           <Badge className={getStatusColor(o.status)}>{o.status.replace('_', ' ').toUpperCase()}</Badge>
                         </TableCell>
-                        <TableCell>₹{(o.final_amount || 0).toFixed(2)}</TableCell>
-                        <TableCell>₹{(o.balance_amount || 0).toFixed(2)}</TableCell>
+                        <TableCell className="text-right font-medium">
+                          <div className="text-green-600">₹{(o.final_amount || 0).toFixed(2)}</div>
+                        </TableCell>
+                        <TableCell className="text-right font-medium">
+                          <div className="text-orange-600">₹{(o.balance_amount || 0).toFixed(2)}</div>
+                        </TableCell>
                         <TableCell>
                           <div className="flex gap-2">
                             <Button variant="outline" size="sm" onClick={() => navigate(`/orders/${o.id}`)}>
@@ -156,7 +221,7 @@ export default function ProcurementPage() {
                                     quantity: 1
                                   }
                                 }));
-                                navigate(`/procurement/bom/new?order=${orderData}`);
+                                navigate(`/bom/new?order=${orderData}`);
                               }}
                             >
                               Create BOM

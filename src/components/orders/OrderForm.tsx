@@ -44,19 +44,26 @@ interface SizeType {
   available_sizes: string[];
 }
 
-interface FabricVariant {
+interface FabricMaster {
   id: string;
-  fabric_id: string;
+  fabric_code: string;
+  fabric_name: string;
+  fabric_description?: string | null;
+  type: string;
   color: string;
-  gsm: string;
-  rate_per_meter: number;
-  stock_quantity: number;
-}
-
-interface Fabric {
-  id: string;
-  name: string;
-  color: string;
+  hex?: string | null;
+  gsm?: string | null;
+  uom: string;
+  rate: number;
+  hsn_code?: string | null;
+  gst: number;
+  image?: string | null;
+  inventory: number;
+  supplier1?: string | null;
+  supplier2?: string | null;
+  status: 'active' | 'inactive';
+  created_at: string;
+  updated_at: string;
 }
 
 interface Employee {
@@ -115,8 +122,7 @@ export function OrderForm() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [productCategories, setProductCategories] = useState<ProductCategory[]>([]);
   const [sizeTypes, setSizeTypes] = useState<SizeType[]>([]);
-  const [fabrics, setFabrics] = useState<Fabric[]>([]);
-  const [fabricVariants, setFabricVariants] = useState<FabricVariant[]>([]);
+  const [fabrics, setFabrics] = useState<FabricMaster[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -198,35 +204,47 @@ export function OrderForm() {
     // Auto-scroll will restart automatically due to useEffect dependency
   };
 
-  // Handle fabric selection and auto-select GSM
+  // Handle fabric selection and auto-select GSM and price
   const handleFabricSelect = (productIndex: number, fabricId: string) => {
-    setFormData(prev => ({
-      ...prev,
-      products: prev.products.map((p, i) => 
-        i === productIndex ? { ...p, fabric_id: fabricId, color: '', gsm: '' } : p
-      )
-    }));
-  };
-
-  // Handle color selection and auto-select GSM
-  const handleColorSelect = (productIndex: number, color: string) => {
-    const product = formData.products[productIndex];
-    const selectedVariant = fabricVariants.find(variant => 
-      variant.fabric_id === product.fabric_id && variant.color === color
-    );
-    
+    const selectedFabric = fabrics.find(f => f.id === fabricId);
     setFormData(prev => ({
       ...prev,
       products: prev.products.map((p, i) => 
         i === productIndex ? { 
           ...p, 
-          color: color, 
-          gsm: selectedVariant?.gsm || '',
-          price: selectedVariant?.rate_per_meter || 0
+          fabric_id: fabricId, 
+          color: '', // Reset color - user will select from dropdown
+          gsm: selectedFabric?.gsm || '',
+          price: selectedFabric?.rate || 0
         } : p
       )
     }));
   };
+
+  // Handle color selection
+  const handleColorSelect = (productIndex: number, color: string) => {
+    setFormData(prev => ({
+      ...prev,
+      products: prev.products.map((p, i) => 
+        i === productIndex ? { ...p, color: color } : p
+      )
+    }));
+  };
+
+  // Get available colors for selected fabric
+  const getAvailableColors = (productIndex: number) => {
+    const product = formData.products[productIndex];
+    if (!product.fabric_id) return [];
+    
+    const selectedFabric = fabrics.find(f => f.id === product.fabric_id);
+    if (!selectedFabric) return [];
+    
+    // Get all fabrics with the same fabric_name but different colors
+    return fabrics.filter(f => f.fabric_name === selectedFabric.fabric_name);
+  };
+
+  // Color and GSM are now automatically selected with fabric
+  // No separate color selection needed
 
   // Handle image gallery functionality
   const handleImageClick = (productIndex: number, imageType: 'reference' | 'mockup' | 'category', imageUrl: string) => {
@@ -308,20 +326,18 @@ export function OrderForm() {
 
   const fetchData = async () => {
     try {
-      const [customersRes, categoriesRes, sizeTypesRes, fabricsRes, fabricVariantsRes, employeesRes] = await Promise.all([
+      const [customersRes, categoriesRes, sizeTypesRes, fabricsRes, employeesRes] = await Promise.all([
         supabase.from('customers').select('*').order('company_name'),
         supabase.from('product_categories').select('*').order('category_name'),
         supabase.from('size_types').select('*').order('size_name'),
-        supabase.from('fabrics').select('*').order('name'),
-        supabase.from('fabric_variants').select('*').order('color'),
+        supabase.from('fabric_master').select('*').order('fabric_name'),
         supabase.from('employees').select('*').order('full_name')
       ]);
 
       if (customersRes.data) setCustomers(customersRes.data);
       if (categoriesRes.data) setProductCategories(categoriesRes.data);
       if (sizeTypesRes.data) setSizeTypes(sizeTypesRes.data);
-      if (fabricsRes.data) setFabrics(fabricsRes.data);
-      if (fabricVariantsRes.data) setFabricVariants(fabricVariantsRes.data);
+      if (fabricsRes.data) setFabrics(fabricsRes.data as any);
       if (employeesRes.data) {
         console.log('Employees fetched:', employeesRes.data);
         setEmployees(employeesRes.data);
@@ -397,24 +413,29 @@ export function OrderForm() {
     }));
   };
 
-  // Get fabrics filtered by selected product category
-  const getFilteredFabrics = (productIndex: number) => {
+  // Get unique fabric names filtered by selected product category
+  const getFilteredFabricNames = (productIndex: number) => {
     const product = formData.products[productIndex];
     
-    if (!product.product_category_id) {
-      return fabrics; // Show all fabrics if no category is selected
+    let filteredFabrics = fabrics.filter(f => f.status === 'active');
+    
+    if (product.product_category_id) {
+      const category = productCategories.find(c => c.id === product.product_category_id);
+      
+      if (category && category.fabrics && category.fabrics.length > 0) {
+        filteredFabrics = fabrics.filter(fabric => 
+          category.fabrics.includes(fabric.id) && fabric.status === 'active'
+        );
+      }
     }
     
-    const category = productCategories.find(c => c.id === product.product_category_id);
+    // Get unique fabric names
+    const uniqueFabricNames = [...new Set(filteredFabrics.map(f => f.fabric_name))];
     
-    if (!category || !category.fabrics || category.fabrics.length === 0) {
-      return fabrics; // Show all fabrics if category has no associated fabrics
-    }
-    
-    // Filter fabrics based on category's associated fabric IDs
-    // If the fabrics array is empty or doesn't exist, show all fabrics
-    const filteredFabrics = fabrics.filter(fabric => category.fabrics.includes(fabric.id));
-    return filteredFabrics.length > 0 ? filteredFabrics : fabrics;
+    // Return the first fabric of each unique fabric name for display
+    return uniqueFabricNames.map(fabricName => 
+      filteredFabrics.find(f => f.fabric_name === fabricName)!
+    );
   };
 
   // Define proper size order
@@ -857,8 +878,14 @@ export function OrderForm() {
 
       toast.success('Order created successfully!');
       
-      // Navigate to the order detail page
-      navigate(`/orders/${orderResult.id}`);
+      // Show option to create BOM
+      const createBom = window.confirm('Order created successfully! Would you like to create a Bill of Materials (BOM) for this order?');
+      if (createBom) {
+        navigate(`/bom/create?orderId=${orderResult.id}`);
+      } else {
+        // Navigate to the order detail page
+        navigate(`/orders/${orderResult.id}`);
+      }
     } catch (error) {
       console.error('Error creating order:', error);
       console.error('Error details:', JSON.stringify(error, null, 2));
@@ -1138,9 +1165,21 @@ export function OrderForm() {
             <SelectValue placeholder={product.product_category_id ? "Select fabric" : "Select category first"} />
           </SelectTrigger>
           <SelectContent>
-            {getFilteredFabrics(productIndex).map((fabric) => (
+            {getFilteredFabricNames(productIndex).map((fabric) => (
               <SelectItem key={fabric.id} value={fabric.id}>
-                {fabric.name}
+                <div className="flex items-center gap-2">
+                  {fabric.image && (
+                    <img 
+                      src={fabric.image} 
+                      alt={fabric.fabric_name} 
+                      className="w-6 h-6 object-cover rounded border"
+                    />
+                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{fabric.fabric_name}</span>
+                    {fabric.gsm && <span className="text-muted-foreground">({fabric.gsm} GSM)</span>}
+                  </div>
+                </div>
               </SelectItem>
             ))}
           </SelectContent>
@@ -1203,44 +1242,51 @@ export function OrderForm() {
                         )}
                       </div> */}
                       
-    {/* Row 2 */}
+    {/* Row 2 - Color and GSM (Auto-selected from fabric) */}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {/* COLOR */}
-      <div >
-                        <Label className="text-base font-semibold text-gray-700 mb-2 block">Color</Label>
-                        {product.fabric_id ? (
-                          <Select
-                            value={product.color}
-                            onValueChange={(value) => handleColorSelect(productIndex, value)}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Select color" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                                          {fabricVariants
-                              .filter(variant => variant.fabric_id === product.fabric_id)
-                              .map((variant) => (
-                                <SelectItem key={variant.id} value={variant.color}>
-                                  {variant.color}
-                                </SelectItem>
-                              ))
-                            }
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Input
-                            value={product.color}
-                            onChange={(e) => setFormData(prev => ({
-                              ...prev,
-                              products: prev.products.map((p, i) => 
-                                i === productIndex ? { ...p, color: e.target.value } : p
-                              )
-                            }))}
-                            placeholder={product.product_category_id ? "Select fabric first to see available colors" : "Select category and fabric first"}
-                            disabled
-                          />
-                        )}
-                      </div>
+      <div>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">Color</Label>
+        {product.fabric_id ? (
+          <Select
+            value={product.color}
+            onValueChange={(value) => handleColorSelect(productIndex, value)}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select color" />
+            </SelectTrigger>
+            <SelectContent>
+              {getAvailableColors(productIndex).map((fabric) => (
+                <SelectItem key={fabric.id} value={fabric.color}>
+                  <div className="flex items-center gap-2">
+                    {fabric.hex && (
+                      <div
+                        style={{ 
+                          backgroundColor: fabric.hex.startsWith('#') ? fabric.hex : `#${fabric.hex}`,
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '50%',
+                          border: '2px solid #e5e7eb'
+                        }}
+                      />
+                    )}
+                    <span>{fabric.color}</span>
+                    {fabric.hex && <span className="text-muted-foreground text-xs">({fabric.hex})</span>}
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <Input
+            placeholder="Select fabric first"
+            disabled
+            className="bg-gray-50"
+          />
+        )}
+      </div>
+      
+      {/* GSM */}
       <div>
         <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
         <Input
@@ -1692,7 +1738,7 @@ export function OrderForm() {
                                     {productCategories.find(c => c.id === product.product_category_id)?.category_name}
                                   </div>
                                   <div className="text-gray-600 text-xs">
-                                    {fabrics.find(f => f.id === product.fabric_id)?.name} - {product.color}, {product.gsm} GSM
+                                    {fabrics.find(f => f.id === product.fabric_id)?.fabric_name} - {product.color}, {product.gsm} GSM
                                   </div>
                                 </div>
                               </td>
