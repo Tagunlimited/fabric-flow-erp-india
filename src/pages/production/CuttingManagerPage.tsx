@@ -23,11 +23,13 @@ import {
   Package,
   Factory,
   Target,
+  Users,
   Eye,
   Edit,
   Plus
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "@/integrations/supabase/client";
 
 interface CuttingJob {
   id: string;
@@ -61,6 +63,115 @@ const CuttingManagerPage = () => {
   // Initialize with empty array - data will be loaded from backend
   const [cuttingJobs, setCuttingJobs] = useState<CuttingJob[]>([]);
 
+  const navigate = useNavigate();
+  const LOCAL_STORAGE_KEY = 'production-assignments';
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const [updateJob, setUpdateJob] = useState<CuttingJob | null>(null);
+  const [updateCutQty, setUpdateCutQty] = useState<number>(0);
+
+  const formatDateDDMMYY = (value?: string) => {
+    if (!value) return '';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return '';
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yy = String(d.getFullYear()).slice(-2);
+    return `${dd}-${mm}-${yy}`;
+  };
+
+  // Load assigned cutting jobs from Assign Orders (local storage) and enrich with order/customer/BOM
+  useEffect(() => {
+    const loadCuttingJobs = async () => {
+      try {
+        const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+        const map = raw ? JSON.parse(raw) : {};
+        const orderIds: string[] = Object.keys(map).filter(id => !!map[id]?.cuttingMasterId);
+        if (orderIds.length === 0) {
+          setCuttingJobs([]);
+          return;
+        }
+
+        // Fetch orders
+        const { data: orders } = await supabase
+          .from('orders' as any)
+          .select('id, order_number, expected_delivery_date, customer_id')
+          .in('id', orderIds as any);
+
+        // Fetch customers
+        const customerIds = Array.from(new Set((orders || []).map((o: any) => o.customer_id).filter(Boolean)));
+        let customersMap: Record<string, { company_name?: string }> = {};
+        if (customerIds.length > 0) {
+          const { data: customers } = await supabase
+            .from('customers' as any)
+            .select('id, company_name')
+            .in('id', customerIds as any);
+          (customers || []).forEach((c: any) => { if (c?.id) customersMap[c.id] = { company_name: c.company_name }; });
+        }
+
+        // Fetch BOM headers for product name and qty
+        const { data: boms } = await supabase
+          .from('bom_records' as any)
+          .select('order_id, product_name, total_order_qty')
+          .in('order_id', orderIds as any);
+        const bomByOrder: Record<string, { product_name?: string; qty: number }> = {};
+        (boms || []).forEach((b: any) => {
+          const key = b.order_id as string;
+          const prev = bomByOrder[key]?.qty || 0;
+          bomByOrder[key] = { product_name: bomByOrder[key]?.product_name || b.product_name, qty: prev + (b.total_order_qty || 0) };
+        });
+
+        const computePriority = (dueDateStr?: string | null): CuttingJob['priority'] => {
+          if (!dueDateStr) return 'medium';
+          const today = new Date();
+          const due = new Date(dueDateStr);
+          const diffDays = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays <= 2) return 'urgent';
+          if (diffDays <= 7) return 'high';
+          return 'medium';
+        };
+
+        const jobs: CuttingJob[] = (orders || []).map((o: any) => {
+          const p: any = map[o.id] || {};
+          const bom: any = bomByOrder[o.id] || { product_name: undefined, qty: 0 };
+          return {
+            id: o.id,
+            jobNumber: o.order_number,
+            orderNumber: o.order_number,
+            customerName: customersMap[o.customer_id]?.company_name || '',
+            productName: (bom as any).product_name || 'Product',
+            fabricType: '-',
+            quantity: Number((bom as any).qty || 0),
+            cutQuantity: Number(p.cutQuantity || 0),
+            assignedTo: p.cuttingMasterName || '',
+            patternMasterName: p.patternMasterName || '',
+            startDate: p.cuttingWorkDate || '',
+            dueDate: o.expected_delivery_date || '',
+            status: 'pending',
+            priority: computePriority(o.expected_delivery_date),
+            cuttingPattern: '',
+            fabricConsumption: 0,
+            efficiency: 0,
+            notes: '',
+            defects: 0,
+            reworkRequired: false,
+          };
+        });
+
+        setCuttingJobs(jobs);
+      } catch (err) {
+        console.error('Error loading cutting jobs:', err);
+        setCuttingJobs([]);
+      }
+    };
+
+    loadCuttingJobs();
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LOCAL_STORAGE_KEY) loadCuttingJobs();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
 
   const getStatusColor = (status: string) => {
@@ -113,7 +224,6 @@ const CuttingManagerPage = () => {
     inProgress: cuttingJobs.filter(j => j.status === 'in_progress').length,
     completed: cuttingJobs.filter(j => j.status === 'completed').length,
     pending: cuttingJobs.filter(j => j.status === 'pending').length,
-    avgEfficiency: Math.round(cuttingJobs.reduce((acc, job) => acc + job.efficiency, 0) / cuttingJobs.length),
     totalDefects: cuttingJobs.reduce((acc, job) => acc + job.defects, 0),
     reworkJobs: cuttingJobs.filter(j => j.reworkRequired).length
   };
@@ -164,21 +274,7 @@ const CuttingManagerPage = () => {
             </CardContent>
           </Card>
 
-          <Card className="shadow-erp-md">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Avg. Efficiency
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-green-600">
-                  {stats.avgEfficiency}%
-                </span>
-                <TrendingUp className="w-5 h-5 text-green-600" />
-              </div>
-            </CardContent>
-          </Card>
+          
 
           <Card className="shadow-erp-md">
             <CardHeader className="pb-2">
