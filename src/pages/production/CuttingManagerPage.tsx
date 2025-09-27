@@ -9,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
+import { useNavigate } from "react-router-dom";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { 
   Scissors, 
   Clock, 
@@ -37,6 +39,7 @@ interface CuttingJob {
   quantity: number;
   cutQuantity: number;
   assignedTo: string;
+  patternMasterName?: string;
   startDate: string;
   dueDate: string;
   status: 'pending' | 'in_progress' | 'completed' | 'on_hold' | 'quality_check';
@@ -283,8 +286,8 @@ const CuttingManagerPage = () => {
                         <TableHead>Customer</TableHead>
                         <TableHead>Product</TableHead>
                         <TableHead>Progress</TableHead>
-                        <TableHead>Assigned To</TableHead>
-                        <TableHead>Efficiency</TableHead>
+                        <TableHead>Cutting Master</TableHead>
+                        <TableHead>Pattern Master</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Due Date</TableHead>
                         <TableHead>Actions</TableHead>
@@ -322,15 +325,16 @@ const CuttingManagerPage = () => {
                             )}
                           </TableCell>
                           <TableCell>
-                            <div className="flex items-center">
-                              <span className={`text-sm font-medium ${
-                                job.efficiency >= 90 ? 'text-green-600' :
-                                job.efficiency >= 75 ? 'text-orange-600' : 'text-red-600'
-                              }`}>
-                                {job.efficiency}%
-                              </span>
-                            </div>
+                            {job.patternMasterName ? (
+                              <div className="flex items-center">
+                                <Users className="w-4 h-4 mr-2 text-muted-foreground" />
+                                {job.patternMasterName}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">Unassigned</span>
+                            )}
                           </TableCell>
+                          
                           <TableCell>
                             <Badge className={getStatusColor(job.status)}>
                               {job.status.replace('_', ' ')}
@@ -342,18 +346,18 @@ const CuttingManagerPage = () => {
                             )}
                           </TableCell>
                           <TableCell>
-                            <div className="flex items-center">
-                              <Calendar className="w-4 h-4 mr-2 text-muted-foreground" />
-                              {job.dueDate}
-                            </div>
+                        <div className="flex items-center">
+                          <Calendar className="w-4 h-4 mr-2 text-muted-foreground" />
+                          {formatDateDDMMYY(job.dueDate)}
+                        </div>
                           </TableCell>
                           <TableCell>
                             <div className="flex gap-2">
-                              <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" onClick={() => navigate(`/orders/${job.id}?from=production`)}>
                                 <Eye className="w-4 h-4 mr-2" />
                                 View
                               </Button>
-                              <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" onClick={() => { setUpdateJob(job); setUpdateCutQty(job.cutQuantity); setUpdateOpen(true); }}>
                                 <Edit className="w-4 h-4 mr-2" />
                                 Update
                               </Button>
@@ -370,6 +374,37 @@ const CuttingManagerPage = () => {
 
         </Tabs>
       </div>
+      {/* Update Progress Dialog */}
+      <Dialog open={updateOpen} onOpenChange={setUpdateOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Update Cutting Progress</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Cut Quantity</Label>
+              <Input type="number" min={0} value={updateCutQty} onChange={(e) => setUpdateCutQty(Number(e.target.value || 0))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUpdateOpen(false)}>Cancel</Button>
+            <Button onClick={() => {
+              if (!updateJob) { setUpdateOpen(false); return; }
+              const newQty = Math.min(updateCutQty, updateJob.quantity);
+              // Update local table state
+              setCuttingJobs(prev => prev.map(j => j.id === updateJob.id ? { ...j, cutQuantity: newQty } : j));
+              // Persist to local storage used by Assign Orders/Cutting Manager
+              try {
+                const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+                const map = raw ? JSON.parse(raw) : {};
+                map[updateJob.id] = { ...(map[updateJob.id] || {}), cutQuantity: newQty };
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(map));
+              } catch {}
+              setUpdateOpen(false);
+            }}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </ErpLayout>
   );
 };

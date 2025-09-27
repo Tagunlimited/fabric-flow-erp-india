@@ -474,7 +474,7 @@ const AssignOrdersPage = () => {
 
   return (
     <ErpLayout>
-      <div className="space-y-6">
+      <div className="space-y-4">
         <div>
           <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
             Assign Orders
@@ -485,7 +485,7 @@ const AssignOrdersPage = () => {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card className="shadow-erp-md">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -557,14 +557,14 @@ const AssignOrdersPage = () => {
             <TabsTrigger value="workers">Available Workers</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="assignments" className="space-y-4">
+          <TabsContent value="assignments" className="space-y-2">
             {/* Filters */}
             <Card>
               <CardHeader>
                 <CardTitle>Filters</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   <div>
                     <Label htmlFor="search">Search</Label>
                     <div className="relative">
