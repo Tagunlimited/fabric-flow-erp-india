@@ -30,6 +30,7 @@ import InventoryPage from "./pages/InventoryPage";
 import ProductionPage from "./pages/ProductionPage";
 import AssignOrdersPage from "./pages/production/AssignOrdersPage";
 import CuttingManagerPage from "./pages/production/CuttingManagerPage";
+import TailorManagementPage from "./pages/production/TailorManagementPage";
 import QualityPage from "./pages/QualityPage";
 import DispatchPage from "./pages/DispatchPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
@@ -214,6 +215,11 @@ const App = () => {
                 <Route path="/production/cutting-manager" element={
                   <ProtectedRoute>
                     <CuttingManagerPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/production/tailor-management" element={
+                  <ProtectedRoute>
+                    <TailorManagementPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/design" element={

@@ -26,10 +26,13 @@ import {
   Users,
   Eye,
   Edit,
-  Plus
+  Plus,
+  UserCheck,
+  UserPlus
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleBatchAssignmentDialog";
 
 interface CuttingJob {
   id: string;
@@ -52,6 +55,23 @@ interface CuttingJob {
   notes: string;
   defects: number;
   reworkRequired: boolean;
+  // Multiple batch assignment fields
+  batchAssignments?: Array<{
+    id: string;
+    batch_id: string;
+    batch_name: string;
+    batch_code: string;
+    batch_leader_name: string;
+    tailor_type: string;
+    total_quantity: number;
+    size_distributions: Array<{
+      size_name: string;
+      quantity: number;
+    }>;
+    assignment_date: string;
+    assigned_by: string;
+    notes: string;
+  }>;
 }
 
 
@@ -68,6 +88,10 @@ const CuttingManagerPage = () => {
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateJob, setUpdateJob] = useState<CuttingJob | null>(null);
   const [updateCutQty, setUpdateCutQty] = useState<number>(0);
+  
+  // Batch assignment dialog state
+  const [batchAssignmentOpen, setBatchAssignmentOpen] = useState(false);
+  const [selectedJobForBatch, setSelectedJobForBatch] = useState<CuttingJob | null>(null);
 
   const formatDateDDMMYY = (value?: string) => {
     if (!value) return '';
@@ -79,13 +103,133 @@ const CuttingManagerPage = () => {
     return `${dd}-${mm}-${yy}`;
   };
 
+  // Batch assignment handlers
+  const handleAssignBatch = (job: CuttingJob) => {
+    setSelectedJobForBatch(job);
+    setBatchAssignmentOpen(true);
+  };
+
+  const handleBatchAssignmentSuccess = () => {
+    // Reload cutting jobs to get updated batch assignments
+    const loadCuttingJobs = async () => {
+      try {
+        const { data: rows } = await supabase
+          .from('order_assignments' as any)
+          .select(`
+            order_id, 
+            cutting_master_name, 
+            pattern_master_name, 
+            cutting_work_date, 
+            cut_quantity,
+            assigned_batch_id,
+            assigned_batch_name,
+            assigned_batch_code,
+            batch_assignment_date,
+            assigned_by_name,
+            batch_assignment_notes
+          `)
+          .not('cutting_master_id', 'is', null);
+        
+        // ... rest of the loading logic (same as in useEffect)
+        const map: Record<string, any> = {};
+        (rows || []).forEach((r: any) => { if (r?.order_id) map[r.order_id] = r; });
+        const orderIds: string[] = Object.keys(map);
+        if (orderIds.length === 0) {
+          setCuttingJobs([]);
+          return;
+        }
+
+        const { data: orders } = await supabase
+          .from('orders' as any)
+          .select('id, order_number, expected_delivery_date, customer_id')
+          .in('id', orderIds as any);
+
+        const customerIds = Array.from(new Set((orders || []).map((o: any) => o.customer_id).filter(Boolean)));
+        let customersMap: Record<string, { company_name?: string }> = {};
+        if (customerIds.length > 0) {
+          const { data: customers } = await supabase
+            .from('customers' as any)
+            .select('id, company_name')
+            .in('id', customerIds as any);
+          (customers || []).forEach((c: any) => { if (c?.id) customersMap[c.id] = { company_name: c.company_name }; });
+        }
+
+        const { data: boms } = await supabase
+          .from('bom_records' as any)
+          .select('order_id, product_name, total_order_qty')
+          .in('order_id', orderIds as any);
+        const bomByOrder: Record<string, { product_name?: string; qty: number }> = {};
+        (boms || []).forEach((b: any) => {
+          const key = b.order_id as string;
+          const prev = bomByOrder[key]?.qty || 0;
+          bomByOrder[key] = { product_name: bomByOrder[key]?.product_name || b.product_name, qty: prev + (b.total_order_qty || 0) };
+        });
+
+        const computePriority = (dueDateStr?: string | null): CuttingJob['priority'] => {
+          if (!dueDateStr) return 'medium';
+          const today = new Date();
+          const due = new Date(dueDateStr);
+          const diffDays = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays <= 2) return 'urgent';
+          if (diffDays <= 7) return 'high';
+          return 'medium';
+        };
+
+        const jobs: CuttingJob[] = (orders || []).map((o: any) => {
+          const p: any = map[o.id] || {};
+          const bom: any = bomByOrder[o.id] || { product_name: undefined, qty: 0 };
+          return {
+            id: o.id,
+            jobNumber: o.order_number,
+            orderNumber: o.order_number,
+            customerName: customersMap[o.customer_id]?.company_name || '',
+            productName: (bom as any).product_name || 'Product',
+            fabricType: '-',
+            quantity: Number((bom as any).qty || 0),
+            cutQuantity: Number(p.cut_quantity || 0),
+            assignedTo: p.cutting_master_name || '',
+            patternMasterName: p.pattern_master_name || '',
+            startDate: p.cutting_work_date || '',
+            dueDate: o.expected_delivery_date || '',
+            status: 'pending',
+            priority: computePriority(o.expected_delivery_date),
+            cuttingPattern: '',
+            fabricConsumption: 0,
+            efficiency: 0,
+            notes: '',
+            defects: 0,
+            reworkRequired: false,
+            assignedBatchId: p.assigned_batch_id,
+            assignedBatchName: p.assigned_batch_name,
+            assignedBatchCode: p.assigned_batch_code,
+            batchAssignmentDate: p.batch_assignment_date,
+            assignedBy: p.assigned_by_name,
+            batchAssignmentNotes: p.batch_assignment_notes,
+          };
+        });
+
+        setCuttingJobs(jobs);
+      } catch (err) {
+        console.error('Error reloading cutting jobs:', err);
+      }
+    };
+
+    loadCuttingJobs();
+  };
+
   // Load assigned cutting jobs from DB (order_assignments) and enrich with order/customer/BOM
   useEffect(() => {
     const loadCuttingJobs = async () => {
       try {
         const { data: rows } = await supabase
           .from('order_assignments' as any)
-          .select('order_id, cutting_master_name, pattern_master_name, cutting_work_date, cut_quantity')
+          .select(`
+            order_id, 
+            cutting_master_name, 
+            pattern_master_name, 
+            cutting_work_date, 
+            cut_quantity
+          `)
           .not('cutting_master_id', 'is', null);
         const map: Record<string, any> = {};
         (rows || []).forEach((r: any) => { if (r?.order_id) map[r.order_id] = r; });
@@ -158,10 +302,38 @@ const CuttingManagerPage = () => {
             notes: '',
             defects: 0,
             reworkRequired: false,
+            // Batch assignment fields (legacy - will be replaced with batchAssignments)
+            assignedBatchId: p.assigned_batch_id,
+            assignedBatchName: p.assigned_batch_name,
+            assignedBatchCode: p.assigned_batch_code,
+            batchAssignmentDate: p.batch_assignment_date,
+            assignedBy: p.assigned_by_name,
+            batchAssignmentNotes: p.batch_assignment_notes,
           };
         });
 
-        setCuttingJobs(jobs);
+        // Fetch batch assignments for each order
+        const jobsWithBatchAssignments = await Promise.all(jobs.map(async (job) => {
+          try {
+            const { data: batchAssignments } = await supabase
+              .from('order_batch_assignments_with_details')
+              .select('*')
+              .eq('order_id', job.id);
+
+            return {
+              ...job,
+              batchAssignments: batchAssignments || []
+            };
+          } catch (error) {
+            console.error(`Error fetching batch assignments for order ${job.id}:`, error);
+            return {
+              ...job,
+              batchAssignments: []
+            };
+          }
+        }));
+
+        setCuttingJobs(jobsWithBatchAssignments);
       } catch (err) {
         console.error('Error loading cutting jobs:', err);
         setCuttingJobs([]);
@@ -385,6 +557,7 @@ const CuttingManagerPage = () => {
                         <TableHead>Progress</TableHead>
                         <TableHead>Cutting Master</TableHead>
                         <TableHead>Pattern Master</TableHead>
+                        <TableHead>Assigned Batch</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Due Date</TableHead>
                         <TableHead>Actions</TableHead>
@@ -429,6 +602,56 @@ const CuttingManagerPage = () => {
                               </div>
                             ) : (
                               <span className="text-muted-foreground">Unassigned</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {job.batchAssignments && job.batchAssignments.length > 0 ? (
+                              <div className="space-y-2">
+                                {job.batchAssignments.map((assignment, index) => (
+                                  <div key={assignment.id} className="p-2 border rounded-lg bg-green-50">
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center">
+                                        <UserCheck className="w-4 h-4 mr-2 text-green-600" />
+                                        <div>
+                                          <div className="font-medium text-green-700 text-sm">
+                                            {assignment.batch_name}
+                                          </div>
+                                          <div className="text-xs text-muted-foreground">
+                                            {assignment.batch_code} • {assignment.total_quantity} pieces
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <Badge variant="outline" className="text-xs">
+                                        {assignment.tailor_type}
+                                      </Badge>
+                                    </div>
+                                    {assignment.size_distributions && assignment.size_distributions.length > 0 && (
+                                      <div className="mt-1 text-xs text-muted-foreground">
+                                        Sizes: {assignment.size_distributions.map(sd => `${sd.size_name}: ${sd.quantity}`).join(', ')}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleAssignBatch(job)}
+                                  className="text-blue-600 border-blue-200 hover:bg-blue-50 w-full"
+                                >
+                                  <UserPlus className="w-4 h-4 mr-2" />
+                                  Add More Batches
+                                </Button>
+                              </div>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleAssignBatch(job)}
+                                className="text-blue-600 border-blue-200 hover:bg-blue-50"
+                              >
+                                <UserPlus className="w-4 h-4 mr-2" />
+                                Assign Batches
+                              </Button>
                             )}
                           </TableCell>
                           
@@ -501,6 +724,29 @@ const CuttingManagerPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Multiple Batch Assignment Dialog */}
+      <MultipleBatchAssignmentDialog
+        isOpen={batchAssignmentOpen}
+        onClose={() => {
+          setBatchAssignmentOpen(false);
+          setSelectedJobForBatch(null);
+        }}
+        orderId={selectedJobForBatch?.id || ''}
+        orderNumber={selectedJobForBatch?.orderNumber || ''}
+        customerName={selectedJobForBatch?.customerName || ''}
+        onSuccess={handleBatchAssignmentSuccess}
+        existingAssignments={selectedJobForBatch?.batchAssignments?.map(ba => ({
+          batch_id: ba.batch_id,
+          batch_name: ba.batch_name,
+          batch_code: ba.batch_code,
+          size_distributions: ba.size_distributions.reduce((acc, sd) => {
+            acc[sd.size_name] = sd.quantity;
+            return acc;
+          }, {} as { [size: string]: number }),
+          notes: ba.notes
+        })) || []}
+      />
     </ErpLayout>
   );
 };

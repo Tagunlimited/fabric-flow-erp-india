@@ -108,7 +108,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       children: [
         { title: "Production Dashboard", url: "/production", icon: Factory },
         { title: "Assign Orders", url: "/production/assign-orders", icon: Users },
-        { title: "Cutting Manager", url: "/production/cutting-manager", icon: Scissors }
+        { title: "Cutting Manager", url: "/production/cutting-manager", icon: Scissors },
+        { title: "Tailor Management", url: "/production/tailor-management", icon: Users }
       ]
     },
     { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality" },
