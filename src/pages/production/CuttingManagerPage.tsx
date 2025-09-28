@@ -79,13 +79,17 @@ const CuttingManagerPage = () => {
     return `${dd}-${mm}-${yy}`;
   };
 
-  // Load assigned cutting jobs from Assign Orders (local storage) and enrich with order/customer/BOM
+  // Load assigned cutting jobs from DB (order_assignments) and enrich with order/customer/BOM
   useEffect(() => {
     const loadCuttingJobs = async () => {
       try {
-        const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-        const map = raw ? JSON.parse(raw) : {};
-        const orderIds: string[] = Object.keys(map).filter(id => !!map[id]?.cuttingMasterId);
+        const { data: rows } = await supabase
+          .from('order_assignments' as any)
+          .select('order_id, cutting_master_name, pattern_master_name, cutting_work_date, cut_quantity')
+          .not('cutting_master_id', 'is', null);
+        const map: Record<string, any> = {};
+        (rows || []).forEach((r: any) => { if (r?.order_id) map[r.order_id] = r; });
+        const orderIds: string[] = Object.keys(map);
         if (orderIds.length === 0) {
           setCuttingJobs([]);
           return;
@@ -141,10 +145,10 @@ const CuttingManagerPage = () => {
             productName: (bom as any).product_name || 'Product',
             fabricType: '-',
             quantity: Number((bom as any).qty || 0),
-            cutQuantity: Number(p.cutQuantity || 0),
-            assignedTo: p.cuttingMasterName || '',
-            patternMasterName: p.patternMasterName || '',
-            startDate: p.cuttingWorkDate || '',
+            cutQuantity: Number(p.cut_quantity || 0),
+            assignedTo: p.cutting_master_name || '',
+            patternMasterName: p.pattern_master_name || '',
+            startDate: p.cutting_work_date || '',
             dueDate: o.expected_delivery_date || '',
             status: 'pending',
             priority: computePriority(o.expected_delivery_date),
@@ -166,11 +170,8 @@ const CuttingManagerPage = () => {
 
     loadCuttingJobs();
 
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === LOCAL_STORAGE_KEY) loadCuttingJobs();
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    // Optionally, add realtime if needed later
+    return () => {};
   }, []);
 
 
@@ -484,17 +485,16 @@ const CuttingManagerPage = () => {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setUpdateOpen(false)}>Cancel</Button>
-            <Button onClick={() => {
+            <Button onClick={async () => {
               if (!updateJob) { setUpdateOpen(false); return; }
               const newQty = Math.min(updateCutQty, updateJob.quantity);
               // Update local table state
               setCuttingJobs(prev => prev.map(j => j.id === updateJob.id ? { ...j, cutQuantity: newQty } : j));
-              // Persist to local storage used by Assign Orders/Cutting Manager
+              // Persist to DB
               try {
-                const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-                const map = raw ? JSON.parse(raw) : {};
-                map[updateJob.id] = { ...(map[updateJob.id] || {}), cutQuantity: newQty };
-                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(map));
+                await supabase
+                  .from('order_assignments' as any)
+                  .upsert({ order_id: updateJob.id, cut_quantity: newQty } as any, { onConflict: 'order_id' } as any);
               } catch {}
               setUpdateOpen(false);
             }}>Save</Button>

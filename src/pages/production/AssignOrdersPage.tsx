@@ -110,6 +110,28 @@ const AssignOrdersPage = () => {
     }
   };
 
+  // Persist assignment in DB
+  const upsertAssignment = async (
+    orderId: string,
+    fields: Partial<{
+      cutting_master_id: string | null;
+      cutting_master_name: string | null;
+      cutting_work_date: string | null;
+      pattern_master_id: string | null;
+      pattern_master_name: string | null;
+      pattern_work_date: string | null;
+    }>
+  ) => {
+    try {
+      const payload = { order_id: orderId, ...fields } as any;
+      await supabase
+        .from('order_assignments' as any)
+        .upsert(payload, { onConflict: 'order_id' } as any);
+    } catch (e) {
+      console.error('Failed to upsert order assignment:', e);
+    }
+  };
+
   const formatDateDDMMYY = (value?: string) => {
     if (!value) return '';
     const d = new Date(value);
@@ -300,7 +322,17 @@ const AssignOrdersPage = () => {
           return 'medium';
         };
 
-        const persisted = getStoredAssignments();
+        // Load existing assignments from DB
+        let assignmentsByOrder: Record<string, any> = {};
+        try {
+          const { data: rows } = await supabase
+            .from('order_assignments' as any)
+            .select('order_id, cutting_master_id, cutting_master_name, cutting_work_date, pattern_master_id, pattern_master_name, pattern_work_date')
+            .in('order_id', orderIds as any);
+          (rows || []).forEach((r: any) => { if (r?.order_id) assignmentsByOrder[r.order_id] = r; });
+        } catch (e) {
+          console.error('Failed to load order assignments:', e);
+        }
         const nextAssignments: OrderAssignment[] = validOrders.map((o: any) => {
           const bomList = bomsByOrder[o.id] || [];
           const productName = bomList.length === 1
@@ -340,17 +372,16 @@ const AssignOrdersPage = () => {
             priority: computePriority(due),
             materialStatus,
           };
-          // Merge any persisted local selections
-          const p = persisted[o.id] || {};
-          if (p.cuttingMasterId || p.patternMasterId) {
-            base.cuttingMasterId = p.cuttingMasterId;
-            base.cuttingMasterName = p.cuttingMasterName;
-            base.patternMasterId = p.patternMasterId;
-            base.patternMasterName = p.patternMasterName;
-            base.cuttingWorkDate = p.cuttingWorkDate;
-            base.patternWorkDate = p.patternWorkDate;
-            base.assignedDate = p.assignedDate || base.assignedDate;
-            base.assignedTo = p.cuttingMasterName || p.patternMasterName || base.assignedTo;
+          // Merge any DB selections
+          const a = assignmentsByOrder[o.id] || {};
+          if (a.cutting_master_id || a.pattern_master_id) {
+            base.cuttingMasterId = a.cutting_master_id || undefined;
+            base.cuttingMasterName = a.cutting_master_name || undefined;
+            base.patternMasterId = a.pattern_master_id || undefined;
+            base.patternMasterName = a.pattern_master_name || undefined;
+            base.cuttingWorkDate = a.cutting_work_date || undefined;
+            base.patternWorkDate = a.pattern_work_date || undefined;
+            base.assignedTo = a.cutting_master_name || a.pattern_master_name || base.assignedTo;
             if (base.status === 'pending') base.status = 'assigned';
           }
           return base;
@@ -390,7 +421,7 @@ const AssignOrdersPage = () => {
     return counts;
   }, [assignments]);
 
-  const handleAssignCuttingMaster = (assignmentId: string, workerId: string, workDate?: string) => {
+  const handleAssignCuttingMaster = async (assignmentId: string, workerId: string, workDate?: string) => {
     const worker = (workers as any[]).find(w => w.id === workerId);
     setAssignments(prev => prev.map(assignment => 
       assignment.id === assignmentId 
@@ -405,15 +436,14 @@ const AssignOrdersPage = () => {
           }
         : assignment
     ));
-    setStoredAssignment(assignmentId, {
-      cuttingMasterId: workerId,
-      cuttingMasterName: (worker as any)?.name || '',
-      assignedDate: new Date().toISOString().split('T')[0],
-      cuttingWorkDate: workDate || new Date().toISOString().split('T')[0]
+    await upsertAssignment(assignmentId, {
+      cutting_master_id: workerId,
+      cutting_master_name: (worker as any)?.name || '',
+      cutting_work_date: workDate || new Date().toISOString().split('T')[0]
     });
   };
 
-  const handleAssignPatternMaster = (assignmentId: string, workerId: string, workDate?: string) => {
+  const handleAssignPatternMaster = async (assignmentId: string, workerId: string, workDate?: string) => {
     const worker = (workers as any[]).find(w => w.id === workerId);
     setAssignments(prev => prev.map(assignment => 
       assignment.id === assignmentId 
@@ -428,11 +458,10 @@ const AssignOrdersPage = () => {
           }
         : assignment
     ));
-    setStoredAssignment(assignmentId, {
-      patternMasterId: workerId,
-      patternMasterName: (worker as any)?.name || '',
-      assignedDate: new Date().toISOString().split('T')[0],
-      patternWorkDate: workDate || new Date().toISOString().split('T')[0]
+    await upsertAssignment(assignmentId, {
+      pattern_master_id: workerId,
+      pattern_master_name: (worker as any)?.name || '',
+      pattern_work_date: workDate || new Date().toISOString().split('T')[0]
     });
   };
 
@@ -454,15 +483,15 @@ const AssignOrdersPage = () => {
     setScheduleDialogOpen(true);
   };
 
-  const finalizeScheduleAssignment = () => {
+  const finalizeScheduleAssignment = async () => {
     if (!scheduleAssignmentId || !scheduleWorkerId || !scheduleRole) {
       setScheduleDialogOpen(false);
       return;
     }
     if (scheduleRole === 'cutting') {
-      handleAssignCuttingMaster(scheduleAssignmentId, scheduleWorkerId, scheduleDate);
+      await handleAssignCuttingMaster(scheduleAssignmentId, scheduleWorkerId, scheduleDate);
     } else {
-      handleAssignPatternMaster(scheduleAssignmentId, scheduleWorkerId, scheduleDate);
+      await handleAssignPatternMaster(scheduleAssignmentId, scheduleWorkerId, scheduleDate);
     }
     setScheduleDialogOpen(false);
   };
