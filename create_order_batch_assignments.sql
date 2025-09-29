@@ -10,7 +10,7 @@ CREATE TABLE public.order_batch_assignments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     order_id UUID NOT NULL REFERENCES public.orders(id) ON DELETE CASCADE,
     batch_id UUID NOT NULL REFERENCES public.batches(id) ON DELETE CASCADE,
-    assigned_by_id UUID REFERENCES public.employees(id) ON DELETE SET NULL,
+    assigned_by_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     assigned_by_name TEXT,
     assignment_date DATE DEFAULT CURRENT_DATE,
     notes TEXT,
@@ -115,6 +115,7 @@ SELECT
     bl.id as batch_leader_id,
     bl.full_name as batch_leader_name,
     bl.tailor_code as batch_leader_code,
+    bl.avatar_url as batch_leader_avatar,
     
     -- Size distributions
     COALESCE(
@@ -132,13 +133,13 @@ SELECT
 
 FROM public.order_batch_assignments oba
 LEFT JOIN public.batches b ON oba.batch_id = b.id
-LEFT JOIN public.tailors bl ON b.batch_leader_id = bl.id
+LEFT JOIN public.tailors bl ON bl.batch_id = b.id AND bl.is_batch_leader = true
 LEFT JOIN public.order_batch_size_distributions obsd ON oba.id = obsd.order_batch_assignment_id
 GROUP BY 
     oba.id, oba.order_id, oba.batch_id, oba.assigned_by_id, oba.assigned_by_name, 
     oba.assignment_date, oba.notes, oba.created_at, oba.updated_at,
     b.batch_name, b.batch_code, b.tailor_type, b.max_capacity, b.current_capacity, b.status,
-    bl.id, bl.full_name, bl.tailor_code;
+    bl.id, bl.full_name, bl.tailor_code, bl.avatar_url;
 
 -- Grant permissions on the view
 GRANT SELECT ON public.order_batch_assignments_with_details TO authenticated;
