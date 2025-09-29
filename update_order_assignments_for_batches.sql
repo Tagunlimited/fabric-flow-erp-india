@@ -9,7 +9,12 @@ ADD COLUMN IF NOT EXISTS assigned_batch_code TEXT,
 ADD COLUMN IF NOT EXISTS batch_assignment_date DATE,
 ADD COLUMN IF NOT EXISTS assigned_by_id UUID REFERENCES public.employees(id) ON DELETE SET NULL,
 ADD COLUMN IF NOT EXISTS assigned_by_name TEXT,
-ADD COLUMN IF NOT EXISTS batch_assignment_notes TEXT;
+ADD COLUMN IF NOT EXISTS batch_assignment_notes TEXT,
+-- Pricing fields by tailor type and role
+ADD COLUMN IF NOT EXISTS cutting_price_single_needle NUMERIC(10,2),
+ADD COLUMN IF NOT EXISTS cutting_price_overlock_flatlock NUMERIC(10,2),
+ADD COLUMN IF NOT EXISTS pattern_price_single_needle NUMERIC(10,2),
+ADD COLUMN IF NOT EXISTS pattern_price_overlock_flatlock NUMERIC(10,2);
 
 -- Create index for batch assignments
 CREATE INDEX IF NOT EXISTS idx_order_assignments_assigned_batch_id ON public.order_assignments(assigned_batch_id);

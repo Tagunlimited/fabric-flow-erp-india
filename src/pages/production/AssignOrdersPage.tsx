@@ -42,6 +42,11 @@ interface OrderAssignment {
   status: 'pending' | 'assigned' | 'in_progress' | 'completed';
   priority: 'low' | 'medium' | 'high' | 'urgent';
   materialStatus: 'Available' | 'Not Available';
+  // Pricing captured at assignment time by tailor type
+  cuttingPriceSingleNeedle?: number;
+  cuttingPriceOverlockFlatlock?: number;
+  patternPriceSingleNeedle?: number;
+  patternPriceOverlockFlatlock?: number;
 }
 
 const AssignOrdersPage = () => {
@@ -75,6 +80,10 @@ const AssignOrdersPage = () => {
   const [scheduleAssignmentId, setScheduleAssignmentId] = useState<string | null>(null);
   const [scheduleWorkerId, setScheduleWorkerId] = useState<string | null>(null);
   const [scheduleDate, setScheduleDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [scheduleCuttingPriceSingleNeedle, setScheduleCuttingPriceSingleNeedle] = useState<string>('');
+  const [scheduleCuttingPriceOverlockFlatlock, setScheduleCuttingPriceOverlockFlatlock] = useState<string>('');
+  const [schedulePatternPriceSingleNeedle, setSchedulePatternPriceSingleNeedle] = useState<string>('');
+  const [schedulePatternPriceOverlockFlatlock, setSchedulePatternPriceOverlockFlatlock] = useState<string>('');
 
   // View schedule dialog for a worker
   const [viewScheduleOpen, setViewScheduleOpen] = useState(false);
@@ -120,6 +129,10 @@ const AssignOrdersPage = () => {
       pattern_master_id: string | null;
       pattern_master_name: string | null;
       pattern_work_date: string | null;
+      cutting_price_single_needle: number | null;
+      cutting_price_overlock_flatlock: number | null;
+      pattern_price_single_needle: number | null;
+      pattern_price_overlock_flatlock: number | null;
     }>
   ) => {
     try {
@@ -140,6 +153,15 @@ const AssignOrdersPage = () => {
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const yy = String(d.getFullYear()).slice(-2);
     return `${dd}-${mm}-${yy}`;
+  };
+
+  const formatPrice = (value?: number) => {
+    if (value == null || isNaN(Number(value))) return '-';
+    try {
+      return Number(value).toFixed(2);
+    } catch {
+      return String(value);
+    }
   };
 
   // Load employees: Pattern Masters and Cutting Masters
@@ -327,7 +349,7 @@ const AssignOrdersPage = () => {
         try {
           const { data: rows } = await supabase
             .from('order_assignments' as any)
-            .select('order_id, cutting_master_id, cutting_master_name, cutting_work_date, pattern_master_id, pattern_master_name, pattern_work_date')
+            .select('order_id, cutting_master_id, cutting_master_name, cutting_work_date, pattern_master_id, pattern_master_name, pattern_work_date, cutting_price_single_needle, cutting_price_overlock_flatlock, pattern_price_single_needle, pattern_price_overlock_flatlock')
             .in('order_id', orderIds as any);
           (rows || []).forEach((r: any) => { if (r?.order_id) assignmentsByOrder[r.order_id] = r; });
         } catch (e) {
@@ -383,6 +405,10 @@ const AssignOrdersPage = () => {
             base.patternWorkDate = a.pattern_work_date || undefined;
             base.assignedTo = a.cutting_master_name || a.pattern_master_name || base.assignedTo;
             if (base.status === 'pending') base.status = 'assigned';
+            base.cuttingPriceSingleNeedle = a.cutting_price_single_needle != null ? Number(a.cutting_price_single_needle) : undefined;
+            base.cuttingPriceOverlockFlatlock = a.cutting_price_overlock_flatlock != null ? Number(a.cutting_price_overlock_flatlock) : undefined;
+            base.patternPriceSingleNeedle = a.pattern_price_single_needle != null ? Number(a.pattern_price_single_needle) : undefined;
+            base.patternPriceOverlockFlatlock = a.pattern_price_overlock_flatlock != null ? Number(a.pattern_price_overlock_flatlock) : undefined;
           }
           return base;
         });
@@ -421,7 +447,12 @@ const AssignOrdersPage = () => {
     return counts;
   }, [assignments]);
 
-  const handleAssignCuttingMaster = async (assignmentId: string, workerId: string, workDate?: string) => {
+  const handleAssignCuttingMaster = async (
+    assignmentId: string,
+    workerId: string,
+    workDate?: string,
+    prices?: { singleNeedle?: number; overlockFlatlock?: number }
+  ) => {
     const worker = (workers as any[]).find(w => w.id === workerId);
     setAssignments(prev => prev.map(assignment => 
       assignment.id === assignmentId 
@@ -432,18 +463,27 @@ const AssignOrdersPage = () => {
             assignedTo: worker?.name || assignment.assignedTo || '',
             assignedDate: new Date().toISOString().split('T')[0],
             cuttingWorkDate: workDate || assignment.cuttingWorkDate,
-            status: 'assigned' as const 
+            status: 'assigned' as const,
+            cuttingPriceSingleNeedle: prices?.singleNeedle ?? assignment.cuttingPriceSingleNeedle,
+            cuttingPriceOverlockFlatlock: prices?.overlockFlatlock ?? assignment.cuttingPriceOverlockFlatlock
           }
         : assignment
     ));
     await upsertAssignment(assignmentId, {
       cutting_master_id: workerId,
       cutting_master_name: (worker as any)?.name || '',
-      cutting_work_date: workDate || new Date().toISOString().split('T')[0]
+      cutting_work_date: workDate || new Date().toISOString().split('T')[0],
+      cutting_price_single_needle: prices?.singleNeedle ?? null,
+      cutting_price_overlock_flatlock: prices?.overlockFlatlock ?? null
     });
   };
 
-  const handleAssignPatternMaster = async (assignmentId: string, workerId: string, workDate?: string) => {
+  const handleAssignPatternMaster = async (
+    assignmentId: string,
+    workerId: string,
+    workDate?: string,
+    prices?: { singleNeedle?: number; overlockFlatlock?: number }
+  ) => {
     const worker = (workers as any[]).find(w => w.id === workerId);
     setAssignments(prev => prev.map(assignment => 
       assignment.id === assignmentId 
@@ -454,14 +494,18 @@ const AssignOrdersPage = () => {
             assignedTo: assignment.assignedTo || worker?.name || '',
             assignedDate: new Date().toISOString().split('T')[0],
             patternWorkDate: workDate || assignment.patternWorkDate,
-            status: 'assigned' as const 
+            status: 'assigned' as const,
+            patternPriceSingleNeedle: prices?.singleNeedle ?? assignment.patternPriceSingleNeedle,
+            patternPriceOverlockFlatlock: prices?.overlockFlatlock ?? assignment.patternPriceOverlockFlatlock
           }
         : assignment
     ));
     await upsertAssignment(assignmentId, {
       pattern_master_id: workerId,
       pattern_master_name: (worker as any)?.name || '',
-      pattern_work_date: workDate || new Date().toISOString().split('T')[0]
+      pattern_work_date: workDate || new Date().toISOString().split('T')[0],
+      pattern_price_single_needle: prices?.singleNeedle ?? null,
+      pattern_price_overlock_flatlock: prices?.overlockFlatlock ?? null
     });
   };
 
@@ -473,6 +517,12 @@ const AssignOrdersPage = () => {
     setScheduleAssignmentId(assignmentId);
     setScheduleWorkerId(workerId);
     setScheduleDate(new Date().toISOString().split('T')[0]);
+    // Prefill prices from existing assignment if available
+    const existing = assignments.find(a => a.id === assignmentId);
+    setScheduleCuttingPriceSingleNeedle(existing?.cuttingPriceSingleNeedle != null ? String(existing.cuttingPriceSingleNeedle) : '');
+    setScheduleCuttingPriceOverlockFlatlock(existing?.cuttingPriceOverlockFlatlock != null ? String(existing.cuttingPriceOverlockFlatlock) : '');
+    setSchedulePatternPriceSingleNeedle(existing?.patternPriceSingleNeedle != null ? String(existing.patternPriceSingleNeedle) : '');
+    setSchedulePatternPriceOverlockFlatlock(existing?.patternPriceOverlockFlatlock != null ? String(existing.patternPriceOverlockFlatlock) : '');
     if (designation === 'Cutting Manager' || designation === 'Cutting Master') {
       setScheduleRole('cutting');
     } else if (designation === 'Pattern Master') {
@@ -489,9 +539,25 @@ const AssignOrdersPage = () => {
       return;
     }
     if (scheduleRole === 'cutting') {
-      await handleAssignCuttingMaster(scheduleAssignmentId, scheduleWorkerId, scheduleDate);
+      await handleAssignCuttingMaster(
+        scheduleAssignmentId,
+        scheduleWorkerId,
+        scheduleDate,
+        {
+          singleNeedle: scheduleCuttingPriceSingleNeedle !== '' ? Number(scheduleCuttingPriceSingleNeedle) : undefined,
+          overlockFlatlock: scheduleCuttingPriceOverlockFlatlock !== '' ? Number(scheduleCuttingPriceOverlockFlatlock) : undefined,
+        }
+      );
     } else {
-      await handleAssignPatternMaster(scheduleAssignmentId, scheduleWorkerId, scheduleDate);
+      await handleAssignPatternMaster(
+        scheduleAssignmentId,
+        scheduleWorkerId,
+        scheduleDate,
+        {
+          singleNeedle: schedulePatternPriceSingleNeedle !== '' ? Number(schedulePatternPriceSingleNeedle) : undefined,
+          overlockFlatlock: schedulePatternPriceOverlockFlatlock !== '' ? Number(schedulePatternPriceOverlockFlatlock) : undefined,
+        }
+      );
     }
     setScheduleDialogOpen(false);
   };
@@ -661,12 +727,13 @@ const AssignOrdersPage = () => {
                         <TableHead>Customer</TableHead>
                         <TableHead>Product</TableHead>
                         <TableHead>Quantity</TableHead>
-                      <TableHead>Cutting Master</TableHead>
-                      <TableHead>Pattern Master</TableHead>
+                        <TableHead>Cutting Master</TableHead>
+                        <TableHead>Pattern Master</TableHead>
+                        <TableHead>Stitching Price</TableHead>
                         <TableHead>Due Date</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Priority</TableHead>
-                      <TableHead>Material Status</TableHead>
+                        <TableHead>Material Status</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -696,6 +763,21 @@ const AssignOrdersPage = () => {
                             ) : (
                               <span className="text-muted-foreground">Unassigned</span>
                             )}
+                          </TableCell>
+                          {/* Stitching Price Column */}
+                          <TableCell>
+                            <div className="text-xs">
+                              {(() => {
+                                const sn = (assignment.patternPriceSingleNeedle ?? assignment.cuttingPriceSingleNeedle);
+                                const of = (assignment.patternPriceOverlockFlatlock ?? assignment.cuttingPriceOverlockFlatlock);
+                                if (sn == null && of == null) return <span className="text-muted-foreground">-</span>;
+                                return (
+                                  <span>
+                                    SN ₹{formatPrice(sn)} / OF ₹{formatPrice(of)}
+                                  </span>
+                                );
+                              })()}
+                            </div>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center">
@@ -799,6 +881,58 @@ const AssignOrdersPage = () => {
                 <Label>Work Date</Label>
                 <Input type="date" value={scheduleDate} onChange={(e) => setScheduleDate(e.target.value)} />
               </div>
+              {scheduleRole === 'cutting' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <Label>Tailor price (SN)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={scheduleCuttingPriceSingleNeedle}
+                      onChange={(e) => setScheduleCuttingPriceSingleNeedle(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label>Tailor price (OF)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={scheduleCuttingPriceOverlockFlatlock}
+                      onChange={(e) => setScheduleCuttingPriceOverlockFlatlock(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+              {scheduleRole === 'pattern' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <Label>Tailor (SN)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={schedulePatternPriceSingleNeedle}
+                      onChange={(e) => setSchedulePatternPriceSingleNeedle(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label>Tailor (OF)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={schedulePatternPriceOverlockFlatlock}
+                      onChange={(e) => setSchedulePatternPriceOverlockFlatlock(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setScheduleDialogOpen(false)}>Cancel</Button>

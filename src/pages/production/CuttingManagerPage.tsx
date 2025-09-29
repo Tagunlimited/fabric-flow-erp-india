@@ -677,7 +677,7 @@ const CuttingManagerPage = () => {
                                 <Eye className="w-4 h-4 mr-2" />
                                 View
                               </Button>
-                        <Button variant="outline" size="sm" onClick={() => { setUpdateJob(job); setUpdateCutQty(job.cutQuantity); setUpdateOpen(true); }}>
+                        <Button variant="outline" size="sm" onClick={() => { setUpdateJob(job); setUpdateCutQty(0); setUpdateOpen(true); }}>
                                 <Edit className="w-4 h-4 mr-2" />
                                 Update
                               </Button>
@@ -702,7 +702,7 @@ const CuttingManagerPage = () => {
           </DialogHeader>
           <div className="space-y-3">
             <div>
-              <Label>Cut Quantity</Label>
+              <Label>Add Cut Quantity</Label>
               <Input type="number" min={0} value={updateCutQty} onChange={(e) => setUpdateCutQty(Number(e.target.value || 0))} />
             </div>
           </div>
@@ -710,7 +710,9 @@ const CuttingManagerPage = () => {
             <Button variant="outline" onClick={() => setUpdateOpen(false)}>Cancel</Button>
             <Button onClick={async () => {
               if (!updateJob) { setUpdateOpen(false); return; }
-              const newQty = Math.min(updateCutQty, updateJob.quantity);
+              const increment = Math.max(0, Number(updateCutQty) || 0);
+              const summed = (Number(updateJob.cutQuantity) || 0) + increment;
+              const newQty = Math.min(summed, Number(updateJob.quantity) || 0);
               // Update local table state
               setCuttingJobs(prev => prev.map(j => j.id === updateJob.id ? { ...j, cutQuantity: newQty } : j));
               // Persist to DB
