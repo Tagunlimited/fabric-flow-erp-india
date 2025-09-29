@@ -30,6 +30,7 @@ import {
   UserCheck,
   UserPlus
 } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleBatchAssignmentDialog";
@@ -62,6 +63,7 @@ interface CuttingJob {
     batch_name: string;
     batch_code: string;
     batch_leader_name: string;
+    batch_leader_avatar?: string;
     tailor_type: string;
     total_quantity: number;
     size_distributions: Array<{
@@ -72,6 +74,32 @@ interface CuttingJob {
     assigned_by: string;
     notes: string;
   }>;
+  // Order items for detailed product information
+  orderItems?: Array<{
+    id: string;
+    product_category_id: string;
+    product_description: string;
+    fabric_id: string;
+    color: string;
+    gsm: string;
+    quantity: number;
+    sizes_quantities: any;
+    category_image_url?: string;
+    product_category?: {
+      category_name: string;
+      category_image_url?: string;
+    };
+    fabric?: {
+      fabric_name: string;
+      color: string;
+      gsm: string;
+      image?: string;
+    };
+  }>;
+  customer?: {
+    company_name: string;
+    contact_person: string;
+  };
 }
 
 
@@ -105,6 +133,7 @@ const CuttingManagerPage = () => {
 
   // Batch assignment handlers
   const handleAssignBatch = (job: CuttingJob) => {
+    // Order items are already loaded in the job object
     setSelectedJobForBatch(job);
     setBatchAssignmentOpen(true);
   };
@@ -139,10 +168,85 @@ const CuttingManagerPage = () => {
           return;
         }
 
-        const { data: orders } = await supabase
+        // Fetch orders first (simplified query)
+        const { data: orders, error: ordersError } = await supabase
           .from('orders' as any)
           .select('id, order_number, expected_delivery_date, customer_id')
           .in('id', orderIds as any);
+
+        if (ordersError) {
+          console.error('Error fetching orders:', ordersError);
+          setCuttingJobs([]);
+          return;
+        }
+
+        // Fetch order items separately
+        // First try to fetch order items without relationships
+        const { data: orderItems, error: orderItemsError } = await supabase
+          .from('order_items' as any)
+          .select('*')
+          .in('order_id', orderIds as any);
+
+        if (orderItemsError) {
+          console.error('Error fetching order items:', orderItemsError);
+        } else {
+          console.log('Order items fetched successfully:', orderItems);
+        }
+
+        // Fetch product categories separately
+        const productCategoryIds = Array.from(new Set((orderItems || []).map((item: any) => item.product_category_id).filter(Boolean)));
+        let productCategoriesMap: Record<string, any> = {};
+        if (productCategoryIds.length > 0) {
+          const { data: productCategories, error: productCategoriesError } = await supabase
+            .from('product_categories' as any)
+            .select('id, category_name, category_image_url')
+            .in('id', productCategoryIds as any);
+          
+          if (productCategoriesError) {
+            console.error('Error fetching product categories:', productCategoriesError);
+          } else {
+            console.log('Product categories fetched:', productCategories);
+            (productCategories || []).forEach((cat: any) => {
+              productCategoriesMap[cat.id] = cat;
+            });
+          }
+        }
+
+        // Fetch fabric data separately
+        const fabricIds = Array.from(new Set((orderItems || []).map((item: any) => item.fabric_id).filter(Boolean)));
+        let fabricMap: Record<string, any> = {};
+        if (fabricIds.length > 0) {
+          const { data: fabrics, error: fabricsError } = await supabase
+            .from('fabric_master' as any)
+            .select('id, fabric_name, color, gsm, image')
+            .in('id', fabricIds as any);
+          
+          if (fabricsError) {
+            console.error('Error fetching fabrics:', fabricsError);
+          } else {
+            console.log('Fabrics fetched:', fabrics);
+            (fabrics || []).forEach((fabric: any) => {
+              fabricMap[fabric.id] = fabric;
+            });
+          }
+        }
+
+        // Group order items by order_id and enrich with related data
+        const orderItemsByOrderId: Record<string, any[]> = {};
+        (orderItems || []).forEach((item: any) => {
+          if (!orderItemsByOrderId[item.order_id]) {
+            orderItemsByOrderId[item.order_id] = [];
+          }
+          
+          // Enrich item with related data
+          const enrichedItem = {
+            ...item,
+            product_category: productCategoriesMap[item.product_category_id] || null,
+            fabric: fabricMap[item.fabric_id] || null
+          };
+          
+          orderItemsByOrderId[item.order_id].push(enrichedItem);
+        });
 
         const customerIds = Array.from(new Set((orders || []).map((o: any) => o.customer_id).filter(Boolean)));
         let customersMap: Record<string, { company_name?: string }> = {};
@@ -205,6 +309,9 @@ const CuttingManagerPage = () => {
             batchAssignmentDate: p.batch_assignment_date,
             assignedBy: p.assigned_by_name,
             batchAssignmentNotes: p.batch_assignment_notes,
+            // Add order items with product and fabric details
+            orderItems: orderItemsByOrderId[o.id] || [],
+            customer: customersMap[o.customer_id] ? { company_name: customersMap[o.customer_id].company_name } : undefined,
           };
         });
 
@@ -239,11 +346,85 @@ const CuttingManagerPage = () => {
           return;
         }
 
-        // Fetch orders
-        const { data: orders } = await supabase
+        // Fetch orders first (simplified query)
+        const { data: orders, error: ordersError } = await supabase
           .from('orders' as any)
           .select('id, order_number, expected_delivery_date, customer_id')
           .in('id', orderIds as any);
+
+        if (ordersError) {
+          console.error('Error fetching orders:', ordersError);
+          setCuttingJobs([]);
+          return;
+        }
+
+        // Fetch order items separately
+        // First try to fetch order items without relationships
+        const { data: orderItems, error: orderItemsError } = await supabase
+          .from('order_items' as any)
+          .select('*')
+          .in('order_id', orderIds as any);
+
+        if (orderItemsError) {
+          console.error('Error fetching order items:', orderItemsError);
+        } else {
+          console.log('Order items fetched successfully:', orderItems);
+        }
+
+        // Fetch product categories separately
+        const productCategoryIds = Array.from(new Set((orderItems || []).map((item: any) => item.product_category_id).filter(Boolean)));
+        let productCategoriesMap: Record<string, any> = {};
+        if (productCategoryIds.length > 0) {
+          const { data: productCategories, error: productCategoriesError } = await supabase
+            .from('product_categories' as any)
+            .select('id, category_name, category_image_url')
+            .in('id', productCategoryIds as any);
+          
+          if (productCategoriesError) {
+            console.error('Error fetching product categories:', productCategoriesError);
+          } else {
+            console.log('Product categories fetched:', productCategories);
+            (productCategories || []).forEach((cat: any) => {
+              productCategoriesMap[cat.id] = cat;
+            });
+          }
+        }
+
+        // Fetch fabric data separately
+        const fabricIds = Array.from(new Set((orderItems || []).map((item: any) => item.fabric_id).filter(Boolean)));
+        let fabricMap: Record<string, any> = {};
+        if (fabricIds.length > 0) {
+          const { data: fabrics, error: fabricsError } = await supabase
+            .from('fabric_master' as any)
+            .select('id, fabric_name, color, gsm, image')
+            .in('id', fabricIds as any);
+          
+          if (fabricsError) {
+            console.error('Error fetching fabrics:', fabricsError);
+          } else {
+            console.log('Fabrics fetched:', fabrics);
+            (fabrics || []).forEach((fabric: any) => {
+              fabricMap[fabric.id] = fabric;
+            });
+          }
+        }
+
+        // Group order items by order_id and enrich with related data
+        const orderItemsByOrderId: Record<string, any[]> = {};
+        (orderItems || []).forEach((item: any) => {
+          if (!orderItemsByOrderId[item.order_id]) {
+            orderItemsByOrderId[item.order_id] = [];
+          }
+          
+          // Enrich item with related data
+          const enrichedItem = {
+            ...item,
+            product_category: productCategoriesMap[item.product_category_id] || null,
+            fabric: fabricMap[item.fabric_id] || null
+          };
+          
+          orderItemsByOrderId[item.order_id].push(enrichedItem);
+        });
 
         // Fetch customers
         const customerIds = Array.from(new Set((orders || []).map((o: any) => o.customer_id).filter(Boolean)));
@@ -309,6 +490,9 @@ const CuttingManagerPage = () => {
             batchAssignmentDate: p.batch_assignment_date,
             assignedBy: p.assigned_by_name,
             batchAssignmentNotes: p.batch_assignment_notes,
+            // Add order items with product and fabric details
+            orderItems: orderItemsByOrderId[o.id] || [],
+            customer: customersMap[o.customer_id] ? { company_name: customersMap[o.customer_id].company_name } : undefined,
           };
         });
 
@@ -610,20 +794,22 @@ const CuttingManagerPage = () => {
                                 {job.batchAssignments.map((assignment, index) => (
                                   <div key={assignment.id} className="p-2 border rounded-lg bg-green-50">
                                     <div className="flex items-center justify-between">
-                                      <div className="flex items-center">
-                                        <UserCheck className="w-4 h-4 mr-2 text-green-600" />
+                                      <div className="flex items-center space-x-3">
+                                        <Avatar className="w-8 h-8">
+                                          <AvatarImage src={assignment.batch_leader_avatar} alt={assignment.batch_leader_name} />
+                                          <AvatarFallback className="bg-gray-200 text-gray-700 text-xs">
+                                            {assignment.batch_leader_name?.charAt(0) || assignment.batch_name.charAt(0)}
+                                          </AvatarFallback>
+                                        </Avatar>
                                         <div>
                                           <div className="font-medium text-green-700 text-sm">
                                             {assignment.batch_name}
                                           </div>
                                           <div className="text-xs text-muted-foreground">
-                                            {assignment.batch_code} • {assignment.total_quantity} pieces
+                                            {assignment.batch_leader_name} • {assignment.total_quantity} pieces
                                           </div>
                                         </div>
                                       </div>
-                                      <Badge variant="outline" className="text-xs">
-                                        {assignment.tailor_type}
-                                      </Badge>
                                     </div>
                                     {assignment.size_distributions && assignment.size_distributions.length > 0 && (
                                       <div className="mt-1 text-xs text-muted-foreground">
@@ -746,6 +932,7 @@ const CuttingManagerPage = () => {
           }, {} as { [size: string]: number }),
           notes: ba.notes
         })) || []}
+        orderItems={selectedJobForBatch?.orderItems || []}
       />
     </ErpLayout>
   );
