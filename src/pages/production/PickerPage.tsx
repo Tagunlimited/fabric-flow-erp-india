@@ -18,6 +18,7 @@ interface TailorListItem {
   assigned_orders: number;
   assigned_quantity: number;
   picked_quantity: number;
+  rejected_quantity?: number;
   batch_id?: string | null;
   is_batch_leader?: boolean | null;
 }
@@ -40,6 +41,9 @@ export default function PickerPage() {
   const [rejectedOpen, setRejectedOpen] = useState(false);
   const [rejectedOrderNumber, setRejectedOrderNumber] = useState("");
   const [rejectedItems, setRejectedItems] = useState<{ size_name: string; rejected_quantity: number; remarks?: string }[]>([]);
+  const [batchRejectedOpen, setBatchRejectedOpen] = useState(false);
+  const [batchRejectedTitle, setBatchRejectedTitle] = useState("");
+  const [batchRejectedDetails, setBatchRejectedDetails] = useState<{ order_number: string; sizes: { size_name: string; rejected_quantity: number; remarks?: string }[] }[]>([]);
 
   useEffect(() => {
     fetchTailorsWithAssignedCounts();
@@ -88,6 +92,7 @@ export default function PickerPage() {
       let ordersCountByBatch: Record<string, number> = {};
       let qtyByBatch: Record<string, number> = {};
       let pickedByBatch: Record<string, number> = {};
+      let rejectedByBatch: Record<string, number> = {};
       let assignmentToBatch: Record<string, string> = {};
       let assignmentIds: string[] = [];
       if (batchIds.length > 0) {
@@ -143,6 +148,19 @@ export default function PickerPage() {
               } catch {}
             });
           } catch {}
+
+          // QC rejections per batch
+          try {
+            const { data: qcRows } = await (supabase as any)
+              .from('qc_reviews')
+              .select('order_batch_assignment_id, rejected_quantity')
+              .in('order_batch_assignment_id', assignmentIds as any);
+            (qcRows || []).forEach((q: any) => {
+              const aid = q?.order_batch_assignment_id as string | undefined; if (!aid) return;
+              const b = assignmentToBatch[aid]; if (!b) return;
+              rejectedByBatch[b] = (rejectedByBatch[b] || 0) + Number(q.rejected_quantity || 0);
+            });
+          } catch {}
         }
       }
 
@@ -154,6 +172,7 @@ export default function PickerPage() {
         assigned_orders: ordersCountByBatch[b.id] || 0,
         assigned_quantity: qtyByBatch[b.id] || 0,
         picked_quantity: pickedByBatch[b.id] || 0,
+        rejected_quantity: rejectedByBatch[b.id] || 0,
         batch_id: b.id,
         is_batch_leader: true,
       }));
@@ -164,6 +183,44 @@ export default function PickerPage() {
     } finally {
       setLoadingTailors(false);
     }
+  };
+
+  const openBatchRejectedDetails = async (batchId: string, batchName: string) => {
+    try {
+      const { data: rows } = await (supabase as any)
+        .from('order_batch_assignments_with_details')
+        .select('assignment_id, order_id')
+        .eq('batch_id', batchId);
+      const aids = (rows || []).map((r: any) => r.assignment_id).filter(Boolean);
+      const orderIds = Array.from(new Set((rows || []).map((r: any) => r.order_id).filter(Boolean)));
+      let ordersMap: Record<string, string> = {};
+      if (orderIds.length > 0) {
+        const { data: ords } = await (supabase as any)
+          .from('orders')
+          .select('id, order_number')
+          .in('id', orderIds as any);
+        (ords || []).forEach((o: any) => { ordersMap[o.id] = o.order_number; });
+      }
+      const { data: qcRows } = await (supabase as any)
+        .from('qc_reviews')
+        .select('order_batch_assignment_id, size_name, rejected_quantity, remarks')
+        .in('order_batch_assignment_id', aids as any);
+      // Need mapping assignment -> order_id
+      const aidToOrder: Record<string, string> = {};
+      (rows || []).forEach((r: any) => { if (r.assignment_id) aidToOrder[r.assignment_id] = r.order_id; });
+      const perOrder: Record<string, Record<string, { size_name: string; rejected_quantity: number; remarks?: string }>> = {};
+      (qcRows || []).forEach((q: any) => {
+        const oid = aidToOrder[q.order_batch_assignment_id]; if (!oid) return;
+        if (!perOrder[oid]) perOrder[oid] = {};
+        const key = q.size_name as string;
+        const prev = perOrder[oid][key]?.rejected_quantity || 0;
+        perOrder[oid][key] = { size_name: key, rejected_quantity: prev + Number(q.rejected_quantity || 0), remarks: q.remarks || undefined };
+      });
+      const details = Object.entries(perOrder).map(([oid, map]) => ({ order_number: ordersMap[oid] || oid, sizes: Object.values(map) }));
+      setBatchRejectedDetails(details);
+      setBatchRejectedTitle(batchName);
+      setBatchRejectedOpen(true);
+    } catch {}
   };
 
   const openBatchOrders = async (batchId: string) => {
@@ -368,6 +425,11 @@ export default function PickerPage() {
                                   Picked Qty: {t.picked_quantity}
                                 </Badge>
                               )}
+                              {t.rejected_quantity && t.rejected_quantity > 0 && (
+                                <Badge className="bg-red-100 text-red-800" onClick={(e) => { e.stopPropagation(); openBatchRejectedDetails(t.id, t.full_name); }}>
+                                  Rejected Qty: {t.rejected_quantity}
+                                </Badge>
+                              )}
                             </div>
                           </div>
                         </CardContent>
@@ -481,6 +543,34 @@ export default function PickerPage() {
                       {it.remarks && <div className="text-xs text-muted-foreground">{it.remarks}</div>}
                     </div>
                     <Badge className="bg-red-100 text-red-800">{it.rejected_quantity}</Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Batch-level rejected details dialog */}
+        <Dialog open={batchRejectedOpen} onOpenChange={(v) => { if (!v) setBatchRejectedOpen(false); }}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Rejected details for {batchRejectedTitle}</DialogTitle>
+            </DialogHeader>
+            {batchRejectedDetails.length === 0 ? (
+              <p className="text-muted-foreground">No rejections recorded.</p>
+            ) : (
+              <div className="space-y-3">
+                {batchRejectedDetails.map((od, i) => (
+                  <div key={i} className="border rounded p-2">
+                    <div className="text-sm font-medium mb-1">Order #{od.order_number}</div>
+                    <div className="space-y-1">
+                      {od.sizes.map((s, j) => (
+                        <div key={j} className="flex items-center justify-between">
+                          <div className="text-xs text-muted-foreground">{s.size_name}{s.remarks ? ` • ${s.remarks}` : ''}</div>
+                          <Badge className="bg-red-100 text-red-800">{s.rejected_quantity}</Badge>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
