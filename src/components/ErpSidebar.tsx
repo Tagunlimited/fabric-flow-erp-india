@@ -112,7 +112,13 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Tailor Management", url: "/production/tailor-management", icon: Users }
       ]
     },
-    { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality" },
+    { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality",
+      children: [
+        { title: "Picker", url: "/production/picker", icon: Package },
+        { title: "QC", url: "/quality/checks", icon: CheckCircle },
+        { title: "Dispatch", url: "/quality/dispatch", icon: Truck }
+      ]
+     },
     {
       title: "People",
       icon: Users,

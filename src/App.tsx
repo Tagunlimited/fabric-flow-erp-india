@@ -31,7 +31,10 @@ import ProductionPage from "./pages/ProductionPage";
 import AssignOrdersPage from "./pages/production/AssignOrdersPage";
 import CuttingManagerPage from "./pages/production/CuttingManagerPage";
 import TailorManagementPage from "./pages/production/TailorManagementPage";
+import PickerPage from "./pages/production/PickerPage";
 import QualityPage from "./pages/QualityPage";
+import QCPage from "./pages/quality/QCPage";
+import DispatchQCPage from "./pages/quality/DispatchQCPage";
 import DispatchPage from "./pages/DispatchPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -228,6 +231,11 @@ const App = () => {
                     <TailorManagementPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/production/picker" element={
+                  <ProtectedRoute>
+                    <PickerPage />
+                  </ProtectedRoute>
+                } />
                 <Route path="/design" element={
                   <ProtectedRoute>
                     <DesignPage />
@@ -301,6 +309,16 @@ const App = () => {
                 <Route path="/quality" element={
                   <ProtectedRoute>
                     <QualityPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/quality/checks" element={
+                  <ProtectedRoute>
+                    <QCPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/quality/dispatch" element={
+                  <ProtectedRoute>
+                    <DispatchQCPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/dispatch" element={
