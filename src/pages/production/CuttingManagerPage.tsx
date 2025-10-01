@@ -26,10 +26,17 @@ import {
   Users,
   Eye,
   Edit,
-  Plus
+  Plus,
+  UserCheck,
+  UserPlus,
+  RefreshCw
 } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleBatchAssignmentDialog";
+import { UpdateCuttingQuantityDialog } from "@/components/production/UpdateCuttingQuantityDialog";
+import { FabricPickingDialog } from "@/components/production/FabricPickingDialog";
 
 interface CuttingJob {
   id: string;
@@ -40,6 +47,7 @@ interface CuttingJob {
   fabricType: string;
   quantity: number;
   cutQuantity: number;
+  cutQuantitiesBySize?: { [size: string]: number };
   assignedTo: string;
   patternMasterName?: string;
   startDate: string;
@@ -52,6 +60,50 @@ interface CuttingJob {
   notes: string;
   defects: number;
   reworkRequired: boolean;
+  // Multiple batch assignment fields
+  batchAssignments?: Array<{
+    id: string;
+    batch_id: string;
+    batch_name: string;
+    batch_code: string;
+    batch_leader_name: string;
+    batch_leader_avatar?: string;
+    tailor_type: string;
+    total_quantity: number;
+    size_distributions: Array<{
+      size_name: string;
+      quantity: number;
+    }>;
+    assignment_date: string;
+    assigned_by: string;
+    notes: string;
+  }>;
+  // Order items for detailed product information
+  orderItems?: Array<{
+    id: string;
+    product_category_id: string;
+    product_description: string;
+    fabric_id: string;
+    color: string;
+    gsm: string;
+    quantity: number;
+    sizes_quantities: any;
+    category_image_url?: string;
+    product_category?: {
+      category_name: string;
+      category_image_url?: string;
+    };
+    fabric?: {
+      fabric_name: string;
+      color: string;
+      gsm: string;
+      image?: string;
+    };
+  }>;
+  customer?: {
+    company_name: string;
+    contact_person: string;
+  };
 }
 
 
@@ -67,7 +119,15 @@ const CuttingManagerPage = () => {
   const LOCAL_STORAGE_KEY = 'production-assignments';
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateJob, setUpdateJob] = useState<CuttingJob | null>(null);
-  const [updateCutQty, setUpdateCutQty] = useState<number>(0);
+  const [refreshing, setRefreshing] = useState(false);
+  
+  // Batch assignment dialog state
+  const [batchAssignmentOpen, setBatchAssignmentOpen] = useState(false);
+  const [selectedJobForBatch, setSelectedJobForBatch] = useState<CuttingJob | null>(null);
+  
+  // Fabric picking dialog state
+  const [fabricPickingOpen, setFabricPickingOpen] = useState(false);
+  const [selectedJobForFabricPicking, setSelectedJobForFabricPicking] = useState<CuttingJob | null>(null);
 
   const formatDateDDMMYY = (value?: string) => {
     if (!value) return '';
@@ -79,23 +139,124 @@ const CuttingManagerPage = () => {
     return `${dd}-${mm}-${yy}`;
   };
 
-  // Load assigned cutting jobs from Assign Orders (local storage) and enrich with order/customer/BOM
-  useEffect(() => {
+  // Batch assignment handlers
+  const handleAssignBatch = (job: CuttingJob) => {
+    // Order items are already loaded in the job object
+    setSelectedJobForBatch(job);
+    setBatchAssignmentOpen(true);
+  };
+
+  const handlePickFabric = (job: CuttingJob) => {
+    setSelectedJobForFabricPicking(job);
+    setFabricPickingOpen(true);
+  };
+
+  const handleBatchAssignmentSuccess = () => {
+    // Reload cutting jobs to get updated batch assignments
+    refreshData();
+  };
+
+  // Load assigned cutting jobs from DB (order_assignments) and enrich with order/customer/BOM
     const loadCuttingJobs = async () => {
       try {
-        const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-        const map = raw ? JSON.parse(raw) : {};
-        const orderIds: string[] = Object.keys(map).filter(id => !!map[id]?.cuttingMasterId);
+        const { data: rows } = await supabase
+          .from('order_assignments' as any)
+          .select(`
+            order_id, 
+            cutting_master_name, 
+            pattern_master_name, 
+            cutting_work_date, 
+            cut_quantity,
+            cut_quantities_by_size
+          `)
+          .not('cutting_master_id', 'is', null);
+        const map: Record<string, any> = {};
+        (rows || []).forEach((r: any) => { if (r?.order_id) map[r.order_id] = r; });
+        const orderIds: string[] = Object.keys(map);
         if (orderIds.length === 0) {
           setCuttingJobs([]);
           return;
         }
 
-        // Fetch orders
-        const { data: orders } = await supabase
+        // Fetch orders first (simplified query)
+        const { data: orders, error: ordersError } = await supabase
           .from('orders' as any)
           .select('id, order_number, expected_delivery_date, customer_id')
           .in('id', orderIds as any);
+
+        if (ordersError) {
+          console.error('Error fetching orders:', ordersError);
+          setCuttingJobs([]);
+          return;
+        }
+
+        // Fetch order items separately
+        // First try to fetch order items without relationships
+        const { data: orderItems, error: orderItemsError } = await supabase
+          .from('order_items' as any)
+          .select('*')
+          .in('order_id', orderIds as any);
+
+        if (orderItemsError) {
+          console.error('Error fetching order items:', orderItemsError);
+        } else {
+          console.log('Order items fetched successfully:', orderItems);
+        }
+
+        // Fetch product categories separately
+        const productCategoryIds = Array.from(new Set((orderItems || []).map((item: any) => item.product_category_id).filter(Boolean)));
+        let productCategoriesMap: Record<string, any> = {};
+        if (productCategoryIds.length > 0) {
+          const { data: productCategories, error: productCategoriesError } = await supabase
+            .from('product_categories' as any)
+            .select('id, category_name, category_image_url')
+            .in('id', productCategoryIds as any);
+          
+          if (productCategoriesError) {
+            console.error('Error fetching product categories:', productCategoriesError);
+          } else {
+            console.log('Product categories fetched:', productCategories);
+            (productCategories || []).forEach((cat: any) => {
+              productCategoriesMap[cat.id] = cat;
+            });
+          }
+        }
+
+        // Fetch fabric data separately
+        const fabricIds = Array.from(new Set((orderItems || []).map((item: any) => item.fabric_id).filter(Boolean)));
+        let fabricMap: Record<string, any> = {};
+        if (fabricIds.length > 0) {
+          const { data: fabrics, error: fabricsError } = await supabase
+            .from('fabric_master' as any)
+            .select('id, fabric_name, color, gsm, image')
+            .in('id', fabricIds as any);
+          
+          if (fabricsError) {
+            console.error('Error fetching fabrics:', fabricsError);
+          } else {
+            console.log('Fabrics fetched:', fabrics);
+            (fabrics || []).forEach((fabric: any) => {
+              fabricMap[fabric.id] = fabric;
+            });
+          }
+        }
+
+        // Group order items by order_id and enrich with related data
+        const orderItemsByOrderId: Record<string, any[]> = {};
+        (orderItems || []).forEach((item: any) => {
+          if (!orderItemsByOrderId[item.order_id]) {
+            orderItemsByOrderId[item.order_id] = [];
+          }
+          
+          // Enrich item with related data
+          const enrichedItem = {
+            ...item,
+            product_category: productCategoriesMap[item.product_category_id] || null,
+            fabric: fabricMap[item.fabric_id] || null
+          };
+          
+          orderItemsByOrderId[item.order_id].push(enrichedItem);
+        });
 
         // Fetch customers
         const customerIds = Array.from(new Set((orders || []).map((o: any) => o.customer_id).filter(Boolean)));
@@ -133,18 +294,27 @@ const CuttingManagerPage = () => {
         const jobs: CuttingJob[] = (orders || []).map((o: any) => {
           const p: any = map[o.id] || {};
           const bom: any = bomByOrder[o.id] || { product_name: undefined, qty: 0 };
+          const orderItems = orderItemsByOrderId[o.id] || [];
+          const firstOrderItem = orderItems[0];
+          const productCategoryName = firstOrderItem?.product_category?.category_name || 
+                                     firstOrderItem?.product_description || 
+                                     (bom as any).product_name || 
+                                     'Product';
           return {
             id: o.id,
             jobNumber: o.order_number,
             orderNumber: o.order_number,
             customerName: customersMap[o.customer_id]?.company_name || '',
-            productName: (bom as any).product_name || 'Product',
-            fabricType: '-',
+            productName: productCategoryName,
+            fabricType: firstOrderItem?.fabric ? 
+              `${firstOrderItem.fabric.fabric_name} - ${firstOrderItem.fabric.gsm} GSM` : 
+              '-',
             quantity: Number((bom as any).qty || 0),
-            cutQuantity: Number(p.cutQuantity || 0),
-            assignedTo: p.cuttingMasterName || '',
-            patternMasterName: p.patternMasterName || '',
-            startDate: p.cuttingWorkDate || '',
+            cutQuantity: Number(p.cut_quantity || 0),
+            cutQuantitiesBySize: p.cut_quantities_by_size || {},
+            assignedTo: p.cutting_master_name || '',
+            patternMasterName: p.pattern_master_name || '',
+            startDate: p.cutting_work_date || '',
             dueDate: o.expected_delivery_date || '',
             status: 'pending',
             priority: computePriority(o.expected_delivery_date),
@@ -154,24 +324,61 @@ const CuttingManagerPage = () => {
             notes: '',
             defects: 0,
             reworkRequired: false,
+            // Batch assignment fields (legacy - will be replaced with batchAssignments)
+            assignedBatchId: p.assigned_batch_id,
+            assignedBatchName: p.assigned_batch_name,
+            assignedBatchCode: p.assigned_batch_code,
+            batchAssignmentDate: p.batch_assignment_date,
+            assignedBy: p.assigned_by_name,
+            batchAssignmentNotes: p.batch_assignment_notes,
+            // Add order items with product and fabric details
+            orderItems: orderItemsByOrderId[o.id] || [],
+            customer: customersMap[o.customer_id] ? { company_name: customersMap[o.customer_id].company_name } : undefined,
           };
         });
 
-        setCuttingJobs(jobs);
+        // Fetch batch assignments for each order
+        const jobsWithBatchAssignments = await Promise.all(jobs.map(async (job) => {
+          try {
+            const { data: batchAssignments } = await supabase
+              .from('order_batch_assignments_with_details')
+              .select('*')
+              .eq('order_id', job.id);
+
+            return {
+              ...job,
+              batchAssignments: batchAssignments || []
+            };
+          } catch (error) {
+            console.error(`Error fetching batch assignments for order ${job.id}:`, error);
+            return {
+              ...job,
+              batchAssignments: []
+            };
+          }
+        }));
+
+        setCuttingJobs(jobsWithBatchAssignments);
       } catch (err) {
         console.error('Error loading cutting jobs:', err);
         setCuttingJobs([]);
       }
     };
 
-    loadCuttingJobs();
 
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === LOCAL_STORAGE_KEY) loadCuttingJobs();
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+  useEffect(() => {
+    loadCuttingJobs();
   }, []);
+
+  // Add refresh function
+  const refreshData = async () => {
+    setRefreshing(true);
+    try {
+      await loadCuttingJobs();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
 
   const getStatusColor = (status: string) => {
@@ -196,7 +403,19 @@ const CuttingManagerPage = () => {
   };
 
 
-  const filteredJobs = cuttingJobs.filter(job => {
+  // Function to check if a job is completed (all quantities cut and batches assigned)
+  // Note: Fabric usage validation will be handled in the cutting dialog
+  const isJobCompleted = (job: CuttingJob) => {
+    const isFullyCut = job.cutQuantity >= job.quantity;
+    const hasBatchAssignments = job.batchAssignments && job.batchAssignments.length > 0;
+    return isFullyCut && hasBatchAssignments;
+  };
+
+  // Separate jobs into active and completed
+  const activeJobs = cuttingJobs.filter(job => !isJobCompleted(job));
+  const completedJobs = cuttingJobs.filter(job => isJobCompleted(job));
+
+  const filteredActiveJobs = activeJobs.filter(job => {
     const matchesSearch = job.jobNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          job.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          job.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -207,8 +426,36 @@ const CuttingManagerPage = () => {
     return matchesSearch && matchesStatus && matchesPriority;
   });
 
+  const filteredCompletedJobs = completedJobs.filter(job => {
+    const matchesSearch = job.jobNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         job.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         job.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         job.productName.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesStatus = statusFilter === "all" || job.status === statusFilter;
+    const matchesPriority = priorityFilter === "all" || job.priority === priorityFilter;
+    
+    return matchesSearch && matchesStatus && matchesPriority;
+  });
+
+  // Calculate stats after activeJobs and completedJobs are defined
+  const stats = {
+    totalJobs: cuttingJobs.length,
+    activeJobs: activeJobs.length,
+    completedJobs: completedJobs.length,
+    inProgress: cuttingJobs.filter(j => j.status === 'in_progress').length,
+    pending: cuttingJobs.filter(j => j.status === 'pending').length,
+    totalDefects: cuttingJobs.reduce((acc, job) => acc + job.defects, 0),
+    reworkJobs: cuttingJobs.filter(j => j.reworkRequired).length
+  };
+
   const getCompletionPercentage = (job: CuttingJob) => {
     return Math.round((job.cutQuantity / job.quantity) * 100);
+  };
+
+  const getProgressBarColor = (percentage: number) => {
+    if (percentage < 30) return 'bg-red-500';
+    if (percentage < 70) return 'bg-yellow-500';
+    return 'bg-green-500';
   };
 
   const getDaysRemaining = (dueDate: string) => {
@@ -219,25 +466,27 @@ const CuttingManagerPage = () => {
     return diffDays;
   };
 
-  const stats = {
-    totalJobs: cuttingJobs.length,
-    inProgress: cuttingJobs.filter(j => j.status === 'in_progress').length,
-    completed: cuttingJobs.filter(j => j.status === 'completed').length,
-    pending: cuttingJobs.filter(j => j.status === 'pending').length,
-    totalDefects: cuttingJobs.reduce((acc, job) => acc + job.defects, 0),
-    reworkJobs: cuttingJobs.filter(j => j.reworkRequired).length
-  };
-
   return (
     <ErpLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-            Cutting Manager
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Manage cutting operations and track cutting efficiency
-          </p>
+        <div className="flex justify-between items-start">
+          <div>
+            <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+              Cutting Manager
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              Manage cutting operations and track cutting efficiency
+            </p>
+          </div>
+          <Button 
+            variant="outline" 
+            onClick={refreshData}
+            disabled={refreshing}
+            className="flex items-center space-x-2"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            <span>{refreshing ? 'Refreshing...' : 'Refresh'}</span>
+          </Button>
         </div>
 
         {/* Stats Cards */}
@@ -245,13 +494,13 @@ const CuttingManagerPage = () => {
           <Card className="shadow-erp-md">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total Jobs
+                Active Jobs
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold text-blue-600">
-                  {stats.totalJobs}
+                  {stats.activeJobs}
                 </span>
                 <Scissors className="w-5 h-5 text-blue-600" />
               </div>
@@ -261,20 +510,34 @@ const CuttingManagerPage = () => {
           <Card className="shadow-erp-md">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                In Progress
+                Completed Jobs
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-orange-600">
-                  {stats.inProgress}
+                <span className="text-2xl font-bold text-green-600">
+                  {stats.completedJobs}
                 </span>
-                <Factory className="w-5 h-5 text-orange-600" />
+                <CheckCircle className="w-5 h-5 text-green-600" />
               </div>
             </CardContent>
           </Card>
 
-          
+          <Card className="shadow-erp-md">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Total Jobs
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-bold text-purple-600">
+                  {stats.totalJobs}
+                </span>
+                <Factory className="w-5 h-5 text-purple-600" />
+              </div>
+            </CardContent>
+          </Card>
 
           <Card className="shadow-erp-md">
             <CardHeader className="pb-2">
@@ -294,8 +557,9 @@ const CuttingManagerPage = () => {
         </div>
 
         <Tabs defaultValue="jobs" className="w-full">
-          <TabsList className="grid w-full grid-cols-1">
-            <TabsTrigger value="jobs">Cutting Jobs</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="jobs">Active Jobs</TabsTrigger>
+            <TabsTrigger value="completed">Completed Jobs</TabsTrigger>
           </TabsList>
 
           <TabsContent value="jobs" className="space-y-4">
@@ -384,13 +648,14 @@ const CuttingManagerPage = () => {
                         <TableHead>Progress</TableHead>
                         <TableHead>Cutting Master</TableHead>
                         <TableHead>Pattern Master</TableHead>
+                        <TableHead>Assigned Batch</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Due Date</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredJobs.map((job) => (
+                      {filteredActiveJobs.map((job) => (
                         <TableRow key={job.id}>
                           <TableCell className="font-medium">{job.jobNumber}</TableCell>
                           <TableCell>{job.orderNumber}</TableCell>
@@ -405,9 +670,14 @@ const CuttingManagerPage = () => {
                             <div className="w-32">
                               <div className="flex justify-between text-sm mb-1">
                                 <span>{getCompletionPercentage(job)}%</span>
-                                <span>{job.cutQuantity}/{job.quantity}</span>
+                                <span>{typeof job.cutQuantity === 'number' ? job.cutQuantity.toFixed(0) : job.cutQuantity}/{typeof job.quantity === 'number' ? job.quantity.toFixed(0) : job.quantity}</span>
                               </div>
-                              <Progress value={getCompletionPercentage(job)} className="h-2" />
+                              <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className={`h-2 rounded-full transition-all duration-300 ${getProgressBarColor(getCompletionPercentage(job))}`}
+                                  style={{ width: `${getCompletionPercentage(job)}%` }}
+                                />
+                              </div>
                             </div>
                           </TableCell>
                           <TableCell>
@@ -428,6 +698,58 @@ const CuttingManagerPage = () => {
                               </div>
                             ) : (
                               <span className="text-muted-foreground">Unassigned</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {job.batchAssignments && job.batchAssignments.length > 0 ? (
+                              <div className="space-y-2">
+                                {job.batchAssignments.map((assignment, index) => (
+                                  <div key={assignment.id} className="p-2 border rounded-lg bg-green-50">
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center space-x-3">
+                                        <Avatar className="w-8 h-8">
+                                          <AvatarImage src={assignment.batch_leader_avatar} alt={assignment.batch_leader_name} />
+                                          <AvatarFallback className="bg-gray-200 text-gray-700 text-xs">
+                                            {assignment.batch_leader_name?.charAt(0) || assignment.batch_name.charAt(0)}
+                                          </AvatarFallback>
+                                        </Avatar>
+                                        <div>
+                                          <div className="font-medium text-green-700 text-sm">
+                                            {assignment.batch_name}
+                                          </div>
+                                          <div className="text-xs text-muted-foreground">
+                                            {assignment.batch_leader_name} • {assignment.total_quantity} pieces
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    {assignment.size_distributions && assignment.size_distributions.length > 0 && (
+                                      <div className="mt-1 text-xs text-muted-foreground">
+                                        Sizes: {assignment.size_distributions.map(sd => `${sd.size_name}: ${sd.quantity}`).join(', ')}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleAssignBatch(job)}
+                                  className="text-blue-600 border-blue-200 hover:bg-blue-50 w-full"
+                                >
+                                  <UserPlus className="w-4 h-4 mr-2" />
+                                  Add More Batches
+                                </Button>
+                              </div>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleAssignBatch(job)}
+                                className="text-blue-600 border-blue-200 hover:bg-blue-50"
+                              >
+                                <UserPlus className="w-4 h-4 mr-2" />
+                                Assign Batches
+                              </Button>
                             )}
                           </TableCell>
                           
@@ -453,10 +775,14 @@ const CuttingManagerPage = () => {
                                 <Eye className="w-4 h-4 mr-2" />
                                 View
                               </Button>
-                        <Button variant="outline" size="sm" onClick={() => { setUpdateJob(job); setUpdateCutQty(job.cutQuantity); setUpdateOpen(true); }}>
-                                <Edit className="w-4 h-4 mr-2" />
-                                Update
-                              </Button>
+                          <Button variant="outline" size="sm" onClick={() => { setUpdateJob(job); setUpdateOpen(true); }}>
+                            <Edit className="w-4 h-4 mr-2" />
+                            Add Cut Qty
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => handlePickFabric(job)}>
+                            <Package className="w-4 h-4 mr-2" />
+                            Pick Fabric
+                          </Button>
                             </div>
                           </TableCell>
                         </TableRow>
@@ -468,39 +794,248 @@ const CuttingManagerPage = () => {
             </Card>
           </TabsContent>
 
-        </Tabs>
+          <TabsContent value="completed" className="space-y-4">
+            {/* Filters */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Filters</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div>
+                    <Label htmlFor="search-completed">Search</Label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        id="search-completed"
+                        placeholder="Search completed jobs..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="pl-10"
+                      />
       </div>
-      {/* Update Progress Dialog */}
-      <Dialog open={updateOpen} onOpenChange={setUpdateOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Update Cutting Progress</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
+                  </div>
             <div>
-              <Label>Cut Quantity</Label>
-              <Input type="number" min={0} value={updateCutQty} onChange={(e) => setUpdateCutQty(Number(e.target.value || 0))} />
+                    <Label htmlFor="status-completed">Status</Label>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Status</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="in_progress">In Progress</SelectItem>
+                        <SelectItem value="completed">Completed</SelectItem>
+                        <SelectItem value="on_hold">On Hold</SelectItem>
+                        <SelectItem value="quality_check">Quality Check</SelectItem>
+                      </SelectContent>
+                    </Select>
             </div>
+                  <div>
+                    <Label htmlFor="priority-completed">Priority</Label>
+                    <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All Priorities" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Priorities</SelectItem>
+                        <SelectItem value="low">Low</SelectItem>
+                        <SelectItem value="medium">Medium</SelectItem>
+                        <SelectItem value="high">High</SelectItem>
+                        <SelectItem value="urgent">Urgent</SelectItem>
+                      </SelectContent>
+                    </Select>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setUpdateOpen(false)}>Cancel</Button>
-            <Button onClick={() => {
-              if (!updateJob) { setUpdateOpen(false); return; }
-              const newQty = Math.min(updateCutQty, updateJob.quantity);
-              // Update local table state
-              setCuttingJobs(prev => prev.map(j => j.id === updateJob.id ? { ...j, cutQuantity: newQty } : j));
-              // Persist to local storage used by Assign Orders/Cutting Manager
-              try {
-                const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-                const map = raw ? JSON.parse(raw) : {};
-                map[updateJob.id] = { ...(map[updateJob.id] || {}), cutQuantity: newQty };
-                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(map));
-              } catch {}
+                  <div className="flex items-end">
+                    <Button className="w-full">
+                      <Filter className="w-4 h-4 mr-2" />
+                      Apply Filters
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Completed Jobs Table */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Completed Cutting Jobs</CardTitle>
+                  <Badge className="bg-green-100 text-green-800">
+                    {filteredCompletedJobs.length} Completed
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Job #</TableHead>
+                        <TableHead>Order #</TableHead>
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead>Progress</TableHead>
+                        <TableHead>Cutting Master</TableHead>
+                        <TableHead>Pattern Master</TableHead>
+                        <TableHead>Assigned Batches</TableHead>
+                        <TableHead>Completion Date</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredCompletedJobs.map((job) => (
+                        <TableRow key={job.id} className="bg-green-50/30">
+                          <TableCell className="font-medium">{job.jobNumber}</TableCell>
+                          <TableCell>{job.orderNumber}</TableCell>
+                          <TableCell>{job.customerName}</TableCell>
+                          <TableCell>
+                            <div>
+                              <p className="font-medium">{job.productName}</p>
+                              <p className="text-sm text-muted-foreground">{job.fabricType}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="w-32">
+                              <div className="flex justify-between text-sm mb-1">
+                                <span className="text-green-600 font-semibold">100%</span>
+                                <span>{typeof job.cutQuantity === 'number' ? job.cutQuantity.toFixed(0) : job.cutQuantity}/{typeof job.quantity === 'number' ? job.quantity.toFixed(0) : job.quantity}</span>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className="h-2 rounded-full transition-all duration-300 bg-green-500"
+                                  style={{ width: '100%' }}
+                                />
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center">
+                              <Users className="w-4 h-4 mr-2 text-muted-foreground" />
+                              {job.assignedTo}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center">
+                              <Users className="w-4 h-4 mr-2 text-muted-foreground" />
+                              {job.patternMasterName || 'Unassigned'}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              {job.batchAssignments?.map((assignment, index) => (
+                                <div key={assignment.id} className="p-2 border rounded-lg bg-green-100">
+                                  <div className="flex items-center space-x-2">
+                                    <Avatar className="w-6 h-6">
+                                      <AvatarImage src={assignment.batch_leader_avatar} alt={assignment.batch_leader_name} />
+                                      <AvatarFallback className="bg-green-200 text-green-700 text-xs">
+                                        {assignment.batch_leader_name?.charAt(0) || assignment.batch_name.charAt(0)}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <div>
+                                      <div className="font-medium text-green-700 text-xs">
+                                        {assignment.batch_name}
+                                      </div>
+                                      <div className="text-xs text-muted-foreground">
+                                        {assignment.total_quantity} pieces
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center">
+                              <CheckCircle className="w-4 h-4 mr-2 text-green-600" />
+                              <span className="text-sm text-green-600 font-medium">Completed</span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex gap-2">
+                              <Button variant="outline" size="sm" onClick={() => navigate(`/orders/${job.id}?from=production`)}>
+                                <Eye className="w-4 h-4 mr-2" />
+                                View
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {filteredCompletedJobs.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={10} className="text-center py-8 text-gray-500">
+                            <CheckCircle className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                            <p>No completed cutting jobs found.</p>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+        </Tabs>
+
+        {/* Update Cutting Quantity Dialog - Size Wise */}
+        <UpdateCuttingQuantityDialog
+        isOpen={updateOpen}
+        onClose={() => {
               setUpdateOpen(false);
-            }}>Save</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          setUpdateJob(null);
+        }}
+        onSuccess={() => {
+          // Reload cutting jobs to show updated quantities
+          refreshData();
+        }}
+        jobId={updateJob?.id || ''}
+        orderNumber={updateJob?.orderNumber || ''}
+        customerName={updateJob?.customerName || ''}
+        productName={updateJob?.productName || ''}
+        orderItems={updateJob?.orderItems || []}
+        currentCutQuantities={updateJob?.cutQuantitiesBySize || {}}
+      />
+
+      {/* Multiple Batch Assignment Dialog */}
+      <MultipleBatchAssignmentDialog
+        isOpen={batchAssignmentOpen}
+        onClose={() => {
+          setBatchAssignmentOpen(false);
+          setSelectedJobForBatch(null);
+        }}
+        orderId={selectedJobForBatch?.id || ''}
+        orderNumber={selectedJobForBatch?.orderNumber || ''}
+        customerName={selectedJobForBatch?.customerName || ''}
+        onSuccess={handleBatchAssignmentSuccess}
+        existingAssignments={selectedJobForBatch?.batchAssignments?.map(ba => ({
+          batch_id: ba.batch_id,
+          batch_name: ba.batch_name,
+          batch_code: ba.batch_code,
+          size_distributions: ba.size_distributions.reduce((acc, sd) => {
+            acc[sd.size_name] = sd.quantity;
+            return acc;
+          }, {} as { [size: string]: number }),
+          notes: ba.notes
+        })) || []}
+        orderItems={selectedJobForBatch?.orderItems || []}
+        />
+
+        {/* Fabric Picking Dialog */}
+        <FabricPickingDialog
+          isOpen={fabricPickingOpen}
+          onClose={() => {
+            setFabricPickingOpen(false);
+            setSelectedJobForFabricPicking(null);
+          }}
+          onSuccess={() => {
+            refreshData();
+          }}
+          orderId={selectedJobForFabricPicking?.id || ''}
+          orderNumber={selectedJobForFabricPicking?.orderNumber || ''}
+          customerName={selectedJobForFabricPicking?.customerName || ''}
+        />
+      </div>
     </ErpLayout>
   );
 };

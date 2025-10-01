@@ -448,13 +448,13 @@ export default function ReceiptPage() {
         }
       }
 
-      toast.success(`Receipt ${receiptNumber} generated successfully`);
+      toast.success(`Receipt ${newReceipt.receipt_number} generated successfully`);
       
       // Store the amount before clearing the form
       setReceiptAmount(Number(amount));
       setReceiptReference(selected.number);
       
-      setReceiptNumber(receiptNumber);
+      setReceiptNumber(newReceipt.receipt_number);
       setOpenPreview(true);
 
       // Refresh order data to update UI

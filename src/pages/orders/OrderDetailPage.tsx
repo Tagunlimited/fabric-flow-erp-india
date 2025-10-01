@@ -19,7 +19,8 @@ import {
   MessageCircle,
   Share,
   Send,
-  ChevronDown
+  ChevronDown,
+  Users
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -910,6 +911,15 @@ export default function OrderDetailPage() {
               {/* <Button variant="outline" onClick={openEditDialog}>
                 Edit
               </Button> */}
+              <Button 
+                variant="outline" 
+                onClick={() => navigate(`/orders/${id}/assign-batches`)}
+                className="bg-primary/10 hover:bg-primary/20 text-primary border-primary/20"
+              >
+                <Users className="w-4 h-4 mr-2" />
+                Assign Batches
+              </Button>
+              
               <Button variant="outline" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print

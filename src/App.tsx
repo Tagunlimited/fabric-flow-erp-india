@@ -30,7 +30,11 @@ import InventoryPage from "./pages/InventoryPage";
 import ProductionPage from "./pages/ProductionPage";
 import AssignOrdersPage from "./pages/production/AssignOrdersPage";
 import CuttingManagerPage from "./pages/production/CuttingManagerPage";
+import TailorManagementPage from "./pages/production/TailorManagementPage";
+import PickerPage from "./pages/production/PickerPage";
 import QualityPage from "./pages/QualityPage";
+import QCPage from "./pages/quality/QCPage";
+import DispatchQCPage from "./pages/quality/DispatchQCPage";
 import DispatchPage from "./pages/DispatchPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -53,6 +57,7 @@ import DesignationsPage from "./pages/people/DesignationsPage";
 import ProductionTeamPage from "./pages/people/ProductionTeamPage";
 import ProductionTeamDetailPage from "./pages/people/ProductionTeamDetailPage";
 import OrderDetailPage from "./pages/orders/OrderDetailPage";
+import OrderBatchAssignmentPage from "./pages/orders/OrderBatchAssignmentPage";
 import StockOrdersPage from "./pages/orders/StockOrdersPage";
 import { CustomerDashboard } from "./pages/customer/CustomerDashboard";
 import { CustomerAccessManagement } from "./pages/admin/CustomerAccessManagement";
@@ -141,6 +146,11 @@ const App = () => {
                     <OrderDetailPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/orders/:id/assign-batches" element={
+                  <ProtectedRoute>
+                    <OrderBatchAssignmentPage />
+                  </ProtectedRoute>
+                } />
                 <Route path="/inventory" element={
                   <ProtectedRoute>
                     <InventoryPage />
@@ -216,6 +226,16 @@ const App = () => {
                     <CuttingManagerPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/production/tailor-management" element={
+                  <ProtectedRoute>
+                    <TailorManagementPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/production/picker" element={
+                  <ProtectedRoute>
+                    <PickerPage />
+                  </ProtectedRoute>
+                } />
                 <Route path="/design" element={
                   <ProtectedRoute>
                     <DesignPage />
@@ -263,6 +283,11 @@ const App = () => {
                     <BomForm />
                   </ProtectedRoute>
                 } />
+                <Route path="/bom/:id/edit" element={
+                  <ProtectedRoute>
+                    <BomForm />
+                  </ProtectedRoute>
+                } />
                 
                 {/* GRN Routes */}
                 <Route path="/procurement/grn" element={
@@ -289,6 +314,16 @@ const App = () => {
                 <Route path="/quality" element={
                   <ProtectedRoute>
                     <QualityPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/quality/checks" element={
+                  <ProtectedRoute>
+                    <QCPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/quality/dispatch" element={
+                  <ProtectedRoute>
+                    <DispatchQCPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/dispatch" element={

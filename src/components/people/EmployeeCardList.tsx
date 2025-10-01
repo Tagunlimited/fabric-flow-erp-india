@@ -5,10 +5,9 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { UserPlus, Search, Filter, Phone, Mail, MapPin, Calendar, Briefcase, Edit } from "lucide-react";
+import { UserPlus, Search, Filter, Phone, Edit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { format, differenceInYears, differenceInMonths } from "date-fns";
 import { EmployeeForm } from "./EmployeeForm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useNavigate } from "react-router-dom";
@@ -85,15 +84,6 @@ export function EmployeeCardList() {
 
   const departments = [...new Set(employees.map(emp => emp.department))];
 
-  const getEmploymentTypeBadgeVariant = (type: string) => {
-    switch (type) {
-      case 'Full-time': return 'default';
-      case 'Part-time': return 'secondary';
-      case 'Contract': return 'outline';
-      case 'Intern': return 'destructive';
-      default: return 'default';
-    }
-  };
 
   const getAvatarUrl = (employee: Employee) => {
     if (employee.avatar_url) {
@@ -111,18 +101,6 @@ export function EmployeeCardList() {
     return `https://images.unsplash.com/${avatars[index]}?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=150&h=150&q=80`;
   };
 
-  const getExperienceText = (joiningDate: string) => {
-    const joinDate = new Date(joiningDate);
-    const now = new Date();
-    const years = differenceInYears(now, joinDate);
-    const months = differenceInMonths(now, joinDate) % 12;
-    
-    if (years > 0) {
-      return `${years} Yr${years > 1 ? 's' : ''}, ${months} Month${months !== 1 ? 's' : ''}`;
-    } else {
-      return `${months} Month${months !== 1 ? 's' : ''}`;
-    }
-  };
 
   const handleEmployeeAdded = () => {
     fetchEmployees();
@@ -220,7 +198,7 @@ export function EmployeeCardList() {
                       {/* Avatar */}
                       <Avatar className="w-16 h-16 flex-shrink-0">
                         <AvatarImage src={getAvatarUrl(employee)} alt={employee.full_name} />
-                        <AvatarFallback className="text-lg font-bold bg-gradient-primary text-white">
+                        <AvatarFallback className="text-sm font-bold bg-gradient-primary text-white">
                           {employee.full_name.split(' ').map(n => n[0]).join('').toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
