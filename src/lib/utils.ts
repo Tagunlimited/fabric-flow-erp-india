@@ -34,12 +34,12 @@ export function calculateLifetimeValue(invoices: any[] = [], orders: any[] = [])
  * @returns Formatted currency string
  */
 export function formatCurrency(amount: number): string {
-  return `₹${amount.toLocaleString('en-IN')}`;
+  return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 /**
  * Format a plain number using Indian digit grouping (1,23,45,678)
  */
 export function formatIndianNumber(value: number): string {
-  return value.toLocaleString('en-IN');
+  return value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }

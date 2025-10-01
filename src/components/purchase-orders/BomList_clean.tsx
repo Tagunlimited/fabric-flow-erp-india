@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
+import { supabase } from '../../lib/supabase';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
@@ -62,8 +62,6 @@ export function BomList() {
       }
 
       console.log('Fetched BOMs:', data);
-      console.log('First BOM data structure:', data?.[0]);
-      console.log('BOM number field:', data?.[0]?.bom_number);
       setBoms(data || []);
     } catch (error) {
       console.error('Error:', error);
@@ -283,9 +281,7 @@ export function BomList() {
                 <TableBody>
                   {filteredBoms.map((bom) => (
                     <TableRow key={bom.id}>
-                      <TableCell className="font-medium">
-                        {bom.bom_number || `BOM-${bom.id?.slice(-8) || 'N/A'}`}
-                      </TableCell>
+                      <TableCell className="font-medium">{bom.bom_number}</TableCell>
                       <TableCell>
                         <div className="flex items-center space-x-3">
                           {bom.product_image_url && (
