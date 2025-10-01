@@ -171,7 +171,7 @@ export default function PickerPage() {
         tailor_type: b.tailor_type,
         assigned_orders: ordersCountByBatch[b.id] || 0,
         assigned_quantity: qtyByBatch[b.id] || 0,
-        picked_quantity: pickedByBatch[b.id] || 0,
+        picked_quantity: Math.max(0, (pickedByBatch[b.id] || 0) - (rejectedByBatch[b.id] || 0)),
         rejected_quantity: rejectedByBatch[b.id] || 0,
         batch_id: b.id,
         is_batch_leader: true,
@@ -318,7 +318,10 @@ export default function PickerPage() {
         rejected_sizes: rejectedSizesByAssignment[r.assignment_id] || [],
         size_distributions: Array.isArray(r.size_distributions) ? r.size_distributions : [],
       }));
-      const pending = enriched.filter((o: any) => Number(o.total_quantity || 0) > Number(o.picked_quantity || 0));
+      const pending = enriched.filter((o: any) => {
+        const effectivePicked = Math.max(0, Number(o.picked_quantity || 0) - Number(o.rejected_quantity || 0));
+        return Number(o.total_quantity || 0) > effectivePicked;
+      });
       setBatchOrders(pending);
       setOrdersDialogOpen(true);
     } catch (e) {

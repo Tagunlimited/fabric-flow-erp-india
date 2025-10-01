@@ -761,7 +761,7 @@ const AssignOrdersPage = () => {
                             )}
                           </TableCell>
                           {/* Stitching Price Column */}
-                          <TableCell>
+                           <TableCell>
                             <div className="text-xs">
                               {(() => {
                                 const sn = (assignment.patternPriceSingleNeedle ?? assignment.cuttingPriceSingleNeedle);

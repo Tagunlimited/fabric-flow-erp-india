@@ -36,6 +36,7 @@ import QualityPage from "./pages/QualityPage";
 import QCPage from "./pages/quality/QCPage";
 import DispatchQCPage from "./pages/quality/DispatchQCPage";
 import DispatchPage from "./pages/DispatchPage";
+import DispatchChallanPrint from "./pages/DispatchChallanPrint";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import SettingsPage from "./pages/SettingsPage";
 import DesignPage from "./pages/DesignPage";
@@ -329,6 +330,11 @@ const App = () => {
                 <Route path="/dispatch" element={
                   <ProtectedRoute>
                     <DispatchPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/dispatch/challan/:id" element={
+                  <ProtectedRoute>
+                    <DispatchChallanPrint />
                   </ProtectedRoute>
                 } />
                 <Route path="/analytics" element={
