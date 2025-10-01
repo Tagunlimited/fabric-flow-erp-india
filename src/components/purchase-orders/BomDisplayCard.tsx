@@ -34,6 +34,23 @@ export function BomDisplayCard({
   bomItems,
   onViewClick
 }: BomDisplayCardProps) {
+  console.log('BomDisplayCard received bomItems:', bomItems);
+  console.log('BomDisplayCard bomItems length:', bomItems?.length || 0);
+  console.log('BomDisplayCard productName:', productName);
+  console.log('BomDisplayCard totalOrderQty:', totalOrderQty);
+  console.log('BomDisplayCard productImageUrl:', productImageUrl);
+  
+  if (bomItems && bomItems.length > 0) {
+    console.log('First BOM item:', bomItems[0]);
+    console.log('All BOM items:', bomItems.map(item => ({
+      id: item.id,
+      item_name: item.item_name,
+      category: item.category,
+      required_qty: item.required_qty,
+      image_url: item.image_url
+    })));
+  }
+  
   return (
     <Card className="w-full max-w-4xl mx-auto">
       <CardContent className="p-6">
@@ -86,42 +103,58 @@ export function BomDisplayCard({
                       </tr>
                     </thead>
                     <tbody>
-                      {bomItems.map((item, index) => (
-                        <tr key={item.id || index} className="border-b last:border-b-0">
-                          <td className="py-3 px-3">
-                            <div className="w-16 h-16 bg-gray-100 rounded flex items-center justify-center">
-                              {item.image_url ? (
-                                <img 
-                                  src={item.image_url} 
-                                  alt={item.item_name}
-                                  className="w-full h-full object-cover rounded"
-                                />
-                              ) : (
-                                <span className="text-sm text-gray-400">IMG</span>
-                              )}
+                      {bomItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="py-8 text-center text-gray-500">
+                            <div className="flex flex-col items-center space-y-2">
+                              <span>No BOM items found</span>
+                              <span className="text-xs">This BOM may not have been saved with items yet</span>
                             </div>
                           </td>
-                          <td className="py-3 px-3 text-sm">
-                            <div className="font-medium">{item.item_name}</div>
-                            <div className="text-xs text-gray-500">({item.category})</div>
-                          </td>
-                          <td className="py-3 px-3 text-sm">
-                            <span className="text-orange-500 font-medium">
-                              {item.required_qty} {item.required_unit}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 text-sm">
-                            <span className="text-green-600 font-medium">
-                              {item.in_stock} {item.stock_unit}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 text-sm">
-                            <span className="text-red-600 font-medium">
-                              {Math.max(item.required_qty - item.in_stock, 0)} {item.required_unit}
-                            </span>
-                          </td>
                         </tr>
-                      ))}
+                      ) : (
+                        bomItems.map((item, index) => (
+                          <tr key={item.id || index} className="border-b last:border-b-0">
+                            <td className="py-3 px-3">
+                              <div className="w-16 h-16 bg-gray-100 rounded flex items-center justify-center">
+                                {item.image_url ? (
+                                  <img 
+                                    src={item.image_url} 
+                                    alt={item.item_name}
+                                    className="w-full h-full object-cover rounded"
+                                    onError={(e) => {
+                                      console.log('BOM Display Card - Image failed to load:', item.image_url);
+                                      e.currentTarget.style.display = 'none';
+                                    }}
+                                    onLoad={() => console.log('BOM Display Card - Image loaded successfully:', item.image_url)}
+                                  />
+                                ) : (
+                                  <span className="text-sm text-gray-400">IMG</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 text-sm">
+                              <div className="font-medium">{item.item_name}</div>
+                              <div className="text-xs text-gray-500">({item.category})</div>
+                            </td>
+                            <td className="py-3 px-3 text-sm">
+                              <span className="text-orange-500 font-medium">
+                                {item.required_qty} {item.required_unit}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-sm">
+                              <span className="text-green-600 font-medium">
+                                {item.in_stock} {item.stock_unit}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-sm">
+                              <span className="text-red-600 font-medium">
+                                {Math.max(item.required_qty - item.in_stock, 0)} {item.required_unit}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>

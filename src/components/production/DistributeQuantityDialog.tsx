@@ -63,27 +63,38 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
 }) => {
   const [batchQuantities, setBatchQuantities] = useState<BatchQuantity>({});
   const [loading, setLoading] = useState(false);
+  const [filteredOrderSizes, setFilteredOrderSizes] = useState<OrderSize[]>([]);
   const { toast } = useToast();
+
+  // Filter order sizes to show only sizes with quantities > 0
+  useEffect(() => {
+    if (isOpen && orderSizes.length > 0) {
+      // Filter out sizes with zero quantities - only show sizes that have quantities
+      const filtered = orderSizes.filter(size => size.total_quantity > 0);
+      const sorted = sortSizes(filtered);
+      setFilteredOrderSizes(sorted);
+    }
+  }, [isOpen, orderSizes]);
 
   // Initialize batch quantities when dialog opens
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && filteredOrderSizes.length > 0) {
       const initialQuantities: BatchQuantity = {};
       selectedBatchIds.forEach(batchId => {
         initialQuantities[batchId] = {};
-        orderSizes.forEach(size => {
+        filteredOrderSizes.forEach(size => {
           initialQuantities[batchId][size.size_name] = 0;
         });
       });
       setBatchQuantities(initialQuantities);
     }
-  }, [isOpen, selectedBatchIds, orderSizes]);
+  }, [isOpen, selectedBatchIds, filteredOrderSizes]);
 
   const getRemainingQuantity = (size: string) => {
     const totalAssigned = Object.values(batchQuantities).reduce((total, batchQty) => {
       return total + (batchQty[size] || 0);
     }, 0);
-    const orderSize = orderSizes.find(s => s.size_name === size);
+    const orderSize = filteredOrderSizes.find(s => s.size_name === size);
     return (orderSize?.total_quantity || 0) - totalAssigned;
   };
 
@@ -133,7 +144,7 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
   };
 
   const validateDistribution = () => {
-    for (const size of orderSizes) {
+    for (const size of filteredOrderSizes) {
       const remaining = getRemainingQuantity(size.size_name);
       if (remaining > 0) {
         toast({
@@ -336,17 +347,27 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
           {/* Remaining Quantity */}
           <div className="bg-red-50 border border-red-200 p-4 rounded-lg">
             <h4 className="font-medium text-red-800 mb-3">Remaining Pcs to Distribute</h4>
-            <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
-              {orderSizes.map((size) => {
-                const remaining = getRemainingQuantity(size.size_name);
-                return (
-                  <div key={size.size_name} className="text-center p-2 border rounded bg-white">
-                    <div className="text-xs text-gray-600">{size.size_name}</div>
-                    <div className="font-semibold text-gray-900">{remaining}</div>
-                  </div>
-                );
-              })}
-            </div>
+            {filteredOrderSizes.length === 0 ? (
+              <div className="text-center py-4 text-gray-500">
+                <p>No sizes with quantities found for this order.</p>
+              </div>
+            ) : (
+              <div className={`grid gap-2 ${
+                filteredOrderSizes.length <= 4 ? 'grid-cols-2 md:grid-cols-4' :
+                filteredOrderSizes.length <= 6 ? 'grid-cols-3 md:grid-cols-6' :
+                'grid-cols-4 md:grid-cols-8'
+              }`}>
+                {filteredOrderSizes.map((size) => {
+                  const remaining = getRemainingQuantity(size.size_name);
+                  return (
+                    <div key={size.size_name} className="text-center p-2 border rounded bg-white">
+                      <div className="text-xs text-gray-600">{size.size_name}</div>
+                      <div className="font-semibold text-gray-900">{remaining}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Batch Assignment Cards */}
@@ -368,43 +389,49 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {orderSizes.map((size) => {
-                    const quantity = batchQuantities[batch.id]?.[size.size_name] || 0;
-                    const remaining = getRemainingQuantity(size.size_name) + quantity;
-                    return (
-                      <div key={size.size_name} className="flex items-center justify-between">
-                        <Label className="text-sm font-medium">{size.size_name}</Label>
-                        <div className="flex items-center space-x-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => decrementQuantity(batch.id, size.size_name)}
-                            disabled={quantity <= 0}
-                            className="w-8 h-8 p-0"
-                          >
-                            <Minus className="w-4 h-4" />
-                          </Button>
-                          <Input
-                            type="number"
-                            value={quantity}
-                            onChange={(e) => updateQuantity(batch.id, size.size_name, parseInt(e.target.value) || 0)}
-                            className="w-20 h-8 text-sm text-center"
-                            min="0"
-                            max={remaining}
-                          />
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => incrementQuantity(batch.id, size.size_name)}
-                            disabled={remaining <= 0}
-                            className="w-8 h-8 p-0"
-                          >
-                            <Plus className="w-4 h-4" />
-                          </Button>
+                  {filteredOrderSizes.length === 0 ? (
+                    <div className="text-center py-4 text-gray-500">
+                      <p className="text-sm">No sizes with quantities</p>
+                    </div>
+                  ) : (
+                    filteredOrderSizes.map((size) => {
+                      const quantity = batchQuantities[batch.id]?.[size.size_name] || 0;
+                      const remaining = getRemainingQuantity(size.size_name) + quantity;
+                      return (
+                        <div key={size.size_name} className="flex items-center justify-between">
+                          <Label className="text-sm font-medium">{size.size_name}</Label>
+                          <div className="flex items-center space-x-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => decrementQuantity(batch.id, size.size_name)}
+                              disabled={quantity <= 0}
+                              className="w-8 h-8 p-0"
+                            >
+                              <Minus className="w-4 h-4" />
+                            </Button>
+                            <Input
+                              type="number"
+                              value={quantity}
+                              onChange={(e) => updateQuantity(batch.id, size.size_name, parseInt(e.target.value) || 0)}
+                              className="w-20 h-8 text-sm text-center"
+                              min="0"
+                              max={remaining}
+                            />
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => incrementQuantity(batch.id, size.size_name)}
+                              disabled={remaining <= 0}
+                              className="w-8 h-8 p-0"
+                            >
+                              <Plus className="w-4 h-4" />
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                   <div className="pt-2 border-t">
                     <div className="text-xs text-center text-gray-600">
                       Total: <span className="font-semibold">{getTotalQuantityForBatch(batch.id)}</span> pieces
@@ -434,7 +461,7 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
           </Button>
           <Button 
             onClick={handleSave} 
-            disabled={loading}
+            disabled={loading || filteredOrderSizes.length === 0}
             className="bg-blue-600 hover:bg-blue-700"
           >
             {loading ? 'Saving...' : 'Save Assignments'}

@@ -275,6 +275,11 @@ const App = () => {
                     <BomForm />
                   </ProtectedRoute>
                 } />
+                <Route path="/bom/:id/edit" element={
+                  <ProtectedRoute>
+                    <BomForm />
+                  </ProtectedRoute>
+                } />
                 
                 {/* GRN Routes */}
                 <Route path="/procurement/grn" element={
