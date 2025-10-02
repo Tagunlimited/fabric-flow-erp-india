@@ -43,3 +43,68 @@ export function formatCurrency(amount: number): string {
 export function formatIndianNumber(value: number): string {
   return value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+/**
+ * Format date in Indian format (dd-mmm-yy)
+ * @param dateString - The date string to format
+ * @returns Formatted date string in dd-mmm-yy format
+ */
+export function formatDateIndian(dateString?: string): string {
+  if (!dateString) return '';
+  
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return '';
+  
+  const day = String(date.getDate()).padStart(2, '0');
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = monthNames[date.getMonth()];
+  const year = String(date.getFullYear()).slice(-2);
+  
+  return `${day}-${month}-${year}`;
+}
+
+/**
+ * Format date and time in Indian format (dd-mmm-yy hh:mm AM/PM)
+ * @param dateString - The date string to format
+ * @returns Formatted date and time string
+ */
+export function formatDateTimeIndian(dateString?: string): string {
+  if (!dateString) return '';
+  
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return '';
+  
+  const day = String(date.getDate()).padStart(2, '0');
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = monthNames[date.getMonth()];
+  const year = String(date.getFullYear()).slice(-2);
+  
+  const hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  const displayHours = hours % 12 || 12;
+  
+  return `${day}-${month}-${year} ${displayHours}:${minutes} ${ampm}`;
+}
+
+/**
+ * Format due date in Indian format (dd-mmm-yy) - no time component
+ * @param dateString - The date string to format
+ * @returns Formatted due date string in dd-mmm-yy format
+ */
+export function formatDueDateIndian(dateString?: string): string {
+  if (!dateString) return '';
+  
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return '';
+  
+  const day = String(date.getDate()).padStart(2, '0');
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = monthNames[date.getMonth()];
+  const year = String(date.getFullYear()).slice(-2);
+  
+  return `${day}-${month}-${year}`;
+}

@@ -23,6 +23,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
+import { formatDueDateIndian } from '@/lib/utils';
 
 interface OrderAssignment {
   id: string;
@@ -145,14 +146,9 @@ const AssignOrdersPage = () => {
     }
   };
 
+  // Use the centralized Indian date format function
   const formatDateDDMMYY = (value?: string) => {
-    if (!value) return '';
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return '';
-    const dd = String(d.getDate()).padStart(2, '0');
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const yy = String(d.getFullYear()).slice(-2);
-    return `${dd}-${mm}-${yy}`;
+    return formatDueDateIndian(value);
   };
 
   const formatPrice = (value?: number) => {

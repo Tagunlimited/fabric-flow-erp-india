@@ -11,6 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { useNavigate } from "react-router-dom";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { formatDueDateIndian } from '@/lib/utils';
 import { 
   Scissors, 
   Clock, 
@@ -129,14 +130,9 @@ const CuttingManagerPage = () => {
   const [fabricPickingOpen, setFabricPickingOpen] = useState(false);
   const [selectedJobForFabricPicking, setSelectedJobForFabricPicking] = useState<CuttingJob | null>(null);
 
+  // Use the centralized Indian date format function
   const formatDateDDMMYY = (value?: string) => {
-    if (!value) return '';
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return '';
-    const dd = String(d.getDate()).padStart(2, '0');
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const yy = String(d.getFullYear()).slice(-2);
-    return `${dd}-${mm}-${yy}`;
+    return formatDueDateIndian(value);
   };
 
   // Batch assignment handlers
