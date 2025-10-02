@@ -196,7 +196,7 @@ export function BomList() {
 
   const createPurchaseOrderFromBom = (bom: BomRecord) => {
     // Navigate to purchase order creation with BOM data
-    navigate('/purchase-orders/create', { 
+    navigate('/procurement/po/new', { 
       state: { 
         bomData: bom,
         bomItems: processedBomItems 

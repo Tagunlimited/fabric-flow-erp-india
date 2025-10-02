@@ -100,7 +100,7 @@ export function BomForm() {
   const isReadOnly = !!id && !isEditMode;
   
   // Check for Order data in URL params
-  const orderParam = searchParams.get('order');
+  const orderParam = searchParams.get('order') || searchParams.get('orderId');
   const [orderData, setOrderData] = useState<any>(null);
   const [orderFabricData, setOrderFabricData] = useState<any>(null);
 
@@ -867,6 +867,7 @@ export function BomForm() {
 
   const addItem = (type: BomLineItem['item_type']) => {
     const newItem: BomLineItem = {
+      id: `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, // Generate unique temporary ID
       item_type: type,
       item_id: '',
       item_name: '',
@@ -889,6 +890,21 @@ export function BomForm() {
 
   const updateItem = (index: number, updates: Partial<BomLineItem>) => {
     setItems(prev => prev.map((item, i) => i === index ? { ...item, ...updates } : item));
+  };
+
+  // Helper function to safely get the index of an item by its ID
+  const getItemIndex = (itemId: string) => {
+    return items.findIndex(item => item.id === itemId);
+  };
+
+  // Helper function to update item by ID instead of index
+  const updateItemById = (itemId: string, updates: Partial<BomLineItem>) => {
+    setItems(prev => prev.map(item => item.id === itemId ? { ...item, ...updates } : item));
+  };
+
+  // Helper function to remove item by ID instead of index
+  const removeItemById = (itemId: string) => {
+    setItems(prev => prev.filter(item => item.id !== itemId));
   };
 
   const handleItemSelection = (index: number, type: BomLineItem['item_type'], selectedId: string) => {
@@ -1454,9 +1470,8 @@ export function BomForm() {
           ) : (
             <div className="space-y-4">
                   {items.filter(item => item.item_type === 'fabric').map((item) => {
-                    const actualIndex = items.findIndex(i => i.id === item.id);
                     return (
-                    <div key={actualIndex} className="flex items-center gap-4 p-4 border rounded-lg">
+                    <div key={item.id} className="flex items-center gap-4 p-4 border rounded-lg">
                       {/* Fabric Image */}
                     <div className="w-20 h-20 bg-muted rounded overflow-hidden flex items-center justify-center">
                       {item.item_image_url ? (
@@ -1485,8 +1500,8 @@ export function BomForm() {
                             </div>
                           ) : (
                             <Select
-                              value={fabricSelectionState[actualIndex]?.selectedFabricName || ''}
-                              onValueChange={(value) => handleFabricNameSelection(actualIndex, value)}
+                              value={fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName || ''}
+                              onValueChange={(value) => handleFabricNameSelection(getItemIndex(item.id), value)}
                               disabled={isReadOnly}
                             >
                               <SelectTrigger className="w-full">
@@ -1512,15 +1527,15 @@ export function BomForm() {
                             </div>
                           ) : (
                               <Select
-                              value={fabricSelectionState[actualIndex]?.selectedColor || ''}
-                              onValueChange={(value) => handleColorSelection(actualIndex, value)}
-                              disabled={isReadOnly || !fabricSelectionState[actualIndex]?.selectedFabricName}
+                              value={fabricSelectionState[getItemIndex(item.id)]?.selectedColor || ''}
+                              onValueChange={(value) => handleColorSelection(getItemIndex(item.id), value)}
+                              disabled={isReadOnly || !fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName}
                               >
                                 <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Select Color" />
                                 </SelectTrigger>
                               <SelectContent>
-                                {(fabricSelectionState[actualIndex]?.availableColors || []).map(color => (
+                                {(fabricSelectionState[getItemIndex(item.id)]?.availableColors || []).map(color => (
                                   <SelectItem key={color} value={color}>
                                     {color}
                                      </SelectItem>
@@ -1540,14 +1555,14 @@ export function BomForm() {
                           ) : (
                             <Select
                               value={item.fabric_gsm || ''}
-                              onValueChange={(value) => handleGsmSelection(actualIndex, value)}
-                              disabled={isReadOnly || !fabricSelectionState[actualIndex]?.selectedColor}
+                              onValueChange={(value) => handleGsmSelection(getItemIndex(item.id), value)}
+                              disabled={isReadOnly || !fabricSelectionState[getItemIndex(item.id)]?.selectedColor}
                             >
                               <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Select GSM" />
                               </SelectTrigger>
                               <SelectContent>
-                                {(fabricSelectionState[actualIndex]?.availableGsm || []).map(gsm => (
+                                {(fabricSelectionState[getItemIndex(item.id)]?.availableGsm || []).map(gsm => (
                                   <SelectItem key={gsm} value={gsm}>
                                     {gsm} Gsm
                                   </SelectItem>
@@ -1563,7 +1578,7 @@ export function BomForm() {
                             <Input
                             type="number"
                             value={item.qty_per_product}
-                            onChange={(e) => handleQtyPerProductChange(actualIndex, e.target.value)}
+                            onChange={(e) => handleQtyPerProductChange(getItemIndex(item.id), e.target.value)}
                             placeholder="0"
                               disabled={isReadOnly}
                             className="w-20"
@@ -1592,7 +1607,7 @@ export function BomForm() {
                                <Button
                                  variant="outline"
                                  size="sm"
-                          onClick={() => removeItem(actualIndex)}
+                          onClick={() => removeItemById(item.id)}
                           className="text-red-600 hover:text-red-700"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -1633,7 +1648,7 @@ export function BomForm() {
                   {items.map((item, index) => {
                     if (item.item_type !== 'item') return null;
                     return (
-                    <div key={index} className="flex items-center gap-4 p-4 border rounded-lg">
+                    <div key={item.id || `item-${index}`} className="flex items-center gap-4 p-4 border rounded-lg">
                       {/* Item Image */}
                       <div className="w-20 h-20 bg-muted rounded overflow-hidden flex items-center justify-center">
                         {item.item_image_url ? (

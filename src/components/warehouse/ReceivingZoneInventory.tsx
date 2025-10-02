@@ -90,6 +90,15 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
       
       // Filter client-side for receiving zone bins to avoid join filter issues
       const filtered = ((data as any) || []).filter((i: any) => i?.bin?.location_type === 'RECEIVING_ZONE');
+      
+      // Debug logging for image URLs
+      console.log('Receiving zone inventory data:', filtered.map((item: any) => ({
+        item_name: item.item_name,
+        item_type: item.item_type,
+        grn_item_image_url: item.grn_item?.item_image_url,
+        grn_item_data: item.grn_item
+      })));
+      
       setInventory(filtered);
       
       // Create bin summaries
@@ -334,12 +343,21 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                   return (
                     <TableRow key={item.id}>
                       <TableCell>
-                        <img
-                          src={item.grn_item?.item_image_url || ''}
-                          alt={item.item_name}
-                          className="w-12 h-12 object-cover rounded border"
-                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-                        />
+                        {item.grn_item?.item_image_url ? (
+                          <img
+                            src={item.grn_item.item_image_url}
+                            alt={item.item_name}
+                            className="w-12 h-12 object-cover rounded border"
+                            onError={(e) => { 
+                              // Show placeholder if image fails to load
+                              (e.currentTarget as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yNCAzNkMzMC42Mjc0IDM2IDM2IDMwLjYyNzQgMzYgMjRDMzYgMTcuMzcyNiAzMC42Mjc0IDEyIDI0IDEyQzE3LjM3MjYgMTIgMTIgMTcuMzcyNiAxMiAyNEMxMiAzMC42Mjc0IDE3LjM3MjYgMzYgMjQgMzZaIiBmaWxsPSIjOUNBM0FGIi8+CjxwYXRoIGQ9Ik0yNCAyOEMyNi4yMDkxIDI4IDI4IDI2LjIwOTEgMjggMjRDMjggMjEuNzkwOSAyNi4yMDkxIDIwIDI0IDIwQzIxLjc5MDkgMjAgMjAgMjEuNzkwOSAyMCAyNEMyMCAyNi4yMDkxIDIxLjc5MDkgMjggMjQgMjhaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K';
+                            }}
+                          />
+                        ) : (
+                          <div className="w-12 h-12 bg-gray-100 rounded border flex items-center justify-center">
+                            <Package className="w-6 h-6 text-gray-400" />
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div>
