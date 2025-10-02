@@ -51,28 +51,55 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
   const [fabrics, setFabrics] = useState<FabricInfo[]>([]);
   const [storageZones, setStorageZones] = useState<StorageZone[]>([]);
   const [pickingQuantities, setPickingQuantities] = useState<{[key: string]: number}>({});
-  const [selectedZones, setSelectedZones] = useState<{[key: string]: string}>({});
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
-  // Load fabrics and storage zones when dialog opens
+  // Load fabrics when dialog opens
   useEffect(() => {
     if (isOpen) {
       loadFabricData();
-      loadStorageZones();
     }
   }, [isOpen, orderId]);
 
   const loadFabricData = async () => {
     try {
-      const { data, error } = await supabase
-        .from('fabric_availability_by_order')
-        .select('*')
-        .eq('order_id', orderId);
+      console.log('Loading fabric data for order:', orderId, 'Version: 4.0 - Fixed warehouse inventory query');
+      // First, get order items to find fabric IDs
+      const { data: orderItems, error: orderItemsError } = await supabase
+        .from('order_items')
+        .select('fabric_id')
+        .eq('order_id', orderId)
+        .not('fabric_id', 'is', null);
 
-      if (error) {
-        console.error('Error loading fabric data:', error);
+      if (orderItemsError) {
+        console.error('Error loading order items:', orderItemsError);
+        toast({
+          title: "Error",
+          description: "Failed to load order items",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (!orderItems || orderItems.length === 0) {
+        setFabrics([]);
+        setStorageZones([]);
+        return;
+      }
+
+      // Get unique fabric IDs
+      const fabricIds = [...new Set(orderItems.map(item => item.fabric_id).filter(Boolean))];
+      console.log('Fabric IDs found:', fabricIds);
+
+      // Fetch fabric details from fabric_master table
+      const { data: fabricData, error: fabricError } = await supabase
+        .from('fabric_master')
+        .select('id, fabric_name, color, gsm, image')
+        .in('id', fabricIds);
+
+      if (fabricError) {
+        console.error('Error loading fabric data:', fabricError);
         toast({
           title: "Error",
           description: "Failed to load fabric information",
@@ -81,13 +108,116 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
         return;
       }
 
-      setFabrics(data || []);
+      // Create fabric info from fabric_master data
+      const fabricsList = (fabricData || []).map(fabric => ({
+        fabric_id: fabric.id,
+        fabric_name: fabric.fabric_name,
+        color: fabric.color,
+        gsm: fabric.gsm,
+        image: fabric.image,
+        unit: 'Kgs' // Default unit
+      }));
+
+      setFabrics(fabricsList);
+
+      // Load inventory data from warehouse_inventory - simplified query
+      const { data: inventoryData, error: inventoryError } = await supabase
+        .from('warehouse_inventory')
+        .select('item_id, item_name, quantity, unit, status, bin_id')
+        .in('item_id', fabricIds)
+        .eq('status', 'IN_STORAGE');
+
+      if (inventoryError) {
+        console.error('Error loading inventory data:', inventoryError);
+        toast({
+          title: "Error",
+          description: "Failed to load inventory data",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      console.log('Inventory data loaded:', inventoryData);
+
+      // Get unique bin IDs from inventory
+      const binIds = [...new Set((inventoryData || []).map(item => item.bin_id).filter(Boolean))];
+      console.log('Bin IDs found:', binIds);
+
+      // Fetch bin details separately to avoid complex nested queries
+      const { data: binData, error: binError } = await supabase
+        .from('bins')
+        .select(`
+          id,
+          bin_code,
+          location_type,
+          rack_id,
+          rack:rack_id (
+            id,
+            rack_code,
+            floor_id,
+            floor:floor_id (
+              id,
+              floor_name,
+              warehouse_id,
+              warehouse:warehouse_id (
+                id,
+                warehouse_name
+              )
+            )
+          )
+        `)
+        .in('id', binIds);
+
+      if (binError) {
+        console.error('Error loading bin data:', binError);
+        toast({
+          title: "Warning",
+          description: "Could not load bin details, showing basic inventory",
+          variant: "destructive",
+        });
+      }
+
+      console.log('Bin details loaded:', binData);
+
+      // Create a map of bin_id to bin details
+      const binMap = new Map();
+      (binData || []).forEach(bin => {
+        binMap.set(bin.id, bin);
+      });
+
+      // Group inventory by location type (zones)
+      const zoneInventory = new Map();
+      
+      (inventoryData || []).forEach(inv => {
+        const bin = binMap.get(inv.bin_id);
+        const locationType = bin?.location_type;
+        
+        if (locationType) {
+          if (!zoneInventory.has(locationType)) {
+            zoneInventory.set(locationType, {
+              id: locationType,
+              zone_name: locationType === 'RECEIVING_ZONE' ? 'Receiving Zone' : 
+                       locationType === 'STORAGE_ZONE' ? 'Storage Zone' : 
+                       locationType === 'DISPATCH_ZONE' ? 'Dispatch Zone' : 
+                       locationType.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()),
+              zone_code: locationType,
+              location: `${bin?.rack?.floor?.warehouse?.warehouse_name || 'Unknown'} - ${bin?.rack?.floor?.floor_name || 'Unknown'}`,
+              available_quantity: 0,
+              bin_details: bin
+            });
+          }
+          
+          const zone = zoneInventory.get(locationType);
+          zone.available_quantity += parseFloat(inv.quantity) || 0;
+        }
+      });
+
+      const zonesList = Array.from(zoneInventory.values());
+      console.log('Zones with inventory:', zonesList);
+      setStorageZones(zonesList);
       
       // Initialize picking quantities to 0
       const initialQuantities: {[key: string]: number} = {};
-      (data || []).forEach(fabric => {
-        initialQuantities[fabric.fabric_id] = 0;
-      });
       setPickingQuantities(initialQuantities);
     } catch (error) {
       console.error('Error loading fabric data:', error);
@@ -99,34 +229,6 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
     }
   };
 
-  const loadStorageZones = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('fabric_storage_zones')
-        .select('*')
-        .eq('is_active', true)
-        .order('zone_name');
-
-      if (error) {
-        console.error('Error loading storage zones:', error);
-        toast({
-          title: "Error",
-          description: "Failed to load storage zones",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      setStorageZones(data || []);
-    } catch (error) {
-      console.error('Error loading storage zones:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load storage zones",
-        variant: "destructive",
-      });
-    }
-  };
 
   const updatePickingQuantity = (fabricId: string, quantity: number) => {
     const fabric = fabrics.find(f => f.fabric_id === fabricId);
@@ -155,10 +257,58 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
     return Object.values(pickingQuantities).reduce((total, qty) => total + qty, 0);
   };
 
-  const handleSave = async () => {
-    const pickedFabrics = fabrics.filter(fabric => (pickingQuantities[fabric.fabric_id] || 0) > 0);
+  // Zone-based quantity management functions
+  const updateZonePickingQuantity = (fabricId: string, zoneId: string, quantity: number) => {
+    const key = `${fabricId}_${zoneId}`;
+    const zone = storageZones.find(z => z.id === zoneId);
+    if (!zone) return;
+
+    const maxQuantity = zone.available_quantity;
+    const newQuantity = Math.max(0, Math.min(quantity, maxQuantity));
     
-    if (pickedFabrics.length === 0) {
+    setPickingQuantities(prev => ({
+      ...prev,
+      [key]: newQuantity
+    }));
+  };
+
+  const incrementZoneQuantity = (fabricId: string, zoneId: string) => {
+    const key = `${fabricId}_${zoneId}`;
+    const current = pickingQuantities[key] || 0;
+    updateZonePickingQuantity(fabricId, zoneId, current + 0.1);
+  };
+
+  const decrementZoneQuantity = (fabricId: string, zoneId: string) => {
+    const key = `${fabricId}_${zoneId}`;
+    const current = pickingQuantities[key] || 0;
+    updateZonePickingQuantity(fabricId, zoneId, current - 0.1);
+  };
+
+  const handleSave = async () => {
+    // Get all zone-based picking records
+    const pickingRecords: any[] = [];
+    
+    fabrics.forEach(fabric => {
+      storageZones.forEach(zone => {
+        const key = `${fabric.fabric_id}_${zone.id}`;
+        const quantity = pickingQuantities[key] || 0;
+        
+        if (quantity > 0) {
+          pickingRecords.push({
+            order_id: orderId,
+            fabric_id: fabric.fabric_id,
+            storage_zone_id: zone.id,
+            picked_quantity: quantity,
+            unit: fabric.unit,
+            picked_by_id: null, // Will be set below
+            picked_by_name: 'System', // Will be set below
+            notes: notes
+          });
+        }
+      });
+    });
+    
+    if (pickingRecords.length === 0) {
       toast({
         title: "No Fabric Selected",
         description: "Please select at least one fabric to pick",
@@ -167,38 +317,21 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
       return;
     }
 
-    // Validate that all picked fabrics have selected storage zones
-    for (const fabric of pickedFabrics) {
-      if (!selectedZones[fabric.fabric_id]) {
-        toast({
-          title: "Storage Zone Required",
-          description: `Please select a storage zone for ${fabric.fabric_name}`,
-          variant: "destructive",
-        });
-        return;
-      }
-    }
-
     setLoading(true);
     try {
       // Get current user info
       const { data: { user } } = await supabase.auth.getUser();
 
-      // Create picking records
-      const pickingRecords = pickedFabrics.map(fabric => ({
-        order_id: orderId,
-        fabric_id: fabric.fabric_id,
-        storage_zone_id: selectedZones[fabric.fabric_id],
-        picked_quantity: pickingQuantities[fabric.fabric_id],
-        unit: fabric.unit,
+      // Update picking records with user info
+      const finalPickingRecords = pickingRecords.map(record => ({
+        ...record,
         picked_by_id: user?.id || null,
-        picked_by_name: user?.user_metadata?.full_name || user?.email || 'System',
-        notes: notes
+        picked_by_name: user?.user_metadata?.full_name || user?.email || 'System'
       }));
 
       const { error } = await supabase
         .from('fabric_picking_records')
-        .insert(pickingRecords);
+        .insert(finalPickingRecords);
 
       if (error) {
         console.error('Error saving picking records:', error);
@@ -261,112 +394,128 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
                   const maxQty = fabric.net_available_quantity;
                   
                   return (
-                    <Card key={fabric.fabric_id} className="border border-gray-200">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center space-x-3">
-                          {fabric.image && (
+                    <Card key={fabric.fabric_id} className="border-2 border-gray-200 rounded-lg p-6">
+                      <CardContent>
+                      <div className="flex items-start space-x-4 mb-6">
+                        <div className="w-20 h-20 rounded-lg overflow-hidden border-2 border-gray-200">
+                          {fabric.image ? (
                             <img 
                               src={fabric.image} 
                               alt={fabric.fabric_name}
-                              className="w-12 h-12 rounded object-cover border"
+                              className="w-full h-full object-cover"
                             />
-                          )}
-                          <div className="flex-1">
-                            <CardTitle className="text-sm">{fabric.fabric_name}</CardTitle>
-                            <div className="flex items-center space-x-2 text-xs text-gray-500">
-                              <div 
-                                className="w-4 h-4 rounded-full border"
-                                style={{ backgroundColor: fabric.color?.toLowerCase() || '#cccccc' }}
-                              />
-                              <span>{fabric.color} • {fabric.gsm} GSM</span>
+                          ) : (
+                            <div className="w-full h-full bg-gray-100 flex items-center justify-center">
+                              <Package className="w-8 h-8 text-gray-400" />
                             </div>
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <h3 className="text-xl font-semibold text-gray-900 mb-2">{fabric.fabric_name}</h3>
+                          <div className="flex items-center space-x-3">
+                            <div 
+                              className="w-4 h-4 rounded-full border-2 border-gray-300"
+                              style={{ backgroundColor: fabric.color?.toLowerCase() || '#cccccc' }}
+                            />
+                            <span className="text-sm text-gray-600">{fabric.color} • {fabric.gsm} GSM</span>
                           </div>
                         </div>
-                      </CardHeader>
-                      <CardContent className="space-y-3">
-                        {/* Availability Info */}
-                        <div className="bg-gray-50 p-3 rounded">
-                          <div className="text-xs text-gray-600 mb-1">Available in Storage:</div>
-                          <div className="text-sm font-medium">
-                            {typeof maxQty === 'number' ? maxQty.toFixed(2) : maxQty} {fabric.unit}
+                      </div>
+                      
+                      {/* Inventory Summary Cards */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                          <div className="bg-gray-50 p-3 rounded-lg text-center">
+                            <div className="text-xs text-gray-600 mb-1">WH1 Warehouse</div>
+                            <div className="text-sm font-bold text-gray-800">350 Kgs</div>
                           </div>
-                          {fabric.total_reserved_quantity > 0 && (
-                            <div className="text-xs text-orange-600 mt-1">
-                              {fabric.total_reserved_quantity} {fabric.unit} reserved
+                          <div className="bg-green-50 p-3 rounded-lg text-center">
+                            <div className="text-xs text-green-600 mb-1">Total Available</div>
+                            <div className="text-sm font-bold text-green-800">
+                              {typeof maxQty === 'number' ? maxQty.toFixed(2) : maxQty} {fabric.unit}
                             </div>
-                          )}
+                          </div>
+                          <div className="bg-blue-50 p-3 rounded-lg text-center">
+                            <div className="text-xs text-blue-600 mb-1">Storage Zone</div>
+                            <div className="text-sm font-bold text-blue-800">
+                              {storageZones.find(z => z.zone_code === 'STORAGE_ZONE')?.available_quantity?.toFixed(2) || '0.00'} {fabric.unit}
+                            </div>
+                          </div>
+                          <div className="bg-yellow-50 p-3 rounded-lg text-center">
+                            <div className="text-xs text-yellow-600 mb-1">Dispatch Zone</div>
+                            <div className="text-sm font-bold text-yellow-800">
+                              {storageZones.find(z => z.zone_code === 'DISPATCH_ZONE')?.available_quantity?.toFixed(2) || '0.00'} {fabric.unit}
+                            </div>
+                          </div>
                         </div>
 
-                        {/* Storage Zone Selection */}
-                        <div className="space-y-2">
-                          <Label className="text-xs">Pick from Storage Zone:</Label>
-                          <Select 
-                            value={selectedZones[fabric.fabric_id] || ''} 
-                            onValueChange={(value) => setSelectedZones(prev => ({
-                              ...prev,
-                              [fabric.fabric_id]: value
-                            }))}
-                          >
-                            <SelectTrigger className="h-8">
-                              <SelectValue placeholder="Select zone" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {storageZones.map((zone) => (
-                                <SelectItem key={zone.id} value={zone.id}>
-                                  <div className="flex items-center space-x-2">
-                                    <MapPin className="w-3 h-3" />
-                                    <span>{zone.zone_name}</span>
+                        {/* Storage Zones Section */}
+                        <div className="border-t pt-6">
+                          <h5 className="text-lg font-medium text-gray-900 mb-4">Storage Zones</h5>
+                          
+                          {storageZones.length === 0 ? (
+                            <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg">
+                              <Package className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                              <p className="text-sm">No inventory found in storage zones</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              {storageZones.map((zone) => {
+                                const zonePickedQty = pickingQuantities[`${fabric.fabric_id}_${zone.id}`] || 0;
+                                const zoneMaxQty = zone.available_quantity;
+                                
+                                return (
+                                  <div key={zone.id} className="border-2 border-gray-200 rounded-lg p-4 bg-white hover:border-blue-300 transition-colors">
+                                    <div className="flex items-center justify-between mb-3">
+                                      <div className="flex items-center space-x-3">
+                                        <MapPin className="w-5 h-5 text-gray-500" />
+                                        <span className="text-base font-medium text-gray-900">{zone.zone_name}</span>
+                                      </div>
+                                      <div className="text-sm text-gray-600">
+                                        Available: <span className="font-semibold">{typeof zoneMaxQty === 'number' ? zoneMaxQty.toFixed(2) : zoneMaxQty} {fabric.unit}</span>
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="flex items-center space-x-3">
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => decrementZoneQuantity(fabric.fabric_id, zone.id)}
+                                        disabled={zonePickedQty <= 0}
+                                        className="w-12 h-12 p-0 text-xl font-bold"
+                                      >
+                                        <Minus className="w-4 h-4" />
+                                      </Button>
+                                      <Input
+                                        type="number"
+                                        value={zonePickedQty}
+                                        onChange={(e) => updateZonePickingQuantity(fabric.fabric_id, zone.id, parseFloat(e.target.value) || 0)}
+                                        className="w-24 h-12 text-center text-lg font-semibold border-2"
+                                        min="0"
+                                        max={zoneMaxQty}
+                                        step="0.1"
+                                      />
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => incrementZoneQuantity(fabric.fabric_id, zone.id)}
+                                        disabled={zoneMaxQty <= 0 || zonePickedQty >= zoneMaxQty}
+                                        className="w-12 h-12 p-0 text-xl font-bold"
+                                      >
+                                        <Plus className="w-4 h-4" />
+                                      </Button>
+                                    </div>
+                                    
+                                    {zonePickedQty > 0 && (
+                                      <div className="mt-3 text-sm text-green-600 font-medium">
+                                        ✓ Picked: {typeof zonePickedQty === 'number' ? zonePickedQty.toFixed(2) : zonePickedQty} {fabric.unit}
+                                      </div>
+                                    )}
                                   </div>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-
-                        {/* Quantity Selection */}
-                        <div className="space-y-2">
-                          <Label className="text-xs">Quantity to Pick:</Label>
-                          <div className="flex items-center space-x-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => decrementQuantity(fabric.fabric_id)}
-                              disabled={pickedQty <= 0}
-                              className="w-8 h-8 p-0"
-                            >
-                              <Minus className="w-3 h-3" />
-                            </Button>
-                            <Input
-                              type="number"
-                              value={pickedQty}
-                              onChange={(e) => updatePickingQuantity(fabric.fabric_id, parseInt(e.target.value) || 0)}
-                              className="w-20 h-8 text-center text-sm"
-                              min="0"
-                              max={maxQty}
-                            />
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => incrementQuantity(fabric.fabric_id)}
-                              disabled={maxQty <= 0 || pickedQty >= maxQty}
-                              className="w-8 h-8 p-0"
-                            >
-                              <Plus className="w-3 h-3" />
-                            </Button>
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            Max: {typeof maxQty === 'number' ? maxQty.toFixed(2) : maxQty} {fabric.unit}
-                          </div>
-                        </div>
-
-                        {/* Picked Summary */}
-                        {pickedQty > 0 && (
-                          <div className="bg-green-50 p-2 rounded">
-                            <div className="text-xs text-green-700">
-                              ✓ Picked: {typeof pickedQty === 'number' ? pickedQty.toFixed(2) : pickedQty} {fabric.unit}
+                                );
+                              })}
                             </div>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </CardContent>
                     </Card>
                   );

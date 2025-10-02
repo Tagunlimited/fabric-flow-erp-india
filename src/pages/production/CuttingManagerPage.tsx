@@ -329,7 +329,10 @@ const CuttingManagerPage = () => {
             batchAssignmentNotes: p.batch_assignment_notes,
             // Add order items with product and fabric details
             orderItems: orderItemsByOrderId[o.id] || [],
-            customer: customersMap[o.customer_id] ? { company_name: customersMap[o.customer_id].company_name } : undefined,
+            customer: customersMap[o.customer_id] ? { 
+              company_name: customersMap[o.customer_id].company_name,
+              contact_person: (customersMap[o.customer_id] as any).contact_person || ''
+            } : undefined,
           };
         });
 
@@ -339,11 +342,11 @@ const CuttingManagerPage = () => {
             const { data: batchAssignments } = await supabase
               .from('order_batch_assignments_with_details')
               .select('*')
-              .eq('order_id', job.id);
+              .eq('order_id', job.id as any);
 
             return {
               ...job,
-              batchAssignments: batchAssignments || []
+              batchAssignments: (batchAssignments as any) || []
             };
           } catch (error) {
             console.error(`Error fetching batch assignments for order ${job.id}:`, error);
@@ -354,7 +357,7 @@ const CuttingManagerPage = () => {
           }
         }));
 
-        setCuttingJobs(jobsWithBatchAssignments);
+        setCuttingJobs(jobsWithBatchAssignments as CuttingJob[]);
       } catch (err) {
         console.error('Error loading cutting jobs:', err);
         setCuttingJobs([]);

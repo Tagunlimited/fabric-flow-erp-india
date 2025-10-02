@@ -54,7 +54,7 @@ export function EmployeeCardList() {
         .order('full_name');
 
       if (error) throw error;
-      setEmployees(data || []);
+      setEmployees((data as unknown as Employee[]) || []);
     } catch (error) {
       console.error('Error fetching employees:', error);
       toast({
