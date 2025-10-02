@@ -91,10 +91,25 @@ CREATE TRIGGER trigger_auto_generate_bom_number
     BEFORE INSERT ON public.bom_records
     FOR EACH ROW EXECUTE FUNCTION auto_generate_bom_number();
 
--- 12. Update existing records to have BOM numbers if they don't have them
-UPDATE public.bom_records 
-SET bom_number = 'BOM-' || LPAD(ROW_NUMBER() OVER (ORDER BY created_at)::TEXT, 6, '0')
-WHERE bom_number IS NULL OR bom_number = '';
+-- 12. Backfill missing bom_number values using CTEs (window functions are not allowed directly in UPDATE)
+WITH max_seq AS (
+  SELECT COALESCE(MAX(CAST(SUBSTRING(bom_number FROM 'BOM-(\d+)') AS INTEGER)), 0) AS max_seq
+  FROM public.bom_records
+  WHERE bom_number ~ '^BOM-\d+$'
+),
+to_fill AS (
+  SELECT br.id, ROW_NUMBER() OVER (ORDER BY br.created_at) AS rn
+  FROM public.bom_records br
+  WHERE br.bom_number IS NULL OR br.bom_number = ''
+),
+assign AS (
+  SELECT t.id, 'BOM-' || LPAD((m.max_seq + t.rn)::TEXT, 6, '0') AS new_bom_number
+  FROM to_fill t CROSS JOIN max_seq m
+)
+UPDATE public.bom_records br
+SET bom_number = a.new_bom_number
+FROM assign a
+WHERE br.id = a.id;
 
 -- 13. Verify the final table structure
 SELECT 'Final bom_records table structure:' as info;
