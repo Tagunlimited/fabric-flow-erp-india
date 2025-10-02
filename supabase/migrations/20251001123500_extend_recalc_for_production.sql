@@ -18,6 +18,7 @@ declare
   v_total_picked integer := 0;
   v_total_approved integer := 0;
   v_total_rejected integer := 0;
+  v_total_dispatched integer := 0;
 begin
   if p_order_id is null then return; end if;
 
@@ -71,15 +72,10 @@ begin
    where oba.order_id = p_order_id;
 
   -- Dispatch totals from dispatch_order_items
-  declare v_total_dispatched integer := 0;
-  begin
-    select coalesce(sum(doi.quantity),0)
-      into v_total_dispatched
-      from public.dispatch_order_items doi
-     where doi.order_id = p_order_id;
-  exception when others then
-    v_total_dispatched := 0;
-  end;
+  select coalesce(sum(doi.quantity),0)
+    into v_total_dispatched
+    from public.dispatch_order_items doi
+   where doi.order_id = p_order_id;
 
   -- Determine target status in progression; do not override late-terminal states
   v_target := 'pending';
