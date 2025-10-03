@@ -243,7 +243,7 @@ export function BomList() {
       const hasValidIdentifier = isFabric ? !!item.fabric_name : !!item.item_id;
       const hasValidName = isFabric ? !!item.fabric_name : !!item.item_name;
       
-      return hasValidIdentifier && hasValidName && (item.qty_total > 0 || item.to_order > 0);
+      return hasValidIdentifier && hasValidName && (item.qty_total != null || item.to_order != null);
     });
     
     console.log('Filtered items count:', filteredItems.length);

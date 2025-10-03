@@ -390,7 +390,7 @@ export function PurchaseOrderForm() {
           ...item,
           // Enrich with data from options if available and not already set
           item_image_url: bestImageUrl,
-          item_category: item.item_category || itemOption?.item_type || null,
+          item_category: item.item_category || itemOption?.item_type || itemOption?.type || 'Not specified',
           // Also update fabric-specific fields if this is a fabric item
           ...(item.item_type === 'fabric' && {
             fabric_color: item.fabric_color || fabricOption?.color || 'N/A',
