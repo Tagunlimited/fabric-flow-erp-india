@@ -25,9 +25,10 @@ interface FabricInfo {
 
 interface StorageZone {
   id: string;
-  zone_name: string; // mapped from bins.bin_name or bin_code
-  zone_code: string; // mapped from bins.bin_code
-  location: string; // bins.location_type
+  fabric_id?: string;
+  zone_name: string;
+  zone_code: string;
+  location: string;
   available_quantity: number;
 }
 
@@ -76,13 +77,42 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
 
   const loadFabricData = async () => {
     try {
-      const { data, error } = await (supabase as any)
-        .from('fabric_availability_by_order')
-        .select('*')
-        .eq('order_id', orderId);
+      console.log('Loading fabric data for order:', orderId, 'Version: 5.0 - Fixed warehouse inventory query with all statuses');
+      // First, get order items to find fabric IDs
+      const { data: orderItems, error: orderItemsError } = await supabase
+        .from('order_items')
+        .select('fabric_id')
+        .eq('order_id', orderId as any)
+        .not('fabric_id', 'is', null);
 
-      if (error) {
-        console.error('Error loading fabric data:', error);
+      if (orderItemsError) {
+        console.error('Error loading order items:', orderItemsError);
+        toast({
+          title: "Error",
+          description: "Failed to load order items",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (!orderItems || orderItems.length === 0) {
+        setFabrics([]);
+        setStorageZones([]);
+        return;
+      }
+
+      // Get unique fabric IDs
+      const fabricIds = [...new Set((orderItems || []).map((item: any) => item.fabric_id).filter(Boolean))];
+      console.log('Fabric IDs found:', fabricIds);
+
+      // Fetch fabric details from fabric_master table
+      const { data: fabricData, error: fabricError } = await supabase
+        .from('fabric_master')
+        .select('id, fabric_name, color, gsm, image')
+        .in('id', fabricIds);
+
+      if (fabricError) {
+        console.error('Error loading fabric data:', fabricError);
         toast({
           title: "Error",
           description: "Failed to load fabric information",
@@ -91,16 +121,17 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
         return;
       }
 
-      const normalized: FabricInfo[] = (data || []).map((row: any) => ({
-        fabric_id: row.fabric_id,
-        fabric_name: row.fabric_name,
-        color: row.color,
-        gsm: row.gsm,
-        image: row.fabric_image, // map
-        total_available_quantity: Number(row.total_available_quantity || 0),
-        total_reserved_quantity: Number(row.total_reserved_quantity || 0),
-        net_available_quantity: Number(row.net_available_quantity || 0),
-        unit: row.unit || 'meters'
+      // Create fabric info from fabric_master data
+      const fabricsList = (fabricData || []).map((fabric: any) => ({
+        fabric_id: fabric.id,
+        fabric_name: fabric.fabric_name,
+        color: fabric.color,
+        gsm: fabric.gsm,
+        image: fabric.image,
+        unit: 'Kgs', // Default unit
+        total_available_quantity: 0,
+        total_reserved_quantity: 0,
+        net_available_quantity: 0
       }));
 
       setFabrics(normalized);
@@ -119,16 +150,20 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
     }
   };
 
-  const loadZoneAvailability = async () => {
-    try {
-      // Join bins + warehouse_inventory to fetch bin stock by fabric
-      const { data, error } = await (supabase as any)
+      // Load inventory data from warehouse_inventory - include all available statuses
+      const { data: inventoryData, error: inventoryError } = await supabase
         .from('warehouse_inventory')
-        .select('*')
-        .eq('item_type', 'FABRIC' as any)
-        .in('status', ['IN_STORAGE', 'RECEIVED'] as any);
-      if (error) {
-        console.error('Error loading zone availability:', error);
+        .select('item_id, item_name, quantity, unit, status, bin_id')
+        .in('item_id', fabricIds)
+        .in('status', ['RECEIVED', 'IN_STORAGE', 'READY_TO_DISPATCH'] as any);
+
+      if (inventoryError) {
+        console.error('Error loading inventory data:', inventoryError);
+        toast({
+          title: "Error",
+          description: "Failed to load inventory data",
+          variant: "destructive",
+        });
         return;
       }
       const map: Record<string, Record<string, { available: number; reserved: number; unit?: string }>> = {};
@@ -191,32 +226,188 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
     } catch (e) { /* ignore */ }
   };
 
-  const loadStorageZones = async () => {
-    try {
-      const { data, error } = await (supabase as any)
-        .from('bins')
-        .select('id, bin_code, location_type')
-        .in('location_type', ['RECEIVING_ZONE', 'STORAGE', 'DISPATCH_ZONE'] as any)
-        .order('location_type, bin_code');
+      console.log('Inventory data loaded:', inventoryData);
+      console.log('Number of inventory records found:', inventoryData?.length || 0);
+      console.log('Fabric IDs being searched:', fabricIds);
+      
+      let finalInventoryData = inventoryData;
 
-      if (error) {
-        console.error('Error loading storage zones:', error);
+      // If no inventory found, let's check what's in the warehouse_inventory table
+      if (!inventoryData || inventoryData.length === 0) {
+        console.log('No inventory found for the specified fabric IDs. Checking all warehouse inventory...');
+        console.warn('⚠️ DATA MISMATCH: Order fabric IDs do not match warehouse inventory item_ids. This suggests a data synchronization issue.');
+        const { data: allInventory, error: allInventoryError } = await supabase
+          .from('warehouse_inventory')
+          .select('item_id, item_name, quantity, unit, status, bin_id')
+          .limit(10);
+        
+        if (!allInventoryError && allInventory) {
+          console.log('Sample warehouse inventory data:', allInventory);
+          console.log('Available item_ids in warehouse_inventory:', allInventory.map((item: any) => item.item_id));
+          console.log('Requested fabric_ids:', fabricIds);
+          
+          // Check if any warehouse inventory items match the fabric names
+          const fabricNames = fabricsList.map(f => f.fabric_name);
+          console.log('Fabric names in order:', fabricNames);
+          
+          const matchingByName = allInventory.filter((item: any) => 
+            fabricNames.some(name => item.item_name && item.item_name.toLowerCase().includes(name.toLowerCase()))
+          );
+          if (matchingByName.length > 0) {
+            console.log('Found potential matches by name:', matchingByName);
+          }
+        }
+        
+        // Also check if there are any inventory records for these fabrics with different statuses
+        const { data: allStatusInventory, error: allStatusError } = await supabase
+          .from('warehouse_inventory')
+          .select('item_id, item_name, quantity, unit, status, bin_id')
+          .in('item_id', fabricIds);
+        
+        if (!allStatusError && allStatusInventory) {
+          console.log('All inventory for these fabrics (any status):', allStatusInventory);
+        }
+        
+        // If still no inventory found by ID, try to find by fabric name as fallback
+        if (fabricIds.length > 0 && (!inventoryData || inventoryData.length === 0)) {
+          console.log('Attempting fallback search by fabric name...');
+          const fabricNames = fabricsList.map(f => f.fabric_name);
+          
+          // Try to find inventory by item_name matching fabric names
+          const { data: nameBasedInventory, error: nameBasedError } = await supabase
+            .from('warehouse_inventory')
+            .select('item_id, item_name, quantity, unit, status, bin_id')
+            .or(fabricNames.map(name => `item_name.ilike.%${name}%`).join(','))
+            .in('status', ['RECEIVED', 'IN_STORAGE', 'READY_TO_DISPATCH'] as any);
+          
+          if (!nameBasedError && nameBasedInventory && nameBasedInventory.length > 0) {
+            console.log('Found inventory by fabric name:', nameBasedInventory);
+            // Use the name-based inventory data instead
+            finalInventoryData = nameBasedInventory as any[];
+          }
+        }
+      }
+
+      // Calculate total quantities for each fabric from warehouse inventory
+      const fabricQuantityMap = new Map();
+      (finalInventoryData || []).forEach((inv: any) => {
+        console.log('Processing inventory item:', inv);
+        const fabricId = inv.item_id;
+        if (!fabricQuantityMap.has(fabricId)) {
+          fabricQuantityMap.set(fabricId, {
+            total_available: 0,
+            total_reserved: 0,
+            unit: inv.unit || 'Kgs'
+          });
+        }
+        const fabricQty = fabricQuantityMap.get(fabricId);
+        fabricQty.total_available += parseFloat(inv.quantity) || 0;
+        console.log(`Added ${inv.quantity} ${inv.unit} for fabric ${fabricId}, total now: ${fabricQty.total_available}`);
+        // Note: reserved quantity would come from fabric_picking_records if needed
+      });
+
+      // Update fabric quantities with actual warehouse inventory data
+      const updatedFabricsList = fabricsList.map(fabric => {
+        const qtyData = fabricQuantityMap.get(fabric.fabric_id) || { total_available: 0, total_reserved: 0, unit: 'Kgs' };
+        const updatedFabric = {
+          ...fabric,
+          total_available_quantity: qtyData.total_available,
+          total_reserved_quantity: qtyData.total_reserved,
+          net_available_quantity: qtyData.total_available - qtyData.total_reserved,
+          unit: qtyData.unit
+        };
+        console.log(`Final quantities for fabric ${fabric.fabric_name} (${fabric.fabric_id}):`, {
+          total_available: updatedFabric.total_available_quantity,
+          net_available: updatedFabric.net_available_quantity,
+          unit: updatedFabric.unit
+        });
+        return updatedFabric;
+      });
+
+      setFabrics(updatedFabricsList);
+
+      // Get unique bin IDs from inventory
+      const binIds = [...new Set((finalInventoryData || []).map((item: any) => item.bin_id).filter(Boolean))];
+      console.log('Bin IDs found:', binIds);
+
+      // Fetch bin details separately - simplified query to avoid complex nested relationships
+      const { data: binData, error: binError } = await supabase
+        .from('bins')
+        .select('id, bin_code, location_type, rack_id')
+        .in('id', binIds);
+
+      if (binError) {
+        console.error('Error loading bin data:', binError);
+        console.log('Bin IDs that failed to load:', binIds);
+        
+        // Try to check if bins table exists and has any data
+        const { data: allBins, error: allBinsError } = await supabase
+          .from('bins')
+          .select('id, bin_code, location_type')
+          .limit(5);
+        
+        if (allBinsError) {
+          console.error('Bins table error:', allBinsError);
+        } else {
+          console.log('Sample bins data:', allBins);
+        }
+        
         toast({
           title: "Error",
           description: "Failed to load storage zones",
           variant: "destructive",
         });
-        return;
+      } else {
+        console.log('Bin data loaded successfully:', binData);
       }
 
-      const mapped: StorageZone[] = (data || []).map((b: any) => ({
-        id: b.id,
-        zone_name: b.bin_code,
-        zone_code: b.bin_code,
-        location: b.location_type,
-        available_quantity: 0
-      }));
-      setStorageZones(mapped);
+      console.log('Bin details loaded:', binData);
+
+      // Create a map of bin_id to bin details
+      const binMap = new Map();
+      (binData || []).forEach((bin: any) => {
+        binMap.set(bin.id, bin);
+      });
+
+      // Group inventory by location type (zones) for each fabric
+      const fabricZoneInventory = new Map();
+      
+      (finalInventoryData || []).forEach((inv: any) => {
+        const bin = binMap.get(inv.bin_id);
+        const locationType = bin?.location_type || 'UNKNOWN_ZONE';
+        const fabricId = inv.item_id;
+        
+        if (fabricId) {
+          const fabricZoneKey = `${fabricId}_${locationType}`;
+          
+          if (!fabricZoneInventory.has(fabricZoneKey)) {
+            fabricZoneInventory.set(fabricZoneKey, {
+              fabric_id: fabricId,
+              id: locationType,
+              zone_name: locationType === 'RECEIVING_ZONE' ? 'Receiving Zone' : 
+                       locationType === 'STORAGE' ? 'Storage Zone' : 
+                       locationType === 'DISPATCH_ZONE' ? 'Dispatch Zone' : 
+                       locationType === 'UNKNOWN_ZONE' ? 'Warehouse Inventory' :
+                       locationType.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()),
+              zone_code: locationType,
+              location: bin ? `${bin.bin_code}` : `Bin ID: ${inv.bin_id}`,
+              available_quantity: 0,
+              bin_details: bin
+            });
+          }
+          
+          const zone = fabricZoneInventory.get(fabricZoneKey);
+          zone.available_quantity += parseFloat(inv.quantity) || 0;
+        }
+      });
+
+      const zonesList = Array.from(fabricZoneInventory.values());
+      console.log('Zones with inventory:', zonesList);
+      setStorageZones(zonesList);
+      
+      // Initialize picking quantities to 0
+      const initialQuantities: {[key: string]: number} = {};
+      setPickingQuantities(initialQuantities);
     } catch (error) {
       console.error('Error loading storage zones:', error);
       toast({
@@ -451,50 +642,25 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
                           <span>{fabric.color} • {fabric.gsm} GSM</span>
                         </div>
                       </div>
-                        </div>
-                      </CardContent>
-                      <CardContent className="space-y-3">
-                        {/* Zone-wise Availability Cards */}
-                        <div className="space-y-3">
-                          <div className="text-xs text-gray-600 font-medium">Available by Zone Type:</div>
-                          
-                          {/* Receiving Zone Card */}
-                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center space-x-2">
-                                <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                                <span className="text-sm font-medium text-blue-800">Receiving Zone</span>
-                              </div>
-                              <span className="text-lg font-bold text-blue-900">
-                                {(() => {
-                                  const receivingZones = storageZones.filter(z => z.location === 'RECEIVING_ZONE');
-                                  const totalReceiving = receivingZones.reduce((sum, zone) => {
-                                    const zoneData = zoneAvailability[fabric.fabric_id]?.[zone.id];
-                                    return sum + (zoneData ? Math.max(0, (zoneData.available || 0) - (zoneData.reserved || 0)) : 0);
-                                  }, 0);
-                                  return totalReceiving.toFixed(2) + ' ' + (fabric.unit || 'units');
-                                })()}
-                              </span>
+                      
+                      {/* Inventory Summary Cards */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                          <div className="bg-gray-50 p-3 rounded-lg text-center">
+                            <div className="text-xs text-gray-600 mb-1">Total Warehouse</div>
+                            <div className="text-sm font-bold text-gray-800">
+                              {fabric.total_available_quantity.toFixed(2)} {fabric.unit}
                             </div>
                           </div>
-
-                          {/* Storage Zone Card */}
-                          <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center space-x-2">
-                                <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                                <span className="text-sm font-medium text-green-800">Storage Zone</span>
-                              </div>
-                              <span className="text-lg font-bold text-green-900">
-                                {(() => {
-                                  const storageZoneBins = storageZones.filter(z => z.location === 'STORAGE');
-                                  const totalStorage = storageZoneBins.reduce((sum, zone) => {
-                                    const zoneData = zoneAvailability[fabric.fabric_id]?.[zone.id];
-                                    return sum + (zoneData ? Math.max(0, (zoneData.available || 0) - (zoneData.reserved || 0)) : 0);
-                                  }, 0);
-                                  return totalStorage.toFixed(2) + ' ' + (fabric.unit || 'units');
-                                })()}
-                              </span>
+                          <div className="bg-green-50 p-3 rounded-lg text-center">
+                            <div className="text-xs text-green-600 mb-1">Net Available</div>
+                            <div className="text-sm font-bold text-green-800">
+                              {fabric.net_available_quantity.toFixed(2)} {fabric.unit}
+                            </div>
+                          </div>
+                          <div className="bg-blue-50 p-3 rounded-lg text-center">
+                            <div className="text-xs text-blue-600 mb-1">Storage Zone</div>
+                            <div className="text-sm font-bold text-blue-800">
+                              {storageZones.find(z => z.zone_code === 'STORAGE')?.available_quantity?.toFixed(2) || '0.00'} {fabric.unit}
                             </div>
                           </div>
 
@@ -519,41 +685,76 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
                           </div>
                         </div>
 
-                        {/* Storage Zone Selection */}
-                        <div className="space-y-2">
-                          <Label className="text-xs">Pick from Storage Zone:</Label>
-                          <Select 
-                            value={selectedZones[fabric.fabric_id] || ''} 
-                            onValueChange={(value) => setSelectedZones(prev => ({
-                              ...prev,
-                              [fabric.fabric_id]: value
-                            }))}
-                          >
-                            <SelectTrigger className="h-8">
-                              <SelectValue placeholder="Select zone" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {storageZones
-                                .filter((zone) => {
-                                  const za = zoneAvailability[fabric.fabric_id]?.[zone.id];
-                                  const net = za ? Math.max(0, (za.available || 0) - (za.reserved || 0)) : 0;
-                                  return net > 0; // Only show zones with available quantity
-                                })
-                                .map((zone) => {
-                                  const za = zoneAvailability[fabric.fabric_id]?.[zone.id];
-                                  const net = za ? Math.max(0, (za.available || 0) - (za.reserved || 0)) : 0;
-                                  return (
-                                    <SelectItem key={zone.id} value={zone.id}>
-                                      <div className="flex items-center space-x-2">
-                                        <MapPin className="w-3 h-3" />
-                                        <span>{zone.zone_name}</span>
-                                        <span className="text-xs text-muted-foreground">({net.toFixed(2)} {za?.unit || fabric.unit})</span>
+                        {/* Storage Zones Section */}
+                        <div className="border-t pt-6">
+                          <h5 className="text-lg font-medium text-gray-900 mb-4">Storage Zones</h5>
+                          
+                          {(() => {
+                            const fabricZones = storageZones.filter(zone => zone.fabric_id === fabric.fabric_id);
+                            return fabricZones.length === 0 ? (
+                              <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg">
+                                <Package className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                                <p className="text-sm">No inventory found in storage zones for this fabric</p>
+                              </div>
+                            ) : (
+                              <div className="space-y-3">
+                                {fabricZones.map((zone) => {
+                                  const zonePickedQty = pickingQuantities[`${fabric.fabric_id}_${zone.id}`] || 0;
+                                  const zoneMaxQty = zone.available_quantity;
+                                
+                                return (
+                                  <div key={zone.id} className="border-2 border-gray-200 rounded-lg p-4 bg-white hover:border-blue-300 transition-colors">
+                                    <div className="flex items-center justify-between mb-3">
+                                      <div className="flex items-center space-x-3">
+                                        <MapPin className="w-5 h-5 text-gray-500" />
+                                        <span className="text-base font-medium text-gray-900">{zone.zone_name}</span>
                                       </div>
-                                    </SelectItem>
-                                  );
+                                      <div className="text-sm text-gray-600">
+                                        Available: <span className="font-semibold">{typeof zoneMaxQty === 'number' ? zoneMaxQty.toFixed(2) : zoneMaxQty} {fabric.unit}</span>
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="flex items-center space-x-3">
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => decrementZoneQuantity(fabric.fabric_id, zone.id)}
+                                        disabled={zonePickedQty <= 0}
+                                        className="w-12 h-12 p-0 text-xl font-bold"
+                                      >
+                                        <Minus className="w-4 h-4" />
+                                      </Button>
+                                      <Input
+                                        type="number"
+                                        value={zonePickedQty}
+                                        onChange={(e) => updateZonePickingQuantity(fabric.fabric_id, zone.id, parseFloat(e.target.value) || 0)}
+                                        className="w-24 h-12 text-center text-lg font-semibold border-2"
+                                        min="0"
+                                        max={zoneMaxQty}
+                                        step="0.1"
+                                      />
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => incrementZoneQuantity(fabric.fabric_id, zone.id)}
+                                        disabled={zoneMaxQty <= 0 || zonePickedQty >= zoneMaxQty}
+                                        className="w-12 h-12 p-0 text-xl font-bold"
+                                      >
+                                        <Plus className="w-4 h-4" />
+                                      </Button>
+                                    </div>
+                                    
+                                    {zonePickedQty > 0 && (
+                                      <div className="mt-3 text-sm text-green-600 font-medium">
+                                        ✓ Picked: {typeof zonePickedQty === 'number' ? zonePickedQty.toFixed(2) : zonePickedQty} {fabric.unit}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
                                 })}
-                            </SelectContent>
-                          </Select>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Quantity Selection */}

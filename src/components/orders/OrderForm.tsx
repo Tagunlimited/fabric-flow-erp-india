@@ -883,14 +883,8 @@ export function OrderForm() {
 
       toast.success('Order created successfully!');
       
-      // Show option to create BOM
-      const createBom = window.confirm('Order created successfully! Would you like to create a Bill of Materials (BOM) for this order?');
-      if (createBom) {
-        navigate(`/bom/create?orderId=${orderResult.id}`);
-      } else {
-        // Navigate to the order detail page
-        navigate(`/orders/${orderResult.id}`);
-      }
+      // Navigate directly to the order list page
+      navigate('/orders');
     } catch (error) {
       console.error('Error creating order:', error);
       console.error('Error details:', JSON.stringify(error, null, 2));

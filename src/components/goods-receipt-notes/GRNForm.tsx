@@ -281,7 +281,126 @@ const GRNForm = () => {
         .order('created_at');
 
       if (itemsError) throw itemsError;
-      setGrnItems((itemsData as any) || []);
+      
+      // Enrich items with image data
+      const enrichedItems = await Promise.all((itemsData || []).map(async (item: any) => {
+        let enrichedItem = { ...item };
+        
+        console.log('Processing GRN item for image enrichment:', {
+          item_name: item.item_name,
+          item_type: item.item_type,
+          item_id: item.item_id,
+          current_image_url: item.item_image_url
+        });
+        
+        // If item_image_url is missing, try multiple strategies to fetch it
+        if (!item.item_image_url) {
+          try {
+            if (item.item_type === 'fabric') {
+              console.log('Trying to enrich fabric item:', item.item_name);
+              
+              // Strategy 1: Try to fetch by item_id from fabric_master
+              if (item.item_id) {
+                const { data: fabricData, error: fabricError } = await supabase
+                  .from('fabric_master')
+                  .select('id, image, fabric_name, color, gsm')
+                  .eq('id', item.item_id)
+                  .single();
+                
+                console.log('Fabric fetch by ID result:', { fabricData, fabricError });
+                
+                if (fabricData?.image) {
+                  enrichedItem.item_image_url = fabricData.image;
+                  console.log('✅ Enriched fabric item with image by ID:', item.item_name, fabricData.image);
+                }
+              }
+              
+              // Strategy 2: If still no image, try to find by fabric name
+              if (!enrichedItem.item_image_url && item.fabric_name) {
+                const { data: fabricByName, error: nameError } = await supabase
+                  .from('fabric_master')
+                  .select('id, image, fabric_name, color, gsm')
+                  .ilike('fabric_name', `%${item.fabric_name}%`)
+                  .single();
+                
+                console.log('Fabric fetch by name result:', { fabricByName, nameError });
+                
+                if (fabricByName?.image) {
+                  enrichedItem.item_image_url = fabricByName.image;
+                  console.log('✅ Enriched fabric item with image by name:', item.item_name, fabricByName.image);
+                }
+              }
+              
+              // Strategy 3: If still no image, try to find by item name
+              if (!enrichedItem.item_image_url && item.item_name) {
+                const { data: fabricByItemName, error: itemNameError } = await supabase
+                  .from('fabric_master')
+                  .select('id, image, fabric_name, color, gsm')
+                  .ilike('fabric_name', `%${item.item_name.split(' - ')[0]}%`)
+                  .single();
+                
+                console.log('Fabric fetch by item name result:', { fabricByItemName, itemNameError });
+                
+                if (fabricByItemName?.image) {
+                  enrichedItem.item_image_url = fabricByItemName.image;
+                  console.log('✅ Enriched fabric item with image by item name:', item.item_name, fabricByItemName.image);
+                }
+              }
+            } else {
+              console.log('Trying to enrich regular item:', item.item_name);
+              
+              // Strategy 1: Try to fetch by item_id from item_master
+              if (item.item_id) {
+                const { data: itemMasterData, error: itemError } = await supabase
+                  .from('item_master')
+                  .select('id, image_url, image, item_name, item_type')
+                  .eq('id', item.item_id)
+                  .single();
+                
+                console.log('Item master fetch by ID result:', { itemMasterData, itemError });
+                
+                if (itemMasterData?.image_url || itemMasterData?.image) {
+                  enrichedItem.item_image_url = itemMasterData.image_url || itemMasterData.image;
+                  console.log('✅ Enriched item with image by ID:', item.item_name, itemMasterData.image_url || itemMasterData.image);
+                }
+              }
+              
+              // Strategy 2: If still no image, try to find by item name
+              if (!enrichedItem.item_image_url && item.item_name) {
+                const { data: itemByName, error: nameError } = await supabase
+                  .from('item_master')
+                  .select('id, image_url, image, item_name, item_type')
+                  .ilike('item_name', `%${item.item_name}%`)
+                  .single();
+                
+                console.log('Item master fetch by name result:', { itemByName, nameError });
+                
+                if (itemByName?.image_url || itemByName?.image) {
+                  enrichedItem.item_image_url = itemByName.image_url || itemByName.image;
+                  console.log('✅ Enriched item with image by name:', item.item_name, itemByName.image_url || itemByName.image);
+                }
+              }
+            }
+            
+            // Log final result
+            console.log('Final enrichment result:', {
+              item_name: item.item_name,
+              original_image_url: item.item_image_url,
+              final_image_url: enrichedItem.item_image_url,
+              success: !!enrichedItem.item_image_url
+            });
+            
+          } catch (error) {
+            console.warn('❌ Failed to enrich image for item:', item.item_name, error);
+          }
+        } else {
+          console.log('✅ Item already has image URL:', item.item_name, item.item_image_url);
+        }
+        
+        return enrichedItem;
+      }));
+      
+      setGrnItems(enrichedItems);
 
     } catch (error) {
       console.error('Error loading GRN:', error);
@@ -398,7 +517,7 @@ const GRNForm = () => {
             try {
               const { data: itemByName, error: nameError } = await supabase
                 .from('item_master')
-                .select('id, color, item_name, image_url')
+                .select('id, color, item_name, image_url, image')
                 .ilike('item_name', `%${item.item_name}%`)
                 .single();
               
@@ -406,7 +525,7 @@ const GRNForm = () => {
               
               if (itemByName) {
                 itemColor = (itemByName as any).color;
-                itemImageUrl = (itemByName as any).image_url;
+                itemImageUrl = (itemByName as any).image_url || (itemByName as any).image;
                 // Clear fabric data for non-fabric items
                 fabricColor = null;
                 fabricGsm = null;
@@ -442,7 +561,7 @@ const GRNForm = () => {
               console.log('Fetching additional item data for item_id:', item.item_id);
               const { data: itemData, error: itemError } = await supabase
                 .from('item_master')
-                .select('color, item_name, image_url')
+                .select('color, item_name, image_url, image')
                 .eq('id', item.item_id)
                 .single();
               
@@ -450,7 +569,7 @@ const GRNForm = () => {
               
               if (itemData) {
                 if (!itemColor) itemColor = (itemData as any).color;
-                if (!itemImageUrl) itemImageUrl = (itemData as any).image_url;
+                if (!itemImageUrl) itemImageUrl = (itemData as any).image_url || (itemData as any).image;
                 console.log('Updated missing item details:', { itemColor, itemImageUrl });
               }
             }
@@ -472,7 +591,8 @@ const GRNForm = () => {
             fabric_gsm: item.fabric_gsm,
             fabric_name: item.fabric_name,
             item_color: item.item_color,
-            color: item.color
+            color: item.color,
+            item_image_url: item.item_image_url
           }
         });
         
@@ -486,6 +606,17 @@ const GRNForm = () => {
             fabric_gsm: fabricGsm,
             fabric_name: fabricName,
             item_color: itemColor
+          });
+        }
+        
+        // Additional debugging: Check if image URL is missing
+        if (!itemImageUrl) {
+          console.warn('⚠️ MISSING IMAGE URL for item:', {
+            item_name: item.item_name,
+            item_type: item.item_type,
+            item_id: item.item_id,
+            original_image_url: item.item_image_url,
+            final_image_url: itemImageUrl
           });
         }
         
@@ -1595,6 +1726,10 @@ const GRNForm = () => {
                               src={item.item_image_url}
                               alt={item.item_name}
                               className="w-16 h-16 object-cover rounded-lg border"
+                              fallbackText={item.item_type === 'fabric' ? 'FAB' : 'ITEM'}
+                              onError={(error) => {
+                                console.warn('ProductImage failed to load for item:', item.item_name, error);
+                              }}
                             />
                             <div className="flex-1">
                               <h4 className="font-semibold text-lg">{item.item_name}</h4>
