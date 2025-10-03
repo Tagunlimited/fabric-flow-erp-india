@@ -318,6 +318,8 @@ export function PurchaseOrderForm() {
         
         return {
           ...item,
+          // Ensure item_id is resolved from options if missing (prevents NOT NULL violations)
+          item_id: item.item_id || itemOption?.id || fabricOption?.id || '',
           // Enrich with data from options if available and not already set
           item_image_url: bestImageUrl,
           item_category: item.item_category || itemOption?.item_type || null,
@@ -1336,12 +1338,12 @@ export function PurchaseOrderForm() {
         supplier_id: po.supplier_id,
         order_date: po.order_date || new Date().toISOString().split('T')[0],
         status: po.status,
-        terms_conditions: po.terms_conditions,
-        notes: po.notes,
+        terms_conditions: po.terms_conditions ?? null,
+        notes: po.notes ?? null,
         po_number: poNumber, // Explicitly set PO number
         total_amount: grandTotal,
-        delivery_address: po.delivery_address,
-        expected_delivery_date: po.expected_delivery_date,
+        delivery_address: (po.delivery_address && po.delivery_address.trim() !== '') ? po.delivery_address : null,
+        expected_delivery_date: (po.expected_delivery_date && po.expected_delivery_date.trim() !== '') ? po.expected_delivery_date : null,
       };
 
       console.log('PO Data being saved:', poData);
