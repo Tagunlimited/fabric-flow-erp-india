@@ -7,7 +7,7 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, formatDateIndian } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
 import {
@@ -297,7 +297,7 @@ export default function QuotationDetailPage() {
         `Thank you for your inquiry! Please find your quotation details below:\n\n` +
         `📋 *Quotation No:* ${quotationNumber}\n` +
         `💰 *Total Amount:* ${formatCurrency(grandTotal)}\n` +
-        `📅 *Date:* ${new Date(orderDate).toLocaleDateString('en-IN')}\n` +
+        `📅 *Date:* ${formatDateIndian(orderDate)}\n` +
         `📞 *Contact:* ${customer.contact_person || 'Sales Team'}\n\n` +
         `✅ *Next Steps:*\n` +
         `• Review the quotation details\n` +
@@ -349,7 +349,7 @@ export default function QuotationDetailPage() {
         `Thank you for your interest in our products. Please find below the quotation details:\n\n` +
         `QUOTATION DETAILS:\n` +
         `• Quotation Number: ${quotationNumber}\n` +
-        `• Date: ${new Date(orderDate).toLocaleDateString('en-IN')}\n` +
+        `• Date: ${formatDateIndian(orderDate)}\n` +
         `• Total Amount: ${formatCurrency(grandTotal)}\n` +
         `• Sales Manager: ${salesManagerName || 'Sales Team'}\n\n` +
         `NEXT STEPS:\n` +
@@ -561,7 +561,7 @@ export default function QuotationDetailPage() {
         `Quotation Details:\n` +
         `• Quotation Number: ${quotationNumber}\n` +
         `• Total Amount: ${formatCurrency(grandTotal)}\n` +
-        `• Date: ${new Date(order.order_date).toLocaleDateString('en-IN')}\n\n` +
+        `• Date: ${formatDateIndian(order.order_date)}\n\n` +
         `Note: The PDF file has been downloaded to your device. Please attach it to this email before sending.\n\n` +
         `Thank you for your business.\n\n` +
         `Best regards,\n` +

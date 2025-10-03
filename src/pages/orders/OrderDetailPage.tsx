@@ -781,6 +781,13 @@ export default function OrderDetailPage() {
       case 'confirmed': return 'bg-blue-100 text-blue-800';
       case 'in_production': return 'bg-orange-100 text-orange-800';
       case 'quality_check': return 'bg-purple-100 text-purple-800';
+      case 'designing_done': return 'bg-teal-100 text-teal-800';
+      case 'under_procurement': return 'bg-amber-100 text-amber-800';
+      case 'under_cutting': return 'bg-orange-100 text-orange-800';
+      case 'under_stitching': return 'bg-indigo-100 text-indigo-800';
+      case 'under_qc': return 'bg-pink-100 text-pink-800';
+      case 'ready_for_dispatch': return 'bg-green-100 text-green-800';
+      case 'rework': return 'bg-red-100 text-red-800';
       case 'ready': return 'bg-green-100 text-green-800';
       case 'dispatched': return 'bg-indigo-100 text-indigo-800';
       case 'delivered': return 'bg-emerald-100 text-emerald-800';

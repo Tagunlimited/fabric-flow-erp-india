@@ -23,6 +23,7 @@ interface Customer {
   company_name: string;
   contact_person: string;
   phone: string;
+  mobile: string;
   email: string;
   address: string;
   city: string;
@@ -73,11 +74,11 @@ export function CustomerSearchSelect({
         .limit(50);
 
       if (error) throw error;
-      setCustomers(data || []);
+      setCustomers((data as unknown as Customer[]) || []);
       
       // Fetch lifetime values for customers
       if (data && data.length > 0) {
-        await fetchCustomerLifetimeValues(data);
+        await fetchCustomerLifetimeValues(data as unknown as Customer[]);
       }
     } catch (error) {
       console.error('Error fetching customers:', error);
@@ -95,7 +96,7 @@ export function CustomerSearchSelect({
       const { data: invoices, error: invoiceError } = await supabase
         .from('invoices')
         .select('customer_id, total_amount')
-        .in('customer_id', customerIds);
+        .in('customer_id', customerIds as any[]);
 
       if (invoiceError) throw invoiceError;
 
@@ -103,14 +104,14 @@ export function CustomerSearchSelect({
       const { data: orders, error: orderError } = await supabase
         .from('orders')
         .select('customer_id, final_amount')
-        .in('customer_id', customerIds);
+        .in('customer_id', customerIds as any[]);
 
       if (orderError) throw orderError;
 
       // Calculate lifetime value for each customer
       customerIds.forEach(customerId => {
-        const customerInvoices = invoices?.filter(inv => inv.customer_id === customerId) || [];
-        const customerOrders = orders?.filter(ord => ord.customer_id === customerId) || [];
+        const customerInvoices = (invoices as any[])?.filter((inv: any) => inv.customer_id === customerId) || [];
+        const customerOrders = (orders as any[])?.filter((ord: any) => ord.customer_id === customerId) || [];
         lifetimeValues[customerId] = calculateLifetimeValue(customerInvoices, customerOrders);
       });
 
@@ -126,12 +127,12 @@ export function CustomerSearchSelect({
       const { data, error } = await supabase
         .from('customers')
         .select('*')
-        .or(`phone.ilike.%${term}%,company_name.ilike.%${term}%,contact_person.ilike.%${term}%,email.ilike.%${term}%`)
-        .order('phone', { ascending: true })
+        .or(`company_name.ilike.%${term}%,contact_person.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%,mobile.ilike.%${term}%,address.ilike.%${term}%,city.ilike.%${term}%,state.ilike.%${term}%,pincode.ilike.%${term}%,gstin.ilike.%${term}%,pan.ilike.%${term}%`)
+        .order('company_name', { ascending: true })
         .limit(20);
 
       if (error) throw error;
-      setCustomers(data || []);
+      setCustomers((data as unknown as Customer[]) || []);
     } catch (error) {
       console.error('Error searching customers:', error);
     } finally {
@@ -158,7 +159,7 @@ export function CustomerSearchSelect({
           className="justify-between"
         >
           {selectedCustomer
-            ? `${selectedCustomer.company_name} (${selectedCustomer.phone})`
+            ? `${selectedCustomer.company_name} (${selectedCustomer.mobile || selectedCustomer.phone})`
             : placeholder}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
@@ -166,7 +167,7 @@ export function CustomerSearchSelect({
       <PopoverContent className="w-[400px] p-0">
         <Command>
           <CommandInput 
-            placeholder="Search by company name, phone, contact person..." 
+            placeholder="Search by any customer detail (name, phone, email, address, GSTIN, etc.)..." 
             value={searchTerm}
             onValueChange={setSearchTerm}
           />
@@ -192,7 +193,7 @@ export function CustomerSearchSelect({
                     <div className="flex-1">
                       <div className="font-medium">{customer.company_name}</div>
                       <div className="text-sm text-muted-foreground">
-                        {customer.contact_person} • {customer.phone}
+                        {customer.contact_person} • {customer.mobile || customer.phone}
                       </div>
                       {customer.email && (
                         <div className="text-xs text-muted-foreground">{customer.email}</div>

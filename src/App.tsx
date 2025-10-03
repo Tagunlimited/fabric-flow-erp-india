@@ -36,6 +36,7 @@ import QualityPage from "./pages/QualityPage";
 import QCPage from "./pages/quality/QCPage";
 import DispatchQCPage from "./pages/quality/DispatchQCPage";
 import DispatchPage from "./pages/DispatchPage";
+import DispatchChallanPrint from "./pages/DispatchChallanPrint";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import SettingsPage from "./pages/SettingsPage";
 import DesignPage from "./pages/DesignPage";
@@ -65,6 +66,8 @@ import ProfileSettingsPage from "./pages/profile/ProfileSettingsPage";
 import QuotationsPage from './pages/accounts/QuotationsPage';
 import QuotationDetailPage from './pages/accounts/QuotationDetailPage';
 import ReceiptPage from './pages/accounts/ReceiptPage';
+import InvoicePage from './pages/accounts/InvoicePage';
+import InvoiceDetailPage from './pages/accounts/InvoiceDetailPage';
 import { CompanySettingsProvider } from "@/hooks/CompanySettingsContext";
 import EmployeeAccessManagementPage from "./pages/admin/EmployeeAccessManagement";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
@@ -331,6 +334,11 @@ const App = () => {
                     <DispatchPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/dispatch/challan/:id" element={
+                  <ProtectedRoute>
+                    <DispatchChallanPrint />
+                  </ProtectedRoute>
+                } />
                 <Route path="/analytics" element={
                   <ProtectedRoute>
                     <AnalyticsPage />
@@ -418,6 +426,17 @@ const App = () => {
                 <Route path="/accounts/receipts" element={
                   <ProtectedRoute>
                     <ReceiptPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/accounts/invoices" element={
+                  <ProtectedRoute>
+                    <InvoicePage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/accounts/invoices/:id" element={
+                  <ProtectedRoute>
+                    <InvoiceDetailPage />
                   </ProtectedRoute>
                 } />
                 

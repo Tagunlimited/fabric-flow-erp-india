@@ -609,7 +609,7 @@ export function ProductCategoryManager() {
                                     const selectedFabrics = fabricIds.map(id => fabrics.find(f => f.id === id)).filter(Boolean) || [];
                                     const uniqueFabricNames = [...new Set(selectedFabrics.map(f => f!.fabric_name))];
                                     
-                                    return uniqueFabricNames.slice(0, 2).map((fabricName, index) => {
+                                    return uniqueFabricNames.map((fabricName, index) => {
                                       const fabric = selectedFabrics.find(f => f!.fabric_name === fabricName)!;
                                       const colorCount = selectedFabrics.filter(f => f!.fabric_name === fabricName).length;
                                       

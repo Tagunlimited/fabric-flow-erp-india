@@ -604,7 +604,7 @@ export async function searchCustomers(query: string): Promise<Customers[]> {
   const { data, error } = await supabase
     .from('customers')
     .select('*')
-    .or(`company_name.ilike.%${query}%,contact_person.ilike.%${query}%,email.ilike.%${query}%`)
+    .or(`company_name.ilike.%${query}%,contact_person.ilike.%${query}%,email.ilike.%${query}%,phone.ilike.%${query}%,mobile.ilike.%${query}%,address.ilike.%${query}%,city.ilike.%${query}%,state.ilike.%${query}%,pincode.ilike.%${query}%,gstin.ilike.%${query}%,pan.ilike.%${query}%`)
     .order('created_at', { ascending: false });
 
   if (error) {

@@ -11,6 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { useNavigate } from "react-router-dom";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { formatDueDateIndian } from '@/lib/utils';
 import { 
   Scissors, 
   Clock, 
@@ -124,19 +125,14 @@ const CuttingManagerPage = () => {
   // Batch assignment dialog state
   const [batchAssignmentOpen, setBatchAssignmentOpen] = useState(false);
   const [selectedJobForBatch, setSelectedJobForBatch] = useState<CuttingJob | null>(null);
-  
+
   // Fabric picking dialog state
   const [fabricPickingOpen, setFabricPickingOpen] = useState(false);
   const [selectedJobForFabricPicking, setSelectedJobForFabricPicking] = useState<CuttingJob | null>(null);
 
+  // Use the centralized Indian date format function
   const formatDateDDMMYY = (value?: string) => {
-    if (!value) return '';
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return '';
-    const dd = String(d.getDate()).padStart(2, '0');
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const yy = String(d.getFullYear()).slice(-2);
-    return `${dd}-${mm}-${yy}`;
+    return formatDueDateIndian(value);
   };
 
   // Batch assignment handlers
@@ -333,7 +329,10 @@ const CuttingManagerPage = () => {
             batchAssignmentNotes: p.batch_assignment_notes,
             // Add order items with product and fabric details
             orderItems: orderItemsByOrderId[o.id] || [],
-            customer: customersMap[o.customer_id] ? { company_name: customersMap[o.customer_id].company_name } : undefined,
+            customer: customersMap[o.customer_id] ? { 
+              company_name: customersMap[o.customer_id].company_name,
+              contact_person: (customersMap[o.customer_id] as any).contact_person || ''
+            } : undefined,
           };
         });
 
@@ -343,11 +342,11 @@ const CuttingManagerPage = () => {
             const { data: batchAssignments } = await supabase
               .from('order_batch_assignments_with_details')
               .select('*')
-              .eq('order_id', job.id);
+              .eq('order_id', job.id as any);
 
             return {
               ...job,
-              batchAssignments: batchAssignments || []
+              batchAssignments: (batchAssignments as any) || []
             };
           } catch (error) {
             console.error(`Error fetching batch assignments for order ${job.id}:`, error);
@@ -358,7 +357,7 @@ const CuttingManagerPage = () => {
           }
         }));
 
-        setCuttingJobs(jobsWithBatchAssignments);
+        setCuttingJobs(jobsWithBatchAssignments as CuttingJob[]);
       } catch (err) {
         console.error('Error loading cutting jobs:', err);
         setCuttingJobs([]);
@@ -470,13 +469,13 @@ const CuttingManagerPage = () => {
     <ErpLayout>
       <div className="space-y-6">
         <div className="flex justify-between items-start">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-              Cutting Manager
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              Manage cutting operations and track cutting efficiency
-            </p>
+        <div>
+          <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+            Cutting Manager
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Manage cutting operations and track cutting efficiency
+          </p>
           </div>
           <Button 
             variant="outline" 
@@ -776,13 +775,13 @@ const CuttingManagerPage = () => {
                                 View
                               </Button>
                           <Button variant="outline" size="sm" onClick={() => { setUpdateJob(job); setUpdateOpen(true); }}>
-                            <Edit className="w-4 h-4 mr-2" />
+                                <Edit className="w-4 h-4 mr-2" />
                             Add Cut Qty
                           </Button>
                           <Button variant="outline" size="sm" onClick={() => handlePickFabric(job)}>
                             <Package className="w-4 h-4 mr-2" />
                             Pick Fabric
-                          </Button>
+                              </Button>
                             </div>
                           </TableCell>
                         </TableRow>

@@ -196,14 +196,131 @@ export function BomList() {
     navigate(`/bom/${bom.id}/edit`);
   };
 
-  const createPurchaseOrderFromBom = (bom: BomRecord) => {
-    // Navigate to purchase order creation with BOM data
-    navigate('/purchase-orders/create', { 
-      state: { 
-        bomData: bom,
-        bomItems: processedBomItems 
-      } 
+  const createPurchaseOrderFromBom = async (bom: BomRecord) => {
+    console.log('Creating PO from BOM:', bom);
+    console.log('BOM items to process:', bom.bom_items);
+    
+    // Process BOM items with images for PO creation
+    const bomItems = bom.bom_items || [];
+    console.log('Raw BOM items:', bomItems);
+    console.log('BOM items detailed:', bomItems.map((item: any) => ({
+      id: item.id,
+      item_id: item.item_id,
+      item_name: item.item_name,
+      item_type: item.item_type,
+      category: item.category,
+      qty_total: item.qty_total,
+      to_order: item.to_order,
+      stock: item.stock,
+      fabric_name: item.fabric_name,
+      fabric_color: item.fabric_color,
+      fabric_gsm: item.fabric_gsm
+    })));
+    
+    if (bomItems.length === 0) {
+      console.warn('No BOM items found for this BOM');
+      toast.error('No BOM items found to create purchase order');
+      return;
+    }
+
+    const filteredItems = bomItems.filter(item => {
+      console.log('Filtering BOM item:', {
+        item_id: item.item_id,
+        item_name: item.item_name,
+        qty_total: item.qty_total,
+        to_order: item.to_order,
+        item_type: item.item_type,
+        category: item.category,
+        fabric_name: item.fabric_name,
+        has_item_id: !!item.item_id,
+        has_item_name: !!item.item_name,
+        has_fabric_name: !!item.fabric_name,
+        has_quantity: !!(item.qty_total > 0 || item.to_order > 0)
+      });
+      
+      // For fabric items, check fabric_name instead of item_id
+      const isFabric = item.category === 'Fabric';
+      const hasValidIdentifier = isFabric ? !!item.fabric_name : !!item.item_id;
+      const hasValidName = isFabric ? !!item.fabric_name : !!item.item_name;
+      
+      return hasValidIdentifier && hasValidName && (item.qty_total != null || item.to_order != null);
     });
+    
+    console.log('Filtered items count:', filteredItems.length);
+    console.log('Filtered items:', filteredItems.map((item: any) => ({
+      item_name: item.item_name,
+      item_type: item.item_type,
+      category: item.category
+    })));
+    
+    const processedItems = await Promise.all(
+      filteredItems.map(async (item: any) => {
+        let imageUrl = null;
+        
+        // Try to get image from BOM item first
+        if (item.image_url) {
+          imageUrl = item.image_url;
+        } else if (item.item?.image_url) {
+          imageUrl = item.item.image_url;
+        } else if (item.item?.image) {
+          imageUrl = item.item.image;
+        } else {
+          // Fetch image from fabric_master or item_master
+          try {
+            if (item.item_type === 'fabric' || item.category === 'Fabric') {
+              // For fabric items, use fabric_name, fabric_color, fabric_gsm to find the fabric
+              const { data: fabricData } = await supabase
+                .from('fabric_master')
+                .select('image')
+                .eq('fabric_name', item.fabric_name || item.item_name)
+                .eq('color', item.fabric_color || '')
+                .eq('gsm', item.fabric_gsm || '')
+                .single();
+              imageUrl = fabricData?.image || null;
+              
+              // If not found with exact match, try just fabric name
+              if (!imageUrl && item.fabric_name) {
+                const { data: fabricData2 } = await supabase
+                  .from('fabric_master')
+                  .select('image')
+                  .eq('fabric_name', item.fabric_name)
+                  .single();
+                imageUrl = fabricData2?.image || null;
+              }
+            } else {
+              const { data: itemData } = await supabase
+                .from('item_master')
+                .select('image_url, image')
+                .eq('id', item.item_id)
+                .single();
+              imageUrl = itemData?.image_url || itemData?.image || null;
+            }
+          } catch (error) {
+            console.warn('Failed to fetch image for item:', item.item_name || item.fabric_name, error);
+          }
+        }
+
+        return {
+          ...item,
+          image_url: imageUrl
+        };
+      })
+    );
+
+    console.log('Processed items for PO:', processedItems);
+
+    const bomPayload = {
+      id: bom.id,
+      bom_number: bom.bom_number,
+      product_name: bom.product_name,
+      order_number: bom.order?.order_number,
+      items: processedItems
+    } as any;
+
+    console.log('BOM payload for PO:', bomPayload);
+
+    const encoded = encodeURIComponent(JSON.stringify(bomPayload));
+    navigate(`/procurement/po/new?bom=${encoded}`);
   };
 
   const filteredBoms = boms.filter(bom => {

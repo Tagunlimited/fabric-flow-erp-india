@@ -11,7 +11,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelect';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, formatDateIndian } from '@/lib/utils';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
@@ -808,7 +808,7 @@ export default function ReceiptPage() {
                       <tbody>
                         {txns.map((r) => (
                           <tr key={r.id} className="hover:bg-muted/30 cursor-pointer" onClick={async () => { await handleOpenReceipt(r); }}>
-                            <td className="p-2 border">{new Date(r.created_at).toLocaleDateString('en-IN')}</td>
+                            <td className="p-2 border">{formatDateIndian(r.created_at)}</td>
                             <td className="p-2 border font-medium">{r.receipt_number}</td>
                             <td className="p-2 border">{r.customers?.company_name || r.customer_name || '-'}</td>
                             <td className="p-2 border">{r.reference_number}</td>
@@ -875,7 +875,7 @@ export default function ReceiptPage() {
                               {results.map((r) => (
                                 <CommandItem key={`order-${r.id}`} onSelect={() => { setSelected(r); setRefOpen(false); }} className="flex items-center gap-2">
                                   <span className="font-medium">{r.number}</span>
-                                  <span className="ml-auto text-xs text-muted-foreground">{new Date(r.date).toLocaleDateString('en-IN')}</span>
+                                  <span className="ml-auto text-xs text-muted-foreground">{formatDateIndian(r.date)}</span>
                                 </CommandItem>
                               ))}
                             </CommandGroup>
@@ -898,7 +898,7 @@ export default function ReceiptPage() {
                 <Popover>
                   <PopoverTrigger asChild>
                     <Button variant="outline" className="w-full justify-start">
-                      <CalendarIcon className="mr-2 h-4 w-4" /> {date.toLocaleDateString('en-IN')}
+                      <CalendarIcon className="mr-2 h-4 w-4" /> {formatDateIndian(date)}
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent align="start" className="p-0">
@@ -992,7 +992,7 @@ export default function ReceiptPage() {
                 </div>
                 <div className="text-right">
                   <div className="text-lg font-bold">RECEIPT</div>
-                  <div className="text-xs text-muted-foreground">{date.toLocaleDateString('en-IN')}</div>
+                  <div className="text-xs text-muted-foreground">{formatDateIndian(date)}</div>
                 </div>
               </div>
 
@@ -1024,7 +1024,7 @@ export default function ReceiptPage() {
               {/* Footer */}
               <div className="flex justify-between items-end mt-8 text-xs">
                 <div>
-                  <div className="text-muted-foreground">Generated on {new Date().toLocaleDateString('en-IN')}</div>
+                  <div className="text-muted-foreground">Generated on {formatDateIndian(new Date())}</div>
                 </div>
                 <div className="text-right">
                   <div className="font-medium">For {company?.company_name || 'Our Company'}</div>
@@ -1062,7 +1062,7 @@ export default function ReceiptPage() {
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button variant="outline" className="w-full justify-start">
-                        <CalendarIcon className="mr-2 h-4 w-4" /> {editDate.toLocaleDateString('en-IN')}
+                        <CalendarIcon className="mr-2 h-4 w-4" /> {formatDateIndian(editDate)}
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent align="start" className="p-0">

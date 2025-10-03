@@ -52,17 +52,19 @@ export default function QCReviewDialog({ isOpen, onClose, orderId, orderNumber, 
   const setApproved = (size: string, value: number) => {
     setRows(prev => prev.map(r => {
       if (r.size_name !== size) return r;
-      const v = Math.max(0, Number(value) || 0);
-      const maxAllowed = Math.max(0, r.picked - r.rejected);
-      return { ...r, approved: Math.min(v, maxAllowed) };
+      let desiredApproved = Math.max(0, Number(value) || 0);
+      if (desiredApproved > r.picked) desiredApproved = r.picked;
+      const newRejected = Math.max(0, r.picked - desiredApproved);
+      return { ...r, approved: desiredApproved, rejected: newRejected };
     }));
   };
   const setRejected = (size: string, value: number) => {
     setRows(prev => prev.map(r => {
       if (r.size_name !== size) return r;
-      const v = Math.max(0, Number(value) || 0);
-      const maxAllowed = Math.max(0, r.picked - r.approved);
-      return { ...r, rejected: Math.min(v, maxAllowed) };
+      let desiredRejected = Math.max(0, Number(value) || 0);
+      if (desiredRejected > r.picked) desiredRejected = r.picked;
+      const newApproved = Math.max(0, r.picked - desiredRejected);
+      return { ...r, rejected: desiredRejected, approved: newApproved };
     }));
   };
   const setRemarks = (size: string, value: string) => {
