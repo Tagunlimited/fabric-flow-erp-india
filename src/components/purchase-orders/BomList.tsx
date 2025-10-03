@@ -300,13 +300,24 @@ export function BomList() {
           }
         }
 
+        return {
+          ...item,
+          image_url: imageUrl
+        };
+      })
+    );
+
+    console.log('Processed items for PO:', processedItems);
+
     const bomPayload = {
       id: bom.id,
       bom_number: bom.bom_number,
       product_name: bom.product_name,
       order_number: bom.order?.order_number,
-      items
+      items: processedItems
     } as any;
+
+    console.log('BOM payload for PO:', bomPayload);
 
     const encoded = encodeURIComponent(JSON.stringify(bomPayload));
     navigate(`/procurement/po/new?bom=${encoded}`);
