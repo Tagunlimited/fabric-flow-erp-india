@@ -2,12 +2,14 @@ import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { toast } from "sonner";
 import { 
   Users, 
   Clock, 
@@ -30,14 +32,22 @@ interface OrderAssignment {
   orderNumber: string;
   customerName: string;
   productName: string;
+  productCategoryImage?: string;
   quantity: number;
   assignedTo: string; // legacy single assignee
+  // Multiple cutting masters support
+  cuttingMasters?: Array<{
+    id: string;
+    name: string;
+    avatarUrl?: string;
+    assignedDate: string;
+    assignedBy?: string;
+  }>;
+  // Legacy single cutting master fields (for backward compatibility)
   cuttingMasterId?: string;
   cuttingMasterName?: string;
-  patternMasterId?: string;
-  patternMasterName?: string;
+  cuttingMasterAvatarUrl?: string;
   cuttingWorkDate?: string;
-  patternWorkDate?: string;
   assignedDate: string;
   dueDate: string;
   status: 'pending' | 'assigned' | 'in_progress' | 'completed';
@@ -46,8 +56,10 @@ interface OrderAssignment {
   // Pricing captured at assignment time by tailor type
   cuttingPriceSingleNeedle?: number;
   cuttingPriceOverlockFlatlock?: number;
-  patternPriceSingleNeedle?: number;
-  patternPriceOverlockFlatlock?: number;
+  // Stitching rates (separate from assignment)
+  stitchingRatesSet?: boolean;
+  stitchingPriceSingleNeedle?: number;
+  stitchingPriceOverlockFlatlock?: number;
 }
 
 const AssignOrdersPage = () => {
@@ -89,9 +101,25 @@ const AssignOrdersPage = () => {
   // View schedule dialog for a worker
   const [viewScheduleOpen, setViewScheduleOpen] = useState(false);
   const [viewScheduleWorker, setViewScheduleWorker] = useState<any | null>(null);
+  
+  // Multi-cutting master assignment dialog
+  const [multiAssignmentOpen, setMultiAssignmentOpen] = useState(false);
+  const [multiAssignmentOrderId, setMultiAssignmentOrderId] = useState<string | null>(null);
+  const [selectedCuttingMasters, setSelectedCuttingMasters] = useState<string[]>([]);
+  
+  // Stitching rates dialog
+  const [stitchingRatesOpen, setStitchingRatesOpen] = useState(false);
+  const [stitchingRatesOrderId, setStitchingRatesOrderId] = useState<string | null>(null);
+  const [stitchingPriceSingleNeedle, setStitchingPriceSingleNeedle] = useState<string>('');
+  const [stitchingPriceOverlockFlatlock, setStitchingPriceOverlockFlatlock] = useState<string>('');
+  const [isEditingStitchingRates, setIsEditingStitchingRates] = useState(false);
+  
+  // Current user state
+  const [currentUser, setCurrentUser] = useState<{id: string, name: string} | null>(null);
+
   const setStoredAssignment = (
     orderId: string,
-    update: Partial<Pick<OrderAssignment, 'cuttingMasterId' | 'cuttingMasterName' | 'patternMasterId' | 'patternMasterName' | 'assignedDate' | 'cuttingWorkDate' | 'patternWorkDate'>>
+    update: Partial<Pick<OrderAssignment, 'cuttingMasterId' | 'cuttingMasterName' | 'assignedDate' | 'cuttingWorkDate'>>
   ) => {
     try {
       const map = getStoredAssignments();
@@ -138,9 +166,19 @@ const AssignOrdersPage = () => {
   ) => {
     try {
       const payload = { order_id: orderId, ...fields } as any;
-      await supabase
+      
+      // First try to update existing record
+      const { error: updateError } = await supabase
         .from('order_assignments' as any)
-        .upsert(payload, { onConflict: 'order_id' } as any);
+        .update(fields as any)
+        .eq('order_id', orderId as any);
+
+      // If update failed (no existing record), insert new one
+      if (updateError) {
+        await supabase
+          .from('order_assignments' as any)
+          .insert(payload);
+      }
     } catch (e) {
       console.error('Failed to upsert order assignment:', e);
     }
@@ -166,7 +204,7 @@ const AssignOrdersPage = () => {
       try {
         const { data, error } = await supabase
           .from('employees' as any)
-          .select('id, full_name, designation')
+          .select('id, full_name, designation, avatar_url')
           .in('designation', ['Pattern Master', 'Cutting Manager', 'Cutting Master'] as any);
         if (error) {
           console.error('Failed to load production_team:', error);
@@ -176,6 +214,7 @@ const AssignOrdersPage = () => {
           id: row.id,
           name: row.full_name,
           designation: row.designation,
+          avatar_url: row.avatar_url,
           availability: 'available',
           department: row.designation,
         }));
@@ -185,6 +224,29 @@ const AssignOrdersPage = () => {
       }
     };
     loadProductionTeam();
+  }, []);
+
+  // Load current user
+  useEffect(() => {
+    const loadCurrentUser = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          setCurrentUser({
+            id: user.id,
+            name: user.user_metadata?.full_name || user.email || 'Current User'
+          });
+        }
+      } catch (err) {
+        console.error('Error loading current user:', err);
+        // Fallback to a default user ID if auth fails
+        setCurrentUser({
+          id: '00000000-0000-0000-0000-000000000000',
+          name: 'System User'
+        });
+      }
+    };
+    loadCurrentUser();
   }, []);
 
   // Load only orders which have at least one BOM created
@@ -345,11 +407,28 @@ const AssignOrdersPage = () => {
         try {
           const { data: rows } = await supabase
             .from('order_assignments' as any)
-            .select('order_id, cutting_master_id, cutting_master_name, cutting_work_date, pattern_master_id, pattern_master_name, pattern_work_date, cutting_price_single_needle, cutting_price_overlock_flatlock, pattern_price_single_needle, pattern_price_overlock_flatlock')
+            .select('order_id, cutting_master_id, cutting_master_name, cutting_work_date, cutting_price_single_needle, cutting_price_overlock_flatlock')
             .in('order_id', orderIds as any);
           (rows || []).forEach((r: any) => { if (r?.order_id) assignmentsByOrder[r.order_id] = r; });
         } catch (e) {
           console.error('Failed to load order assignments:', e);
+        }
+
+        // Load multiple cutting masters from order_cutting_assignments
+        let cuttingMastersByOrder: Record<string, any[]> = {};
+        try {
+          const { data: cuttingRows } = await supabase
+            .from('order_cutting_assignments' as any)
+            .select('order_id, cutting_master_id, cutting_master_name, cutting_master_avatar_url, assigned_date')
+            .in('order_id', orderIds as any);
+          (cuttingRows || []).forEach((r: any) => { 
+            if (r?.order_id) {
+              if (!cuttingMastersByOrder[r.order_id]) cuttingMastersByOrder[r.order_id] = [];
+              cuttingMastersByOrder[r.order_id].push(r);
+            }
+          });
+        } catch (e) {
+          console.error('Failed to load cutting masters:', e);
         }
         const nextAssignments: OrderAssignment[] = validOrders.map((o: any) => {
           const bomList = bomsByOrder[o.id] || [];
@@ -392,20 +471,39 @@ const AssignOrdersPage = () => {
           };
           // Merge any DB selections
           const a = assignmentsByOrder[o.id] || {};
-          if (a.cutting_master_id || a.pattern_master_id) {
+          const cuttingMasters = cuttingMastersByOrder[o.id] || [];
+          
+          if (cuttingMasters.length > 0) {
+            // Multiple cutting masters
+            base.cuttingMasters = cuttingMasters.map((cm: any) => ({
+              id: cm.cutting_master_id,
+              name: cm.cutting_master_name,
+              avatarUrl: cm.cutting_master_avatar_url,
+              assignedDate: cm.assigned_date,
+              assignedBy: 'System'
+            }));
+            // Keep legacy single cutting master for backward compatibility
+            base.cuttingMasterId = cuttingMasters[0].cutting_master_id;
+            base.cuttingMasterName = cuttingMasters[0].cutting_master_name;
+            base.assignedTo = cuttingMasters[0].cutting_master_name || base.assignedTo;
+            if (base.status === 'pending') base.status = 'assigned';
+          } else if (a.cutting_master_id) {
+            // Legacy single cutting master
             base.cuttingMasterId = a.cutting_master_id || undefined;
             base.cuttingMasterName = a.cutting_master_name || undefined;
-            base.patternMasterId = a.pattern_master_id || undefined;
-            base.patternMasterName = a.pattern_master_name || undefined;
             base.cuttingWorkDate = a.cutting_work_date || undefined;
-            base.patternWorkDate = a.pattern_work_date || undefined;
-            base.assignedTo = a.cutting_master_name || a.pattern_master_name || base.assignedTo;
+            base.assignedTo = a.cutting_master_name || base.assignedTo;
             if (base.status === 'pending') base.status = 'assigned';
+          }
+          
+          // Load cutting prices from order_assignments and use them as stitching rates
             base.cuttingPriceSingleNeedle = a.cutting_price_single_needle != null ? Number(a.cutting_price_single_needle) : undefined;
             base.cuttingPriceOverlockFlatlock = a.cutting_price_overlock_flatlock != null ? Number(a.cutting_price_overlock_flatlock) : undefined;
-            base.patternPriceSingleNeedle = a.pattern_price_single_needle != null ? Number(a.pattern_price_single_needle) : undefined;
-            base.patternPriceOverlockFlatlock = a.pattern_price_overlock_flatlock != null ? Number(a.pattern_price_overlock_flatlock) : undefined;
-          }
+          
+          // Use cutting prices as stitching rates (they are the same in this context)
+          base.stitchingPriceSingleNeedle = a.cutting_price_single_needle != null ? Number(a.cutting_price_single_needle) : undefined;
+          base.stitchingPriceOverlockFlatlock = a.cutting_price_overlock_flatlock != null ? Number(a.cutting_price_overlock_flatlock) : undefined;
+          base.stitchingRatesSet = (a.cutting_price_single_needle != null && a.cutting_price_overlock_flatlock != null);
           return base;
         });
 
@@ -419,15 +517,46 @@ const AssignOrdersPage = () => {
     loadAssignments();
   }, []);
 
-  const filteredAssignments = assignments.filter(assignment => {
+  // Helper function to check if an order is fully assigned (has cutting master and stitching rates)
+  const isOrderFullyAssigned = (assignment: OrderAssignment): boolean => {
+    const hasCuttingMaster = assignment.cuttingMasterId != null;
+    const hasStitchingRates = assignment.stitchingPriceSingleNeedle != null && assignment.stitchingPriceOverlockFlatlock != null;
+    return hasCuttingMaster && hasStitchingRates;
+  };
+
+  // Helper function to check if an order needs assignment (missing cutting master or stitching rates)
+  const isOrderNeedsAssignment = (assignment: OrderAssignment): boolean => {
+    const hasCuttingMaster = assignment.cuttingMasterId != null;
+    const hasStitchingRates = assignment.stitchingPriceSingleNeedle != null && assignment.stitchingPriceOverlockFlatlock != null;
+    return !hasCuttingMaster || !hasStitchingRates;
+  };
+
+  // Filter assignments for "Order Assignments" tab (orders that need assignment)
+  const assignmentsNeedingWork = assignments.filter(assignment => {
     const matchesSearch = assignment.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          assignment.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          assignment.productName.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === "all" || assignment.status === statusFilter;
     const matchesPriority = priorityFilter === "all" || assignment.priority === priorityFilter;
+    const needsAssignment = isOrderNeedsAssignment(assignment);
     
-    return matchesSearch && matchesStatus && matchesPriority;
+    return matchesSearch && matchesStatus && matchesPriority && needsAssignment;
   });
+
+  // Filter assignments for "Assigned Orders" tab (fully assigned orders)
+  const fullyAssignedOrders = assignments.filter(assignment => {
+    const matchesSearch = assignment.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         assignment.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         assignment.productName.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesStatus = statusFilter === "all" || assignment.status === statusFilter;
+    const matchesPriority = priorityFilter === "all" || assignment.priority === priorityFilter;
+    const isFullyAssigned = isOrderFullyAssigned(assignment);
+    
+    return matchesSearch && matchesStatus && matchesPriority && isFullyAssigned;
+  });
+
+  // Legacy filteredAssignments (kept for backward compatibility)
+  const filteredAssignments = assignmentsNeedingWork;
 
   // Compute how many assignments each worker currently has
   const assignedCounts = useMemo(() => {
@@ -435,9 +564,6 @@ const AssignOrdersPage = () => {
     for (const a of assignments) {
       if (a.cuttingMasterId) {
         counts[a.cuttingMasterId] = (counts[a.cuttingMasterId] || 0) + 1;
-      }
-      if (a.patternMasterId) {
-        counts[a.patternMasterId] = (counts[a.patternMasterId] || 0) + 1;
       }
     }
     return counts;
@@ -474,36 +600,6 @@ const AssignOrdersPage = () => {
     });
   };
 
-  const handleAssignPatternMaster = async (
-    assignmentId: string,
-    workerId: string,
-    workDate?: string,
-    prices?: { singleNeedle?: number; overlockFlatlock?: number }
-  ) => {
-    const worker = (workers as any[]).find(w => w.id === workerId);
-    setAssignments(prev => prev.map(assignment => 
-      assignment.id === assignmentId 
-        ? { 
-            ...assignment, 
-            patternMasterId: workerId,
-            patternMasterName: worker?.name || '',
-            assignedTo: assignment.assignedTo || worker?.name || '',
-            assignedDate: new Date().toISOString().split('T')[0],
-            patternWorkDate: workDate || assignment.patternWorkDate,
-            status: 'assigned' as const,
-            patternPriceSingleNeedle: prices?.singleNeedle ?? assignment.patternPriceSingleNeedle,
-            patternPriceOverlockFlatlock: prices?.overlockFlatlock ?? assignment.patternPriceOverlockFlatlock
-          }
-        : assignment
-    ));
-    await upsertAssignment(assignmentId, {
-      pattern_master_id: workerId,
-      pattern_master_name: (worker as any)?.name || '',
-      pattern_work_date: workDate || new Date().toISOString().split('T')[0],
-      pattern_price_single_needle: prices?.singleNeedle ?? null,
-      pattern_price_overlock_flatlock: prices?.overlockFlatlock ?? null
-    });
-  };
 
   const handleAssignAny = (assignmentId: string, workerId: string) => {
     const worker = (workers as any[]).find(w => w.id === workerId);
@@ -517,12 +613,8 @@ const AssignOrdersPage = () => {
     const existing = assignments.find(a => a.id === assignmentId);
     setScheduleCuttingPriceSingleNeedle(existing?.cuttingPriceSingleNeedle != null ? String(existing.cuttingPriceSingleNeedle) : '');
     setScheduleCuttingPriceOverlockFlatlock(existing?.cuttingPriceOverlockFlatlock != null ? String(existing.cuttingPriceOverlockFlatlock) : '');
-    setSchedulePatternPriceSingleNeedle(existing?.patternPriceSingleNeedle != null ? String(existing.patternPriceSingleNeedle) : '');
-    setSchedulePatternPriceOverlockFlatlock(existing?.patternPriceOverlockFlatlock != null ? String(existing.patternPriceOverlockFlatlock) : '');
     if (designation === 'Cutting Manager' || designation === 'Cutting Master') {
       setScheduleRole('cutting');
-    } else if (designation === 'Pattern Master') {
-      setScheduleRole('pattern');
     } else {
       setScheduleRole(null);
     }
@@ -544,18 +636,173 @@ const AssignOrdersPage = () => {
           overlockFlatlock: scheduleCuttingPriceOverlockFlatlock !== '' ? Number(scheduleCuttingPriceOverlockFlatlock) : undefined,
         }
       );
-    } else {
-      await handleAssignPatternMaster(
-        scheduleAssignmentId,
-        scheduleWorkerId,
-        scheduleDate,
-        {
-          singleNeedle: schedulePatternPriceSingleNeedle !== '' ? Number(schedulePatternPriceSingleNeedle) : undefined,
-          overlockFlatlock: schedulePatternPriceOverlockFlatlock !== '' ? Number(schedulePatternPriceOverlockFlatlock) : undefined,
-        }
-      );
     }
     setScheduleDialogOpen(false);
+  };
+
+  // Function to set stitching rates
+  const handleSetStitchingRates = async (orderId: string) => {
+    try {
+      // Get the current assignment to include cutting master information
+      const assignment = assignments.find(a => a.id === orderId);
+      
+      const updateData = {
+        cutting_master_id: assignment?.cuttingMasterId || null,
+        cutting_master_name: assignment?.cuttingMasterName || null,
+        cutting_price_single_needle: stitchingPriceSingleNeedle ? parseFloat(stitchingPriceSingleNeedle) : null,
+        cutting_price_overlock_flatlock: stitchingPriceOverlockFlatlock ? parseFloat(stitchingPriceOverlockFlatlock) : null
+      };
+
+      // First try to update existing record
+      const { error: updateError } = await supabase
+        .from('order_assignments')
+        .update(updateData as any)
+        .eq('order_id', orderId as any);
+
+      // If update failed (no existing record), insert new one
+      if (updateError) {
+        const { error: insertError } = await supabase
+          .from('order_assignments')
+          .insert({
+            order_id: orderId,
+            ...updateData
+          } as any);
+
+        if (insertError) {
+          console.error('Error inserting stitching rates:', insertError);
+          toast.error('Failed to set stitching rates');
+          return;
+        }
+      }
+
+      // Update local state
+      setAssignments(prev => prev.map(assignment => 
+        assignment.id === orderId 
+          ? { 
+              ...assignment, 
+              stitchingRatesSet: true,
+              stitchingPriceSingleNeedle: stitchingPriceSingleNeedle ? parseFloat(stitchingPriceSingleNeedle) : undefined,
+              stitchingPriceOverlockFlatlock: stitchingPriceOverlockFlatlock ? parseFloat(stitchingPriceOverlockFlatlock) : undefined
+            }
+          : assignment
+      ));
+
+      setStitchingRatesOpen(false);
+      setStitchingPriceSingleNeedle('');
+      setStitchingPriceOverlockFlatlock('');
+      setIsEditingStitchingRates(false);
+    } catch (error) {
+      console.error('Error setting stitching rates:', error);
+    }
+  };
+
+  // Function to open stitching rates dialog in edit mode
+  const handleEditStitchingRates = (orderId: string) => {
+    const assignment = assignments.find(a => a.id === orderId);
+    if (assignment) {
+      setStitchingRatesOrderId(orderId);
+      setStitchingPriceSingleNeedle(assignment.stitchingPriceSingleNeedle?.toString() || '');
+      setStitchingPriceOverlockFlatlock(assignment.stitchingPriceOverlockFlatlock?.toString() || '');
+      setIsEditingStitchingRates(true);
+      setStitchingRatesOpen(true);
+    }
+  };
+
+  // Function to open stitching rates dialog in create mode
+  const handleCreateStitchingRates = (orderId: string) => {
+    setStitchingRatesOrderId(orderId);
+    setStitchingPriceSingleNeedle('');
+    setStitchingPriceOverlockFlatlock('');
+    setIsEditingStitchingRates(false);
+    setStitchingRatesOpen(true);
+  };
+
+  // Function to handle multiple cutting master assignment
+  const handleMultiCuttingMasterAssignment = async () => {
+    if (!multiAssignmentOrderId || selectedCuttingMasters.length === 0 || !currentUser) return;
+    
+    try {
+      // Get the order assignment
+      const assignment = assignments.find(a => a.id === multiAssignmentOrderId);
+      if (!assignment) return;
+
+      // First, delete existing cutting master assignments for this order
+      const { error: deleteError } = await supabase
+        .from('order_cutting_assignments')
+        .delete()
+        .eq('order_id', multiAssignmentOrderId as any);
+
+      if (deleteError) {
+        console.warn('Warning: Could not delete existing assignments:', deleteError);
+        // Continue anyway - we'll try to insert new ones
+      }
+
+      // Create multiple cutting master assignments
+      const cuttingMastersData = selectedCuttingMasters.map(masterId => {
+        const worker = (workers as any[]).find(w => w.id === masterId);
+        return {
+          order_id: multiAssignmentOrderId,
+          cutting_master_id: masterId,
+          cutting_master_name: (worker as any)?.name || '',
+          cutting_master_avatar_url: (worker as any)?.avatar_url || null,
+          assigned_date: new Date().toISOString().split('T')[0],
+          assigned_by_name: currentUser?.name || 'System User',
+          notes: `Assigned via multi-assignment dialog`
+        };
+      });
+
+      // Insert multiple assignments using order_cutting_assignments table
+      const { error } = await supabase
+        .from('order_cutting_assignments')
+        .insert(cuttingMastersData as any);
+
+      if (error) throw error;
+
+      // Also create/update the order_assignments record with the first cutting master for consistency
+      if (selectedCuttingMasters.length > 0) {
+        const firstMasterId = selectedCuttingMasters[0];
+        const firstWorker = (workers as any[]).find(w => w.id === firstMasterId);
+        
+        await supabase
+          .from('order_assignments')
+          .upsert({
+            order_id: multiAssignmentOrderId,
+            cutting_master_id: firstMasterId,
+            cutting_master_name: (firstWorker as any)?.name || '',
+            cutting_work_date: new Date().toISOString().split('T')[0]
+          } as any);
+      }
+
+      // Update local state
+      setAssignments(prev => prev.map(assignment => 
+        assignment.id === multiAssignmentOrderId 
+          ? { 
+              ...assignment, 
+              cuttingMasters: selectedCuttingMasters.map(masterId => {
+                const worker = (workers as any[]).find(w => w.id === masterId);
+                return {
+                  id: masterId,
+                  name: (worker as any)?.name || '',
+                  avatarUrl: (worker as any)?.avatar_url || undefined,
+                  assignedDate: new Date().toISOString().split('T')[0],
+                  assignedBy: 'Current User'
+                };
+              }),
+              // Keep legacy single cutting master for backward compatibility
+              cuttingMasterId: selectedCuttingMasters[0],
+              cuttingMasterName: (workers as any[]).find(w => w.id === selectedCuttingMasters[0])?.name || '',
+              status: 'assigned' as const
+            }
+          : assignment
+      ));
+
+      // Close dialog and reset state
+      setMultiAssignmentOpen(false);
+      setSelectedCuttingMasters([]);
+      setMultiAssignmentOrderId(null);
+    } catch (error) {
+      console.error('Error assigning multiple cutting masters:', error);
+    }
   };
 
   const openWorkerSchedule = (worker: any) => {
@@ -566,13 +813,15 @@ const AssignOrdersPage = () => {
   return (
     <ErpLayout>
       <div className="space-y-4">
-        <div>
-          <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-            Assign Orders
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Manage order assignments and track production workflow
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+              Assign Orders
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              Manage order assignments and track production workflow
+            </p>
+          </div>
         </div>
 
         {/* Stats Cards */}
@@ -580,13 +829,13 @@ const AssignOrdersPage = () => {
           <Card className="shadow-erp-md">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Pending Assignments
+                Need Assignment
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold text-yellow-600">
-                  {assignments.filter(a => a.status === 'pending').length}
+                  {assignmentsNeedingWork.length}
                 </span>
                 <Clock className="w-5 h-5 text-yellow-600" />
               </div>
@@ -596,15 +845,15 @@ const AssignOrdersPage = () => {
           <Card className="shadow-erp-md">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                In Progress
+                Fully Assigned
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-orange-600">
-                  {assignments.filter(a => a.status === 'in_progress').length}
+                <span className="text-2xl font-bold text-green-600">
+                  {fullyAssignedOrders.length}
                 </span>
-                <ArrowRight className="w-5 h-5 text-orange-600" />
+                <CheckCircle className="w-5 h-5 text-green-600" />
               </div>
             </CardContent>
           </Card>
@@ -612,15 +861,15 @@ const AssignOrdersPage = () => {
           <Card className="shadow-erp-md">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Completed Today
+                Total Orders
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-green-600">
-                  {assignments.filter(a => a.status === 'completed').length}
+                <span className="text-2xl font-bold text-blue-600">
+                  {assignments.length}
                 </span>
-                <CheckCircle className="w-5 h-5 text-green-600" />
+                <Users className="w-5 h-5 text-blue-600" />
               </div>
             </CardContent>
           </Card>
@@ -633,18 +882,19 @@ const AssignOrdersPage = () => {
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-blue-600">
+                <span className="text-2xl font-bold text-purple-600">
                   {workers.filter(w => w.availability === 'available').length}
                 </span>
-                <Users className="w-5 h-5 text-blue-600" />
+                <Users className="w-5 h-5 text-purple-600" />
               </div>
             </CardContent>
           </Card>
         </div>
 
         <Tabs defaultValue="assignments" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="assignments">Order Assignments</TabsTrigger>
+            <TabsTrigger value="assigned">Assigned Orders</TabsTrigger>
             <TabsTrigger value="workers">Available Workers</TabsTrigger>
           </TabsList>
 
@@ -724,7 +974,6 @@ const AssignOrdersPage = () => {
                         <TableHead>Product</TableHead>
                         <TableHead>Quantity</TableHead>
                         <TableHead>Cutting Master</TableHead>
-                        <TableHead>Pattern Master</TableHead>
                         <TableHead>Stitching Price</TableHead>
                         <TableHead>Due Date</TableHead>
                         <TableHead>Status</TableHead>
@@ -741,20 +990,26 @@ const AssignOrdersPage = () => {
                           <TableCell>{assignment.productName}</TableCell>
                           <TableCell>{assignment.quantity}</TableCell>
                           <TableCell>
-                            {assignment.cuttingMasterName ? (
-                              <div className="flex items-center">
-                                <UserCheck className="w-4 h-4 mr-2 text-green-600" />
-                                {assignment.cuttingMasterName}
+                            {assignment.cuttingMasters && assignment.cuttingMasters.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {assignment.cuttingMasters.map((master, index) => (
+                                  <div key={master.id} className="flex items-center">
+                                    <Avatar className="w-6 h-6">
+                                      <AvatarImage src={master.avatarUrl} />
+                                      <AvatarFallback>{master.name.charAt(0)}</AvatarFallback>
+                                    </Avatar>
+                                    <span className="ml-1 text-xs">{master.name}</span>
+                                    {index < assignment.cuttingMasters.length - 1 && <span className="mx-1">,</span>}
+                                  </div>
+                                ))}
                               </div>
-                            ) : (
-                              <span className="text-muted-foreground">Unassigned</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {assignment.patternMasterName ? (
+                            ) : assignment.cuttingMasterName ? (
                               <div className="flex items-center">
-                                <UserCheck className="w-4 h-4 mr-2 text-green-600" />
-                                {assignment.patternMasterName}
+                                <Avatar className="w-6 h-6">
+                                  <AvatarImage src={assignment.cuttingMasterAvatarUrl} />
+                                  <AvatarFallback>{assignment.cuttingMasterName.charAt(0)}</AvatarFallback>
+                                </Avatar>
+                                <span className="ml-2">{assignment.cuttingMasterName}</span>
                               </div>
                             ) : (
                               <span className="text-muted-foreground">Unassigned</span>
@@ -764,8 +1019,202 @@ const AssignOrdersPage = () => {
                           <TableCell>
                             <div className="text-xs">
                               {(() => {
-                                const sn = (assignment.patternPriceSingleNeedle ?? assignment.cuttingPriceSingleNeedle);
-                                const of = (assignment.patternPriceOverlockFlatlock ?? assignment.cuttingPriceOverlockFlatlock);
+                                const sn = assignment.stitchingPriceSingleNeedle;
+                                const of = assignment.stitchingPriceOverlockFlatlock;
+                                if (sn == null && of == null) return <span className="text-muted-foreground">-</span>;
+                                return (
+                                  <span>
+                                    SN ₹{formatPrice(sn)} / OF ₹{formatPrice(of)}
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                              <div className="flex items-center">
+                              <Calendar className="w-4 h-4 mr-2 text-muted-foreground" />
+                              {assignment.dueDate ? formatDateDDMMYY(assignment.dueDate) : '-'}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={getStatusColor(assignment.status)}>
+                              {assignment.status.replace('_', ' ')}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={getPriorityColor(assignment.priority)}>
+                              {assignment.priority}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={assignment.materialStatus === 'Available' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>
+                              {assignment.materialStatus}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              {/* Assign button - show for all orders in this tab (they need assignment work) */}
+                              <Button 
+                                variant="default" 
+                                size="sm" 
+                                onClick={() => {
+                                  setMultiAssignmentOrderId(assignment.id);
+                                  // Pre-select current cutting masters if they exist
+                                  const currentMasters = assignment.cuttingMasters?.map(cm => cm.id) || 
+                                                       (assignment.cuttingMasterId ? [assignment.cuttingMasterId] : []);
+                                  setSelectedCuttingMasters(currentMasters);
+                                  setMultiAssignmentOpen(true);
+                                }}
+                              >
+                                {assignment.cuttingMasterId ? 'Re-assign' : 'Assign'}
+                              </Button>
+                              {/* Set Rate button - only show when cutting master is assigned but rates are not set */}
+                              {assignment.cuttingMasterId && !assignment.stitchingRatesSet && (
+                                <Button 
+                                  variant="secondary" 
+                                  size="sm" 
+                                  onClick={() => handleCreateStitchingRates(assignment.id)}
+                                >
+                                  Set Rate
+                                </Button>
+                              )}
+                              <Button variant="outline" size="sm" onClick={() => navigate(`/orders/${assignment.id}?from=production`)}>
+                                View
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="assigned" className="space-y-2">
+            {/* Filters */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Filters</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div>
+                    <Label htmlFor="search-assigned">Search</Label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        id="search-assigned"
+                        placeholder="Search orders..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="pl-10"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <Label htmlFor="status-assigned">Status</Label>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Status</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="assigned">Assigned</SelectItem>
+                        <SelectItem value="in_progress">In Progress</SelectItem>
+                        <SelectItem value="completed">Completed</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="priority-assigned">Priority</Label>
+                    <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All Priorities" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Priorities</SelectItem>
+                        <SelectItem value="low">Low</SelectItem>
+                        <SelectItem value="medium">Medium</SelectItem>
+                        <SelectItem value="high">High</SelectItem>
+                        <SelectItem value="urgent">Urgent</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-end">
+                    <Button className="w-full">
+                      <Filter className="w-4 h-4 mr-2" />
+                      Apply Filters
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Assigned Orders Table */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Assigned Orders</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Order #</TableHead>
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead>Quantity</TableHead>
+                        <TableHead>Cutting Master</TableHead>
+                        <TableHead>Stitching Price</TableHead>
+                        <TableHead>Due Date</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Priority</TableHead>
+                        <TableHead>Material Status</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {fullyAssignedOrders.map((assignment) => (
+                        <TableRow key={assignment.id}>
+                          <TableCell className="font-medium">{assignment.orderNumber}</TableCell>
+                          <TableCell>{assignment.customerName}</TableCell>
+                          <TableCell>{assignment.productName}</TableCell>
+                          <TableCell>{assignment.quantity}</TableCell>
+                          <TableCell>
+                            {assignment.cuttingMasters && assignment.cuttingMasters.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {assignment.cuttingMasters.map((master, index) => (
+                                  <div key={master.id} className="flex items-center">
+                                    <Avatar className="w-6 h-6">
+                                      <AvatarImage src={master.avatarUrl} />
+                                      <AvatarFallback>{master.name.charAt(0)}</AvatarFallback>
+                                    </Avatar>
+                                    <span className="ml-1 text-xs">{master.name}</span>
+                                    {index < assignment.cuttingMasters.length - 1 && <span className="mx-1">,</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : assignment.cuttingMasterName ? (
+                              <div className="flex items-center">
+                                <Avatar className="w-6 h-6">
+                                  <AvatarImage src={assignment.cuttingMasterAvatarUrl} />
+                                  <AvatarFallback>{assignment.cuttingMasterName.charAt(0)}</AvatarFallback>
+                                </Avatar>
+                                <span className="ml-2">{assignment.cuttingMasterName}</span>
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">Unassigned</span>
+                            )}
+                          </TableCell>
+                          {/* Stitching Price Column */}
+                          <TableCell>
+                            <div className="text-xs">
+                              {(() => {
+                                const sn = assignment.stitchingPriceSingleNeedle;
+                                const of = assignment.stitchingPriceOverlockFlatlock;
                                 if (sn == null && of == null) return <span className="text-muted-foreground">-</span>;
                                 return (
                                   <span>
@@ -798,20 +1247,14 @@ const AssignOrdersPage = () => {
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <Select onValueChange={(value) => handleAssignAny(assignment.id, value)}>
-                                <SelectTrigger className="w-72">
-                                  <SelectValue placeholder="Assign to employee" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {workers
-                                    .filter(w => ['Cutting Manager', 'Cutting Master', 'Pattern Master'].includes((w as any).designation))
-                                    .map(worker => (
-                                      <SelectItem key={worker.id} value={worker.id}>
-                                        {(worker as any).name}{' '}—{' '}{(worker as any).designation}
-                                      </SelectItem>
-                                    ))}
-                                </SelectContent>
-                              </Select>
+                              {/* Edit Rate button - always show in Assigned Orders tab since they have rates */}
+                              <Button 
+                                variant="secondary" 
+                                size="sm" 
+                                onClick={() => handleEditStitchingRates(assignment.id)}
+                              >
+                                Edit Rate
+                              </Button>
                               <Button variant="outline" size="sm" onClick={() => navigate(`/orders/${assignment.id}?from=production`)}>
                                 View
                               </Button>
@@ -957,18 +1400,18 @@ const AssignOrdersPage = () => {
                 </thead>
                 <tbody>
                   {assignments
-                    .filter(a => a.cuttingMasterId === (viewScheduleWorker as any)?.id || a.patternMasterId === (viewScheduleWorker as any)?.id)
+                    .filter(a => a.cuttingMasterId === (viewScheduleWorker as any)?.id)
                     .sort((a, b) => {
-                      const ad = a.cuttingMasterId === (viewScheduleWorker as any)?.id ? (a.cuttingWorkDate || '') : (a.patternWorkDate || '');
-                      const bd = b.cuttingMasterId === (viewScheduleWorker as any)?.id ? (b.cuttingWorkDate || '') : (b.patternWorkDate || '');
+                      const ad = a.cuttingWorkDate || '';
+                      const bd = b.cuttingWorkDate || '';
                       return (new Date(ad).getTime() || 0) - (new Date(bd).getTime() || 0);
                     })
                     .map(a => (
                       <tr key={`${a.id}-${(viewScheduleWorker as any)?.id}`} className="border-t">
-                        <td className="p-2">{formatDateDDMMYY(a.cuttingMasterId === (viewScheduleWorker as any)?.id ? a.cuttingWorkDate : a.patternWorkDate)}</td>
+                        <td className="p-2">{formatDateDDMMYY(a.cuttingWorkDate)}</td>
                         <td className="p-2">{a.orderNumber}</td>
                         <td className="p-2">{a.customerName}</td>
-                        <td className="p-2">{a.cuttingMasterId === (viewScheduleWorker as any)?.id ? 'Cutting' : 'Pattern'}</td>
+                        <td className="p-2">Cutting</td>
                       </tr>
                     ))}
                 </tbody>
@@ -976,6 +1419,131 @@ const AssignOrdersPage = () => {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setViewScheduleOpen(false)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Multi-Cutting Master Assignment Dialog */}
+        <Dialog open={multiAssignmentOpen} onOpenChange={setMultiAssignmentOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Assign Cutting Masters</DialogTitle>
+              <DialogDescription>
+                Select one or more cutting masters to assign to this order. You can assign multiple cutting masters to share the workload.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="max-h-60 overflow-y-auto">
+                {workers
+                  .filter(w => ['Cutting Manager', 'Cutting Master'].includes((w as any).designation))
+                  .map(worker => (
+                    <div key={worker.id} className="flex items-center space-x-3 p-3 border rounded-lg">
+                      <Avatar className="w-8 h-8">
+                        <AvatarImage src={(worker as any)?.avatar_url} />
+                        <AvatarFallback>{(worker as any)?.name?.charAt(0)}</AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1">
+                        <p className="font-medium">{(worker as any)?.name}</p>
+                        <p className="text-sm text-muted-foreground">{(worker as any)?.designation}</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={selectedCuttingMasters.includes(worker.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedCuttingMasters(prev => [...prev, worker.id]);
+                          } else {
+                            setSelectedCuttingMasters(prev => prev.filter(id => id !== worker.id));
+                          }
+                        }}
+                        className="w-4 h-4"
+                      />
+                    </div>
+                  ))}
+              </div>
+              {selectedCuttingMasters.length > 0 && (
+                <div className="p-3 bg-muted rounded-lg">
+                  <p className="text-sm font-medium mb-2">Selected Cutting Masters:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedCuttingMasters.map(masterId => {
+                      const worker = (workers as any[]).find(w => w.id === masterId);
+                      return (
+                        <div key={masterId} className="flex items-center space-x-2 bg-background px-2 py-1 rounded border">
+                          <Avatar className="w-5 h-5">
+                            <AvatarImage src={(worker as any)?.avatar_url} />
+                            <AvatarFallback>{(worker as any)?.name?.charAt(0)}</AvatarFallback>
+                          </Avatar>
+                          <span className="text-xs">{(worker as any)?.name}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => {
+                setMultiAssignmentOpen(false);
+                setSelectedCuttingMasters([]);
+                setMultiAssignmentOrderId(null);
+              }}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleMultiCuttingMasterAssignment}
+                disabled={selectedCuttingMasters.length === 0}
+              >
+                Assign {selectedCuttingMasters.length} Cutting Master{selectedCuttingMasters.length !== 1 ? 's' : ''}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Set/Edit Stitching Rates Dialog */}
+        <Dialog open={stitchingRatesOpen} onOpenChange={setStitchingRatesOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>{isEditingStitchingRates ? 'Edit Stitching Rates' : 'Set Stitching Rates'}</DialogTitle>
+              <DialogDescription>
+                {isEditingStitchingRates 
+                  ? 'Update the stitching rates for this order. These rates will be used for production planning.'
+                  : 'Set the stitching rates for this order. These rates will be used for production planning.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="single-needle-rate">Single Needle Rate (₹)</Label>
+                <Input
+                  id="single-needle-rate"
+                  type="number"
+                  step="0.01"
+                  placeholder="Enter single needle rate"
+                  value={stitchingPriceSingleNeedle}
+                  onChange={(e) => setStitchingPriceSingleNeedle(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="overlock-flatlock-rate">Overlock/Flatlock Rate (₹)</Label>
+                <Input
+                  id="overlock-flatlock-rate"
+                  type="number"
+                  step="0.01"
+                  placeholder="Enter overlock/flatlock rate"
+                  value={stitchingPriceOverlockFlatlock}
+                  onChange={(e) => setStitchingPriceOverlockFlatlock(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setStitchingRatesOpen(false)}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={() => stitchingRatesOrderId && handleSetStitchingRates(stitchingRatesOrderId)}
+                disabled={!stitchingPriceSingleNeedle && !stitchingPriceOverlockFlatlock}
+              >
+                {isEditingStitchingRates ? 'Update Rates' : 'Set Rates'}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

@@ -125,7 +125,7 @@ const CuttingManagerPage = () => {
   // Batch assignment dialog state
   const [batchAssignmentOpen, setBatchAssignmentOpen] = useState(false);
   const [selectedJobForBatch, setSelectedJobForBatch] = useState<CuttingJob | null>(null);
-  
+
   // Fabric picking dialog state
   const [fabricPickingOpen, setFabricPickingOpen] = useState(false);
   const [selectedJobForFabricPicking, setSelectedJobForFabricPicking] = useState<CuttingJob | null>(null);
@@ -469,13 +469,13 @@ const CuttingManagerPage = () => {
     <ErpLayout>
       <div className="space-y-6">
         <div className="flex justify-between items-start">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-              Cutting Manager
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              Manage cutting operations and track cutting efficiency
-            </p>
+        <div>
+          <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+            Cutting Manager
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Manage cutting operations and track cutting efficiency
+          </p>
           </div>
           <Button 
             variant="outline" 
@@ -775,13 +775,13 @@ const CuttingManagerPage = () => {
                                 View
                               </Button>
                           <Button variant="outline" size="sm" onClick={() => { setUpdateJob(job); setUpdateOpen(true); }}>
-                            <Edit className="w-4 h-4 mr-2" />
+                                <Edit className="w-4 h-4 mr-2" />
                             Add Cut Qty
                           </Button>
                           <Button variant="outline" size="sm" onClick={() => handlePickFabric(job)}>
                             <Package className="w-4 h-4 mr-2" />
                             Pick Fabric
-                          </Button>
+                              </Button>
                             </div>
                           </TableCell>
                         </TableRow>
