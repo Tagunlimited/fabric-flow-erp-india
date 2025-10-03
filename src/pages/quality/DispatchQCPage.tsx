@@ -17,6 +17,7 @@ interface OrderCard {
   approved_quantity: number;
   total_quantity: number;
   picked_quantity: number;
+  dispatched_quantity?: number;
   image_url?: string;
 }
 
@@ -35,6 +36,12 @@ export default function DispatchQCPage() {
   const [savingDispatch, setSavingDispatch] = useState(false);
   const [dispatchQtyBySize, setDispatchQtyBySize] = useState<Record<string, number>>({});
   const [dispatchOrderId, setDispatchOrderId] = useState<string | null>(null);
+  
+  // Details modal state
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<any>(null);
+  const [dispatchItems, setDispatchItems] = useState<Array<{size_name: string; quantity: number}>>([]);
+  const [loadingDetails, setLoadingDetails] = useState(false);
 
   useEffect(() => { loadApprovedOrders(); }, []);
 
@@ -137,8 +144,23 @@ export default function DispatchQCPage() {
         });
       } catch {}
 
+      // Get dispatched quantities per order
+      let dispatchedByOrder: Record<string, number> = {};
+      if (orderIds.length > 0) {
+        try {
+          const { data: disp } = await (supabase as any)
+            .from('dispatch_order_items')
+            .select('order_id, quantity')
+            .in('order_id', orderIds as any);
+          (disp || []).forEach((r: any) => {
+            const oid = r.order_id as string;
+            dispatchedByOrder[oid] = (dispatchedByOrder[oid] || 0) + Number(r.quantity || 0);
+          });
+        } catch {}
+      }
+
       // Aggregate per order: only show with approved > 0
-      const byOrder: Record<string, OrderCard> = {};
+      const byOrder: Record<string, OrderCard & { dispatched_quantity: number }> = {};
       rows.forEach((r: any) => {
         const aid = r.assignment_id as string;
         const approved = Number(approvedByAssignment[aid] || 0);
@@ -152,6 +174,7 @@ export default function DispatchQCPage() {
             approved_quantity: 0,
             total_quantity: 0,
             picked_quantity: 0,
+            dispatched_quantity: dispatchedByOrder[oid] || 0,
             image_url: imageByOrder[oid]
           };
         }
@@ -168,9 +191,26 @@ export default function DispatchQCPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return orders;
-    return orders.filter(o => o.order_number.toLowerCase().includes(q) || (o.customer_name || '').toLowerCase().includes(q));
+    const filteredOrders = q ? orders.filter(o => o.order_number.toLowerCase().includes(q) || (o.customer_name || '').toLowerCase().includes(q)) : orders;
+    return filteredOrders;
   }, [orders, search]);
+
+  // Separate orders with remaining quantity from those without
+  const pendingOrders = useMemo(() => {
+    return filtered.filter(o => {
+      // Check if there's any remaining quantity to dispatch
+      const remainingQuantity = o.approved_quantity - (o.dispatched_quantity || 0);
+      return remainingQuantity > 0;
+    });
+  }, [filtered]);
+
+  const fullyDispatchedOrders = useMemo(() => {
+    return filtered.filter(o => {
+      // Check if there's no remaining quantity to dispatch
+      const remainingQuantity = o.approved_quantity - (o.dispatched_quantity || 0);
+      return remainingQuantity <= 0;
+    });
+  }, [filtered]);
 
   const totals = useMemo(() => {
     return filtered.reduce((acc, o) => {
@@ -394,6 +434,56 @@ export default function DispatchQCPage() {
     setDispatchQtyBySize(prev => ({ ...prev, [size]: Math.max(0, Math.min(maxAllowed, Number(value) || 0)) }));
   };
 
+  const openDetailsModal = async (order: any) => {
+    setSelectedOrder(order);
+    setDispatchItems([]);
+    setLoadingDetails(true);
+    setDetailsOpen(true);
+
+    // Load dispatch items if this is a dispatch record
+    if (order.id && order.dispatch_number) {
+      try {
+        const { data, error } = await (supabase as any)
+          .from('dispatch_order_items')
+          .select('size_name, quantity')
+          .eq('dispatch_order_id', order.id);
+        
+        if (!error && data) {
+          setDispatchItems(data);
+        }
+      } catch (error) {
+        console.error('Error loading dispatch items:', error);
+      }
+    } else if (order.order_id) {
+      // For fully dispatched orders, load all dispatch items for this order
+      try {
+        const { data, error } = await (supabase as any)
+          .from('dispatch_order_items')
+          .select('size_name, quantity')
+          .eq('order_id', order.order_id);
+        
+        if (!error && data) {
+          // Aggregate by size
+          const aggregated: Record<string, number> = {};
+          data.forEach((item: any) => {
+            const size = item.size_name;
+            aggregated[size] = (aggregated[size] || 0) + Number(item.quantity || 0);
+          });
+          
+          const items = Object.entries(aggregated).map(([size_name, quantity]) => ({
+            size_name,
+            quantity
+          }));
+          setDispatchItems(items);
+        }
+      } catch (error) {
+        console.error('Error loading dispatch items:', error);
+      }
+    }
+    
+    setLoadingDetails(false);
+  };
+
   return (
     <ErpLayout>
       <div className="space-y-6">
@@ -432,11 +522,11 @@ export default function DispatchQCPage() {
           <TabsContent value="pending">
             {loading ? (
               <p className="text-muted-foreground">Loading...</p>
-            ) : filtered.length === 0 ? (
-              <p className="text-muted-foreground">No QC-approved orders found.</p>
+            ) : pendingOrders.length === 0 ? (
+              <p className="text-muted-foreground">No orders with remaining quantity to dispatch.</p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filtered.map((o) => (
+                {pendingOrders.map((o) => (
                   <Card key={o.order_id} className="border hover:shadow-md transition cursor-pointer" onClick={() => openDispatchDialog(o)}>
                     <CardContent className="pt-5">
                       <div className="flex items-start justify-between">
@@ -450,7 +540,8 @@ export default function DispatchQCPage() {
                         <div className="flex items-center gap-2 flex-wrap justify-end">
                           <Badge className="bg-blue-100 text-blue-800">Approved: {o.approved_quantity}</Badge>
                           <Badge className="bg-green-100 text-green-800">Picked: {o.picked_quantity}</Badge>
-                          <Badge className="bg-purple-100 text-purple-800">Total: {o.total_quantity}</Badge>
+                          <Badge className="bg-orange-100 text-orange-800">Dispatched: {o.dispatched_quantity || 0}</Badge>
+                          <Badge className="bg-purple-100 text-purple-800">Remaining: {o.approved_quantity - (o.dispatched_quantity || 0)}</Badge>
                         </div>
                       </div>
                     </CardContent>
@@ -461,30 +552,67 @@ export default function DispatchQCPage() {
           </TabsContent>
 
           <TabsContent value="completed">
-            {completed.length === 0 ? (
+            {completed.length === 0 && fullyDispatchedOrders.length === 0 ? (
               <p className="text-muted-foreground">No completed dispatch orders.</p>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {(completed || []).map((d: any) => (
-                  <Card key={d.id} className="border hover:shadow-md transition">
-                    <CardContent className="pt-5">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-semibold">Order #{d.orders?.order_number || '-'}</div>
-                          <div className="text-xs text-muted-foreground">{d.orders?.customers?.company_name || '-'}</div>
-                        </div>
-                        <Badge className="bg-green-100 text-green-800 capitalize">{String(d.status).replace('_',' ')}</Badge>
-                      </div>
-                      <div className="mt-2 text-xs text-muted-foreground">
-                        <div>Dispatch No: {d.dispatch_number}</div>
-                        <div>Dispatch Date: {new Date(d.dispatch_date).toLocaleString()}</div>
-                        {d.courier_name && <div>Courier: {d.courier_name}</div>}
-                        {d.tracking_number && <div>Tracking: {d.tracking_number}</div>}
-                        {d.actual_delivery && <div>Delivered: {new Date(d.actual_delivery).toLocaleString()}</div>}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+              <div className="space-y-4">
+                {/* Fully Dispatched Orders (from QC approved) */}
+                {fullyDispatchedOrders.length > 0 && (
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Fully Dispatched Orders</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {fullyDispatchedOrders.map((o) => (
+                        <Card key={o.order_id} className="border hover:shadow-md transition cursor-pointer" onClick={() => openDetailsModal(o)}>
+                          <CardContent className="pt-5">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-start gap-3">
+                                <img src={o.image_url || '/placeholder.svg'} alt={o.order_number} className="w-12 h-12 rounded object-cover border" />
+                                <div>
+                                  <div className="font-semibold">Order #{o.order_number}</div>
+                                  <div className="text-xs text-muted-foreground">{o.customer_name}</div>
+                                </div>
+                              </div>
+                              <Badge className="bg-green-100 text-green-800">Fully Dispatched</Badge>
+                            </div>
+                            <div className="mt-2 text-xs text-muted-foreground">
+                              <div>Approved: {o.approved_quantity}</div>
+                              <div>Dispatched: {o.dispatched_quantity || 0}</div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Completed Dispatch Orders (from dispatch_orders table) */}
+                {completed.length > 0 && (
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Dispatch Records</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {(completed || []).map((d: any) => (
+                        <Card key={d.id} className="border hover:shadow-md transition cursor-pointer" onClick={() => openDetailsModal(d)}>
+                          <CardContent className="pt-5">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="font-semibold">Order #{d.orders?.order_number || '-'}</div>
+                                <div className="text-xs text-muted-foreground">{d.orders?.customers?.company_name || '-'}</div>
+                              </div>
+                              <Badge className="bg-green-100 text-green-800 capitalize">{String(d.status).replace('_',' ')}</Badge>
+                            </div>
+                            <div className="mt-2 text-xs text-muted-foreground">
+                              <div>Dispatch No: {d.dispatch_number}</div>
+                              <div>Dispatch Date: {new Date(d.dispatch_date).toLocaleString()}</div>
+                              {d.courier_name && <div>Courier: {d.courier_name}</div>}
+                              {d.tracking_number && <div>Tracking: {d.tracking_number}</div>}
+                              {d.actual_delivery && <div>Delivered: {new Date(d.actual_delivery).toLocaleString()}</div>}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </TabsContent>
@@ -561,6 +689,106 @@ export default function DispatchQCPage() {
               )}
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Details Modal */}
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Order Details</DialogTitle>
+          </DialogHeader>
+          {selectedOrder && (
+            <div className="space-y-6">
+              {/* Order Basic Info */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <h3 className="font-semibold">Order Information</h3>
+                  <div className="text-sm space-y-1">
+                    <div><span className="font-medium">Order Number:</span> {selectedOrder.order_number || selectedOrder.orders?.order_number}</div>
+                    <div><span className="font-medium">Customer:</span> {selectedOrder.customer_name || selectedOrder.orders?.customers?.company_name}</div>
+                    {selectedOrder.approved_quantity && (
+                      <div><span className="font-medium">Approved Quantity:</span> {selectedOrder.approved_quantity}</div>
+                    )}
+                    {selectedOrder.dispatched_quantity !== undefined && (
+                      <div><span className="font-medium">Dispatched Quantity:</span> {selectedOrder.dispatched_quantity}</div>
+                    )}
+                    {selectedOrder.picked_quantity && (
+                      <div><span className="font-medium">Picked Quantity:</span> {selectedOrder.picked_quantity}</div>
+                    )}
+                  </div>
+                </div>
+                
+                {selectedOrder.dispatch_number && (
+                  <div className="space-y-2">
+                    <h3 className="font-semibold">Dispatch Information</h3>
+                    <div className="text-sm space-y-1">
+                      <div><span className="font-medium">Dispatch Number:</span> {selectedOrder.dispatch_number}</div>
+                      <div><span className="font-medium">Dispatch Date:</span> {new Date(selectedOrder.dispatch_date).toLocaleString()}</div>
+                      {selectedOrder.courier_name && (
+                        <div><span className="font-medium">Courier:</span> {selectedOrder.courier_name}</div>
+                      )}
+                      {selectedOrder.tracking_number && (
+                        <div><span className="font-medium">Tracking Number:</span> {selectedOrder.tracking_number}</div>
+                      )}
+                      {selectedOrder.actual_delivery && (
+                        <div><span className="font-medium">Delivered:</span> {new Date(selectedOrder.actual_delivery).toLocaleString()}</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Dispatch Items by Size */}
+              {selectedOrder.order_id && (
+                <div className="space-y-2">
+                  <h3 className="font-semibold">Dispatch Items by Size</h3>
+                  <div className="border rounded-lg p-4">
+                    {loadingDetails ? (
+                      <div className="text-center py-4">
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto mb-2"></div>
+                        <div className="text-sm text-muted-foreground">Loading dispatch items...</div>
+                      </div>
+                    ) : dispatchItems.length > 0 ? (
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                        {dispatchItems.map((item, index) => (
+                          <div key={index} className="border rounded-lg p-3 text-center">
+                            <div className="text-sm font-medium text-gray-700">{item.size_name}</div>
+                            <div className="text-lg font-bold text-blue-600">{item.quantity}</div>
+                            <div className="text-xs text-gray-500">pieces</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-4 text-sm text-muted-foreground">
+                        No dispatch items found
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex justify-end space-x-2 pt-4 border-t">
+                <Button variant="outline" onClick={() => setDetailsOpen(false)}>
+                  Close
+                </Button>
+                {selectedOrder.dispatch_number && (
+                  <Button 
+                    onClick={() => {
+                      // Find the dispatch order ID and open challan
+                      if (selectedOrder.id) {
+                        window.open(`/dispatch/challan/${selectedOrder.id}`, '_blank');
+                      }
+                    }}
+                    className="bg-blue-600 hover:bg-blue-700"
+                  >
+                    View Challan
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </ErpLayout>

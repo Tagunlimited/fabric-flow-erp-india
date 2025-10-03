@@ -66,6 +66,8 @@ import ProfileSettingsPage from "./pages/profile/ProfileSettingsPage";
 import QuotationsPage from './pages/accounts/QuotationsPage';
 import QuotationDetailPage from './pages/accounts/QuotationDetailPage';
 import ReceiptPage from './pages/accounts/ReceiptPage';
+import InvoicePage from './pages/accounts/InvoicePage';
+import InvoiceDetailPage from './pages/accounts/InvoiceDetailPage';
 import { CompanySettingsProvider } from "@/hooks/CompanySettingsContext";
 import EmployeeAccessManagementPage from "./pages/admin/EmployeeAccessManagement";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
@@ -424,6 +426,17 @@ const App = () => {
                 <Route path="/accounts/receipts" element={
                   <ProtectedRoute>
                     <ReceiptPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/accounts/invoices" element={
+                  <ProtectedRoute>
+                    <InvoicePage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/accounts/invoices/:id" element={
+                  <ProtectedRoute>
+                    <InvoiceDetailPage />
                   </ProtectedRoute>
                 } />
                 
