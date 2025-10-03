@@ -195,13 +195,33 @@ export function BomList() {
   };
 
   const createPurchaseOrderFromBom = (bom: BomRecord) => {
-    // Navigate to purchase order creation with BOM data
-    navigate('/procurement/po/new', { 
-      state: { 
-        bomData: bom,
-        bomItems: processedBomItems 
-      } 
-    });
+    const items = (bom.bom_items || []).map((it: any) => ({
+      item_type: it.category === 'Fabric' ? 'fabric' : 'item',
+      item_id: it.item_id || '',
+      item_name: it.item_name || '',
+      item_image_url: it.image_url || null,
+      quantity: Number(it.qty_total || it.required_qty || 0),
+      unit_price: 0,
+      unit_of_measure: it.unit_of_measure || it.required_unit || 'pcs',
+      gst_rate: it.gst_rate || 18,
+      item_category: it.category || null,
+      fabricSelections: it.fabricSelections || (
+        it.category === 'Fabric'
+          ? [{ color: it.fabric_color || '', gsm: it.fabric_gsm || '', quantity: Number(it.qty_total || 0) }]
+          : []
+      )
+    }));
+
+    const bomPayload = {
+      id: bom.id,
+      bom_number: bom.bom_number,
+      product_name: bom.product_name,
+      order_number: bom.order?.order_number,
+      items
+    } as any;
+
+    const encoded = encodeURIComponent(JSON.stringify(bomPayload));
+    navigate(`/procurement/po/new?bom=${encoded}`);
   };
 
   const filteredBoms = boms.filter(bom => {

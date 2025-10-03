@@ -300,22 +300,16 @@ export function BomList() {
           }
         }
 
-        return {
-          ...item,
-          image_url: imageUrl
-        };
-      })
-    );
+    const bomPayload = {
+      id: bom.id,
+      bom_number: bom.bom_number,
+      product_name: bom.product_name,
+      order_number: bom.order?.order_number,
+      items
+    } as any;
 
-    console.log('Processed items for PO:', processedItems);
-    
-    // Navigate to purchase order creation with BOM data
-    navigate('/procurement/po/new', { 
-      state: { 
-        bomData: bom,
-        bomItems: processedItems 
-      } 
-    });
+    const encoded = encodeURIComponent(JSON.stringify(bomPayload));
+    navigate(`/procurement/po/new?bom=${encoded}`);
   };
 
   const filteredBoms = boms.filter(bom => {

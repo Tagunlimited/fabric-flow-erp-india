@@ -32,12 +32,14 @@ export default function PickerQuantityDialog({
 }: PickerQuantityDialogProps) {
   const { toast } = useToast();
   const [pickedBySize, setPickedBySize] = useState<Record<string, number>>({}); // existing picked
+  const [rejectedBySize, setRejectedBySize] = useState<Record<string, number>>({}); // existing QC rejected
   const [addBySize, setAddBySize] = useState<Record<string, number>>({}); // increment to add
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const loadPicked = async () => {
       let pickedMap: Record<string, number> = {};
+      let rejectedMap: Record<string, number> = {};
       // Attempt 1: from order_batch_size_distributions.picked_quantity (if column exists)
       try {
         const { data } = await (supabase as any)
@@ -73,6 +75,19 @@ export default function PickerQuantityDialog({
         } catch {}
       }
       setPickedBySize(pickedMap);
+      // Load QC rejections by size (if any)
+      try {
+        const { data: qcRows } = await (supabase as any)
+          .from('qc_reviews')
+          .select('size_name, rejected_quantity')
+          .eq('order_batch_assignment_id', assignmentId);
+        (qcRows || []).forEach((row: any) => {
+          if (row?.size_name) {
+            rejectedMap[row.size_name] = Number(row.rejected_quantity || 0);
+          }
+        });
+      } catch {}
+      setRejectedBySize(rejectedMap);
       // Reset increments to 0 on open
       const zeros: Record<string, number> = {};
       (sizeDistributions || []).forEach(s => { zeros[s.size_name] = 0; });
@@ -89,7 +104,9 @@ export default function PickerQuantityDialog({
 
   const getAssigned = (size: string) => Number((sizeDistributions || []).find(s => s.size_name === size)?.quantity || 0);
   const getPicked = (size: string) => Number(pickedBySize[size] || 0);
-  const getRemaining = (size: string) => Math.max(0, getAssigned(size) - getPicked(size));
+  const getRejected = (size: string) => Number(rejectedBySize[size] || 0);
+  // Remaining after QC = assigned - picked + rejected
+  const getRemaining = (size: string) => Math.max(0, getAssigned(size) - getPicked(size) + getRejected(size));
 
   const incDelta = (size: string, delta: number) => {
     setAddBySize(prev => {
@@ -181,7 +198,8 @@ export default function PickerQuantityDialog({
             {(sizeDistributions || []).map((s) => {
               const assigned = getAssigned(s.size_name);
               const picked = getPicked(s.size_name);
-              const remaining = Math.max(0, assigned - picked);
+              const rejected = getRejected(s.size_name);
+              const remaining = Math.max(0, assigned - picked + rejected);
               const addVal = Number(addBySize[s.size_name] || 0);
               return (
                 <div key={s.size_name} className="border rounded-lg p-3">
@@ -200,6 +218,7 @@ export default function PickerQuantityDialog({
                   </div>
                   <div className="mt-2 text-xs text-muted-foreground flex items-center gap-2">
                     <span>Picked {picked} / {assigned}</span>
+                    {rejected > 0 && <span>• Rejected {rejected}</span>}
                     {remaining > 0 ? <span>• Remaining {remaining}</span> : <span>• Completed</span>}
                   </div>
                 </div>

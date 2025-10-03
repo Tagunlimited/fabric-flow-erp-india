@@ -15,7 +15,28 @@ import {
   Download,
   Users
 } from "lucide-react";
-import { getCustomers, type Customers } from "@/lib/database";
+import { getCustomers } from "@/lib/database";
+
+interface Customer {
+  id: string;
+  company_name: string;
+  contact_person?: string;
+  email?: string;
+  phone?: string;
+  mobile?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  gstin?: string;
+  pan?: string;
+  customer_tier?: string;
+  customer_type?: string;
+  outstandingAmount?: number;
+  creditLimit?: number;
+  total_orders?: number;
+  totalBilledAmount?: number;
+}
 
 export function CrmModule() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -40,9 +61,19 @@ export function CrmModule() {
   }, []);
 
   const filteredCustomers = customers.filter(customer => {
-    const matchesSearch = customer.company_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         (customer.email && customer.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
-                         (customer.phone && customer.phone.includes(searchTerm));
+    const searchLower = searchTerm.toLowerCase();
+    const matchesSearch = 
+      customer.company_name.toLowerCase().includes(searchLower) ||
+      (customer.contact_person && customer.contact_person.toLowerCase().includes(searchLower)) ||
+      (customer.email && customer.email.toLowerCase().includes(searchLower)) ||
+      (customer.phone && customer.phone.includes(searchTerm)) ||
+      (customer.mobile && customer.mobile.includes(searchTerm)) ||
+      (customer.address && customer.address.toLowerCase().includes(searchLower)) ||
+      (customer.city && customer.city.toLowerCase().includes(searchLower)) ||
+      (customer.state && customer.state.toLowerCase().includes(searchLower)) ||
+      (customer.pincode && customer.pincode.includes(searchTerm)) ||
+      (customer.gstin && customer.gstin.toLowerCase().includes(searchLower)) ||
+      (customer.pan && customer.pan.toLowerCase().includes(searchLower));
     
     const matchesTier = selectedTier === "all" || (customer.customer_tier && customer.customer_tier.toLowerCase() === selectedTier.toLowerCase());
     

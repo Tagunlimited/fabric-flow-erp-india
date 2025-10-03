@@ -58,6 +58,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
     {
       title: "Orders",
       icon: ShoppingCart,
+      url: "/orders",
       badge: currentPath === "/orders" ? "..." : pendingOrdersCount.toString(),
       badgeColor: "bg-manufacturing",
       children: [
