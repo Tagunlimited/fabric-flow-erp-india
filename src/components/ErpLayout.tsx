@@ -40,6 +40,10 @@ export function ErpLayout({ children }: ErpLayoutProps) {
     (user?.email === 'ecom@tagunlimitedclothing.com' ? 'System Administrator' : user?.email);
   const displayRole = profile?.role || 
     (user?.email === 'ecom@tagunlimitedclothing.com' ? 'admin' : 'user');
+  
+  // Debug logging (commented out since issues are resolved)
+  // console.log('ErpLayout - Profile data:', profile);
+  // console.log('ErpLayout - Avatar URL:', (profile as any)?.avatar_url);
 
   // Handle floating header
   useEffect(() => {
@@ -68,34 +72,44 @@ export function ErpLayout({ children }: ErpLayoutProps) {
   const handleAvatarUpload = async (url: string) => {
     if (!user) return;
     try {
-      await supabase
+      // Update only the avatar_url field to avoid constraint violations
+      const { error } = await supabase
         .from('profiles')
-        .upsert({
-          user_id: user.id,
+        .update({
           avatar_url: url
-        } as any);
+        })
+        .eq('user_id', user.id);
       
+      if (error) throw error;
+      
+      // Force refresh profile to get updated avatar
       await refreshProfile();
       toast.success('Avatar uploaded successfully');
     } catch (error: any) {
-      toast.error('Failed to upload avatar');
+      console.error('Avatar upload error:', error);
+      toast.error('Failed to upload avatar: ' + (error.message || 'Unknown error'));
     }
   };
 
   const handleAvatarDelete = async () => {
     if (!user) return;
     try {
-      await supabase
+      // Update only the avatar_url field to avoid constraint violations
+      const { error } = await supabase
         .from('profiles')
-        .upsert({
-          user_id: user.id,
+        .update({
           avatar_url: null
-        } as any);
+        })
+        .eq('user_id', user.id);
       
+      if (error) throw error;
+      
+      // Force refresh profile to get updated avatar
       await refreshProfile();
       toast.success('Avatar deleted successfully');
     } catch (error: any) {
-      toast.error('Failed to delete avatar');
+      console.error('Avatar delete error:', error);
+      toast.error('Failed to delete avatar: ' + (error.message || 'Unknown error'));
     }
   };
 
@@ -143,7 +157,11 @@ export function ErpLayout({ children }: ErpLayoutProps) {
               <img 
                 src={headerLogo} 
                 alt="AG Scissors ERP Logo" 
-                className="h-8 w-auto object-contain"
+                style={{
+                  height: config.logo_sizes?.header_logo_height || '32px',
+                  width: config.logo_sizes?.header_logo_width || 'auto'
+                }}
+                className="object-contain"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';
                 }}
@@ -229,6 +247,13 @@ export function ErpLayout({ children }: ErpLayoutProps) {
                   <DropdownMenuItem onClick={() => navigate('/profile')}>
                     <Settings className="mr-2 h-4 w-4" />
                     <span>Profile Settings</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => {
+                    console.log('Manual profile refresh triggered');
+                    refreshProfile();
+                  }}>
+                    <User className="mr-2 h-4 w-4" />
+                    <span>Refresh Profile</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

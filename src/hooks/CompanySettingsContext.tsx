@@ -9,6 +9,15 @@ export interface CompanyConfig {
   sidebar_logo_url?: string;
   header_logo_url?: string;
   favicon_url?: string;
+  logo_sizes?: {
+    sidebar_logo_height: string;
+    sidebar_logo_width: string;
+    header_logo_height: string;
+    header_logo_width: string;
+    company_logo_height: string;
+    company_logo_width: string;
+    favicon_size: string;
+  };
   address: string;
   city: string;
   state: string;
@@ -32,6 +41,15 @@ const defaultConfig: CompanyConfig = {
   sidebar_logo_url: '/placeholder.svg',
   header_logo_url: '/placeholder.svg',
   favicon_url: undefined,
+  logo_sizes: {
+    sidebar_logo_height: '32px',
+    sidebar_logo_width: 'auto',
+    header_logo_height: '32px',
+    header_logo_width: 'auto',
+    company_logo_height: '48px',
+    company_logo_width: 'auto',
+    favicon_size: '16px'
+  },
   address: '',
   city: '',
   state: '',

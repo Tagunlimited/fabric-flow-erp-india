@@ -500,7 +500,11 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
               <img 
                 src={companyLogo} 
                 alt="Company Logo" 
-                className="h-8 object-contain"
+                style={{
+                  height: config.logo_sizes?.sidebar_logo_height || '32px',
+                  width: config.logo_sizes?.sidebar_logo_width || 'auto'
+                }}
+                className="object-contain"
                 onError={(e) => {
                   (e.target as HTMLImageElement).src = 'https://i.postimg.cc/3JbMq1Fw/6732e31fc8403c1a709ad1e0-256-1.png';
                 }}
@@ -515,7 +519,11 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
             <img 
               src={companyLogo} 
               alt="Logo" 
-              className="h-8 object-contain mx-auto"
+              style={{
+                height: config.logo_sizes?.sidebar_logo_height || '32px',
+                width: config.logo_sizes?.sidebar_logo_width || 'auto'
+              }}
+              className="object-contain mx-auto"
               onError={(e) => {
                 (e.target as HTMLImageElement).src = 'https://i.postimg.cc/3JbMq1Fw/6732e31fc8403c1a709ad1e0-256-1.png';
               }}
