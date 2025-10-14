@@ -164,9 +164,9 @@ export function CalendarView() {
       if (error) {
         console.error('Error fetching departments:', error);
         toast.error('Failed to load departments');
-      } else {
+      } else if (data && !Array.isArray(data) === false) {
         // Convert to array of department names for the select dropdown
-        const departmentNames = data?.map(dept => dept.name) || [];
+        const departmentNames = (data as any[]).map(dept => dept.name);
         setDepartments(departmentNames);
       }
     } catch (err: any) {
@@ -185,12 +185,12 @@ export function CalendarView() {
       if (error) {
         console.error('Error fetching employees:', error);
         toast.error('Failed to load employees');
-      } else {
-        const employeeList = data?.map(emp => ({
+      } else if (data && !Array.isArray(data) === false) {
+        const employeeList = (data as any[]).map(emp => ({
           id: emp.id,
           name: emp.full_name,
           department: emp.department || 'Unknown'
-        })) || [];
+        }));
         setEmployees(employeeList);
         setFilteredEmployees(employeeList);
       }
@@ -238,15 +238,15 @@ export function CalendarView() {
         title: newEvent.title,
         type: newEvent.type,
         time: newEvent.time || null,
-        status: 'pending',
+        status: 'pending' as const,
         details: newEvent.details || null,
         priority: newEvent.priority,
         department: newEvent.department || null,
         assigned_to: newEvent.assignedTo.length > 0 ? JSON.stringify(newEvent.assignedTo) : null,
-        assigned_by: null, // Set to null instead of empty string
+        assigned_by: null,
         deadline: newEvent.deadline || null,
         date: newEvent.date,
-      });
+      } as any);
       if (error) throw error;
       toast.success('Event added!');
       setShowAddEvent(false);
@@ -277,8 +277,8 @@ export function CalendarView() {
     try {
       const { error } = await supabase
         .from('calendar_events')
-        .update({ status: newStatus })
-        .eq('id', eventId);
+        .update({ status: newStatus } as any)
+        .eq('id', eventId as any);
       if (error) throw error;
       toast.success('Event updated!');
       fetchEvents();
@@ -298,7 +298,7 @@ export function CalendarView() {
       const { error } = await supabase
         .from('calendar_events')
         .delete()
-        .eq('id', eventId);
+        .eq('id', eventId as any);
       if (error) throw error;
       toast.success('Event deleted!');
       fetchEvents();

@@ -301,7 +301,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                       <TableCell>
                         <div>
                           <p className="font-medium">{item.item_name}</p>
-                          <p className="text-sm text-muted-foreground">{item.item_code}</p>
+                          {/* <p className="text-sm text-muted-foreground">{item.item_code}</p> */}
                         </div>
                       </TableCell>
                       <TableCell>

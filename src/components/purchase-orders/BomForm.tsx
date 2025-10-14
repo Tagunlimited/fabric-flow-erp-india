@@ -297,7 +297,8 @@ export function BomForm() {
   // Auto-add fabric items when order fabric data is available
   useEffect(() => {
     if (orderFabricData && orderFabricData.length > 0 && items.length === 0) {
-      const fabricItems: BomLineItem[] = orderFabricData.map((fabricItem: any) => ({
+      const fabricItems: BomLineItem[] = orderFabricData.map((fabricItem: any, index: number) => ({
+        id: `order-fabric-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`, // Generate unique ID
         item_type: 'fabric',
         item_id: fabricItem.fabric_id || '',
         item_name: fabricItem.fabric?.fabric_name || '',
@@ -1578,7 +1579,17 @@ export function BomForm() {
                             <Input
                             type="number"
                             value={item.qty_per_product}
-                            onChange={(e) => handleQtyPerProductChange(getItemIndex(item.id), e.target.value)}
+                            onChange={(e) => {
+                              const qtyPerProduct = parseFloat(e.target.value) || 0;
+                              const qtyTotal = qtyPerProduct * bom.total_order_qty;
+                              const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
+                              
+                              updateItemById(item.id, { 
+                                qty_per_product: qtyPerProduct,
+                                qty_total: qtyTotal,
+                                to_order: toOrder
+                              });
+                            }}
                             placeholder="0"
                               disabled={isReadOnly}
                             className="w-20"

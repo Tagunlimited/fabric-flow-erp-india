@@ -121,7 +121,15 @@ export function AvatarUploader({ currentUrl, onUpload, onDelete, userId, userNam
       <DialogTrigger asChild>
         <div className="relative group cursor-pointer">
           <Avatar className={getSizeClasses()}>
-            <AvatarImage src={currentUrl} alt={userName} />
+            <AvatarImage 
+              src={currentUrl} 
+              alt={userName} 
+              onError={(e) => {
+                console.log('Avatar image failed to load:', currentUrl);
+                (e.target as HTMLImageElement).style.display = 'none';
+              }}
+              onLoad={() => console.log('Avatar image loaded successfully:', currentUrl)}
+            />
             <AvatarFallback className="bg-primary text-primary-foreground">
               {userName?.charAt(0) || 'U'}
             </AvatarFallback>
@@ -137,7 +145,15 @@ export function AvatarUploader({ currentUrl, onUpload, onDelete, userId, userNam
         </DialogHeader>
         <div className="flex flex-col items-center space-y-4">
           <Avatar className="h-24 w-24">
-            <AvatarImage src={currentUrl} alt={userName} />
+            <AvatarImage 
+              src={currentUrl} 
+              alt={userName} 
+              onError={(e) => {
+                console.log('Dialog avatar image failed to load:', currentUrl);
+                (e.target as HTMLImageElement).style.display = 'none';
+              }}
+              onLoad={() => console.log('Dialog avatar image loaded successfully:', currentUrl)}
+            />
             <AvatarFallback className="bg-primary text-primary-foreground text-2xl">
               {userName?.charAt(0) || 'U'}
             </AvatarFallback>

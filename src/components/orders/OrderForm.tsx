@@ -1152,38 +1152,40 @@ export function OrderForm() {
   <div className="lg:col-span-8 grid grid-cols-1 gap-6">
     {/* Row 1 */}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      {/* Fabric */}
-      <div>
-        <Label className="text-base font-semibold text-gray-700 mb-2 block">Fabric</Label>
-        <Select
-          value={product.fabric_id}
-          onValueChange={(value) => handleFabricSelect(productIndex, value)}
-          disabled={false}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder={product.product_category_id ? "Select fabric" : "Select category first"} />
-          </SelectTrigger>
-          <SelectContent>
-            {getFilteredFabricNames(productIndex).map((fabric) => (
-              <SelectItem key={fabric.id} value={fabric.id}>
-                <div className="flex items-center gap-2">
-                  {fabric.image && (
-                    <img 
-                      src={fabric.image} 
-                      alt={fabric.fabric_name} 
-                      className="w-6 h-6 object-cover rounded border"
-                    />
-                  )}
+      {/* Fabric - Only show when product category is selected */}
+      {product.product_category_id && (
+        <div>
+          <Label className="text-base font-semibold text-gray-700 mb-2 block">Fabric</Label>
+          <Select
+            value={product.fabric_id}
+            onValueChange={(value) => handleFabricSelect(productIndex, value)}
+            disabled={false}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select fabric" />
+            </SelectTrigger>
+            <SelectContent>
+              {getFilteredFabricNames(productIndex).map((fabric) => (
+                <SelectItem key={fabric.id} value={fabric.id}>
                   <div className="flex items-center gap-2">
-                    <span className="font-medium">{fabric.fabric_name}</span>
-                    {fabric.gsm && <span className="text-muted-foreground">({fabric.gsm} GSM)</span>}
+                    {fabric.image && (
+                      <img 
+                        src={fabric.image} 
+                        alt={fabric.fabric_name} 
+                        className="w-6 h-6 object-cover rounded border"
+                      />
+                    )}
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{fabric.fabric_name}</span>
+                      {fabric.gsm && <span className="text-muted-foreground">({fabric.gsm} GSM)</span>}
+                    </div>
                   </div>
-                </div>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       {/* Size Type */}
       <div>
