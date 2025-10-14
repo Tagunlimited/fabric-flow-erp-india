@@ -13,7 +13,6 @@ const DispatchPage = () => {
 
   useEffect(() => {
     const fetchDispatchOrders = async () => {
-      
       try {
         setLoading(true);
         const { data, error } = await (supabase as any)
