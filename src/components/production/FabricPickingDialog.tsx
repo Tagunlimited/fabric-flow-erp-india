@@ -340,16 +340,38 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
       const binToZoneMap: Record<string, string> = {};
       for (const binId of Object.values(selectedZones)) {
         if (!binToZoneMap[binId]) {
-          // Find or create a fabric_storage_zone for this bin
-          const { data: existingZone } = await (supabase as any)
+          console.log(`Looking up storage zone for bin: ${binId}`);
+          
+          // First, try to find existing storage zone by zone_code matching bin_id
+          let { data: existingZone } = await (supabase as any)
             .from('fabric_storage_zones')
-            .select('id')
+            .select('id, zone_code, zone_name')
             .eq('zone_code', binId)
             .single();
           
+          // If not found, try to find by zone_name matching bin_code
+          if (!existingZone) {
+            const { data: binData } = await (supabase as any)
+              .from('bins')
+              .select('bin_code, location_type')
+              .eq('id', binId)
+              .single();
+            
+            if (binData) {
+              console.log(`Bin data found:`, binData);
+              existingZone = await (supabase as any)
+                .from('fabric_storage_zones')
+                .select('id, zone_code, zone_name')
+                .eq('zone_name', binData.bin_code)
+                .single();
+            }
+          }
+          
           if (existingZone) {
+            console.log(`Found existing storage zone:`, existingZone);
             binToZoneMap[binId] = existingZone.id;
           } else {
+            console.log(`No existing storage zone found, creating new one for bin: ${binId}`);
             // Create a new fabric_storage_zone for this bin
             const { data: binData } = await (supabase as any)
               .from('bins')
@@ -357,22 +379,53 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
               .eq('id', binId)
               .single();
             
-            const { data: newZone } = await (supabase as any)
-              .from('fabric_storage_zones')
-              .insert({
-                zone_name: binData?.bin_code || 'Warehouse Bin',
-                zone_code: binId,
-                location: binData?.location_type || 'STORAGE',
-                description: 'Auto-created from warehouse bin',
-                is_active: true
-              })
-              .select('id')
-              .single();
-            
-            binToZoneMap[binId] = newZone.id;
+            if (binData) {
+              const { data: newZone, error: createError } = await (supabase as any)
+                .from('fabric_storage_zones')
+                .insert({
+                  zone_name: binData.bin_code || 'Warehouse Bin',
+                  zone_code: binId, // Use bin_id as zone_code for direct mapping
+                  location: binData.location_type || 'STORAGE',
+                  description: 'Auto-created from warehouse bin',
+                  is_active: true
+                })
+                .select('id')
+                .single();
+              
+              if (createError) {
+                console.error('Error creating storage zone:', createError);
+                // Fallback: use a default storage zone
+                const { data: defaultZone } = await (supabase as any)
+                  .from('fabric_storage_zones')
+                  .select('id')
+                  .eq('zone_code', 'DEFAULT_STORAGE')
+                  .single();
+                
+                if (defaultZone) {
+                  binToZoneMap[binId] = defaultZone.id;
+                }
+              } else {
+                console.log(`Created new storage zone:`, newZone);
+                binToZoneMap[binId] = newZone.id;
+              }
+            } else {
+              console.error(`Could not find bin data for bin_id: ${binId}`);
+              // Use default storage zone as fallback
+              const { data: defaultZone } = await (supabase as any)
+                .from('fabric_storage_zones')
+                .select('id')
+                .eq('zone_code', 'DEFAULT_STORAGE')
+                .single();
+              
+              if (defaultZone) {
+                binToZoneMap[binId] = defaultZone.id;
+              }
+            }
           }
         }
       }
+      
+      console.log('Bin to zone mapping:', binToZoneMap);
 
       // Build picking records - use mapped storage_zone_id
       const finalPickingRecords = pickedFabrics.map(fabric => ({
@@ -395,37 +448,243 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
         throw error;
       }
 
-      // Update warehouse inventory - reduce quantities for picked fabrics
+      // Validate inventory availability before updating
+      console.log('🔍 Validating inventory availability...');
+      const validationErrors = [];
+      
       for (const fabric of pickedFabrics) {
         const pickedQty = pickingQuantities[fabric.fabric_id];
         const binId = selectedZones[fabric.fabric_id];
         
-        // Find warehouse inventory records for this fabric in this bin
-        const { data: inventoryRecords } = await (supabase as any)
+        // Check if we have enough inventory
+        console.log(`Checking inventory for fabric ${fabric.fabric_name} in bin ${binId}`);
+        const { data: inventoryCheck, error: inventoryCheckError } = await (supabase as any)
           .from('warehouse_inventory')
-          .select('id, quantity')
+          .select('quantity, item_name, item_id, bin_id')
           .eq('item_type', 'FABRIC')
           .eq('bin_id', binId)
           .or(`item_id.eq.${fabric.fabric_id},item_name.eq.${fabric.fabric_name}`);
+        
+        if (inventoryCheckError) {
+          console.error(`Error checking inventory for ${fabric.fabric_name}:`, inventoryCheckError);
+        }
 
-        if (inventoryRecords && inventoryRecords.length > 0) {
-          // Reduce quantity from the first matching record
-          const record = inventoryRecords[0];
-          const newQuantity = Math.max(0, record.quantity - pickedQty);
+        if (inventoryCheck && inventoryCheck.length > 0) {
+          const totalAvailable = inventoryCheck.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
+          console.log(`Inventory check for ${fabric.fabric_name}:`, {
+            pickedQty,
+            totalAvailable,
+            records: inventoryCheck
+          });
           
-          await (supabase as any)
-            .from('warehouse_inventory')
-            .update({ quantity: newQuantity })
-            .eq('id', record.id);
-          
-          console.log(`Updated warehouse inventory: ${fabric.fabric_name} in bin ${binId}, reduced by ${pickedQty}`);
+          if (pickedQty > totalAvailable) {
+            validationErrors.push({
+              fabric: fabric.fabric_name,
+              picked: pickedQty,
+              available: totalAvailable,
+              shortage: pickedQty - totalAvailable
+            });
+          }
+        } else {
+          console.warn(`No inventory found for ${fabric.fabric_name} in bin ${binId}`);
+          validationErrors.push({
+            fabric: fabric.fabric_name,
+            picked: pickedQty,
+            available: 0,
+            shortage: pickedQty
+          });
         }
       }
 
-      toast({
-        title: "Success",
-        description: `Fabric picking recorded for order ${orderNumber}`,
-      });
+      if (validationErrors.length > 0) {
+        console.error('❌ Inventory validation failed:', validationErrors);
+        toast({
+          title: "Insufficient Inventory",
+          description: `Cannot pick requested quantities. ${validationErrors.length} items have insufficient stock. Check console for details.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      console.log('✅ Inventory validation passed, proceeding with updates...');
+
+      // Update warehouse inventory - reduce quantities for picked fabrics
+      const inventoryUpdates = [];
+      
+      for (const fabric of pickedFabrics) {
+        const pickedQty = pickingQuantities[fabric.fabric_id];
+        const binId = selectedZones[fabric.fabric_id];
+        
+        try {
+          console.log(`Processing inventory update for ${fabric.fabric_name}:`, {
+            pickedQty,
+            binId,
+            fabricId: fabric.fabric_id
+          });
+          
+          // Find warehouse inventory records for this fabric in this bin
+          console.log(`Finding inventory records for ${fabric.fabric_name} in bin ${binId}`);
+          const { data: inventoryRecords, error: inventoryError } = await (supabase as any)
+            .from('warehouse_inventory')
+            .select('id, quantity, item_name, item_id, bin_id')
+            .eq('item_type', 'FABRIC')
+            .eq('bin_id', binId)
+            .or(`item_id.eq.${fabric.fabric_id},item_name.eq.${fabric.fabric_name}`);
+
+          if (inventoryError) {
+            console.error(`Error fetching inventory for ${fabric.fabric_name}:`, inventoryError);
+            inventoryUpdates.push({
+              fabric: fabric.fabric_name,
+              status: 'error',
+              message: `Failed to fetch inventory: ${inventoryError.message}`
+            });
+            continue;
+          }
+
+          console.log(`Found ${inventoryRecords?.length || 0} inventory records for ${fabric.fabric_name}:`, inventoryRecords);
+          
+          // Debug: Show all records with their quantities
+          if (inventoryRecords && inventoryRecords.length > 0) {
+            console.log(`Available inventory records for ${fabric.fabric_name}:`, 
+              inventoryRecords.map(r => ({
+                id: r.id,
+                itemId: r.item_id,
+                itemName: r.item_name,
+                quantity: r.quantity,
+                binId: r.bin_id
+              }))
+            );
+          }
+
+          if (inventoryRecords && inventoryRecords.length > 0) {
+            // Find the best matching record with available quantity
+            let bestMatch = null;
+            
+            // First, try to find by item_id with available quantity
+            bestMatch = inventoryRecords
+              .filter(r => r.item_id === fabric.fabric_id && Number(r.quantity || 0) > 0)
+              .sort((a, b) => Number(b.quantity || 0) - Number(a.quantity || 0))[0];
+            
+            // If not found, try by item_name with available quantity
+            if (!bestMatch) {
+              bestMatch = inventoryRecords
+                .filter(r => r.item_name === fabric.fabric_name && Number(r.quantity || 0) > 0)
+                .sort((a, b) => Number(b.quantity || 0) - Number(a.quantity || 0))[0];
+            }
+            
+            // If still not found, try any record with available quantity
+            if (!bestMatch) {
+              bestMatch = inventoryRecords
+                .filter(r => Number(r.quantity || 0) > 0)
+                .sort((a, b) => Number(b.quantity || 0) - Number(a.quantity || 0))[0];
+            }
+            
+            // Last resort: use the record with highest quantity (even if 0)
+            if (!bestMatch) {
+              bestMatch = inventoryRecords
+                .sort((a, b) => Number(b.quantity || 0) - Number(a.quantity || 0))[0];
+            }
+            
+            console.log(`Selected inventory record for ${fabric.fabric_name}:`, {
+              recordId: bestMatch.id,
+              quantity: bestMatch.quantity,
+              itemId: bestMatch.item_id,
+              itemName: bestMatch.item_name
+            });
+
+            const currentQuantity = Number(bestMatch.quantity || 0);
+            
+            // Check if we're trying to pick from a record with 0 quantity
+            if (currentQuantity === 0) {
+              console.warn(`⚠️ Selected inventory record has 0 quantity for ${fabric.fabric_name}`);
+              inventoryUpdates.push({
+                fabric: fabric.fabric_name,
+                status: 'warning',
+                message: `Selected inventory record has 0 quantity. Available records: ${inventoryRecords.map(r => `${r.item_name}: ${r.quantity}`).join(', ')}`
+              });
+              continue;
+            }
+            
+            const newQuantity = Math.max(0, currentQuantity - pickedQty);
+            
+            console.log(`Updating inventory for ${fabric.fabric_name}:`, {
+              recordId: bestMatch.id,
+              currentQuantity,
+              pickedQty,
+              newQuantity
+            });
+            
+            const { error: updateError } = await (supabase as any)
+              .from('warehouse_inventory')
+              .update({ 
+                quantity: newQuantity,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', bestMatch.id);
+            
+            if (updateError) {
+              console.error(`Error updating inventory for ${fabric.fabric_name}:`, updateError);
+              inventoryUpdates.push({
+                fabric: fabric.fabric_name,
+                status: 'error',
+                message: `Failed to update inventory: ${updateError.message}`
+              });
+            } else {
+              console.log(`✅ Successfully updated warehouse inventory: ${fabric.fabric_name} in bin ${binId}, reduced by ${pickedQty} (${currentQuantity} -> ${newQuantity})`);
+              inventoryUpdates.push({
+                fabric: fabric.fabric_name,
+                status: 'success',
+                quantity: pickedQty,
+                previousQuantity: currentQuantity,
+                newQuantity: newQuantity
+              });
+            }
+          } else {
+            console.warn(`⚠️ No inventory records found for ${fabric.fabric_name} in bin ${binId}`);
+            inventoryUpdates.push({
+              fabric: fabric.fabric_name,
+              status: 'warning',
+              message: `No inventory records found in selected bin`
+            });
+          }
+        } catch (error) {
+          console.error(`Unexpected error updating inventory for ${fabric.fabric_name}:`, error);
+          inventoryUpdates.push({
+            fabric: fabric.fabric_name,
+            status: 'error',
+            message: `Unexpected error: ${error.message}`
+          });
+        }
+      }
+
+      // Log inventory update summary
+      console.log('📊 Inventory updates completed:', inventoryUpdates);
+      
+      // Check for any errors in inventory updates
+      const errors = inventoryUpdates.filter(update => update.status === 'error');
+      const warnings = inventoryUpdates.filter(update => update.status === 'warning');
+      const successes = inventoryUpdates.filter(update => update.status === 'success');
+      
+      if (errors.length > 0) {
+        console.error('❌ Some inventory updates failed:', errors);
+        toast({
+          title: "Partial Success",
+          description: `Fabric picking recorded, but ${errors.length} inventory updates failed. Check console for details.`,
+          variant: "destructive",
+        });
+      } else if (warnings.length > 0) {
+        console.warn('⚠️ Some inventory updates had warnings:', warnings);
+        toast({
+          title: "Success with Warnings",
+          description: `Fabric picking recorded. ${warnings.length} items had inventory warnings.`,
+        });
+      } else {
+        console.log('✅ All inventory updates successful:', successes);
+        toast({
+          title: "Success",
+          description: `Fabric picking recorded and inventory updated for order ${orderNumber}`,
+        });
+      }
 
       onSuccess();
       onClose();
