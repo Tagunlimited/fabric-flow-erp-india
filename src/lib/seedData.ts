@@ -64,7 +64,7 @@ const sampleProducts: Tables['products']['Insert'][] = [
     cost_price: 120,
     description: 'High-quality cotton t-shirt with excellent comfort',
     hsn_code: '6104.42',
-   gst_rate: 18
+   tax_rate: 18
   },
   {
     name: 'Corporate Uniform',
@@ -74,7 +74,7 @@ const sampleProducts: Tables['products']['Insert'][] = [
     cost_price: 250,
     description: 'Professional corporate uniform with company branding',
     hsn_code: '6104.43',
-   gst_rate: 18
+   tax_rate: 18
   },
   {
     name: 'Winter Jacket',
@@ -84,7 +84,7 @@ const sampleProducts: Tables['products']['Insert'][] = [
     cost_price: 450,
     description: 'Warm winter jacket with multiple pockets',
     hsn_code: '6104.44',
-   gst_rate: 18
+   tax_rate: 18
   }
 ];
 
@@ -131,19 +131,19 @@ const sampleFabrics: Tables['fabrics']['Insert'][] = [
   {
     name: 'Premium Cotton',
     description: 'High-quality cotton fabric for t-shirts',
-    gsm: '180',
+    // gsm: '180', // Field not available in current schema
     image_url: null
   },
   {
     name: 'Polyester Blend',
     description: 'Durable polyester blend for uniforms',
-    gsm: '200',
+    // gsm: '200', // Field not available in current schema
     image_url: null
   },
   {
     name: 'Denim',
     description: 'Classic denim fabric for jackets',
-    gsm: '250',
+    // gsm: '250', // Field not available in current schema
     image_url: null
   }
 ];
@@ -181,77 +181,77 @@ const sampleDepartments: Tables['departments']['Insert'][] = [
   {
     name: 'Production',
     description: 'Manufacturing and production operations',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Quality Control',
     description: 'Quality assurance and control processes',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Sales',
     description: 'Sales and customer relationship management',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Marketing',
     description: 'Marketing and promotional activities',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'HR',
     description: 'Human resources and personnel management',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Finance',
     description: 'Financial management and accounting',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'IT',
     description: 'Information technology and systems support',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Warehouse',
     description: 'Inventory and warehouse management',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Cutting',
     description: 'Fabric cutting and preparation',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Stitching',
     description: 'Garment stitching and assembly',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Packaging',
     description: 'Product packaging and dispatch',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Design',
     description: 'Product design and development',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Maintenance',
     description: 'Equipment maintenance and repairs',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Admin',
     description: 'Administrative and general operations',
-    is_active: true
+    // is_active: true // Field not available in current schema
   },
   {
     name: 'Security',
     description: 'Security and safety management',
-    is_active: true
+    // is_active: true // Field not available in current schema
   }
 ];
 
@@ -265,7 +265,7 @@ export async function seedDatabase() {
     for (const customer of sampleCustomers) {
       const { error } = await supabase
         .from('customers')
-        .insert(customer);
+        .insert(customer as any);
       
       if (error) {
         console.error('Error inserting customer:', error);
@@ -277,7 +277,7 @@ export async function seedDatabase() {
     for (const product of sampleProducts) {
       const { error } = await supabase
         .from('products')
-        .insert(product);
+        .insert(product as any);
       
       if (error) {
         console.error('Error inserting product:', error);
@@ -289,7 +289,7 @@ export async function seedDatabase() {
     for (const employee of sampleEmployees) {
       const { error } = await supabase
         .from('employees')
-        .insert(employee);
+        .insert(employee as any);
       
       if (error) {
         console.error('Error inserting employee:', error);
@@ -301,7 +301,7 @@ export async function seedDatabase() {
     for (const fabric of sampleFabrics) {
       const { error } = await supabase
         .from('fabrics')
-        .insert(fabric);
+        .insert(fabric as any);
       
       if (error) {
         console.error('Error inserting fabric:', error);
@@ -313,7 +313,7 @@ export async function seedDatabase() {
     for (const category of sampleProductCategories) {
       const { error } = await supabase
         .from('product_categories')
-        .insert(category);
+        .insert(category as any);
       
       if (error) {
         console.error('Error inserting product category:', error);
@@ -325,7 +325,7 @@ export async function seedDatabase() {
     for (const sizeType of sampleSizeTypes) {
       const { error } = await supabase
         .from('size_types')
-        .insert(sizeType);
+        .insert(sizeType as any);
       
       if (error) {
         console.error('Error inserting size type:', error);
@@ -337,7 +337,7 @@ export async function seedDatabase() {
     for (const department of sampleDepartments) {
       const { error } = await supabase
         .from('departments')
-        .insert(department);
+        .insert(department as any);
       
       if (error) {
         console.error('Error inserting department:', error);
@@ -376,7 +376,7 @@ export async function clearDatabase() {
       const { error } = await supabase
         .from(table)
         .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all except system records
+        .neq('id', '00000000-0000-0000-0000-000000000000' as any); // Delete all except system records
       
       if (error) {
         console.error(`Error clearing table ${table}:`, error);

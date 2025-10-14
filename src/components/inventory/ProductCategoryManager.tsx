@@ -231,6 +231,32 @@ export function ProductCategoryManager() {
 
     try {
       setLoading(true);
+      
+      // Check for dependencies before deletion
+      const [orderItemsResult, fabricsResult, childCategoriesResult] = await Promise.all([
+        supabase.from('order_items').select('id').eq('product_category_id', id).limit(1),
+        supabase.from('fabrics').select('id').eq('category_id', id).limit(1),
+        supabase.from('product_categories').select('id').eq('parent_category_id', id).limit(1)
+      ]);
+
+      const hasOrderItems = orderItemsResult.data && orderItemsResult.data.length > 0;
+      const hasFabrics = fabricsResult.data && fabricsResult.data.length > 0;
+      const hasChildCategories = childCategoriesResult.data && childCategoriesResult.data.length > 0;
+
+      if (hasOrderItems || hasFabrics || hasChildCategories) {
+        let errorMessage = 'Cannot delete category because it is being used by: ';
+        const issues = [];
+        
+        if (hasOrderItems) issues.push('existing orders');
+        if (hasFabrics) issues.push('fabric records');
+        if (hasChildCategories) issues.push('child categories');
+        
+        errorMessage += issues.join(', ');
+        toast.error(errorMessage);
+        return;
+      }
+
+      // If no dependencies, proceed with deletion
       const { error } = await supabase
         .from('product_categories')
         .delete()
@@ -241,7 +267,7 @@ export function ProductCategoryManager() {
       fetchCategories();
     } catch (error) {
       console.error('Error deleting category:', error);
-      toast.error('Failed to delete category');
+      toast.error('Failed to delete category. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -489,11 +515,12 @@ export function ProductCategoryManager() {
                             <Card key={category.id} className="group hover:shadow-lg transition-all duration-200 border-2 hover:border-primary/20 bg-white rounded-lg overflow-hidden">
                               {/* Header with action buttons */}
                               <div className="flex justify-end items-center p-4 pb-2">
-                                <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="flex space-x-1 opacity-60 hover:opacity-100 transition-opacity">
                       <Button 
                         variant="outline" 
                         size="sm"
                         onClick={() => handleEdit(category)}
+                        title="Edit Category"
                       >
                         <Pencil className="w-3 h-3" />
                       </Button>
@@ -501,6 +528,7 @@ export function ProductCategoryManager() {
                         variant="destructive" 
                         size="sm"
                         onClick={() => handleDelete(category.id)}
+                        title="Delete Category"
                       >
                         <Trash2 className="w-3 h-3" />
                       </Button>

@@ -9,10 +9,10 @@ interface ProtectedRouteProps {
 }
 
 export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
-  const { user, profile, loading } = useAuth();
+  const { user, profile, loading, profileLoading } = useAuth();
 
-  // Show loader while session is restoring
-  if (loading) {
+  // Show loader while session is restoring or profile is loading
+  if (loading || profileLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -23,24 +23,6 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
 
   // Pre-configured admin user - bypass approval process
   const isPreConfiguredAdmin = user?.email === 'ecom@tagunlimitedclothing.com';
-  // Allow access even without profile to handle RLS policy issues
-  if (!profile && user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-            <h2 className="text-lg font-semibold text-yellow-800 mb-2">Profile Loading Issue</h2>
-            <p className="text-yellow-700 mb-4">
-              There's a temporary issue loading your profile. You can still access the system.
-            </p>
-            <div className="space-y-2">
-              {children}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   if (!user) {
     return <Navigate to="/login" replace />;

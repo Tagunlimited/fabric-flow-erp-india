@@ -107,18 +107,132 @@ export function FabricManagerNew() {
   
   const [formData, setFormData] = useState<FabricMaster>(DEFAULT_FABRIC);
 
-  // Fetch fabrics from fabric_master table
+  // Fetch fabrics from fabric_master table with inventory totals
   const fetchFabrics = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      
+      // Fetch fabrics
+      const { data: fabricsData, error: fabricsError } = await supabase
         .from('fabric_master')
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
-      console.log('Fetched fabrics data:', data);
-      setFabrics((data as any) || []);
+      if (fabricsError) throw fabricsError;
+
+      // Fetch warehouse inventory to calculate totals
+      const [warehouseInventoryResult, fabricInventoryResult, grnFabricDetailsResult] = await Promise.all([
+        supabase
+          .from('warehouse_inventory')
+          .select(`
+            quantity,
+            grn_item:grn_item_id (
+              fabric_name,
+              item_name,
+              item_type
+            )
+          `),
+        supabase
+          .from('fabric_inventory')
+          .select(`
+            fabric_id,
+            quantity
+          `),
+        supabase
+          .from('grn_items_fabric_details')
+          .select(`
+            fabric_id,
+            approved_quantity,
+            grn_item:grn_item_id (
+              warehouse_inventory (
+                quantity
+              )
+            )
+          `)
+      ]);
+
+      const { data: warehouseInventoryData, error: warehouseInventoryError } = warehouseInventoryResult;
+      const { data: fabricInventoryData, error: fabricInventoryError } = fabricInventoryResult;
+      const { data: grnFabricDetailsData, error: grnFabricDetailsError } = grnFabricDetailsResult;
+
+      if (warehouseInventoryError) {
+        console.warn('Could not fetch warehouse inventory data:', warehouseInventoryError);
+      }
+      if (fabricInventoryError) {
+        console.warn('Could not fetch fabric inventory data:', fabricInventoryError);
+      }
+      if (grnFabricDetailsError) {
+        console.warn('Could not fetch GRN fabric details data:', grnFabricDetailsError);
+      }
+
+      // Calculate total inventory for each fabric
+      const inventoryTotals: { [key: string]: number } = {};
+      
+      // Add fabric inventory data (direct fabric_id matches)
+      if (fabricInventoryData) {
+        (fabricInventoryData as any[]).forEach(item => {
+          if (item.fabric_id && item.quantity) {
+            inventoryTotals[item.fabric_id] = (inventoryTotals[item.fabric_id] || 0) + item.quantity;
+          }
+        });
+      }
+
+      // Add GRN fabric details data (direct fabric_id matches)
+      if (grnFabricDetailsData) {
+        (grnFabricDetailsData as any[]).forEach(item => {
+          if (item.fabric_id && item.approved_quantity) {
+            inventoryTotals[item.fabric_id] = (inventoryTotals[item.fabric_id] || 0) + item.approved_quantity;
+          }
+        });
+      }
+
+      // Add warehouse inventory data (name-based matching)
+      if (warehouseInventoryData) {
+        console.log('Processing warehouse inventory for name-based matching...');
+        (warehouseInventoryData as any[]).forEach(item => {
+          const fabricName = item.grn_item?.fabric_name;
+          const itemName = item.grn_item?.item_name;
+          const itemType = item.grn_item?.item_type;
+          
+          if (item.quantity && (fabricName || (itemType === 'fabric' && itemName))) {
+            // Try to match by fabric name first
+            let matchingFabric = null;
+            if (fabricName) {
+              matchingFabric = (fabricsData as any[]).find(fabric => 
+                fabric.fabric_name?.toLowerCase() === fabricName.toLowerCase()
+              );
+            }
+            
+            // If no match by fabric name, try by item name for fabric type
+            if (!matchingFabric && itemType === 'fabric' && itemName) {
+              matchingFabric = (fabricsData as any[]).find(fabric => 
+                fabric.fabric_name?.toLowerCase() === itemName.toLowerCase()
+              );
+            }
+            
+            if (matchingFabric) {
+              inventoryTotals[matchingFabric.id] = (inventoryTotals[matchingFabric.id] || 0) + item.quantity;
+              console.log(`Matched fabric: ${fabricName || itemName} -> ${matchingFabric.fabric_name} (ID: ${matchingFabric.id}) - Qty: ${item.quantity}`);
+            } else {
+              console.log(`No fabric match found for: ${fabricName || itemName} (Type: ${itemType})`);
+            }
+          }
+        });
+      }
+
+      console.log('Final inventory totals calculated:', inventoryTotals);
+      console.log('Warehouse inventory data:', warehouseInventoryData);
+      console.log('Fabric inventory data:', fabricInventoryData);
+      console.log('GRN fabric details data:', grnFabricDetailsData);
+
+      // Merge fabrics with inventory totals
+      const fabricsWithInventory = (fabricsData as any[]).map(fabric => ({
+        ...fabric,
+        inventory: inventoryTotals[fabric.id] || 0
+      }));
+
+      console.log('Final fabrics data with inventory:', fabricsWithInventory);
+      setFabrics(fabricsWithInventory);
     } catch (error) {
       console.error('Error fetching fabrics:', error);
       toast.error('Failed to fetch fabrics');
@@ -575,10 +689,12 @@ export function FabricManagerNew() {
                     <Input
                       id="inventory"
                       type="number"
-                      value={formData.inventory}
+                      value={formData.inventory || 0}
                       onChange={(e) => setFormData(prev => ({ ...prev, inventory: Number(e.target.value) }))}
                       className="mt-1"
                       placeholder="0"
+                      disabled
+                      title="Inventory is calculated from warehouse stock"
                     />
                   </div>
                   <div>
@@ -971,7 +1087,12 @@ export function FabricManagerNew() {
                       </TableCell>
                       <TableCell>{fabric.gsm}</TableCell>
                       <TableCell>₹{fabric.rate}</TableCell>
-                      <TableCell>{fabric.inventory} {fabric.uom}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1">
+                          <span className="font-medium">{fabric.inventory || 0}</span>
+                          <span className="text-xs text-muted-foreground">{fabric.uom}</span>
+                        </div>
+                      </TableCell>
                       <TableCell>
                         <Badge variant={fabric.status === 'active' ? 'default' : 'secondary'}>
                           {fabric.status}

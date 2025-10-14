@@ -8,6 +8,7 @@ interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
+  profileLoading: boolean;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -30,6 +31,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   // Helper: check if login expired
   const isLoginExpired = () => {
@@ -39,15 +41,38 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return now - parseInt(loginTime, 10) > 1 * 24 * 60 * 60 * 1000; // 7 days
   };
 
-  const refreshProfile = async () => {
+  const refreshProfile = async (retryCount = 0) => {
     if (user) {
+      setProfileLoading(true);
       try {
+        console.log(`Attempting to refresh profile (attempt ${retryCount + 1})`);
         const userProfile = await authService.getUserProfile(user.id);
         setProfile(userProfile);
+        console.log('Profile refreshed successfully:', userProfile);
       } catch (error) {
-        // Silently handle profile fetch errors to prevent app crashes
         console.warn('Profile refresh failed:', error?.message || 'Unknown error');
-        setProfile(null);
+        
+        // Retry once if it's a network error or first attempt
+        if (retryCount === 0) {
+          console.log('Retrying profile refresh...');
+          setTimeout(() => refreshProfile(1), 1000);
+        } else {
+          // Create a minimal profile object to prevent UI issues
+          const fallbackProfile = {
+            id: user.id,
+            user_id: user.id,
+            full_name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+            email: user.email || '',
+            role: 'user',
+            status: 'active',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          };
+          console.log('Using fallback profile:', fallbackProfile);
+          setProfile(fallbackProfile as any);
+        }
+      } finally {
+        setProfileLoading(false);
       }
     }
   };
@@ -126,6 +151,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     user,
     profile,
     loading,
+    profileLoading,
     signOut,
     refreshProfile,
   };

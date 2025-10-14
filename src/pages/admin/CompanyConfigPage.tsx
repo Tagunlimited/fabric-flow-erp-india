@@ -6,6 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Slider } from '@/components/ui/slider';
 import { Loader2, Save, Upload, Building, MapPin, Phone, Mail, CreditCard, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
@@ -19,6 +21,15 @@ interface CompanyConfig {
   sidebar_logo_url?: string;
   header_logo_url?: string;
   favicon_url?: string;
+  logo_sizes?: {
+    sidebar_logo_height: string;
+    sidebar_logo_width: string;
+    header_logo_height: string;
+    header_logo_width: string;
+    company_logo_height: string;
+    company_logo_width: string;
+    favicon_size: string;
+  };
   address: string;
   city: string;
   state: string;
@@ -53,6 +64,67 @@ const CompanyConfigPage = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [uploading, setUploading] = useState<{[key:string]: boolean}>({});
 
+  // Preset size options for easy configuration
+  const presetSizes = [
+    { label: 'Extra Small (16px)', value: '16px' },
+    { label: 'Small (24px)', value: '24px' },
+    { label: 'Medium (32px)', value: '32px' },
+    { label: 'Large (40px)', value: '40px' },
+    { label: 'Extra Large (48px)', value: '48px' },
+    { label: 'Custom', value: 'custom' }
+  ];
+
+  // Helper functions for slider conversion
+  const pixelToSliderValue = (pixelValue: string): number => {
+    const numericValue = parseInt(pixelValue.replace('px', '')) || 32;
+    return Math.min(Math.max(numericValue, 8), 80); // Clamp between 8px and 80px
+  };
+
+  const sliderToPixelValue = (sliderValue: number): string => {
+    return `${sliderValue}px`;
+  };
+
+  // Apply preset size to all logos
+  const applyPresetSize = (size: string) => {
+    if (size === 'custom') return; // Don't change anything for custom
+    
+    setConfig(prev => ({
+      ...prev,
+      logo_sizes: {
+        ...prev.logo_sizes,
+        sidebar_logo_height: size,
+        header_logo_height: size,
+        company_logo_height: size,
+        sidebar_logo_width: 'auto',
+        header_logo_width: 'auto',
+        company_logo_width: 'auto'
+      }
+    }));
+  };
+
+  // Handle slider changes
+  const handleSliderChange = (field: string, value: number[]) => {
+    const pixelValue = sliderToPixelValue(value[0]);
+    handleInputChange(field, pixelValue);
+  };
+
+  // Reset all logo sizes to defaults
+  const resetLogoSizes = () => {
+    setConfig(prev => ({
+      ...prev,
+      logo_sizes: {
+        sidebar_logo_height: '32px',
+        sidebar_logo_width: 'auto',
+        header_logo_height: '32px',
+        header_logo_width: 'auto',
+        company_logo_height: '48px',
+        company_logo_width: 'auto',
+        favicon_size: '16px'
+      }
+    }));
+    toast.success('Logo sizes reset to defaults');
+  };
+
   const handleInputChange = (field: string, value: string) => {
     if (field.startsWith('bank_details.')) {
       const bankField = field.replace('bank_details.', '');
@@ -61,6 +133,15 @@ const CompanyConfigPage = () => {
         bank_details: {
           ...prev.bank_details,
           [bankField]: value
+        }
+      }));
+    } else if (field.startsWith('logo_sizes.')) {
+      const logoField = field.replace('logo_sizes.', '');
+      setConfig(prev => ({
+        ...prev,
+        logo_sizes: {
+          ...prev.logo_sizes,
+          [logoField]: value
         }
       }));
     } else {
@@ -400,6 +481,266 @@ const CompanyConfigPage = () => {
                       className="w-8 h-8 object-contain border rounded"
                     />
                   )}
+                </div>
+              </div>
+
+              {/* Logo Size Configuration */}
+              <div className="border-t pt-4">
+                <Label className="text-lg font-semibold">Logo Size Configuration</Label>
+                <p className="text-sm text-muted-foreground mb-4">Configure the size of logos displayed throughout the application</p>
+                
+                {/* Quick Preset Selector */}
+                <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg">
+                  <Label className="text-sm font-medium mb-2 block">Quick Preset Sizes</Label>
+                  <Select onValueChange={applyPresetSize}>
+                    <SelectTrigger className="w-64">
+                      <SelectValue placeholder="Choose a preset size" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {presetSizes.map((preset) => (
+                        <SelectItem key={preset.value} value={preset.value}>
+                          {preset.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">This will apply the size to all logos (height only)</p>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Sidebar Logo Size */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Sidebar Logo</Label>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label htmlFor="sidebar_height" className="text-xs">Height</Label>
+                        <Input
+                          id="sidebar_height"
+                          placeholder="32px"
+                          value={config.logo_sizes?.sidebar_logo_height || '32px'}
+                          onChange={(e) => handleInputChange('logo_sizes.sidebar_logo_height', e.target.value)}
+                          className="text-sm"
+                        />
+                        <div className="mt-2">
+                          <Label className="text-xs text-muted-foreground mb-1 block">Height Slider</Label>
+                          <Slider
+                            value={[pixelToSliderValue(config.logo_sizes?.sidebar_logo_height || '32px')]}
+                            onValueChange={(value) => handleSliderChange('logo_sizes.sidebar_logo_height', value)}
+                            min={8}
+                            max={80}
+                            step={2}
+                            className="w-full"
+                          />
+                          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                            <span>8px</span>
+                            <span>{config.logo_sizes?.sidebar_logo_height || '32px'}</span>
+                            <span>80px</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <Label htmlFor="sidebar_width" className="text-xs">Width</Label>
+                        <Input
+                          id="sidebar_width"
+                          placeholder="auto"
+                          value={config.logo_sizes?.sidebar_logo_width || 'auto'}
+                          onChange={(e) => handleInputChange('logo_sizes.sidebar_logo_width', e.target.value)}
+                          className="text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Header Logo Size */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Header Logo</Label>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label htmlFor="header_height" className="text-xs">Height</Label>
+                        <Input
+                          id="header_height"
+                          placeholder="32px"
+                          value={config.logo_sizes?.header_logo_height || '32px'}
+                          onChange={(e) => handleInputChange('logo_sizes.header_logo_height', e.target.value)}
+                          className="text-sm"
+                        />
+                        <div className="mt-2">
+                          <Label className="text-xs text-muted-foreground mb-1 block">Height Slider</Label>
+                          <Slider
+                            value={[pixelToSliderValue(config.logo_sizes?.header_logo_height || '32px')]}
+                            onValueChange={(value) => handleSliderChange('logo_sizes.header_logo_height', value)}
+                            min={8}
+                            max={80}
+                            step={2}
+                            className="w-full"
+                          />
+                          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                            <span>8px</span>
+                            <span>{config.logo_sizes?.header_logo_height || '32px'}</span>
+                            <span>80px</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <Label htmlFor="header_width" className="text-xs">Width</Label>
+                        <Input
+                          id="header_width"
+                          placeholder="auto"
+                          value={config.logo_sizes?.header_logo_width || 'auto'}
+                          onChange={(e) => handleInputChange('logo_sizes.header_logo_width', e.target.value)}
+                          className="text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Company Logo Size */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Company Logo</Label>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label htmlFor="company_height" className="text-xs">Height</Label>
+                        <Input
+                          id="company_height"
+                          placeholder="48px"
+                          value={config.logo_sizes?.company_logo_height || '48px'}
+                          onChange={(e) => handleInputChange('logo_sizes.company_logo_height', e.target.value)}
+                          className="text-sm"
+                        />
+                        <div className="mt-2">
+                          <Label className="text-xs text-muted-foreground mb-1 block">Height Slider</Label>
+                          <Slider
+                            value={[pixelToSliderValue(config.logo_sizes?.company_logo_height || '48px')]}
+                            onValueChange={(value) => handleSliderChange('logo_sizes.company_logo_height', value)}
+                            min={8}
+                            max={80}
+                            step={2}
+                            className="w-full"
+                          />
+                          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                            <span>8px</span>
+                            <span>{config.logo_sizes?.company_logo_height || '48px'}</span>
+                            <span>80px</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <Label htmlFor="company_width" className="text-xs">Width</Label>
+                        <Input
+                          id="company_width"
+                          placeholder="auto"
+                          value={config.logo_sizes?.company_logo_width || 'auto'}
+                          onChange={(e) => handleInputChange('logo_sizes.company_logo_width', e.target.value)}
+                          className="text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Favicon Size */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Favicon</Label>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label htmlFor="favicon_size" className="text-xs">Size</Label>
+                        <Input
+                          id="favicon_size"
+                          placeholder="16px"
+                          value={config.logo_sizes?.favicon_size || '16px'}
+                          onChange={(e) => handleInputChange('logo_sizes.favicon_size', e.target.value)}
+                          className="text-sm"
+                        />
+                        <div className="mt-2">
+                          <Label className="text-xs text-muted-foreground mb-1 block">Size Slider</Label>
+                          <Slider
+                            value={[pixelToSliderValue(config.logo_sizes?.favicon_size || '16px')]}
+                            onValueChange={(value) => handleSliderChange('logo_sizes.favicon_size', value)}
+                            min={8}
+                            max={32}
+                            step={2}
+                            className="w-full"
+                          />
+                          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                            <span>8px</span>
+                            <span>{config.logo_sizes?.favicon_size || '16px'}</span>
+                            <span>32px</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Preview Section */}
+                <div className="mt-4 p-4 bg-muted/50 rounded-lg">
+                  <Label className="text-sm font-medium mb-3 block">Live Preview</Label>
+                  <div className="flex items-center gap-6">
+                    {config.sidebar_logo_url && (
+                      <div className="text-center">
+                        <Label className="text-xs text-muted-foreground mb-1 block">Sidebar</Label>
+                        <img 
+                          src={config.sidebar_logo_url} 
+                          alt="Sidebar Logo Preview" 
+                          style={{
+                            height: config.logo_sizes?.sidebar_logo_height || '32px',
+                            width: config.logo_sizes?.sidebar_logo_width || 'auto'
+                          }}
+                          className="object-contain border rounded bg-white p-1"
+                        />
+                      </div>
+                    )}
+                    {config.header_logo_url && (
+                      <div className="text-center">
+                        <Label className="text-xs text-muted-foreground mb-1 block">Header</Label>
+                        <img 
+                          src={config.header_logo_url} 
+                          alt="Header Logo Preview" 
+                          style={{
+                            height: config.logo_sizes?.header_logo_height || '32px',
+                            width: config.logo_sizes?.header_logo_width || 'auto'
+                          }}
+                          className="object-contain border rounded bg-white p-1"
+                        />
+                      </div>
+                    )}
+                    {config.logo_url && (
+                      <div className="text-center">
+                        <Label className="text-xs text-muted-foreground mb-1 block">Company</Label>
+                        <img 
+                          src={config.logo_url} 
+                          alt="Company Logo Preview" 
+                          style={{
+                            height: config.logo_sizes?.company_logo_height || '48px',
+                            width: config.logo_sizes?.company_logo_width || 'auto'
+                          }}
+                          className="object-contain border rounded bg-white p-1"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Save Logo Configuration Button */}
+                <div className="mt-4 flex justify-between items-center">
+                  <Button 
+                    onClick={resetLogoSizes}
+                    variant="outline"
+                    className="flex items-center gap-2"
+                  >
+                    Reset to Defaults
+                  </Button>
+                  <Button 
+                    onClick={handleSave} 
+                    disabled={saving}
+                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700"
+                  >
+                    {saving ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Save className="w-4 h-4" />
+                    )}
+                    {saving ? 'Saving Logo Settings...' : 'Save Logo Configuration'}
+                  </Button>
                 </div>
               </div>
             </CardContent>
