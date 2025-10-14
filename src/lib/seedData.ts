@@ -177,6 +177,84 @@ const sampleSizeTypes: Tables['size_types']['Insert'][] = [
   }
 ];
 
+const sampleDepartments: Tables['departments']['Insert'][] = [
+  {
+    name: 'Production',
+    description: 'Manufacturing and production operations',
+    is_active: true
+  },
+  {
+    name: 'Quality Control',
+    description: 'Quality assurance and control processes',
+    is_active: true
+  },
+  {
+    name: 'Sales',
+    description: 'Sales and customer relationship management',
+    is_active: true
+  },
+  {
+    name: 'Marketing',
+    description: 'Marketing and promotional activities',
+    is_active: true
+  },
+  {
+    name: 'HR',
+    description: 'Human resources and personnel management',
+    is_active: true
+  },
+  {
+    name: 'Finance',
+    description: 'Financial management and accounting',
+    is_active: true
+  },
+  {
+    name: 'IT',
+    description: 'Information technology and systems support',
+    is_active: true
+  },
+  {
+    name: 'Warehouse',
+    description: 'Inventory and warehouse management',
+    is_active: true
+  },
+  {
+    name: 'Cutting',
+    description: 'Fabric cutting and preparation',
+    is_active: true
+  },
+  {
+    name: 'Stitching',
+    description: 'Garment stitching and assembly',
+    is_active: true
+  },
+  {
+    name: 'Packaging',
+    description: 'Product packaging and dispatch',
+    is_active: true
+  },
+  {
+    name: 'Design',
+    description: 'Product design and development',
+    is_active: true
+  },
+  {
+    name: 'Maintenance',
+    description: 'Equipment maintenance and repairs',
+    is_active: true
+  },
+  {
+    name: 'Admin',
+    description: 'Administrative and general operations',
+    is_active: true
+  },
+  {
+    name: 'Security',
+    description: 'Security and safety management',
+    is_active: true
+  }
+];
+
 // Function to seed the database
 export async function seedDatabase() {
   try {
@@ -251,6 +329,18 @@ export async function seedDatabase() {
       
       if (error) {
         console.error('Error inserting size type:', error);
+      }
+    }
+
+    // Insert departments
+    console.log('Inserting departments...');
+    for (const department of sampleDepartments) {
+      const { error } = await supabase
+        .from('departments')
+        .insert(department);
+      
+      if (error) {
+        console.error('Error inserting department:', error);
       }
     }
 

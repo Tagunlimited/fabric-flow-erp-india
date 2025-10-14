@@ -66,18 +66,18 @@ interface CuttingJob {
     id: string;
     batch_id: string;
     batch_name: string;
-    batch_code: string;
-    batch_leader_name: string;
-    batch_leader_avatar?: string;
-    tailor_type: string;
-    total_quantity: number;
-    size_distributions: Array<{
+    batch_code?: string;
+    batch_leader_name?: string;
+    batch_leader_avatar_url?: string;
+    tailor_type?: string;
+    total_quantity?: number;
+    size_distributions?: Array<{
       size_name: string;
       quantity: number;
     }>;
-    assignment_date: string;
-    assigned_by: string;
-    notes: string;
+    assignment_date?: string;
+    assigned_by?: string;
+    notes?: string;
   }>;
   // Order items for detailed product information
   orderItems?: Array<{
@@ -926,17 +926,20 @@ const CuttingManagerPage = () => {
                                 <div key={assignment.id} className="p-2 border rounded-lg bg-green-100">
                                   <div className="flex items-center space-x-2">
                                     <Avatar className="w-6 h-6">
-                                      <AvatarImage src={assignment.batch_leader_avatar} alt={assignment.batch_leader_name} />
+                                      <AvatarImage 
+                                        src={assignment.batch_leader_avatar_url || undefined} 
+                                        alt={assignment.batch_leader_name || assignment.batch_name || 'Batch'} 
+                                      />
                                       <AvatarFallback className="bg-green-200 text-green-700 text-xs">
-                                        {assignment.batch_leader_name?.charAt(0) || assignment.batch_name.charAt(0)}
+                                        {(assignment.batch_leader_name || assignment.batch_name || 'B').charAt(0).toUpperCase()}
                                       </AvatarFallback>
                                     </Avatar>
                                     <div>
                                       <div className="font-medium text-green-700 text-xs">
-                                        {assignment.batch_name}
+                                        {assignment.batch_name || 'Unknown Batch'}
                                       </div>
                                       <div className="text-xs text-muted-foreground">
-                                        {assignment.total_quantity} pieces
+                                        {assignment.total_quantity || 0} pieces
                                       </div>
                                     </div>
                                   </div>
