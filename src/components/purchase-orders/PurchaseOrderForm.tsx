@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -108,7 +108,8 @@ export function PurchaseOrderForm() {
   const isReadOnly = !!id && !isEditMode;
   const printRef = useRef<HTMLDivElement>(null);
   
-  // Check for BOM data in URL params
+  // Check for BOM data in URL params and location state
+  const location = useLocation();
   const bomParam = searchParams.get('bom');
   const [bomData, setBomData] = useState<any>(null);
 
@@ -138,37 +139,90 @@ export function PurchaseOrderForm() {
       try {
         const parsed = JSON.parse(decodeURIComponent(bomParam));
         setBomData(parsed);
-        console.log('BOM data loaded:', parsed);
+        console.log('BOM data loaded from URL params:', parsed);
       } catch (e) {
         console.error('Failed to parse BOM data:', e);
       }
     }
   }, [bomParam]);
 
+  // Process BOM data from location state
+  useEffect(() => {
+    if (location.state?.bomData) {
+      console.log('BOM data received from location state:', location.state.bomData);
+      console.log('BOM items received from location state:', location.state.bomItems);
+      console.log('BOM items count:', location.state.bomItems?.length);
+      console.log('BOM items details:', location.state.bomItems?.map((item: any) => ({
+        item_name: item.item_name,
+        item_type: item.item_type,
+        category: item.category,
+        qty_total: item.qty_total,
+        to_order: item.to_order
+      })));
+      setBomData({
+        ...location.state.bomData,
+        items: location.state.bomItems || location.state.bomData.items || []
+      });
+    }
+  }, [location.state]);
+
   // Load BOM data into form
   useEffect(() => {
-    if (bomData) {
+    if (bomData && (fabricOptions.length > 0 || itemOptions.length > 0)) {
       console.log('Processing BOM data:', bomData);
+      console.log('Fabric options loaded:', fabricOptions.length);
+      console.log('Item options loaded:', itemOptions.length);
       // Pre-fill items from BOM data
       const bomItems = bomData.items || [];
+      console.log('Processing BOM items:', {
+        count: bomItems.length,
+        items: bomItems.map((item: any) => ({
+          item_name: item.item_name,
+          item_type: item.item_type,
+          category: item.category,
+          qty_total: item.qty_total,
+          to_order: item.to_order
+        }))
+      });
       const formattedItems = bomItems.map((item: any) => {
         console.log('Processing BOM item:', item);
         
-        if (item.item_type === 'fabric') {
+        if (item.item_type === 'fabric' || item.category === 'Fabric') {
           // Handle fabric items with color and GSM
           const fabricSelections = item.fabricSelections || [];
           const firstSelection = fabricSelections[0] || {};
           
+          // Parse fabric details from item_name if not available in separate fields
+          let fabricName = item.fabric_name || firstSelection.fabric_name || '';
+          let fabricColor = item.fabric_color || firstSelection.color || '';
+          let fabricGsm = item.fabric_gsm || firstSelection.gsm || '';
+          
+          // If fabric details are not available, try to parse from item_name
+          if (!fabricColor || !fabricGsm) {
+            const itemNameParts = item.item_name?.split(' - ') || [];
+            if (itemNameParts.length >= 3) {
+              fabricName = fabricName || itemNameParts[0]?.trim();
+              fabricColor = fabricColor || itemNameParts[1]?.trim();
+              fabricGsm = fabricGsm || itemNameParts[2]?.replace('GSM', '').trim();
+            }
+          }
+          
+          console.log('Parsed fabric details:', {
+            original: { fabric_name: item.fabric_name, fabric_color: item.fabric_color, fabric_gsm: item.fabric_gsm },
+            parsed: { fabricName, fabricColor, fabricGsm },
+            itemName: item.item_name
+          });
+          
         // Find the fabric in fabricOptions to get the GST rate and image
         let fabricOption = fabricOptions.find(f => 
-          f.fabric_name === firstSelection.fabric_name && 
-          f.color === firstSelection.color && 
-          f.gsm === firstSelection.gsm
+          f.fabric_name === fabricName && 
+          f.color === fabricColor && 
+          f.gsm === fabricGsm
         );
         
         // If not found with exact match, try to find by fabric name only
-        if (!fabricOption && firstSelection.fabric_name) {
-          fabricOption = fabricOptions.find(f => f.fabric_name === firstSelection.fabric_name);
+        if (!fabricOption && fabricName) {
+          fabricOption = fabricOptions.find(f => f.fabric_name === fabricName);
         }
         
         // If still not found, try to find by item name
@@ -187,23 +241,23 @@ export function PurchaseOrderForm() {
           return {
             item_type: 'fabric',
             item_id: item.item_id || '',
-            item_name: item.item_name || '',
+            item_name: fabricName || item.item_name || '',
             item_image_url: fabricOption?.image_url || item.item_image_url || null,
-            quantity: item.quantity || 0,
+            quantity: item.qty_total || item.to_order || item.quantity || 0,
             unit_price: item.unit_price || 0,
             total_price: 0,
             gst_rate: fabricOption?.gst_rate || item.gst_rate || 18,
             gst_amount: 0,
             line_total: 0,
             unit_of_measure: item.unit_of_measure || 'Kgs',
-            // Store fabric-specific data with proper fallbacks
-            fabric_name: item.item_name || firstSelection.fabric_name || 'Unknown Fabric',
-            fabric_color: firstSelection.color || fabricOption?.color || 'N/A',
-            fabric_gsm: firstSelection.gsm || fabricOption?.gsm || 'N/A',
+            // Store fabric-specific data with parsed values
+            fabric_name: fabricName || 'Unknown Fabric',
+            fabric_color: fabricColor || 'N/A',
+            fabric_gsm: fabricGsm || 'N/A',
             fabricSelections: fabricSelections,
             attributes: {
-              colorsList: firstSelection.color ? [firstSelection.color] : (fabricOption?.color ? [fabricOption.color] : []),
-              gsmList: firstSelection.gsm ? [firstSelection.gsm] : (fabricOption?.gsm ? [fabricOption.gsm] : []),
+              colorsList: fabricColor ? [fabricColor] : (fabricOption?.color ? [fabricOption.color] : []),
+              gsmList: fabricGsm ? [fabricGsm] : (fabricOption?.gsm ? [fabricOption.gsm] : []),
               description: item.item_name || 'Fabric Item'
             }
           };
@@ -239,7 +293,7 @@ export function PurchaseOrderForm() {
             item_id: item.item_id || '',
             item_name: item.item_name || '',
             item_image_url: itemOption?.image_url || item.item_image_url || null,
-            quantity: item.quantity || 0,
+            quantity: item.qty_total || item.to_order || item.quantity || 0,
             unit_price: item.unit_price || 0,
             total_price: 0,
             gst_rate: itemOption?.gst_rate || item.gst_rate || 18,
@@ -273,17 +327,33 @@ export function PurchaseOrderForm() {
       const enrichedItems = items.map(item => {
         // Find the item in options to get additional data
         let itemOption = itemOptions.find(i => i.id === item.item_id);
-        let fabricOption = fabricOptions.find(f => f.id === item.item_id);
+        let fabricOption = null;
+        
+        // For fabric items, search by fabric details instead of item_id
+        if (item.item_type === 'fabric' || item.category === 'Fabric') {
+          fabricOption = fabricOptions.find(f => 
+            f.fabric_name === item.fabric_name && 
+            f.color === item.fabric_color && 
+            f.gsm === item.fabric_gsm
+          );
+          
+          // If not found with exact match, try by fabric name only
+          if (!fabricOption && item.fabric_name) {
+            fabricOption = fabricOptions.find(f => f.fabric_name === item.fabric_name);
+          }
+          
+          // If still not found, try by item name
+          if (!fabricOption && item.item_name) {
+            fabricOption = fabricOptions.find(f => f.fabric_name === item.item_name);
+          }
+        } else {
+          // For non-fabric items, search by ID
+          fabricOption = fabricOptions.find(f => f.id === item.item_id);
+        }
         
         // If not found by ID, try to find by name
         if (!itemOption && item.item_name) {
           itemOption = itemOptions.find(i => i.label === item.item_name);
-        }
-        if (!fabricOption && item.fabric_name) {
-          fabricOption = fabricOptions.find(f => f.fabric_name === item.fabric_name);
-        }
-        if (!fabricOption && item.item_name) {
-          fabricOption = fabricOptions.find(f => f.fabric_name === item.item_name);
         }
         
         // If still not found, try partial name matching
@@ -318,9 +388,11 @@ export function PurchaseOrderForm() {
         
         return {
           ...item,
+          // Ensure item_id is resolved from options if missing (prevents NOT NULL violations)
+          item_id: item.item_id || itemOption?.id || fabricOption?.id || '',
           // Enrich with data from options if available and not already set
           item_image_url: bestImageUrl,
-          item_category: item.item_category || itemOption?.item_type || null,
+          item_category: item.item_category || itemOption?.item_type || itemOption?.type || 'Not specified',
           // Also update fabric-specific fields if this is a fabric item
           ...(item.item_type === 'fabric' && {
             fabric_color: item.fabric_color || fabricOption?.color || 'N/A',
@@ -1092,6 +1164,7 @@ export function PurchaseOrderForm() {
         withGSM: mappedFabrics.filter(f => f.gsm && f.gsm !== 'N/A').length
       });
       setFabricOptions(mappedFabrics);
+      console.log('Fabric options set:', mappedFabrics.length);
 
       // Fetch items with comprehensive error handling
       const { data: items, error: itemError } = await supabase
@@ -1120,6 +1193,7 @@ export function PurchaseOrderForm() {
         withTypes: mappedItems.filter(i => i.item_type).length
       });
       setItemOptions(mappedItems);
+      console.log('Item options set:', mappedItems.length);
         
       // Get unique item types
       const types = [...new Set((items || []).map(i => i.item_type))];
@@ -1189,10 +1263,21 @@ export function PurchaseOrderForm() {
       // Process line items - use existing GST data from database
       const processedItems = (lineItems || []).map(item => ({
         ...item,
+        item_type: item.item_type || 'item', // Ensure item_type is set
         gst_rate: item.gst_rate || 0, // Use actual GST rate from database
         gst_amount: item.gst_amount || 0, // Use actual GST amount from database
         line_total: item.line_total || 0, // Use actual line total from database
         total_price: item.total_price || 0, // Use actual total price from database
+        // Map fabric-specific fields from database
+        fabric_name: item.fabric_name || null,
+        fabric_color: item.fabric_color || null,
+        fabric_gsm: item.fabric_gsm || null,
+        item_color: item.item_color || null,
+        // Ensure proper field mapping
+        type: item.item_type || 'item',
+        quantity: item.quantity || 0,
+        unit_price: item.unit_price || 0,
+        unit_of_measure: item.unit_of_measure || 'pcs'
       }));
       
       // Only recalculate if GST fields are missing or zero
@@ -1336,17 +1421,19 @@ export function PurchaseOrderForm() {
         supplier_id: po.supplier_id,
         order_date: po.order_date || new Date().toISOString().split('T')[0],
         status: po.status,
-        terms_conditions: po.terms_conditions,
-        notes: po.notes,
+        terms_conditions: po.terms_conditions ?? null,
+        notes: po.notes ?? null,
         po_number: poNumber, // Explicitly set PO number
         total_amount: grandTotal,
-        delivery_address: po.delivery_address,
-        expected_delivery_date: po.expected_delivery_date,
+        delivery_address: (po.delivery_address && po.delivery_address.trim() !== '') ? po.delivery_address : null,
+        expected_delivery_date: (po.expected_delivery_date && po.expected_delivery_date.trim() !== '') ? po.expected_delivery_date : null,
       };
 
-      console.log('PO Data being saved:', poData);
-      console.log('PO Number in data:', poData.po_number);
-      console.log('PO Number type:', typeof poData.po_number);
+      console.log('🔧 TIMESTAMP:', new Date().toISOString(), 'PO Data being saved:', poData);
+      console.log('🔧 PO Number in data:', poData.po_number);
+      console.log('🔧 PO Number type:', typeof poData.po_number);
+      console.log('🔧 Expected delivery date:', po.expected_delivery_date);
+      console.log('🔧 Expected delivery date processed:', poData.expected_delivery_date);
 
       let poId = po.id;
 
@@ -1393,6 +1480,17 @@ export function PurchaseOrderForm() {
         line_total: item.line_total || 0, // Save line total
         unit_of_measure: item.unit_of_measure,
         notes: item.notes,
+        // Add fabric-specific fields for fabric items
+        ...(item.item_type === 'fabric' && {
+          fabric_name: item.fabric_name || null,
+          fabric_color: item.fabric_color || null,
+          fabric_gsm: item.fabric_gsm || null,
+          fabric_id: item.item_id || null // For fabric items, item_id is the fabric_id
+        }),
+        // Add item color for non-fabric items
+        ...(item.item_type !== 'fabric' && {
+          item_color: item.item_color || null
+        })
       }));
 
       console.log('Line items data being saved:', lineItemsData);
@@ -1406,7 +1504,7 @@ export function PurchaseOrderForm() {
       if (itemsError) throw itemsError;
 
       toast.success('Purchase order saved successfully');
-      navigate('/purchase-orders');
+      navigate('/procurement/po');
       
       } catch (error) {
       console.error('Error saving purchase order:', error);

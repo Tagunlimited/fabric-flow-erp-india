@@ -117,6 +117,7 @@ export function FabricManagerNew() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
+      console.log('Fetched fabrics data:', data);
       setFabrics((data as any) || []);
     } catch (error) {
       console.error('Error fetching fabrics:', error);
@@ -150,19 +151,48 @@ export function FabricManagerNew() {
 
       // Handle image upload if new file was selected
       if (fabricImageFile) {
+        try {
+          console.log('Starting image upload for file:', fabricImageFile.name);
         const fileExt = fabricImageFile.name.split('.').pop();
         const fileName = `fabric_${Date.now()}.${fileExt}`;
-        const { error } = await supabase.storage
+          console.log('Uploading to bucket: fabric-images, filename:', fileName);
+          
+          // Try fabric-images bucket first, fallback to company-assets if it doesn't exist
+          let uploadResult = await supabase.storage
           .from('fabric-images')
           .upload(fileName, fabricImageFile, { upsert: true });
 
-        if (error) throw error;
+          // If fabric-images bucket doesn't exist, try company-assets
+          if (uploadResult.error && uploadResult.error.message.includes('not found')) {
+            console.log('fabric-images bucket not found, trying company-assets...');
+            uploadResult = await supabase.storage
+              .from('company-assets')
+              .upload(`fabric-images/${fileName}`, fabricImageFile, { upsert: true });
+          }
+          
+          const { error } = uploadResult;
 
-        const { data: { publicUrl } } = supabase.storage
-          .from('fabric-images')
-          .getPublicUrl(fileName);
-
+          if (error) {
+            console.error('Storage upload error:', error);
+            toast.error(`Image upload failed: ${error.message}. Saving fabric without image.`);
+            uploadedImageUrl = ''; // Continue without image
+          } else {
+            console.log('Image uploaded successfully, getting public URL...');
+            // Use the same bucket that was used for upload
+            const bucketName = uploadResult.data?.path?.includes('fabric-images/') ? 'company-assets' : 'fabric-images';
+            const filePath = uploadResult.data?.path?.includes('fabric-images/') ? `fabric-images/${fileName}` : fileName;
+            
+            const { data: { publicUrl } } = supabase.storage
+              .from(bucketName)
+              .getPublicUrl(filePath);
+            console.log('Public URL generated:', publicUrl);
         uploadedImageUrl = publicUrl;
+          }
+        } catch (uploadError) {
+          console.error('Image upload error:', uploadError);
+          toast.error(`Image upload failed. Saving fabric without image.`);
+          uploadedImageUrl = ''; // Continue without image
+        }
       }
 
       const fabricData = {
@@ -172,6 +202,9 @@ export function FabricManagerNew() {
         gst: Number(formData.gst) || 18.00,
         inventory: Number(formData.inventory) || 0
       };
+      
+      console.log('Fabric data to save:', fabricData);
+      console.log('Image URL being saved:', uploadedImageUrl);
 
       if (editingFabric) {
         // Update existing fabric
@@ -180,7 +213,10 @@ export function FabricManagerNew() {
           .update(fabricData as any)
           .eq('id', editingFabric.id as any);
 
-        if (error) throw error;
+        if (error) {
+          console.error('Database update error:', error);
+          throw new Error(`Failed to update fabric: ${error.message}`);
+        }
         toast.success('Fabric updated successfully');
       } else {
         // Create new fabric
@@ -188,7 +224,10 @@ export function FabricManagerNew() {
           .from('fabric_master')
           .insert([fabricData as any]);
 
-        if (error) throw error;
+        if (error) {
+          console.error('Database insert error:', error);
+          throw new Error(`Failed to create fabric: ${error.message}`);
+        }
         toast.success('Fabric created successfully');
       }
 
@@ -197,7 +236,8 @@ export function FabricManagerNew() {
       fetchFabrics();
     } catch (error) {
       console.error('Error saving fabric:', error);
-      toast.error(`Failed to ${editingFabric ? 'update' : 'create'} fabric`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      toast.error(`Failed to ${editingFabric ? 'update' : 'create'} fabric: ${errorMessage}`);
     } finally {
       setLoading(false);
     }
@@ -858,12 +898,39 @@ export function FabricManagerNew() {
                       <TableCell className="font-medium">{fabric.fabric_code}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          {fabric.image && (
+                          {fabric.image ? (
                             <img 
                               src={fabric.image} 
                               alt={fabric.fabric_name} 
-                              className="w-10 h-10 object-cover rounded border shadow-sm flex-shrink-0"
+                              className="w-10 h-10 object-cover rounded border shadow-sm flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+                              onClick={() => {
+                                const modal = document.createElement('div');
+                                modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
+                                modal.innerHTML = `
+                                  <div class="relative max-w-4xl max-h-full">
+                                    <img src="${fabric.image}" alt="${fabric.fabric_name}" class="max-w-full max-h-full object-contain rounded-lg" />
+                                    <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
+                                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                                      </svg>
+                                    </button>
+                                  </div>
+                                `;
+                                document.body.appendChild(modal);
+                                modal.onclick = (e) => {
+                                  if (e.target === modal) modal.remove();
+                                };
+                              }}
+                              onError={(e) => {
+                                console.error('Image failed to load:', fabric.image);
+                                e.currentTarget.style.display = 'none';
+                              }}
                             />
+                          ) : (
+                            <div className="w-10 h-10 bg-gray-100 rounded border shadow-sm flex-shrink-0 flex items-center justify-center">
+                              <span className="text-xs text-gray-500">No Image</span>
+                            </div>
                           )}
                           <div className="flex flex-col min-w-0 flex-1">
                             <span className="font-medium text-sm truncate">{fabric.fabric_name}</span>

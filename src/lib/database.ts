@@ -268,6 +268,68 @@ export async function getEmployeeById(id: string): Promise<Employees | null> {
   return data;
 }
 
+// Production Team Management
+export async function getProductionTeam(): Promise<any[]> {
+  const { data, error } = await supabase
+    .from('production_team')
+    .select('*')
+    .order('full_name');
+
+  if (error) {
+    console.error('Error fetching production team:', error);
+    return [];
+  }
+
+  return data || [];
+}
+
+export async function getCuttingManagers(): Promise<any[]> {
+  console.log('Querying production_team for Cutting Manager...');
+  
+  // Query by designation field instead of tailor_type
+  const { data, error } = await supabase
+    .from('production_team')
+    .select('*')
+    .eq('designation', 'Cutting Manager')
+    .order('full_name');
+
+  if (error) {
+    console.error('Error fetching cutting managers:', error);
+    return [];
+  }
+
+  console.log('Cutting managers found:', data);
+  return data || [];
+}
+
+// Get department count
+export async function getDepartmentCount(): Promise<number> {
+  const { count, error } = await supabase
+    .from('departments')
+    .select('*', { count: 'exact', head: false });
+
+  if (error) {
+    console.error('Error fetching department count:', error);
+    return 0;
+  }
+  return count || 0;
+}
+
+// Get recent activities
+export async function getRecentActivities(limit: number = 10): Promise<any[]> {
+  const { data, error } = await supabase
+    .from('order_lifecycle_view')
+    .select('*')
+    .order('performed_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('Error fetching recent activities:', error);
+    return [];
+  }
+  return data || [];
+}
+
 // Production Management
 export async function getProductionOrders(): Promise<ProductionOrders[]> {
   const { data, error } = await supabase
@@ -542,7 +604,7 @@ export async function searchCustomers(query: string): Promise<Customers[]> {
   const { data, error } = await supabase
     .from('customers')
     .select('*')
-    .or(`company_name.ilike.%${query}%,contact_person.ilike.%${query}%,email.ilike.%${query}%`)
+    .or(`company_name.ilike.%${query}%,contact_person.ilike.%${query}%,email.ilike.%${query}%,phone.ilike.%${query}%,mobile.ilike.%${query}%,address.ilike.%${query}%,city.ilike.%${query}%,state.ilike.%${query}%,pincode.ilike.%${query}%,gstin.ilike.%${query}%,pan.ilike.%${query}%`)
     .order('created_at', { ascending: false });
 
   if (error) {

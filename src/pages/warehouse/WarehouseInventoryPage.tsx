@@ -30,37 +30,77 @@ const WarehouseInventoryPage: React.FC = () => {
   const [bomItems, setBomItems] = useState<any[]>([]);
 
   const loadTotals = async () => {
-    // Fetch totals by status; filter location type client-side to avoid RLS join issues
-    const { data, error } = await supabase
-      .from('warehouse_inventory' as any)
-      .select(`
-        quantity,
-        status,
-        bin:bin_id (
-          id,
-          location_type
-        )
-      `);
-    if (error) return;
-    const rows = (data as any) || [];
-    const receivingQty = rows
-      .filter((r: any) => r.status === 'RECEIVED' && r.bin?.location_type === 'RECEIVING_ZONE')
-      .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
-    const storageQty = rows
-      .filter((r: any) => r.status === 'IN_STORAGE' && r.bin?.location_type === 'STORAGE')
-      .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
-    const dispatchQty = rows
-      .filter((r: any) => r.status === 'READY_TO_DISPATCH' && r.bin?.location_type === 'DISPATCH_ZONE')
-      .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
-    const allQty = rows.reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
-    setTotals({ receiving: receivingQty, storage: storageQty, dispatch: dispatchQty, all: allQty });
+    try {
+      // First, check if warehouse_inventory table exists
+      const { data: tableCheck, error: tableError } = await supabase
+        .from('warehouse_inventory' as any)
+        .select('id')
+        .limit(1);
+      
+      if (tableError) {
+        console.error('Warehouse inventory table error:', tableError);
+        // Set default totals if table doesn't exist
+        setTotals({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+        return;
+      }
+
+      // Fetch totals by status; filter location type client-side to avoid RLS join issues
+      const { data, error } = await supabase
+        .from('warehouse_inventory' as any)
+        .select(`
+          quantity,
+          status,
+          bin:bin_id (
+            id,
+            location_type
+          )
+        `);
+      
+      if (error) {
+        console.error('Error fetching warehouse inventory totals:', error);
+        setTotals({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+        return;
+      }
+      
+      const rows = (data as any) || [];
+      console.log('Warehouse inventory rows:', rows);
+      
+      const receivingQty = rows
+        .filter((r: any) => r.status === 'RECEIVED' && r.bin?.location_type === 'RECEIVING_ZONE')
+        .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
+      const storageQty = rows
+        .filter((r: any) => r.status === 'IN_STORAGE' && r.bin?.location_type === 'STORAGE')
+        .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
+      const dispatchQty = rows
+        .filter((r: any) => r.status === 'READY_TO_DISPATCH' && r.bin?.location_type === 'DISPATCH_ZONE')
+        .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
+      const allQty = rows.reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
+      
+      console.log('Warehouse inventory totals:', { receiving: receivingQty, storage: storageQty, dispatch: dispatchQty, all: allQty });
+      setTotals({ receiving: receivingQty, storage: storageQty, dispatch: dispatchQty, all: allQty });
+    } catch (error) {
+      console.error('Error in loadTotals:', error);
+      setTotals({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+    }
   };
 
   useEffect(() => {
     loadTotals();
     const handler = () => loadTotals();
     window.addEventListener('warehouse-inventory-updated', handler as any);
-    return () => window.removeEventListener('warehouse-inventory-updated', handler as any);
+    // Realtime subscription to auto-refresh when warehouse_inventory changes
+    const channel = supabase
+      .channel('warehouse_inventory_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'warehouse_inventory' } as any, () => {
+        loadTotals();
+        try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
+      })
+      .subscribe();
+
+    return () => {
+      window.removeEventListener('warehouse-inventory-updated', handler as any);
+      try { supabase.removeChannel(channel); } catch {}
+    };
   }, []);
 
   const loadRelatedDetails = async (inv: WarehouseInventory) => {
@@ -240,17 +280,41 @@ const WarehouseInventoryPage: React.FC = () => {
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="receiving" className="flex items-center gap-2">
             <Package className="h-4 w-4" />
-            Receiving Zone
+            Receiving Zone ({totals.receiving})
           </TabsTrigger>
           <TabsTrigger value="storage" className="flex items-center gap-2">
             <Archive className="h-4 w-4" />
-            Storage Zone
+            Storage Zone ({totals.storage})
           </TabsTrigger>
           <TabsTrigger value="dispatch" className="flex items-center gap-2">
             <Truck className="h-4 w-4" />
-            Dispatch Zone
+            Dispatch Zone ({totals.dispatch})
           </TabsTrigger>
         </TabsList>
+        
+        {/* Debug Information */}
+        {totals.all === 0 && (
+          <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <div className="flex items-center gap-2 text-yellow-700 mb-2">
+              <Package className="w-4 h-4" />
+              <span className="font-medium">No items found in warehouse inventory</span>
+            </div>
+            <div className="text-sm text-yellow-600 space-y-1">
+              <p>This could mean:</p>
+              <ul className="list-disc list-inside ml-4 space-y-1">
+                <li>No GRNs have been approved yet</li>
+                <li>Warehouse inventory tables need to be set up</li>
+                <li>Approved GRN items haven't been moved to warehouse inventory</li>
+              </ul>
+              <p className="mt-2 font-medium">To fix this:</p>
+              <ol className="list-decimal list-inside ml-4 space-y-1">
+                <li>Run the <code className="bg-yellow-100 px-1 rounded">setup_warehouse_inventory_complete.sql</code> script in Supabase</li>
+                <li>Approve some GRNs using the GRN approval workflow</li>
+                <li>Check that approved items are being inserted into warehouse_inventory table</li>
+              </ol>
+            </div>
+          </div>
+        )}
 
         <TabsContent value="receiving" className="space-y-4">
           <ReceivingZoneInventory

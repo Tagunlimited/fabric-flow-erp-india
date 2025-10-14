@@ -5,8 +5,25 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Users, Award, TrendingUp, UserPlus, Scissors, Palette, UserCheck } from "lucide-react";
 import { EmployeeCardList } from "@/components/people/EmployeeCardList";
 import { ProductionTeamList } from "@/components/people/ProductionTeamList";
+import { getDepartmentCount } from "@/lib/database";
+import { useState, useEffect } from "react";
 
 const PeoplePage = () => {
+  const [departmentCount, setDepartmentCount] = useState<number>(0);
+
+  useEffect(() => {
+    const fetchDepartmentCount = async () => {
+      try {
+        const count = await getDepartmentCount();
+        setDepartmentCount(count);
+      } catch (error) {
+        console.error('Error fetching department count:', error);
+      }
+    };
+
+    fetchDepartmentCount();
+  }, []);
+
   return (
     <ErpLayout>
       <div className="space-y-6">
@@ -65,7 +82,7 @@ const PeoplePage = () => {
               <Award className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">8</div>
+              <div className="text-2xl font-bold">{departmentCount}</div>
               <p className="text-xs text-muted-foreground">
                 Across all operations
               </p>

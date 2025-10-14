@@ -96,11 +96,11 @@ export function BomForm() {
   const navigate = useNavigate();
   const { id } = useParams();
   const [searchParams] = useSearchParams();
-  const isEditMode = !!id && searchParams.get('edit') === '1';
+  const isEditMode = !!id && (searchParams.get('edit') === '1' || window.location.pathname.includes('/edit'));
   const isReadOnly = !!id && !isEditMode;
   
   // Check for Order data in URL params
-  const orderParam = searchParams.get('order');
+  const orderParam = searchParams.get('order') || searchParams.get('orderId');
   const [orderData, setOrderData] = useState<any>(null);
   const [orderFabricData, setOrderFabricData] = useState<any>(null);
 
@@ -535,6 +535,8 @@ export function BomForm() {
   const fetchExisting = async () => {
     if (!id) return;
     
+    console.log('Fetching existing BOM for edit mode, ID:', id);
+    
     try {
       setLoading(true);
       
@@ -593,23 +595,56 @@ export function BomForm() {
             .eq('bom_id', id as any);
           
           if (itemsResult3.error) {
+            console.error('All BOM items table attempts failed:', itemsResult3.error);
             itemsError = itemsResult3.error;
           } else {
             itemsData = itemsResult3.data;
+            console.log('Successfully fetched from bill_of_materials_items');
           }
         } else {
           itemsData = itemsResult2.data;
-          }
-                 } else {
+          console.log('Successfully fetched from bom_items (fallback)');
+        }
+      } else {
         itemsData = itemsResult1.data;
-         }
+        console.log('Successfully fetched from bom_record_items');
+      }
         
       if (itemsError) throw itemsError;
       
       // Convert BOM items to line items format
-      const lineItems = (itemsData || []).map((item: any) => ({
+      console.log('Raw items data from database:', itemsData);
+      console.log('Items data length:', itemsData?.length || 0);
+      
+      const lineItems = (itemsData || []).map((item: any) => {
+        console.log('Processing item:', item);
+        const isFabric = item.category === 'Fabric';
+        let fabricName = item.fabric_name || '';
+        let fabricColor = item.fabric_color || '';
+        let fabricGsm = item.fabric_gsm || '';
+        
+        // Parse fabric details from item_name if not stored separately or if they are empty
+        if (isFabric && item.item_name && (!fabricName || !fabricColor || !fabricGsm)) {
+          console.log('Parsing fabric from item_name:', item.item_name);
+          const fabricMatch = item.item_name.match(/^(.+?)\s*-\s*(.+?)\s*-\s*(\d+)\s+GSM$/i);
+          if (fabricMatch) {
+            fabricName = fabricMatch[1].trim();
+            fabricColor = fabricMatch[2].trim();
+            fabricGsm = fabricMatch[3].trim();
+            console.log('Parsed fabric details:', { fabricName, fabricColor, fabricGsm });
+          } else {
+            console.log('No fabric pattern match found in:', item.item_name);
+            // If no pattern match, try to extract at least the fabric name
+            if (!fabricName) {
+              fabricName = item.item_name.split(' - ')[0] || item.item_name;
+              console.log('Using first part as fabric name:', fabricName);
+            }
+          }
+        }
+        
+        const lineItem = {
            id: item.id,
-           item_type: item.category === 'Fabric' ? 'fabric' : 'item',
+           item_type: isFabric ? 'fabric' : 'item',
            item_id: item.item_id || '',
            item_name: item.item_name,
            quantity: item.qty_total,
@@ -619,10 +654,208 @@ export function BomForm() {
            stock: item.stock,
            to_order: item.to_order,
            item_category: item.category,
-           selected_item_type: item.item_type || ''
-      }));
+           selected_item_type: item.item_type || item.category || '',
+           // Preserve fabric details for editing
+           fabric_name: fabricName,
+           fabric_color: fabricColor,
+           fabric_gsm: fabricGsm,
+           // Mark as prefilled in edit mode
+           is_prefilled: isEditMode && isFabric
+        };
+        
+        console.log('Created line item:', lineItem);
+        return lineItem;
+      });
       
+      console.log('Final line items array:', lineItems);
+      console.log('Line items length:', lineItems.length);
       setItems(lineItems);
+      
+      // Fetch fabric images for fabric items in edit mode
+      if (isEditMode) {
+        const fabricItems = lineItems.filter(item => item.item_type === 'fabric');
+        
+        // Fetch fabric images from fabric master
+        for (const item of fabricItems) {
+          if (item.fabric_name) {
+            try {
+              // Try exact match first
+              let fabricData = null;
+              let fabricError = null;
+              
+              const exactResult = await supabase
+                .from('fabric_master')
+                .select('image')
+                .eq('fabric_name', item.fabric_name)
+                .eq('color', item.fabric_color || '')
+                .eq('gsm', item.fabric_gsm || '')
+                .single();
+              
+              if (exactResult.error) {
+                // Try partial match - just name
+                console.log('Exact match failed, trying name-only match for:', item.fabric_name);
+                const partialResult = await supabase
+                  .from('fabric_master')
+                  .select('image')
+                  .eq('fabric_name', item.fabric_name)
+                  .single();
+                
+                if (partialResult.error) {
+                  fabricError = partialResult.error;
+                } else {
+                  fabricData = partialResult.data;
+                }
+              } else {
+                fabricData = exactResult.data;
+              }
+              
+              if (fabricData?.image) {
+                // Update the item with the fabric image URL
+                setItems(prevItems => 
+                  prevItems.map(prevItem => 
+                    prevItem.id === item.id 
+                      ? { ...prevItem, item_image_url: fabricData.image }
+                      : prevItem
+                  )
+                );
+                console.log('Found fabric image for:', item.fabric_name, fabricData.image);
+              } else {
+                // Try to find image from loaded fabric options as fallback
+                const fabricFromOptions = fabricOptions.find(fabric => 
+                  fabric.label.toLowerCase().includes(item.fabric_name.toLowerCase())
+                );
+                
+                if (fabricFromOptions?.image_url) {
+                  setItems(prevItems => 
+                    prevItems.map(prevItem => 
+                      prevItem.id === item.id 
+                        ? { ...prevItem, item_image_url: fabricFromOptions.image_url }
+                        : prevItem
+                    )
+                  );
+                  console.log('Found fabric image from options for:', item.fabric_name, fabricFromOptions.image_url);
+                } else {
+                  console.log('No fabric image found for:', item.fabric_name, fabricError);
+                }
+              }
+            } catch (error) {
+              console.log('Error fetching fabric image:', error);
+            }
+          }
+        }
+        
+        // Fetch item images for non-fabric items
+        const itemItems = lineItems.filter(item => item.item_type === 'item' && item.item_id);
+        
+        for (const item of itemItems) {
+          console.log('Processing item for image:', {
+            item_name: item.item_name,
+            item_id: item.item_id,
+            item_type: item.item_type
+          });
+          
+          if (item.item_id) {
+            try {
+              const { data: itemData, error: itemError } = await supabase
+                .from('item_master')
+                .select('image, image_url')
+                .eq('id', item.item_id)
+                .single();
+              
+              if (!itemError && (itemData?.image || itemData?.image_url)) {
+                // Update the item with the image URL
+                const imageUrl = itemData.image || itemData.image_url;
+                setItems(prevItems => 
+                  prevItems.map(prevItem => 
+                    prevItem.id === item.id 
+                      ? { ...prevItem, item_image_url: imageUrl }
+                      : prevItem
+                  )
+                );
+                console.log('Found item image for:', item.item_name, imageUrl);
+              } else {
+                console.log('Item image query failed:', {
+                  item_name: item.item_name,
+                  item_id: item.item_id,
+                  error: itemError,
+                  data: itemData
+                });
+                
+                // Try to find image from loaded item options as fallback
+                const itemFromOptions = itemOptions.find(option => 
+                  option.id === item.item_id || option.label.toLowerCase().includes(item.item_name.toLowerCase())
+                );
+                
+                if (itemFromOptions?.image_url) {
+                  setItems(prevItems => 
+                    prevItems.map(prevItem => 
+                      prevItem.id === item.id 
+                        ? { ...prevItem, item_image_url: itemFromOptions.image_url }
+                        : prevItem
+                    )
+                  );
+                  console.log('Found item image from options for:', item.item_name, itemFromOptions.image_url);
+                } else {
+                  console.log('No item image found for:', item.item_name, itemError);
+                  console.log('Available item options:', itemOptions.map(opt => ({ id: opt.id, label: opt.label, image_url: opt.image_url })));
+                }
+              }
+            } catch (error) {
+              console.log('Error fetching item image:', error);
+            }
+          } else {
+            console.log('Item has no item_id, cannot fetch image:', {
+              item_name: item.item_name,
+              item_id: item.item_id
+            });
+          }
+        }
+      }
+      
+      // Parse and set fabric selection state for edit mode
+      if (isEditMode) {
+        const fabricItems = lineItems.filter(item => item.item_type === 'fabric');
+        const newFabricState: any = {};
+        
+        console.log('Setting up fabric selection state for edit mode');
+        console.log('Fabric items found:', fabricItems);
+        console.log('Total line items:', lineItems.length);
+        
+        fabricItems.forEach((item) => {
+          // Find the actual index of this item in the full items array
+          const actualIndex = lineItems.findIndex(lineItem => lineItem.id === item.id);
+          if (actualIndex !== -1) {
+            // Use the already parsed fabric details from lineItems
+            newFabricState[actualIndex] = {
+              selectedFabricName: item.fabric_name,
+              selectedColor: item.fabric_color,
+              selectedGsm: item.fabric_gsm,
+              availableColors: [], // Will be populated when fabric is selected
+              availableGsm: [] // Will be populated when color is selected
+            };
+            console.log(`Setting fabric state for index ${actualIndex}:`, {
+              selectedFabricName: item.fabric_name,
+              selectedColor: item.fabric_color,
+              selectedGsm: item.fabric_gsm
+            });
+          }
+        });
+        
+        console.log('Setting fabric selection state for edit mode:', newFabricState);
+        console.log('Fabric items for edit mode:', fabricItems);
+        console.log('Current fabricSelectionState before update:', fabricSelectionState);
+        setFabricSelectionState(newFabricState);
+        console.log('Fabric selection state updated');
+      }
+      
+      if (isEditMode) {
+        if (lineItems.length === 0) {
+          toast.warning('BOM loaded but no items found. This may indicate a data issue.');
+          console.warn('BOM loaded in edit mode but no items found');
+        } else {
+          toast.success('BOM loaded successfully for editing');
+        }
+      }
       
     } catch (error) {
       console.error('Error fetching existing BOM:', error);
@@ -634,6 +867,7 @@ export function BomForm() {
 
   const addItem = (type: BomLineItem['item_type']) => {
     const newItem: BomLineItem = {
+      id: `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, // Generate unique temporary ID
       item_type: type,
       item_id: '',
       item_name: '',
@@ -656,6 +890,21 @@ export function BomForm() {
 
   const updateItem = (index: number, updates: Partial<BomLineItem>) => {
     setItems(prev => prev.map((item, i) => i === index ? { ...item, ...updates } : item));
+  };
+
+  // Helper function to safely get the index of an item by its ID
+  const getItemIndex = (itemId: string) => {
+    return items.findIndex(item => item.id === itemId);
+  };
+
+  // Helper function to update item by ID instead of index
+  const updateItemById = (itemId: string, updates: Partial<BomLineItem>) => {
+    setItems(prev => prev.map(item => item.id === itemId ? { ...item, ...updates } : item));
+  };
+
+  // Helper function to remove item by ID instead of index
+  const removeItemById = (itemId: string) => {
+    setItems(prev => prev.filter(item => item.id !== itemId));
   };
 
   const handleItemSelection = (index: number, type: BomLineItem['item_type'], selectedId: string) => {
@@ -849,13 +1098,14 @@ export function BomForm() {
     // Check for duplicate BOM for the same product (only for new BOMs)
     if (!bom.id) {
       try {
-        const { data: existingBom, error: checkError } = await supabase
+        const { data: existingBoms, error: checkError } = await supabase
           .from('bom_records')
           .select('id, product_name')
-          .eq('product_name', bom.product_name as any)
-          .single();
+          .eq('product_name', bom.product_name as any);
 
-        if (existingBom && !checkError) {
+        if (checkError) {
+          console.log('Duplicate check failed, continuing with creation:', checkError);
+        } else if (existingBoms && existingBoms.length > 0) {
           toast.error(`BOM already exists for product "${bom.product_name}". Please edit the existing BOM instead.`);
           return;
         }
@@ -874,6 +1124,7 @@ export function BomForm() {
          product_image_url: bom.product_image_url,
          total_order_qty: bom.total_order_qty,
          status: bom.status || 'draft',
+         bom_number: bom.bom_number || `BOM-${Date.now()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
          ...(bom.order_id && { order_id: bom.order_id }),
          ...(bom.order_item_id && { order_item_id: bom.order_item_id }),
        };
@@ -897,17 +1148,27 @@ export function BomForm() {
           console.log('Successfully updated BOM record');
         }
 
-        // Delete existing items from bom_record_items table
-        const deleteResult = await supabase
+        // Delete existing items from bom_record_items table (try both table names)
+        let deleteResult = await supabase
           .from('bom_record_items')
           .delete()
           .eq('bom_id', bomId as any);
         
         if (deleteResult.error) {
-          console.error('Failed to delete existing BOM items:', deleteResult.error);
-          throw new Error(`Failed to delete existing BOM items: ${deleteResult.error.message}`);
+          console.log('Failed to delete from bom_record_items, trying bom_items...');
+          deleteResult = await supabase
+            .from('bom_items')
+            .delete()
+            .eq('bom_id', bomId as any);
+          
+          if (deleteResult.error) {
+            console.error('Failed to delete existing BOM items from both tables:', deleteResult.error);
+            throw new Error(`Failed to delete existing BOM items: ${deleteResult.error.message}`);
+          } else {
+            console.log('Successfully deleted existing BOM items from bom_items');
+          }
         } else {
-          console.log('Successfully deleted existing BOM items');
+          console.log('Successfully deleted existing BOM items from bom_record_items');
         }
       } else {
         // Create new BOM
@@ -926,7 +1187,15 @@ export function BomForm() {
         } else {
           bomId = (result.data as any).id;
           console.log('Successfully created BOM record with ID:', bomId);
+          
+          // Update the local BOM state with the new ID
+          setBom(prev => ({ ...prev, id: bomId }));
         }
+      }
+
+      // Ensure we have a valid BOM ID before proceeding
+      if (!bomId) {
+        throw new Error('Failed to get BOM ID after creation/update');
       }
 
              // Prepare BOM items data
@@ -955,12 +1224,44 @@ export function BomForm() {
 
          // For fabrics, use the main item data (not fabricSelections)
          if (item.item_type === 'fabric') {
+              // Get fabric details from selection state or item data
+              const fabricState = fabricSelectionState[items.indexOf(item)];
+              let fabricName = fabricState?.selectedFabricName || item.fabric_name || '';
+              let fabricColor = fabricState?.selectedColor || item.fabric_color || '';
+              let fabricGsm = fabricState?.selectedGsm || item.fabric_gsm || '';
+              
+              // If fabric details are not available in separate fields, parse from item_name
+              if (!fabricName || !fabricColor || !fabricGsm) {
+                console.log('Parsing fabric details from item_name:', item.item_name);
+                const fabricMatch = item.item_name.match(/^(.+?)\s*-\s*(.+?)\s*-\s*(\d+)\s+GSM$/i);
+                if (fabricMatch) {
+                  fabricName = fabricMatch[1].trim();
+                  fabricColor = fabricMatch[2].trim();
+                  fabricGsm = fabricMatch[3].trim();
+                  console.log('Parsed fabric details:', { fabricName, fabricColor, fabricGsm });
+                } else {
+                  console.log('No fabric pattern match found in:', item.item_name);
+                  // Fallback: use the full item_name as fabric name
+                  fabricName = fabricName || item.item_name || 'Unknown Fabric';
+                }
+              }
+              
+              const fabricDisplayName = fabricName && fabricColor && fabricGsm 
+                ? `${fabricName} - ${fabricColor} - ${fabricGsm} GSM`
+                : item.item_name || fabricName || 'Unknown Fabric';
+              
+              console.log('Saving fabric with details:', { fabricName, fabricColor, fabricGsm, fabricDisplayName });
+              
               bomItems.push({
                 ...base,
-             item_name: item.fabric_name ? `${item.fabric_name} - ${item.fabric_color || ''} - ${item.fabric_gsm || ''} GSM` : item.item_name,
-             qty_total: item.qty_total || 0,
-             to_order: item.to_order || 0
-            });
+                item_name: fabricDisplayName,
+                qty_total: item.qty_total || 0,
+                to_order: item.to_order || 0,
+                // Add fabric-specific fields for better data integrity
+                fabric_name: fabricName,
+                fabric_color: fabricColor,
+                fabric_gsm: fabricGsm
+              });
           } else {
             // For items and products, use the main quantity
             bomItems.push({
@@ -972,31 +1273,74 @@ export function BomForm() {
        }
 
        // Insert BOM items
+       console.log('Items array before processing:', items);
+       console.log('Items length:', items.length);
+       console.log('BOM items prepared for save:', bomItems);
+       console.log('BOM items length:', bomItems.length);
+       
+       if (items.length === 0) {
+         console.warn('WARNING: Items array is empty! This will result in no BOM items being saved.');
+         toast.warning('No items to save. Please add at least one item to the BOM.');
+       }
+       
        if (bomItems.length > 0) {
         console.log('Attempting to save BOM items:', bomItems);
         console.log('BOM ID:', bomId);
+        console.log('BOM Items count:', bomItems.length);
+        console.log('First BOM item sample:', bomItems[0]);
         
-        // Try to save to bom_record_items (the correct table)
-        const result = await supabase
-           .from('bom_record_items')
-           .insert(bomItems);
+        try {
+          // Try to save to bom_record_items (the correct table)
+          let result = await supabase
+             .from('bom_record_items')
+             .insert(bomItems);
 
-        if (result.error) {
-          console.error('Failed to save BOM items:', result.error);
-          console.error('Error details:', JSON.stringify(result.error, null, 2));
-          throw new Error(`Failed to save BOM items: ${result.error.message}`);
-        } else {
-          console.log('Successfully saved BOM items to bom_record_items');
+          if (result.error) {
+            console.log('bom_record_items failed, trying bom_items...');
+            // Fallback to bom_items table
+            result = await supabase
+              .from('bom_items')
+              .insert(bomItems);
+              
+            if (result.error) {
+              console.error('Both table attempts failed:', result.error);
+              console.error('Error details:', JSON.stringify(result.error, null, 2));
+              console.error('BOM items data:', JSON.stringify(bomItems, null, 2));
+              throw new Error(`Failed to save BOM items: ${result.error.message}`);
+            } else {
+              console.log('Successfully saved BOM items to bom_items (fallback)');
+            }
+          } else {
+            console.log('Successfully saved BOM items to bom_record_items');
+          }
+        } catch (itemsError) {
+          console.error('Error saving BOM items:', itemsError);
+          console.error('BOM items that failed to save:', JSON.stringify(bomItems, null, 2));
+          // Don't throw here - BOM record is already saved successfully
+          toast.warning('BOM saved but some items may not have been saved correctly. Please check and edit if needed.');
         }
       } else {
         console.warn('No BOM items to save');
       }
 
+      // Success - show success message and navigate
       toast.success(bomId ? 'BOM updated successfully' : 'BOM created successfully');
-      navigate(`/bom/${bomId}`);
+      
+      // Navigate after a short delay to ensure toast is visible
+      setTimeout(() => {
+        navigate(`/bom/${bomId}`);
+      }, 1000);
+      
     } catch (error) {
       console.error('Error saving BOM:', error);
-      toast.error('Failed to save BOM');
+      
+      // Check if the error is about duplicate BOM
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      if (errorMessage.includes('already exists') || errorMessage.includes('duplicate')) {
+        toast.error(`BOM already exists for product "${bom.product_name}". Please edit the existing BOM instead.`);
+      } else {
+        toast.error(`Failed to save BOM: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -1044,7 +1388,7 @@ export function BomForm() {
            {!isReadOnly && (
              <Button onClick={save} disabled={loading}>
                <Save className="w-4 h-4 mr-2" />
-               {loading ? 'Saving...' : 'Save BOM'}
+               {loading ? 'Saving...' : (isEditMode ? 'Update BOM' : 'Save BOM')}
              </Button>
            )}
          </div>
@@ -1057,6 +1401,16 @@ export function BomForm() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="bom_number">BOM Number</Label>
+              <Input
+                id="bom_number"
+                value={bom.bom_number || ''}
+                onChange={(e) => setBom(prev => ({ ...prev, bom_number: e.target.value }))}
+                placeholder="Auto-generated if empty"
+                disabled={isReadOnly}
+              />
+            </div>
             <div>
               <Label htmlFor="product_name">Product Name *</Label>
               <Input
@@ -1115,12 +1469,21 @@ export function BomForm() {
             </div>
           ) : (
             <div className="space-y-4">
-                  {items.filter(item => item.item_type === 'fabric').map((item, index) => (
-                    <div key={index} className="flex items-center gap-4 p-4 border rounded-lg">
+                  {items.filter(item => item.item_type === 'fabric').map((item) => {
+                    return (
+                    <div key={item.id} className="flex items-center gap-4 p-4 border rounded-lg">
                       {/* Fabric Image */}
                     <div className="w-20 h-20 bg-muted rounded overflow-hidden flex items-center justify-center">
                       {item.item_image_url ? (
-                        <img src={item.item_image_url} className="w-full h-full object-cover" />
+                        <img 
+                          src={item.item_image_url} 
+                          className="w-full h-full object-cover" 
+                          onError={(e) => {
+                            console.log('Image failed to load:', item.item_image_url);
+                            e.currentTarget.style.display = 'none';
+                          }}
+                          onLoad={() => console.log('Image loaded successfully:', item.item_image_url)}
+                        />
                       ) : (
                         <span className="text-xs text-muted-foreground">IMG</span>
                       )}
@@ -1137,8 +1500,8 @@ export function BomForm() {
                             </div>
                           ) : (
                             <Select
-                              value={fabricSelectionState[index]?.selectedFabricName || ''}
-                              onValueChange={(value) => handleFabricNameSelection(index, value)}
+                              value={fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName || ''}
+                              onValueChange={(value) => handleFabricNameSelection(getItemIndex(item.id), value)}
                               disabled={isReadOnly}
                             >
                               <SelectTrigger className="w-full">
@@ -1164,15 +1527,15 @@ export function BomForm() {
                             </div>
                           ) : (
                               <Select
-                              value={fabricSelectionState[index]?.selectedColor || ''}
-                              onValueChange={(value) => handleColorSelection(index, value)}
-                              disabled={isReadOnly || !fabricSelectionState[index]?.selectedFabricName}
+                              value={fabricSelectionState[getItemIndex(item.id)]?.selectedColor || ''}
+                              onValueChange={(value) => handleColorSelection(getItemIndex(item.id), value)}
+                              disabled={isReadOnly || !fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName}
                               >
                                 <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Select Color" />
                                 </SelectTrigger>
                               <SelectContent>
-                                {(fabricSelectionState[index]?.availableColors || []).map(color => (
+                                {(fabricSelectionState[getItemIndex(item.id)]?.availableColors || []).map(color => (
                                   <SelectItem key={color} value={color}>
                                     {color}
                                      </SelectItem>
@@ -1192,14 +1555,14 @@ export function BomForm() {
                           ) : (
                             <Select
                               value={item.fabric_gsm || ''}
-                              onValueChange={(value) => handleGsmSelection(index, value)}
-                              disabled={isReadOnly || !fabricSelectionState[index]?.selectedColor}
+                              onValueChange={(value) => handleGsmSelection(getItemIndex(item.id), value)}
+                              disabled={isReadOnly || !fabricSelectionState[getItemIndex(item.id)]?.selectedColor}
                             >
                               <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Select GSM" />
                               </SelectTrigger>
                               <SelectContent>
-                                {(fabricSelectionState[index]?.availableGsm || []).map(gsm => (
+                                {(fabricSelectionState[getItemIndex(item.id)]?.availableGsm || []).map(gsm => (
                                   <SelectItem key={gsm} value={gsm}>
                                     {gsm} Gsm
                                   </SelectItem>
@@ -1215,7 +1578,7 @@ export function BomForm() {
                             <Input
                             type="number"
                             value={item.qty_per_product}
-                            onChange={(e) => handleQtyPerProductChange(index, e.target.value)}
+                            onChange={(e) => handleQtyPerProductChange(getItemIndex(item.id), e.target.value)}
                             placeholder="0"
                               disabled={isReadOnly}
                             className="w-20"
@@ -1234,7 +1597,7 @@ export function BomForm() {
                          <div>
                           <Label className="text-sm font-medium">Total Required</Label>
                           <div className="text-sm font-medium">
-                            {item.qty_total} {item.unit_of_measure || 'Kgs'}
+                            {typeof item.qty_total === 'number' ? item.qty_total.toFixed(2) : item.qty_total} {item.unit_of_measure || 'Kgs'}
                           </div>
                         </div>
                       </div>
@@ -1244,14 +1607,15 @@ export function BomForm() {
                                <Button
                                  variant="outline"
                                  size="sm"
-                          onClick={() => removeItem(index)}
+                          onClick={() => removeItemById(item.id)}
                           className="text-red-600 hover:text-red-700"
                         >
                           <Trash2 className="w-4 h-4" />
                                </Button>
                              )}
                            </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </CardContent>
@@ -1284,11 +1648,19 @@ export function BomForm() {
                   {items.map((item, index) => {
                     if (item.item_type !== 'item') return null;
                     return (
-                    <div key={index} className="flex items-center gap-4 p-4 border rounded-lg">
+                    <div key={item.id || `item-${index}`} className="flex items-center gap-4 p-4 border rounded-lg">
                       {/* Item Image */}
                       <div className="w-20 h-20 bg-muted rounded overflow-hidden flex items-center justify-center">
                         {item.item_image_url ? (
-                          <img src={item.item_image_url} className="w-full h-full object-cover" />
+                          <img 
+                            src={item.item_image_url} 
+                            className="w-full h-full object-cover" 
+                            onError={(e) => {
+                              console.log('Item image failed to load:', item.item_image_url);
+                              e.currentTarget.style.display = 'none';
+                            }}
+                            onLoad={() => console.log('Item image loaded successfully:', item.item_image_url)}
+                          />
                         ) : (
                           <span className="text-xs text-muted-foreground">IMG</span>
                         )}
@@ -1378,7 +1750,7 @@ export function BomForm() {
                          <div>
                           <Label className="text-sm font-medium">Total Required</Label>
                           <div className="text-sm font-medium">
-                            {item.qty_total} {item.unit_of_measure || 'Pcs'}
+                            {typeof item.qty_total === 'number' ? item.qty_total.toFixed(2) : item.qty_total} {item.unit_of_measure || 'Pcs'}
                           </div>
                         </div>
 
@@ -1415,15 +1787,15 @@ export function BomForm() {
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="text-center p-4 bg-muted/50 rounded-lg">
-                <div className="text-2xl font-bold text-blue-600">{totals.totalItems}</div>
+                <div className="text-2xl font-bold text-blue-600">{totals.totalItems.toFixed(2)}</div>
                 <div className="text-sm text-muted-foreground">Total Items</div>
               </div>
               <div className="text-center p-4 bg-muted/50 rounded-lg">
-                <div className="text-2xl font-bold text-green-600">{totals.totalFabrics}</div>
+                <div className="text-2xl font-bold text-green-600">{totals.totalFabrics.toFixed(2)}</div>
                 <div className="text-sm text-muted-foreground">Total Fabrics</div>
               </div>
               <div className="text-center p-4 bg-muted/50 rounded-lg">
-                <div className="text-2xl font-bold text-orange-600">{totals.totalToOrder}</div>
+                <div className="text-2xl font-bold text-orange-600">{totals.totalToOrder.toFixed(2)}</div>
                 <div className="text-sm text-muted-foreground">Total to Order</div>
               </div>
             </div>

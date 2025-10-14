@@ -25,49 +25,10 @@ export function NotificationCenter() {
   const [isAnimating, setIsAnimating] = useState(false);
   const { profile } = useAuth();
 
-  const mockNotifications: Notification[] = [
-    {
-      id: '1',
-      type: 'user_registration',
-      title: 'New User Registration',
-      message: 'John Doe has registered and is waiting for approval',
-      read: false,
-      created_at: new Date().toISOString(),
-      priority: 'medium'
-    },
-    {
-      id: '2',
-      type: 'order_update',
-      title: 'Order Status Update',
-      message: 'Order #ORD-2024-0001 has moved to quality check',
-      read: false,
-      created_at: new Date(Date.now() - 3600000).toISOString(),
-      priority: 'high'
-    },
-    {
-      id: '3',
-      type: 'quality_alert',
-      title: 'Quality Alert',
-      message: 'Quality check failed for Order #ORD-2024-0002',
-      read: true,
-      created_at: new Date(Date.now() - 7200000).toISOString(),
-      priority: 'high'
-    },
-    {
-      id: '4',
-      type: 'achievement',
-      title: 'Achievement Unlocked!',
-      message: 'You\'ve completed 50 orders this month!',
-      read: false,
-      created_at: new Date(Date.now() - 1800000).toISOString(),
-      priority: 'low'
-    }
-  ];
-
   useEffect(() => {
-    // Set mock notifications
-    setNotifications(mockNotifications);
-    setUnreadCount(mockNotifications.filter(n => !n.read).length);
+    // Initialize with empty notifications - data will be loaded from backend
+    setNotifications([]);
+    setUnreadCount(0);
 
     // Set up real-time subscriptions
     const channel = supabase

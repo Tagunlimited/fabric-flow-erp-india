@@ -29,32 +29,32 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
     {
       metric: "Total Revenue",
       value: `₹${(data.summary.totalRevenue / 100000).toFixed(1)}L`,
-      change: "+12.5%",
-      trend: "up",
+      change: "N/A",
+      trend: "neutral",
       icon: DollarSign,
       color: "text-success"
     },
     {
       metric: "Active Orders",
       value: (data.summary.pendingOrders + data.summary.inProductionOrders).toString(),
-      change: "+8.2%",
-      trend: "up",
+      change: "N/A",
+      trend: "neutral",
       icon: ShoppingCart,
       color: "text-manufacturing"
     },
     {
       metric: "Production Efficiency",
       value: `${Math.round(data.productionOrders.reduce((sum, order) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%`,
-      change: "-2.1%",
-      trend: "down",
+      change: "N/A",
+      trend: "neutral",
       icon: Factory,
       color: "text-warning"
     },
     {
       metric: "Quality Pass Rate",
       value: `${Math.round(((data.qualityChecks || []).filter((qc) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100)}%`,
-      change: "+5.3%",
-      trend: "up",
+      change: "N/A",
+      trend: "neutral",
       icon: CheckCircle,
       color: "text-quality"
     }
@@ -97,6 +97,15 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
       case 'confirmed': return 'bg-blue-100 text-blue-800';
       case 'in_production': return 'bg-orange-100 text-orange-800';
       case 'quality_check': return 'bg-purple-100 text-purple-800';
+      case 'designing_done': return 'bg-teal-100 text-teal-800';
+      case 'under_procurement': return 'bg-amber-100 text-amber-800';
+      case 'under_cutting': return 'bg-orange-100 text-orange-800';
+      case 'under_stitching': return 'bg-indigo-100 text-indigo-800';
+      case 'under_qc': return 'bg-pink-100 text-pink-800';
+      case 'ready_for_dispatch': return 'bg-green-100 text-green-800';
+      case 'rework': return 'bg-red-100 text-red-800';
+      case 'designing_done': return 'bg-teal-100 text-teal-800';
+      case 'under_procurement': return 'bg-amber-100 text-amber-800';
       case 'ready': return 'bg-green-100 text-green-800';
       case 'dispatched': return 'bg-indigo-100 text-indigo-800';
       case 'delivered': return 'bg-emerald-100 text-emerald-800';

@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +19,8 @@ import {
   MessageCircle,
   Share,
   Send,
-  ChevronDown
+  ChevronDown,
+  Users
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -173,6 +174,7 @@ function calculateOrderSummary(orderItems: any[], order: Order | null) {
 export default function OrderDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const printRef = useRef<HTMLDivElement>(null);
   const { config: company } = useCompanySettings();
   
@@ -204,6 +206,16 @@ export default function OrderDetailPage() {
   const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+
+  // Handle back navigation based on referrer
+  const handleBackNavigation = () => {
+    const from = searchParams.get('from');
+    if (from === 'production') {
+      navigate('/production');
+    } else {
+      navigate('/orders');
+    }
+  };
 
   useEffect(() => {
     if (id) {
@@ -252,12 +264,17 @@ export default function OrderDetailPage() {
           setSalesManager((salesManagerData as unknown as SalesManager) || null);
         }
 
-        // Fetch employees for edit dropdown
+        // Fetch employees for edit dropdown (only Sales Department)
         const { data: employeesData } = await (supabase as any)
           .from('employees')
-          .select('id, full_name')
+          .select('id, full_name, department')
           .order('full_name');
-        setEmployees((employeesData as unknown as SalesManager[]) || []);
+        
+        // Filter to only show employees from Sales Department
+        const salesEmployees = (employeesData || []).filter((emp: any) => 
+          emp.department && emp.department.toLowerCase().includes('sales')
+        );
+        setEmployees((salesEmployees as unknown as SalesManager[]) || []);
 
         // Fetch order items
         const { data: itemsData, error: itemsError } = await (supabase as any)
@@ -307,7 +324,7 @@ export default function OrderDetailPage() {
     } catch (error) {
       console.error('Error fetching order details:', error);
       toast.error('Failed to load order details');
-      navigate('/orders');
+      handleBackNavigation();
     } finally {
       setLoading(false);
     }
@@ -764,6 +781,13 @@ export default function OrderDetailPage() {
       case 'confirmed': return 'bg-blue-100 text-blue-800';
       case 'in_production': return 'bg-orange-100 text-orange-800';
       case 'quality_check': return 'bg-purple-100 text-purple-800';
+      case 'designing_done': return 'bg-teal-100 text-teal-800';
+      case 'under_procurement': return 'bg-amber-100 text-amber-800';
+      case 'under_cutting': return 'bg-orange-100 text-orange-800';
+      case 'under_stitching': return 'bg-indigo-100 text-indigo-800';
+      case 'under_qc': return 'bg-pink-100 text-pink-800';
+      case 'ready_for_dispatch': return 'bg-green-100 text-green-800';
+      case 'rework': return 'bg-red-100 text-red-800';
       case 'ready': return 'bg-green-100 text-green-800';
       case 'dispatched': return 'bg-indigo-100 text-indigo-800';
       case 'delivered': return 'bg-emerald-100 text-emerald-800';
@@ -855,9 +879,9 @@ export default function OrderDetailPage() {
           <div className="text-center">
             <h2 className="text-2xl font-bold mb-2">Order Not Found</h2>
             <p className="text-muted-foreground mb-4">The requested order could not be found.</p>
-            <Button onClick={() => navigate('/orders')}>
+            <Button onClick={handleBackNavigation}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Orders
+              Back to {searchParams.get('from') === 'production' ? 'Production' : 'Orders'}
             </Button>
           </div>
         </div>
@@ -873,11 +897,11 @@ export default function OrderDetailPage() {
           <div className="flex items-center space-x-4">
             <Button 
               variant="ghost" 
-              onClick={() => navigate('/orders')}
+              onClick={handleBackNavigation}
               className="flex items-center"
             >
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Orders
+              Back to {searchParams.get('from') === 'production' ? 'Production' : 'Orders'}
             </Button>
             <div>
               <h1 className="text-3xl font-bold">Order Details</h1>
@@ -894,6 +918,15 @@ export default function OrderDetailPage() {
               {/* <Button variant="outline" onClick={openEditDialog}>
                 Edit
               </Button> */}
+              <Button 
+                variant="outline" 
+                onClick={() => navigate(`/orders/${id}/assign-batches`)}
+                className="bg-primary/10 hover:bg-primary/20 text-primary border-primary/20"
+              >
+                <Users className="w-4 h-4 mr-2" />
+                Assign Batches
+              </Button>
+              
               <Button variant="outline" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print

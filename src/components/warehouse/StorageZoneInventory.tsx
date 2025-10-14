@@ -126,7 +126,18 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     loadInventory();
     const handler = () => loadInventory();
     window.addEventListener('warehouse-inventory-updated', handler as any);
-    return () => window.removeEventListener('warehouse-inventory-updated', handler as any);
+    // Live updates: listen to realtime changes for storage items
+    const channel = supabase
+      .channel('storage_inventory_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'warehouse_inventory' } as any, () => {
+        loadInventory();
+      })
+      .subscribe();
+
+    return () => {
+      window.removeEventListener('warehouse-inventory-updated', handler as any);
+      try { supabase.removeChannel(channel); } catch {}
+    };
   }, []);
 
   const getStatusConfig = (status: string) => {
@@ -271,12 +282,21 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                   return (
                     <TableRow key={item.id}>
                       <TableCell>
-                        <img
-                          src={item.grn_item?.item_image_url || ''}
-                          alt={item.item_name}
-                          className="w-12 h-12 object-cover rounded border"
-                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-                        />
+                        {item.grn_item?.item_image_url ? (
+                          <img
+                            src={item.grn_item.item_image_url}
+                            alt={item.item_name}
+                            className="w-12 h-12 object-cover rounded border"
+                            onError={(e) => { 
+                              // Show placeholder if image fails to load
+                              (e.currentTarget as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yNCAzNkMzMC42Mjc0IDM2IDM2IDMwLjYyNzQgMzYgMjRDMzYgMTcuMzcyNiAzMC42Mjc0IDEyIDI0IDEyQzE3LjM3MjYgMTIgMTIgMTcuMzcyNiAxMiAyNEMxMiAzMC42Mjc0IDE3LjM3MjYgMzYgMjQgMzZaIiBmaWxsPSIjOUNBM0FGIi8+CjxwYXRoIGQ9Ik0yNCAyOEMyNi4yMDkxIDI4IDI4IDI2LjIwOTEgMjggMjRDMjggMjEuNzkwOSAyNi4yMDkxIDIwIDI0IDIwQzIxLjc5MDkgMjAgMjAgMjEuNzkwOSAyMCAyNEMyMCAyNi4yMDkxIDIxLjc5MDkgMjggMjQgMjhaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K';
+                            }}
+                          />
+                        ) : (
+                          <div className="w-12 h-12 bg-gray-100 rounded border flex items-center justify-center">
+                            <Package className="w-6 h-6 text-gray-400" />
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div>

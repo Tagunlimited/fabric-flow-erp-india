@@ -58,11 +58,12 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
     {
       title: "Orders",
       icon: ShoppingCart,
+      url: "/orders",
       badge: currentPath === "/orders" ? "..." : pendingOrdersCount.toString(),
       badgeColor: "bg-manufacturing",
       children: [
-        { title: "Custom Orders", url: "/orders", icon: ShoppingCart },
-        { title: "Stock Orders", url: "/stock-orders", icon: Shirt }
+        { title: "Custom Orders", url: "/orders", icon: ShoppingCart }
+        // { title: "Stock Orders", url: "/stock-orders", icon: Shirt }
         
       ]
     },
@@ -108,11 +109,17 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       children: [
         { title: "Production Dashboard", url: "/production", icon: Factory },
         { title: "Assign Orders", url: "/production/assign-orders", icon: Users },
-        { title: "Orders Status", url: "/production/orders-status", icon: BarChart3 },
-        { title: "Cutting Manager", url: "/production/cutting-manager", icon: Scissors }
+        { title: "Cutting Manager", url: "/production/cutting-manager", icon: Scissors },
+        { title: "Tailor Management", url: "/production/tailor-management", icon: Users }
       ]
     },
-    { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality" },
+    { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality",
+      children: [
+        { title: "Picker", url: "/production/picker", icon: Package },
+        { title: "QC", url: "/quality/checks", icon: CheckCircle },
+        { title: "Dispatch", url: "/quality/dispatch", icon: Truck }
+      ]
+     },
     {
       title: "People",
       icon: Users,
@@ -120,9 +127,10 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Dashboard", url: "/people", icon: BarChart3 },
         { title: "Our People", url: "/people/employees", icon: Users },
         { title: "Production Team", url: "/people/production-team", icon: Scissors },
-        { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
-        { title: "Incentive Programme", url: "/people/incentives", icon: Award },
-        { title: "Departments", url: "/people/departments", icon: Building }
+        // { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
+        // { title: "Incentive Programme", url: "/people/incentives", icon: Award },
+        { title: "Departments", url: "/people/departments", icon: Building },
+        { title: "Designations", url: "/people/designations", icon: Award }
       ]
     },
     {

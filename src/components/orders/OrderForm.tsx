@@ -340,7 +340,12 @@ export function OrderForm() {
       if (fabricsRes.data) setFabrics(fabricsRes.data as any);
       if (employeesRes.data) {
         console.log('Employees fetched:', employeesRes.data);
-        setEmployees(employeesRes.data);
+        // Filter employees to only show those from Sales Department
+        const salesEmployees = employeesRes.data.filter(emp => 
+          emp.department && emp.department.toLowerCase().includes('sales')
+        );
+        console.log('Sales employees filtered:', salesEmployees);
+        setEmployees(salesEmployees);
       } else {
         console.log('No employees found or error:', employeesRes.error);
       }
@@ -878,14 +883,8 @@ export function OrderForm() {
 
       toast.success('Order created successfully!');
       
-      // Show option to create BOM
-      const createBom = window.confirm('Order created successfully! Would you like to create a Bill of Materials (BOM) for this order?');
-      if (createBom) {
-        navigate(`/bom/create?orderId=${orderResult.id}`);
-      } else {
-        // Navigate to the order detail page
-        navigate(`/orders/${orderResult.id}`);
-      }
+      // Navigate directly to the order list page
+      navigate('/orders');
     } catch (error) {
       console.error('Error creating order:', error);
       console.error('Error details:', JSON.stringify(error, null, 2));

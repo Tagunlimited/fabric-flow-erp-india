@@ -29,10 +29,14 @@ import OrdersPage from "./pages/OrdersPage";
 import InventoryPage from "./pages/InventoryPage";
 import ProductionPage from "./pages/ProductionPage";
 import AssignOrdersPage from "./pages/production/AssignOrdersPage";
-import OrdersStatusPage from "./pages/production/OrdersStatusPage";
 import CuttingManagerPage from "./pages/production/CuttingManagerPage";
+import TailorManagementPage from "./pages/production/TailorManagementPage";
+import PickerPage from "./pages/production/PickerPage";
 import QualityPage from "./pages/QualityPage";
+import QCPage from "./pages/quality/QCPage";
+import DispatchQCPage from "./pages/quality/DispatchQCPage";
 import DispatchPage from "./pages/DispatchPage";
+import DispatchChallanPrint from "./pages/DispatchChallanPrint";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import SettingsPage from "./pages/SettingsPage";
 import DesignPage from "./pages/DesignPage";
@@ -49,9 +53,12 @@ import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
 import EmployeeDetailPage from "./pages/people/EmployeeDetailPage";
 import DepartmentsPage from "./pages/people/DepartmentsPage";
+import DepartmentDetailPage from "./pages/people/DepartmentDetailPage";
+import DesignationsPage from "./pages/people/DesignationsPage";
 import ProductionTeamPage from "./pages/people/ProductionTeamPage";
 import ProductionTeamDetailPage from "./pages/people/ProductionTeamDetailPage";
 import OrderDetailPage from "./pages/orders/OrderDetailPage";
+import OrderBatchAssignmentPage from "./pages/orders/OrderBatchAssignmentPage";
 import StockOrdersPage from "./pages/orders/StockOrdersPage";
 import { CustomerDashboard } from "./pages/customer/CustomerDashboard";
 import { CustomerAccessManagement } from "./pages/admin/CustomerAccessManagement";
@@ -59,6 +66,8 @@ import ProfileSettingsPage from "./pages/profile/ProfileSettingsPage";
 import QuotationsPage from './pages/accounts/QuotationsPage';
 import QuotationDetailPage from './pages/accounts/QuotationDetailPage';
 import ReceiptPage from './pages/accounts/ReceiptPage';
+import InvoicePage from './pages/accounts/InvoicePage';
+import InvoiceDetailPage from './pages/accounts/InvoiceDetailPage';
 import { CompanySettingsProvider } from "@/hooks/CompanySettingsContext";
 import EmployeeAccessManagementPage from "./pages/admin/EmployeeAccessManagement";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
@@ -140,6 +149,11 @@ const App = () => {
                     <OrderDetailPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/orders/:id/assign-batches" element={
+                  <ProtectedRoute>
+                    <OrderBatchAssignmentPage />
+                  </ProtectedRoute>
+                } />
                 <Route path="/inventory" element={
                   <ProtectedRoute>
                     <InventoryPage />
@@ -210,14 +224,19 @@ const App = () => {
                     <AssignOrdersPage />
                   </ProtectedRoute>
                 } />
-                <Route path="/production/orders-status" element={
-                  <ProtectedRoute>
-                    <OrdersStatusPage />
-                  </ProtectedRoute>
-                } />
                 <Route path="/production/cutting-manager" element={
                   <ProtectedRoute>
                     <CuttingManagerPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/production/tailor-management" element={
+                  <ProtectedRoute>
+                    <TailorManagementPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/production/picker" element={
+                  <ProtectedRoute>
+                    <PickerPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/design" element={
@@ -267,6 +286,11 @@ const App = () => {
                     <BomForm />
                   </ProtectedRoute>
                 } />
+                <Route path="/bom/:id/edit" element={
+                  <ProtectedRoute>
+                    <BomForm />
+                  </ProtectedRoute>
+                } />
                 
                 {/* GRN Routes */}
                 <Route path="/procurement/grn" element={
@@ -295,9 +319,24 @@ const App = () => {
                     <QualityPage />
                   </ProtectedRoute>
                 } />
+                <Route path="/quality/checks" element={
+                  <ProtectedRoute>
+                    <QCPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/quality/dispatch" element={
+                  <ProtectedRoute>
+                    <DispatchQCPage />
+                  </ProtectedRoute>
+                } />
                 <Route path="/dispatch" element={
                   <ProtectedRoute>
                     <DispatchPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/dispatch/challan/:id" element={
+                  <ProtectedRoute>
+                    <DispatchChallanPrint />
                   </ProtectedRoute>
                 } />
                 <Route path="/analytics" element={
@@ -335,6 +374,16 @@ const App = () => {
                 <Route path="/people/departments" element={
                   <ProtectedRoute>
                     <DepartmentsPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/people/departments/:id" element={
+                  <ProtectedRoute>
+                    <DepartmentDetailPage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/people/designations" element={
+                  <ProtectedRoute>
+                    <DesignationsPage />
                   </ProtectedRoute>
                 } />
                 <Route path="/people/production-team" element={
@@ -377,6 +426,17 @@ const App = () => {
                 <Route path="/accounts/receipts" element={
                   <ProtectedRoute>
                     <ReceiptPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/accounts/invoices" element={
+                  <ProtectedRoute>
+                    <InvoicePage />
+                  </ProtectedRoute>
+                } />
+                <Route path="/accounts/invoices/:id" element={
+                  <ProtectedRoute>
+                    <InvoiceDetailPage />
                   </ProtectedRoute>
                 } />
                 

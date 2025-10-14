@@ -36,10 +36,11 @@ interface CalendarEvent {
   details: string;
   priority: 'low' | 'medium' | 'high';
   department?: string;
-  assignedTo?: string;
+  assignedTo?: string | string[]; // Support both single and multiple assignments
   assignedBy?: string;
   deadline?: string;
   createdAt?: string;
+  assignedEmployees?: Array<{id: string, name: string}>; // For display purposes
 }
 
 export function CalendarView() {
@@ -55,7 +56,7 @@ export function CalendarView() {
     details: '',
     priority: 'medium' as CalendarEvent['priority'],
     department: '',
-    assignedTo: '',
+    assignedTo: [] as string[], // Changed to array for multiple employees
     deadline: '',
     date: ''
   });
@@ -65,29 +66,14 @@ export function CalendarView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch events from Supabase
+  // Fetch data from Supabase
   useEffect(() => {
-    fetchEvents();
-    // Initialize departments and employees (static for now)
-    const departmentList = ['Production', 'Quality Control', 'Design', 'Management', 'Sales', 'Inventory', 'Export', 'Raw Materials', 'Packaging'];
-    setDepartments(departmentList);
-    const employeeList = [
-      { id: '1', name: 'John Smith', department: 'Production' },
-      { id: '2', name: 'Sarah Johnson', department: 'Production' },
-      { id: '3', name: 'Mike Wilson', department: 'Quality Control' },
-      { id: '4', name: 'Emily Davis', department: 'Quality Control' },
-      { id: '5', name: 'David Brown', department: 'Design' },
-      { id: '6', name: 'Lisa Garcia', department: 'Design' },
-      { id: '7', name: 'Robert Miller', department: 'Management' },
-      { id: '8', name: 'Jennifer Taylor', department: 'Sales' },
-      { id: '9', name: 'Christopher Anderson', department: 'Sales' },
-      { id: '10', name: 'Amanda Thomas', department: 'Inventory' },
-      { id: '11', name: 'James Martinez', department: 'Export' },
-      { id: '12', name: 'Maria Rodriguez', department: 'Raw Materials' },
-      { id: '13', name: 'Kevin Lee', department: 'Packaging' }
-    ];
-    setEmployees(employeeList);
-    setFilteredEmployees(employeeList);
+    const fetchAllData = async () => {
+      await fetchDepartments();
+      await fetchEmployees();
+      await fetchEvents();
+    };
+    fetchAllData();
   }, []);
 
   const fetchEvents = async () => {
@@ -99,11 +85,34 @@ export function CalendarView() {
         .select('*')
         .order('date', { ascending: true });
       if (error) throw error;
-      // Group events by date
+      // Group events by date and remove duplicates
       const eventMap: { [key: string]: CalendarEvent[] } = {};
       data.forEach((event: any) => {
         const dateKey = new Date(event.date).toDateString();
-        if (!eventMap[dateKey]) eventMap[dateKey] = [];
+        if (!eventMap[dateKey]) eventMap[dateKey] = [];        
+        // Parse assigned_to field (could be JSON array or single value)
+        let assignedToIds: string[] = [];
+        let assignedEmployees: Array<{id: string, name: string}> = [];
+        
+        if (event.assigned_to) {
+          try {
+            // Try to parse as JSON array first
+            assignedToIds = JSON.parse(event.assigned_to);
+          } catch {
+            // If not JSON, treat as single value
+            assignedToIds = [event.assigned_to];
+          }
+          
+          // Get employee names for display
+          assignedEmployees = assignedToIds.map((id: string) => {
+            const employee = employees.find(emp => emp.id === id);
+            return {
+              id,
+              name: employee ? employee.name : 'Unknown Employee'
+            };
+          });
+        }
+        
         eventMap[dateKey].push({
           id: event.id,
           title: event.title,
@@ -113,12 +122,30 @@ export function CalendarView() {
           details: event.details,
           priority: event.priority,
           department: event.department,
-          assignedTo: event.assigned_to,
+          assignedTo: assignedToIds.length > 1 ? assignedToIds : assignedToIds[0] || null,
           assignedBy: event.assigned_by,
           deadline: event.deadline,
           createdAt: event.created_at,
+          assignedEmployees: assignedEmployees,
         });
       });
+      
+      // Remove duplicates based on original ID
+      Object.keys(eventMap).forEach(dateKey => {
+        const uniqueEvents: CalendarEvent[] = [];
+        const seenIds = new Set<string>();
+        
+        eventMap[dateKey].forEach(event => {
+          const originalId = event.id.split('-moved-')[0];
+          if (!seenIds.has(originalId)) {
+            seenIds.add(originalId);
+            uniqueEvents.push({ ...event, id: originalId }); // Use original ID
+          }
+        });
+        
+        eventMap[dateKey] = uniqueEvents;
+      });
+      
       setEvents(eventMap);
     } catch (err: any) {
       setError(err.message);
@@ -127,15 +154,64 @@ export function CalendarView() {
     }
   };
 
+  const fetchDepartments = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('departments')
+        .select('id, name')
+        .order('name');
+      
+      if (error) {
+        console.error('Error fetching departments:', error);
+        toast.error('Failed to load departments');
+      } else {
+        // Convert to array of department names for the select dropdown
+        const departmentNames = data?.map(dept => dept.name) || [];
+        setDepartments(departmentNames);
+      }
+    } catch (err: any) {
+      console.error('Error fetching departments:', err);
+      toast.error('Failed to load departments');
+    }
+  };
+
+  const fetchEmployees = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('employees')
+        .select('id, full_name, department')
+        .order('full_name');
+      
+      if (error) {
+        console.error('Error fetching employees:', error);
+        toast.error('Failed to load employees');
+      } else {
+        const employeeList = data?.map(emp => ({
+          id: emp.id,
+          name: emp.full_name,
+          department: emp.department || 'Unknown'
+        })) || [];
+        setEmployees(employeeList);
+        setFilteredEmployees(employeeList);
+      }
+    } catch (err: any) {
+      console.error('Error fetching employees:', err);
+      toast.error('Failed to load employees');
+    }
+  };
+
+
   // Filter employees when department changes
   useEffect(() => {
     if (newEvent.department) {
       const filtered = employees.filter(emp => emp.department === newEvent.department);
       setFilteredEmployees(filtered);
-      // Reset assignedTo if the selected user is not in the new department
-      const isAssignedUserInDepartment = filtered.some(emp => emp.id === newEvent.assignedTo);
-      if (!isAssignedUserInDepartment) {
-        setNewEvent(prev => ({ ...prev, assignedTo: '' }));
+      // Reset assignedTo if the selected users are not in the new department
+      const validAssignedIds = newEvent.assignedTo.filter(empId => 
+        filtered.some(emp => emp.id === empId)
+      );
+      if (validAssignedIds.length !== newEvent.assignedTo.length) {
+        setNewEvent(prev => ({ ...prev, assignedTo: validAssignedIds }));
       }
     } else {
       setFilteredEmployees(employees);
@@ -144,20 +220,31 @@ export function CalendarView() {
 
   // Add event to Supabase
   const handleAddEvent = async () => {
+    // Validate required fields
+    if (!newEvent.title.trim()) {
+      toast.error('Please enter a title for the event');
+      return;
+    }
+    if (!newEvent.date) {
+      toast.error('Please select a date for the event');
+      return;
+    }
+
+
     setLoading(true);
     setError(null);
     try {
       const { error } = await supabase.from('calendar_events').insert({
         title: newEvent.title,
         type: newEvent.type,
-        time: newEvent.time,
+        time: newEvent.time || null,
         status: 'pending',
-        details: newEvent.details,
+        details: newEvent.details || null,
         priority: newEvent.priority,
-        department: newEvent.department,
-        assigned_to: newEvent.assignedTo,
-        assigned_by: '',
-        deadline: newEvent.deadline,
+        department: newEvent.department || null,
+        assigned_to: newEvent.assignedTo.length > 0 ? JSON.stringify(newEvent.assignedTo) : null,
+        assigned_by: null, // Set to null instead of empty string
+        deadline: newEvent.deadline || null,
         date: newEvent.date,
       });
       if (error) throw error;
@@ -170,7 +257,7 @@ export function CalendarView() {
         details: '',
         priority: 'medium',
         department: '',
-        assignedTo: '',
+        assignedTo: [],
         deadline: '',
         date: ''
       });
@@ -293,11 +380,26 @@ export function CalendarView() {
 
     setEvents(prev => {
       const newEvents = { ...prev };
-      // Remove from source
-      newEvents[sourceDate] = newEvents[sourceDate]?.filter(e => e.id !== event.id) || [];
-      // Add to target
+      
+      // Get the original ID (remove any -moved- suffix if present)
+      const originalId = event.id.split('-moved-')[0];
+      
+      // Remove from source - check both original ID and any moved ID variations
+      newEvents[sourceDate] = newEvents[sourceDate]?.filter(e => {
+        const eOriginalId = e.id.split('-moved-')[0];
+        return eOriginalId !== originalId;
+      }) || [];
+      
+      // Remove from target if it already exists there (to prevent duplicates)
+      newEvents[targetDate] = newEvents[targetDate]?.filter(e => {
+        const eOriginalId = e.id.split('-moved-')[0];
+        return eOriginalId !== originalId;
+      }) || [];
+      
+      // Add to target with original ID (no need to create new ID)
       if (!newEvents[targetDate]) newEvents[targetDate] = [];
-      newEvents[targetDate].push({ ...event, id: `${event.id}-moved-${Date.now()}` });
+      newEvents[targetDate].push({ ...event, id: originalId });
+      
       return newEvents;
     });
     
@@ -445,21 +547,51 @@ export function CalendarView() {
                   <div>
                     <Label htmlFor="assignedTo">Assign To</Label>
                     <Select 
-                      value={newEvent.assignedTo} 
-                      onValueChange={(value) => setNewEvent(prev => ({ ...prev, assignedTo: value }))}
+                      value={newEvent.assignedTo.length > 0 ? newEvent.assignedTo[0] : ""} 
+                      onValueChange={(value) => {
+                        if (value && !newEvent.assignedTo.includes(value)) {
+                          setNewEvent(prev => ({ ...prev, assignedTo: [...prev.assignedTo, value] }));
+                        }
+                      }}
                       disabled={!newEvent.department}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder={newEvent.department ? "Select employee" : "Select department first"} />
                       </SelectTrigger>
                       <SelectContent>
-                        {filteredEmployees.map((employee) => (
+                        {filteredEmployees.filter(emp => !newEvent.assignedTo.includes(emp.id)).map((employee) => (
                           <SelectItem key={employee.id} value={employee.id}>
                             {employee.name} ({employee.department})
                           </SelectItem>
                         ))}
-                      </SelectContent>
-                    </Select>
+                    </SelectContent>
+                  </Select>
+                    {/* Display selected employees */}
+                    {newEvent.assignedTo.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        <p className="text-sm text-muted-foreground">Assigned employees:</p>
+                        <div className="flex flex-wrap gap-1">
+                          {newEvent.assignedTo.map((empId) => {
+                            const employee = employees.find(emp => emp.id === empId);
+                            return (
+                              <div key={empId} className="flex items-center gap-1 bg-primary/10 text-primary px-2 py-1 rounded-md text-sm">
+                                <span>{employee?.name || 'Unknown'}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setNewEvent(prev => ({ 
+                                    ...prev, 
+                                    assignedTo: prev.assignedTo.filter(id => id !== empId) 
+                                  }))}
+                                  className="text-primary hover:text-primary/70 ml-1"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div>
@@ -548,7 +680,12 @@ export function CalendarView() {
                   ) : todayEvents.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       {todayEvents
-                        .sort((a, b) => a.time.localeCompare(b.time))
+                        .sort((a, b) => {
+                          // Handle null/undefined time values
+                          const timeA = a.time || '';
+                          const timeB = b.time || '';
+                          return timeA.localeCompare(timeB);
+                        })
                         .map((event) => (
                           <div
                             key={event.id}
@@ -567,11 +704,27 @@ export function CalendarView() {
                               {event.title}
                             </p>
                             <div className="flex items-center justify-between text-sm text-muted-foreground mb-2">
-                              <span className="font-medium">{event.time}</span>
+                              <span className="font-medium">{event.time || 'No time set'}</span>
                               {event.department && <span className="text-xs">• {event.department}</span>}
                             </div>
+                            {event.assignedEmployees && event.assignedEmployees.length > 0 && (
+                              <div className="mb-2">
+                                <div className="flex flex-wrap gap-1">
+                                  {event.assignedEmployees.slice(0, 2).map((emp) => (
+                                    <span key={emp.id} className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                                      {emp.name}
+                                    </span>
+                                  ))}
+                                  {event.assignedEmployees.length > 2 && (
+                                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                                      +{event.assignedEmployees.length - 2} more
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
                             <p className="text-xs text-muted-foreground line-clamp-2 leading-tight">
-                              {event.details}
+                              {event.details || 'No details'}
                             </p>
                           </div>
                         ))}
@@ -628,7 +781,12 @@ export function CalendarView() {
                   <CardContent className="p-2">
                     <div className="space-y-1">{/* Dynamic height for all events */}
                       {dayEvents
-                        .sort((a, b) => a.time.localeCompare(b.time))
+                        .sort((a, b) => {
+                          // Handle null/undefined time values
+                          const timeA = a.time || '';
+                          const timeB = b.time || '';
+                          return timeA.localeCompare(timeB);
+                        })
                         .map((event) => (
                           <div
                             key={event.id}
@@ -651,14 +809,30 @@ export function CalendarView() {
                             <p className="text-xs font-medium leading-tight text-foreground mb-1 line-clamp-2">
                               {event.title}
                             </p>
+                            {event.assignedEmployees && event.assignedEmployees.length > 0 && (
+                              <div className="mb-1">
+                                <div className="flex flex-wrap gap-1">
+                                  {event.assignedEmployees.slice(0, 1).map((emp) => (
+                                    <span key={emp.id} className="text-xs bg-blue-100 text-blue-800 px-1 py-0.5 rounded">
+                                      {emp.name}
+                                    </span>
+                                  ))}
+                                  {event.assignedEmployees.length > 1 && (
+                                    <span className="text-xs bg-gray-100 text-gray-600 px-1 py-0.5 rounded">
+                                      +{event.assignedEmployees.length - 1}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
                             {isExpanded && (
                               <>
                                 <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                  <span>{event.time}</span>
+                                  <span>{event.time || 'No time'}</span>
                                   {event.department && <span>• {event.department}</span>}
                                 </div>
                                 <p className="text-xs text-muted-foreground mt-1 line-clamp-2 leading-tight">
-                                  {event.details}
+                                  {event.details || 'No details'}
                                 </p>
                               </>
                             )}
@@ -698,10 +872,21 @@ export function CalendarView() {
                     </div>
                     <p className="font-semibold text-green-900 mb-1">{event.title}</p>
                     <div className="flex items-center justify-between text-sm text-green-700 mb-2">
-                      <span>{event.time}</span>
+                      <span>{event.time || 'No time'}</span>
                       {event.department && <span>• {event.department}</span>}
                     </div>
-                    <p className="text-xs text-green-600 line-clamp-2">{event.details}</p>
+                    {event.assignedEmployees && event.assignedEmployees.length > 0 && (
+                      <div className="mb-2">
+                        <div className="flex flex-wrap gap-1">
+                          {event.assignedEmployees.map((emp) => (
+                            <span key={emp.id} className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
+                              {emp.name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <p className="text-xs text-green-600 line-clamp-2">{event.details || 'No details'}</p>
                   </div>
                 ))}
                 {completedEvents.length === 0 && (
@@ -736,10 +921,21 @@ export function CalendarView() {
                     </div>
                     <p className="font-semibold text-red-900 mb-1">{event.title}</p>
                     <div className="flex items-center justify-between text-sm text-red-700 mb-2">
-                      <span>{event.time}</span>
+                      <span>{event.time || 'No time'}</span>
                       {event.department && <span>• {event.department}</span>}
                     </div>
-                    <p className="text-xs text-red-600 line-clamp-2">{event.details}</p>
+                    {event.assignedEmployees && event.assignedEmployees.length > 0 && (
+                      <div className="mb-2">
+                        <div className="flex flex-wrap gap-1">
+                          {event.assignedEmployees.map((emp) => (
+                            <span key={emp.id} className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded">
+                              {emp.name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <p className="text-xs text-red-600 line-clamp-2">{event.details || 'No details'}</p>
                   </div>
                 ))}
                 {cancelledEvents.length === 0 && (
@@ -785,6 +981,18 @@ export function CalendarView() {
                 <div>
                   <Label className="text-sm font-medium">Department</Label>
                   <p className="text-sm text-muted-foreground">{selectedEvent.department}</p>
+                </div>
+              )}
+              {selectedEvent.assignedEmployees && selectedEvent.assignedEmployees.length > 0 && (
+                <div>
+                  <Label className="text-sm font-medium">Assigned To</Label>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {selectedEvent.assignedEmployees.map((emp) => (
+                      <Badge key={emp.id} variant="secondary" className="text-sm">
+                        {emp.name}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
               )}
               <div>

@@ -76,7 +76,7 @@ export function UniversalSearchBar({
           .limit(5);
 
         if (orders) {
-          orders.forEach(order => {
+          (orders as any[]).forEach((order: any) => {
             allResults.push({
               id: order.id,
               type: 'order',
@@ -94,18 +94,18 @@ export function UniversalSearchBar({
         // Search Customers
         const { data: customers } = await supabase
           .from('customers')
-          .select('id, company_name, contact_person, email, phone, customer_type')
-          .or(`company_name.ilike.%${searchTerm}%,contact_person.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%`)
+          .select('id, company_name, contact_person, email, phone, mobile, address, city, state, gstin, pan, customer_type')
+          .or(`company_name.ilike.%${searchTerm}%,contact_person.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%,phone.ilike.%${searchTerm}%,mobile.ilike.%${searchTerm}%,address.ilike.%${searchTerm}%,city.ilike.%${searchTerm}%,state.ilike.%${searchTerm}%,gstin.ilike.%${searchTerm}%,pan.ilike.%${searchTerm}%`)
           .limit(5);
 
         if (customers) {
-          customers.forEach(customer => {
+          (customers as any[]).forEach((customer: any) => {
             allResults.push({
               id: customer.id,
               type: 'customer',
               title: customer.company_name,
               subtitle: customer.contact_person || customer.email,
-              description: customer.phone,
+              description: customer.mobile || customer.phone,
               status: customer.customer_type,
               icon: Building,
               route: `/crm/customers/${customer.id}`
@@ -121,7 +121,7 @@ export function UniversalSearchBar({
           .limit(5);
 
         if (employees) {
-          employees.forEach(employee => {
+          (employees as any[]).forEach((employee: any) => {
             allResults.push({
               id: employee.id,
               type: 'employee',
@@ -143,7 +143,7 @@ export function UniversalSearchBar({
           .limit(5);
 
         if (products) {
-          products.forEach(product => {
+          (products as any[]).forEach((product: any) => {
             allResults.push({
               id: product.id,
               type: 'product',
@@ -165,7 +165,7 @@ export function UniversalSearchBar({
           .limit(5);
 
         if (invoices) {
-          invoices.forEach(invoice => {
+          (invoices as any[]).forEach((invoice: any) => {
             allResults.push({
               id: invoice.id,
               type: 'invoice',

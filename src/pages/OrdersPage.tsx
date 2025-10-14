@@ -70,6 +70,13 @@ const OrdersPage = () => {
       case 'pending': return 'bg-yellow-100 text-yellow-800';
       case 'confirmed': return 'bg-blue-100 text-blue-800';
       case 'in_production': return 'bg-purple-100 text-purple-800';
+      case 'designing_done': return 'bg-teal-100 text-teal-800';
+      case 'under_procurement': return 'bg-amber-100 text-amber-800';
+      case 'under_cutting': return 'bg-orange-100 text-orange-800';
+      case 'under_stitching': return 'bg-indigo-100 text-indigo-800';
+      case 'under_qc': return 'bg-pink-100 text-pink-800';
+      case 'ready_for_dispatch': return 'bg-green-100 text-green-800';
+      case 'rework': return 'bg-red-100 text-red-800';
       case 'completed': return 'bg-green-100 text-green-800';
       case 'cancelled': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-800';
@@ -209,6 +216,8 @@ const OrdersPage = () => {
                         <DropdownMenuItem onClick={() => setFilterStatus(null)} className={!filterStatus ? 'bg-accent/20 font-semibold' : ''}>All Statuses</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setFilterStatus("pending")} className={filterStatus === "pending" ? 'bg-accent/20 font-semibold' : ''}>Pending</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setFilterStatus("confirmed")} className={filterStatus === "confirmed" ? 'bg-accent/20 font-semibold' : ''}>Confirmed</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setFilterStatus("designing_done")} className={filterStatus === "designing_done" ? 'bg-accent/20 font-semibold' : ''}>Designing Done</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setFilterStatus("under_procurement")} className={filterStatus === "under_procurement" ? 'bg-accent/20 font-semibold' : ''}>Under Procurement</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setFilterStatus("in_production")} className={filterStatus === "in_production" ? 'bg-accent/20 font-semibold' : ''}>In Production</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setFilterStatus("completed")} className={filterStatus === "completed" ? 'bg-accent/20 font-semibold' : ''}>Completed</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setFilterStatus("cancelled")} className={filterStatus === "cancelled" ? 'bg-accent/20 font-semibold' : ''}>Cancelled</DropdownMenuItem>

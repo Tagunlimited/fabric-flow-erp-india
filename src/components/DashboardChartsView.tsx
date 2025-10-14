@@ -44,7 +44,7 @@ export function DashboardChartsView({ data, chartTypes }: DashboardChartsViewPro
       name: "Revenue",
       value: Math.round(data.orders.reduce((sum: number, order: any) => sum + order.totalAmount, 0) / 100000),
       fullValue: `₹${(data.orders.reduce((sum: number, order: any) => sum + order.totalAmount, 0) / 100000).toFixed(1)}L`,
-      change: "+12.5%",
+      change: "N/A",
       color: "#10B981"
     },
     {
@@ -55,21 +55,21 @@ export function DashboardChartsView({ data, chartTypes }: DashboardChartsViewPro
       fullValue: data.orders.filter((order: any) => 
         ['pending', 'confirmed', 'in_production', 'quality_check'].includes(order.status)
       ).length.toString(),
-      change: "+8.2%",
+      change: "N/A",
       color: "#3B82F6"
     },
     {
       name: "Production Efficiency",
       value: Math.round(data.productionOrders.reduce((sum: number, order: any) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1)),
       fullValue: `${Math.round(data.productionOrders.reduce((sum: number, order: any) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%`,
-      change: "-2.1%",
+      change: "N/A",
       color: "#F59E0B"
     },
     {
       name: "Quality Pass Rate",
       value: Math.round(((data.qualityChecks || []).filter((qc: any) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100),
       fullValue: `${Math.round(((data.qualityChecks || []).filter((qc: any) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100)}%`,
-      change: "+5.3%",
+      change: "N/A",
       color: "#8B5CF6"
     }
   ];

@@ -281,7 +281,126 @@ const GRNForm = () => {
         .order('created_at');
 
       if (itemsError) throw itemsError;
-      setGrnItems((itemsData as any) || []);
+      
+      // Enrich items with image data
+      const enrichedItems = await Promise.all((itemsData || []).map(async (item: any) => {
+        let enrichedItem = { ...item };
+        
+        console.log('Processing GRN item for image enrichment:', {
+          item_name: item.item_name,
+          item_type: item.item_type,
+          item_id: item.item_id,
+          current_image_url: item.item_image_url
+        });
+        
+        // If item_image_url is missing, try multiple strategies to fetch it
+        if (!item.item_image_url) {
+          try {
+            if (item.item_type === 'fabric') {
+              console.log('Trying to enrich fabric item:', item.item_name);
+              
+              // Strategy 1: Try to fetch by item_id from fabric_master
+              if (item.item_id) {
+                const { data: fabricData, error: fabricError } = await supabase
+                  .from('fabric_master')
+                  .select('id, image, fabric_name, color, gsm')
+                  .eq('id', item.item_id)
+                  .single();
+                
+                console.log('Fabric fetch by ID result:', { fabricData, fabricError });
+                
+                if (fabricData?.image) {
+                  enrichedItem.item_image_url = fabricData.image;
+                  console.log('✅ Enriched fabric item with image by ID:', item.item_name, fabricData.image);
+                }
+              }
+              
+              // Strategy 2: If still no image, try to find by fabric name
+              if (!enrichedItem.item_image_url && item.fabric_name) {
+                const { data: fabricByName, error: nameError } = await supabase
+                  .from('fabric_master')
+                  .select('id, image, fabric_name, color, gsm')
+                  .ilike('fabric_name', `%${item.fabric_name}%`)
+                  .single();
+                
+                console.log('Fabric fetch by name result:', { fabricByName, nameError });
+                
+                if (fabricByName?.image) {
+                  enrichedItem.item_image_url = fabricByName.image;
+                  console.log('✅ Enriched fabric item with image by name:', item.item_name, fabricByName.image);
+                }
+              }
+              
+              // Strategy 3: If still no image, try to find by item name
+              if (!enrichedItem.item_image_url && item.item_name) {
+                const { data: fabricByItemName, error: itemNameError } = await supabase
+                  .from('fabric_master')
+                  .select('id, image, fabric_name, color, gsm')
+                  .ilike('fabric_name', `%${item.item_name.split(' - ')[0]}%`)
+                  .single();
+                
+                console.log('Fabric fetch by item name result:', { fabricByItemName, itemNameError });
+                
+                if (fabricByItemName?.image) {
+                  enrichedItem.item_image_url = fabricByItemName.image;
+                  console.log('✅ Enriched fabric item with image by item name:', item.item_name, fabricByItemName.image);
+                }
+              }
+            } else {
+              console.log('Trying to enrich regular item:', item.item_name);
+              
+              // Strategy 1: Try to fetch by item_id from item_master
+              if (item.item_id) {
+                const { data: itemMasterData, error: itemError } = await supabase
+                  .from('item_master')
+                  .select('id, image_url, image, item_name, item_type')
+                  .eq('id', item.item_id)
+                  .single();
+                
+                console.log('Item master fetch by ID result:', { itemMasterData, itemError });
+                
+                if (itemMasterData?.image_url || itemMasterData?.image) {
+                  enrichedItem.item_image_url = itemMasterData.image_url || itemMasterData.image;
+                  console.log('✅ Enriched item with image by ID:', item.item_name, itemMasterData.image_url || itemMasterData.image);
+                }
+              }
+              
+              // Strategy 2: If still no image, try to find by item name
+              if (!enrichedItem.item_image_url && item.item_name) {
+                const { data: itemByName, error: nameError } = await supabase
+                  .from('item_master')
+                  .select('id, image_url, image, item_name, item_type')
+                  .ilike('item_name', `%${item.item_name}%`)
+                  .single();
+                
+                console.log('Item master fetch by name result:', { itemByName, nameError });
+                
+                if (itemByName?.image_url || itemByName?.image) {
+                  enrichedItem.item_image_url = itemByName.image_url || itemByName.image;
+                  console.log('✅ Enriched item with image by name:', item.item_name, itemByName.image_url || itemByName.image);
+                }
+              }
+            }
+            
+            // Log final result
+            console.log('Final enrichment result:', {
+              item_name: item.item_name,
+              original_image_url: item.item_image_url,
+              final_image_url: enrichedItem.item_image_url,
+              success: !!enrichedItem.item_image_url
+            });
+            
+          } catch (error) {
+            console.warn('❌ Failed to enrich image for item:', item.item_name, error);
+          }
+        } else {
+          console.log('✅ Item already has image URL:', item.item_name, item.item_image_url);
+        }
+        
+        return enrichedItem;
+      }));
+      
+      setGrnItems(enrichedItems);
 
     } catch (error) {
       console.error('Error loading GRN:', error);
@@ -398,7 +517,7 @@ const GRNForm = () => {
             try {
               const { data: itemByName, error: nameError } = await supabase
                 .from('item_master')
-                .select('id, color, item_name, image_url')
+                .select('id, color, item_name, image_url, image')
                 .ilike('item_name', `%${item.item_name}%`)
                 .single();
               
@@ -406,7 +525,7 @@ const GRNForm = () => {
               
               if (itemByName) {
                 itemColor = (itemByName as any).color;
-                itemImageUrl = (itemByName as any).image_url;
+                itemImageUrl = (itemByName as any).image_url || (itemByName as any).image;
                 // Clear fabric data for non-fabric items
                 fabricColor = null;
                 fabricGsm = null;
@@ -442,7 +561,7 @@ const GRNForm = () => {
               console.log('Fetching additional item data for item_id:', item.item_id);
               const { data: itemData, error: itemError } = await supabase
                 .from('item_master')
-                .select('color, item_name, image_url')
+                .select('color, item_name, image_url, image')
                 .eq('id', item.item_id)
                 .single();
               
@@ -450,7 +569,7 @@ const GRNForm = () => {
               
               if (itemData) {
                 if (!itemColor) itemColor = (itemData as any).color;
-                if (!itemImageUrl) itemImageUrl = (itemData as any).image_url;
+                if (!itemImageUrl) itemImageUrl = (itemData as any).image_url || (itemData as any).image;
                 console.log('Updated missing item details:', { itemColor, itemImageUrl });
               }
             }
@@ -472,7 +591,8 @@ const GRNForm = () => {
             fabric_gsm: item.fabric_gsm,
             fabric_name: item.fabric_name,
             item_color: item.item_color,
-            color: item.color
+            color: item.color,
+            item_image_url: item.item_image_url
           }
         });
         
@@ -486,6 +606,17 @@ const GRNForm = () => {
             fabric_gsm: fabricGsm,
             fabric_name: fabricName,
             item_color: itemColor
+          });
+        }
+        
+        // Additional debugging: Check if image URL is missing
+        if (!itemImageUrl) {
+          console.warn('⚠️ MISSING IMAGE URL for item:', {
+            item_name: item.item_name,
+            item_type: item.item_type,
+            item_id: item.item_id,
+            original_image_url: item.item_image_url,
+            final_image_url: itemImageUrl
           });
         }
         
@@ -587,66 +718,79 @@ const GRNForm = () => {
       
       for (const item of approvedItems) {
         if (item.quality_status === 'approved' && item.approved_quantity > 0) {
-          if (item.item_type === 'fabric') {
-            // Get current fabric inventory
-            const { data: fabricData, error: fetchError } = await supabase
-              .from('fabric_master')
-              .select('inventory')
-              .eq('id', item.item_id)
-              .single();
+          // Only update master table inventory if item_id exists
+          if (item.item_id && item.item_type === 'fabric') {
+            try {
+              // Get current fabric inventory
+              const { data: fabricData, error: fetchError } = await supabase
+                .from('fabric_master')
+                .select('inventory')
+                .eq('id', item.item_id)
+                .single();
 
-            if (fetchError) {
-              console.error('Error fetching fabric inventory:', fetchError);
-              throw new Error(`Failed to fetch fabric inventory: ${fetchError.message}`);
+              if (fetchError) {
+                console.error('Error fetching fabric inventory:', fetchError);
+                console.log('Skipping fabric inventory update for item:', item.item_name);
+              } else {
+                const currentInventory = (fabricData as any)?.inventory || 0;
+                const newInventory = currentInventory + item.approved_quantity;
+
+                // Update fabric_master inventory
+                const { error: fabricError } = await supabase
+                  .from('fabric_master')
+                  .update({
+                    inventory: newInventory
+                  } as any)
+                  .eq('id', item.item_id as any);
+
+                if (fabricError) {
+                  console.error('Error updating fabric inventory:', fabricError);
+                  console.log('Skipping fabric inventory update for item:', item.item_name);
+                } else {
+                  console.log(`Updated fabric inventory for ${item.item_name}: ${currentInventory} + ${item.approved_quantity} = ${newInventory}`);
+                }
+              }
+            } catch (error) {
+              console.error('Error processing fabric inventory update:', error);
+              console.log('Continuing with warehouse inventory insertion...');
             }
+          } else if (item.item_id && (item.item_type === 'item' || item.item_type === 'product')) {
+            try {
+              // Get current item inventory
+              const { data: itemData, error: fetchError } = await supabase
+                .from('item_master')
+                .select('current_stock')
+                .eq('id', item.item_id)
+                .single();
 
-            const currentInventory = (fabricData as any)?.inventory || 0;
-            const newInventory = currentInventory + item.approved_quantity;
+              if (fetchError) {
+                console.error('Error fetching item inventory:', fetchError);
+                console.log('Skipping item inventory update for item:', item.item_name);
+              } else {
+                const currentStock = (itemData as any)?.current_stock || 0;
+                const newStock = currentStock + item.approved_quantity;
 
-            // Update fabric_master inventory
-            const { error: fabricError } = await supabase
-              .from('fabric_master')
-              .update({
-                inventory: newInventory
-              } as any)
-              .eq('id', item.item_id as any);
+                // Update item_master inventory
+                const { error: itemError } = await supabase
+                  .from('item_master')
+                  .update({
+                    current_stock: newStock
+                  } as any)
+                  .eq('id', item.item_id as any);
 
-            if (fabricError) {
-              console.error('Error updating fabric inventory:', fabricError);
-              throw new Error(`Failed to update fabric inventory: ${fabricError.message}`);
+                if (itemError) {
+                  console.error('Error updating item inventory:', itemError);
+                  console.log('Skipping item inventory update for item:', item.item_name);
+                } else {
+                  console.log(`Updated item inventory for ${item.item_name}: ${currentStock} + ${item.approved_quantity} = ${newStock}`);
+                }
+              }
+            } catch (error) {
+              console.error('Error processing item inventory update:', error);
+              console.log('Continuing with warehouse inventory insertion...');
             }
-            
-            console.log(`Updated fabric inventory for ${item.item_name}: ${currentInventory} + ${item.approved_quantity} = ${newInventory}`);
-          } else if (item.item_type === 'item' || item.item_type === 'product') {
-            // Get current item inventory
-            const { data: itemData, error: fetchError } = await supabase
-              .from('item_master')
-              .select('current_stock')
-              .eq('id', item.item_id)
-              .single();
-
-            if (fetchError) {
-              console.error('Error fetching item inventory:', fetchError);
-              throw new Error(`Failed to fetch item inventory: ${fetchError.message}`);
-            }
-
-            const currentStock = (itemData as any)?.current_stock || 0;
-            const newStock = currentStock + item.approved_quantity;
-
-            // Update item_master inventory
-            const { error: itemError } = await supabase
-              .from('item_master')
-              .update({
-                current_stock: newStock
-              } as any)
-              .eq('id', item.item_id as any);
-
-            if (itemError) {
-              console.error('Error updating item inventory:', itemError);
-              throw new Error(`Failed to update item inventory: ${itemError.message}`);
-            }
-            
-            console.log(`Updated item inventory for ${item.item_name}: ${currentStock} + ${item.approved_quantity} = ${newStock}`);
+          } else {
+            console.log(`Skipping master table inventory update for ${item.item_name} - no item_id or custom item`);
           }
 
           // Add item to warehouse inventory tracking
@@ -658,7 +802,7 @@ const GRNForm = () => {
                 grn_item_id: item.id,
                 item_type: (item.item_type === 'fabric' ? 'FABRIC' : 
                           item.item_type === 'product' ? 'PRODUCT' : 'ITEM') as any,
-                item_id: item.item_id,
+                item_id: item.item_id || null, // Allow null for custom items
                 item_name: item.item_name,
                 item_code: item.item_code || item.item_name,
                 quantity: item.approved_quantity,
@@ -697,6 +841,17 @@ const GRNForm = () => {
     }
 
     try {
+      // First, check if grn_master table exists
+      const { data: tableCheck, error: tableError } = await supabase
+        .from('grn_master')
+        .select('id')
+        .limit(1);
+      
+      if (tableError) {
+        console.error('GRN master table error:', tableError);
+        toast.error('GRN tables are not set up. Please run the GRN setup script in Supabase.');
+        return;
+      }
       // Validate status transition
       const currentStatus = grn.status || 'draft';
       const validTransitions: Record<string, string[]> = {
@@ -747,12 +902,20 @@ const GRNForm = () => {
         updateData.approved_at = new Date().toISOString();
       }
 
+      console.log('Updating GRN with data:', updateData);
+      console.log('GRN ID:', grn.id);
+      
       const { error } = await supabase
         .from('grn_master')
         .update(updateData)
         .eq('id', grn.id as any);
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error updating GRN status:', error);
+        console.error('Update data:', updateData);
+        console.error('GRN ID:', grn.id);
+        throw error;
+      }
       
       setGrn(prev => ({ ...prev, ...updateData }));
       
@@ -774,8 +937,11 @@ const GRNForm = () => {
             if (missing.length > 0) {
               await updateInventory(missing);
             }
+            // Notify warehouse views to refresh
+            try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
           } catch (e) {
             console.warn('Skipping client-side inventory insert; DB trigger should handle it.', e);
+            try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
           }
         }
       }
@@ -872,11 +1038,12 @@ const GRNForm = () => {
         if (grnError) throw grnError;
 
         // Insert GRN items
+        console.log('GRN items to insert:', grnItems);
         const itemsToInsert = grnItems.map(item => ({
           grn_id: (grnData as any).id,
           po_item_id: item.po_item_id,
           item_type: item.item_type,
-          item_id: item.item_id,
+          item_id: item.item_id || null, // Allow null for items without specific item_id
           item_name: item.item_name,
           item_image_url: item.item_image_url,
           ordered_quantity: item.ordered_quantity,
@@ -901,29 +1068,50 @@ const GRNForm = () => {
           item_color: item.item_color
         }));
 
+        console.log('Items to insert:', itemsToInsert);
         const { error: itemsError } = await supabase
           .from('grn_items')
           .insert(itemsToInsert as any);
 
-        if (itemsError) throw itemsError;
+        if (itemsError) {
+          console.error('Error inserting GRN items:', itemsError);
+          throw itemsError;
+        }
 
         toast.success('GRN created successfully');
         navigate(`/procurement/grn/${(grnData as any).id}`);
       } else {
         // Update existing GRN
+        console.log('Updating GRN with data:', grn);
+        console.log('GRN totals:', totals);
         const { error: grnError } = await supabase
           .from('grn_master')
           .update({
-            ...grn,
+            po_id: grn.po_id,
+            supplier_id: grn.supplier_id,
+            grn_date: grn.grn_date,
+            received_date: grn.received_date,
+            received_by: grn.received_by,
+            received_at_location: grn.received_at_location,
+            status: grn.status,
             total_items_received: totals.totalItems,
             total_items_approved: grnItems.filter(item => item.quality_status === 'approved').length,
             total_items_rejected: grnItems.filter(item => item.quality_status === 'rejected' || item.quality_status === 'damaged').length,
             total_amount_received: totals.totalAmount,
-            total_amount_approved: totals.approvedAmount
+            total_amount_approved: totals.approvedAmount,
+            quality_inspector: grn.quality_inspector,
+            inspection_date: grn.inspection_date,
+            inspection_notes: grn.inspection_notes,
+            approved_by: grn.approved_by,
+            approved_at: grn.approved_at,
+            rejection_reason: grn.rejection_reason
           } as any)
           .eq('id', id as any);
 
-        if (grnError) throw grnError;
+        if (grnError) {
+          console.error('Error updating GRN:', grnError);
+          throw grnError;
+        }
 
         // Update GRN items
         for (const item of grnItems) {
@@ -946,8 +1134,27 @@ const GRNForm = () => {
             const { error } = await supabase
               .from('grn_items')
               .insert({ 
-                ...item, 
                 grn_id: id,
+                po_item_id: item.po_item_id,
+                item_type: item.item_type,
+                item_id: item.item_id || null, // Allow null for items without specific item_id
+                item_name: item.item_name,
+                item_image_url: item.item_image_url,
+                ordered_quantity: item.ordered_quantity,
+                received_quantity: item.received_quantity,
+                approved_quantity: item.approved_quantity,
+                rejected_quantity: item.rejected_quantity,
+                unit_of_measure: item.unit_of_measure,
+                unit_price: item.unit_price,
+                total_price: item.total_price,
+                gst_rate: item.gst_rate,
+                gst_amount: item.gst_amount,
+                line_total: item.line_total,
+                quality_status: item.quality_status,
+                batch_number: item.batch_number,
+                expiry_date: item.expiry_date,
+                condition_notes: item.condition_notes,
+                inspection_notes: item.inspection_notes,
                 // Ensure fabric details are included in insert
                 fabric_color: item.fabric_color,
                 fabric_gsm: item.fabric_gsm,
@@ -1116,6 +1323,143 @@ const GRNForm = () => {
           </div>
         </div>
       </div>
+      
+      {/* GRN Status Management Section */}
+      {!isNew && grnItems.length > 0 && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Package className="w-5 h-5" />
+              GRN Status Management
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-3">
+              {grn.status === 'draft' && (
+                <Button 
+                  onClick={() => updateGrnStatus('received')} 
+                  variant="outline"
+                  className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                >
+                  <CheckCircle className="w-4 h-4 mr-2" />
+                  Mark as Received
+                </Button>
+              )}
+              
+              {grn.status === 'received' && (
+                <>
+                  <Button 
+                    onClick={() => updateGrnStatus('under_inspection')} 
+                    variant="outline"
+                    className="bg-yellow-50 hover:bg-yellow-100 text-yellow-700 border-yellow-200"
+                  >
+                    <AlertCircle className="w-4 h-4 mr-2" />
+                    Move to Inspection
+                  </Button>
+                  <Button 
+                    onClick={() => updateGrnStatus('approved')} 
+                    variant="outline"
+                    className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+                    disabled={!grnItems.some(item => item.quality_status === 'approved')}
+                  >
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Approve GRN
+                  </Button>
+                </>
+              )}
+              
+              {grn.status === 'under_inspection' && (
+                <>
+                  <Button 
+                    onClick={() => updateGrnStatus('approved')} 
+                    variant="outline"
+                    className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+                    disabled={!grnItems.some(item => item.quality_status === 'approved')}
+                  >
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Approve GRN
+                  </Button>
+                  <Button 
+                    onClick={() => updateGrnStatus('partially_approved')} 
+                    variant="outline"
+                    className="bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200"
+                    disabled={!grnItems.some(item => item.quality_status === 'approved')}
+                  >
+                    <AlertCircle className="w-4 h-4 mr-2" />
+                    Partial Approval
+                  </Button>
+                  <Button 
+                    onClick={() => updateGrnStatus('rejected')} 
+                    variant="outline"
+                    className="bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
+                    disabled={!grnItems.some(item => item.quality_status === 'rejected' || item.quality_status === 'damaged')}
+                  >
+                    <XCircle className="w-4 h-4 mr-2" />
+                    Reject GRN
+                  </Button>
+                </>
+              )}
+              
+              {grn.status === 'partially_approved' && (
+                <>
+                  <Button 
+                    onClick={() => updateGrnStatus('approved')} 
+                    variant="outline"
+                    className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+                  >
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Full Approval
+                  </Button>
+                  <Button 
+                    onClick={() => updateGrnStatus('rejected')} 
+                    variant="outline"
+                    className="bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
+                  >
+                    <XCircle className="w-4 h-4 mr-2" />
+                    Reject GRN
+                  </Button>
+                </>
+              )}
+              
+              {(grn.status === 'approved' || grn.status === 'rejected' || grn.status === 'partially_approved') && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <CheckCircle className="w-4 h-4 text-green-600" />
+                  <span>GRN is {grn.status.replace('_', ' ')} and items have been moved to receiving zone</span>
+                </div>
+              )}
+            </div>
+            
+            {/* Status Information */}
+            <div className="mt-4 p-3 bg-muted/50 rounded-lg">
+              <div className="text-sm text-muted-foreground">
+                <strong>Current Status:</strong> {grn.status?.replace('_', ' ').toUpperCase()}
+              </div>
+              <div className="text-sm text-muted-foreground mt-1">
+                <strong>Approved Items:</strong> {grnItems.filter(item => item.quality_status === 'approved').length} / {grnItems.length}
+              </div>
+              {grn.status === 'approved' && (
+                <div className="text-sm text-green-600 mt-1">
+                  ✓ Approved items have been added to warehouse inventory in the receiving zone
+                </div>
+              )}
+              
+              {/* Warehouse Status */}
+              {grn.status === 'approved' && (
+                <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center gap-2 text-green-700">
+                    <Package className="w-4 h-4" />
+                    <span className="font-medium">Items in Receiving Zone</span>
+                  </div>
+                  <div className="text-sm text-green-600 mt-1">
+                    Approved items are now available in the warehouse inventory system. 
+                    They can be moved to storage zones or dispatched as needed.
+                  </div>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
       {/* Preview Dialog */}
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="max-w-5xl w-[95vw]">
@@ -1382,6 +1726,10 @@ const GRNForm = () => {
                               src={item.item_image_url}
                               alt={item.item_name}
                               className="w-16 h-16 object-cover rounded-lg border"
+                              fallbackText={item.item_type === 'fabric' ? 'FAB' : 'ITEM'}
+                              onError={(error) => {
+                                console.warn('ProductImage failed to load for item:', item.item_name, error);
+                              }}
                             />
                             <div className="flex-1">
                               <h4 className="font-semibold text-lg">{item.item_name}</h4>
