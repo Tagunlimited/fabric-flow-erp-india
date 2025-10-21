@@ -7,9 +7,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { CheckCircle, XCircle, Clock, Users, UserCheck, UserX, Plus, Edit, Trash2, Key, Mail, Phone, MapPin, Calendar, Briefcase } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Users, UserCheck, UserX, Plus, Edit, Trash2, Key, Mail, Phone, MapPin, Calendar, Briefcase, Settings, Eye, EyeOff, Lock, Unlock } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { DatabaseTest } from '../DatabaseTest';
+import { SetupAdminPermissions } from '../SetupAdminPermissions';
 import { format, differenceInYears, differenceInMonths } from 'date-fns';
 
 interface Employee {
@@ -49,6 +51,27 @@ interface UserProfile {
   created_at: string;
 }
 
+interface SidebarItem {
+  id: string;
+  title: string;
+  url?: string;
+  icon: string;
+  parent_id?: string;
+  sort_order: number;
+  is_active: boolean;
+  children?: SidebarItem[];
+}
+
+interface UserSidebarPermission {
+  id: string;
+  user_id: string;
+  sidebar_item_id: string;
+  can_view: boolean;
+  can_edit: boolean;
+  is_override: boolean;
+  sidebar_item: SidebarItem;
+}
+
 export function EmployeeAccessManagement() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [userProfiles, setUserProfiles] = useState<UserProfile[]>([]);
@@ -58,134 +81,20 @@ export function EmployeeAccessManagement() {
   const [newUserData, setNewUserData] = useState({
     email: '',
     password: '',
-    confirmPassword: '',
-    role: ''
+    confirmPassword: ''
   });
   const [processingUser, setProcessingUser] = useState<string | null>(null);
 
-  const [roles, setRoles] = useState<Array<{ id: number; name: string; description?: string }>>([]);
+  const [sidebarItems, setSidebarItems] = useState<SidebarItem[]>([]);
+  const [userSidebarPermissions, setUserSidebarPermissions] = useState<UserSidebarPermission[]>([]);
+  const [showSidebarPermissions, setShowSidebarPermissions] = useState<string | null>(null);
 
-  // Define role mapping first to avoid scope issues
-  // Note: Database only accepts 'admin' as valid enum value
-  const roleMapping: { [key: string]: string } = {
-    'Admin': 'admin',
-    'Production Manager': 'admin', // Map to admin since production is not valid
-    'Cutting Master': 'admin', // Map to admin since production is not valid
-    'QC Manager': 'admin', // Map to admin since quality is not valid
-    'Sales Manager': 'admin', // Map to admin since sales is not valid
-    'Inventory Manager': 'admin', // Map to admin since manager is not valid
-    'Accounts Manager': 'admin', // Map to admin since manager is not valid
-    'HR Manager': 'admin', // Map to admin since manager is not valid
-    'Procurement Manager': 'admin', // Map to admin since manager is not valid
-    'Design Manager': 'admin' // Map to admin since manager is not valid
-  };
 
-  // Map role names from roles table to user_role enum values
-  const mapRoleNameToEnum = (roleName: string): string => {
-    // Normalize incoming display values to DB enum values
-    const input = (roleName || '').trim().toLowerCase();
-    const map: Record<string, string> = {
-      'admin': 'admin',
-      'sales manager': 'sales manager',
-      'sales': 'sales manager',
-      'production manager': 'production manager',
-      'production': 'production manager',
-      'qc manager': 'qc manager',
-      'quality': 'qc manager',
-      'cutting master': 'cutting master',
-      'packaging & dispatch manager': 'packaging & dispatch manager',
-      'dispatch': 'packaging & dispatch manager',
-      'graphic & printing': 'graphic & printing',
-      'procurement manager': 'procurement manager',
-    };
-    return map[input] || 'sales manager';
-  };
-
-  // Test database access function
-  const testDatabaseAccess = async () => {
-    try {
-      console.log('=== TESTING DATABASE ACCESS ===');
-      
-      // Test 1: Basic connection
-      const { data: test1, error: error1 } = await supabase
-        .from('profiles')
-        .select('count')
-        .limit(1);
-      
-      console.log('Test 1 - Basic connection:', { data: test1, error: error1 });
-      
-      // Test 2: Check table structure
-      const { data: test2, error: error2 } = await supabase
-        .from('profiles')
-        .select('*')
-        .limit(1);
-      
-      console.log('Test 2 - Table structure:', { data: test2, error: error2 });
-      
-      // Test 3: Check if we can see any profiles
-      const { data: test3, error: error3 } = await supabase
-        .from('profiles')
-        .select('id, user_id, full_name, email, role')
-        .limit(5);
-      
-      console.log('Test 3 - Sample profiles:', { data: test3, error: error3 });
-      
-      // Test 4: Check current user authentication
-      const { data: { user: currentUser } } = await supabase.auth.getUser();
-      console.log('Test 4 - Current user:', currentUser);
-      
-      // Test 5: Check current user profile
-      if (currentUser) {
-        const { data: profile, error: profileError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('user_id', currentUser.id)
-          .single();
-        
-        console.log('Test 5 - Current user profile:', { data: profile, error: profileError });
-      }
-      
-      // Test 6: Try a simple insert test (with dummy data)
-      console.log('Test 6 - Testing insert permissions...');
-      const testInsertData = {
-        user_id: '00000000-0000-0000-0000-000000000000', // Dummy UUID
-        full_name: 'TEST USER',
-        email: 'test@example.com',
-        role: 'sales',
-        status: 'approved'
-      };
-      
-      const { error: insertTestError } = await supabase
-        .from('profiles')
-        .insert(testInsertData);
-      
-      console.log('Test 6 - Insert test result:', { error: insertTestError });
-      
-      return { success: true, message: 'Database access test completed' };
-    } catch (error) {
-      console.error('Database access test failed:', error);
-      return { success: false, error: error };
-    }
-  };
 
   const fetchData = async () => {
     try {
       setLoading(true);
       
-      // Fetch roles
-      const { data: rolesData, error: rolesError } = await supabase
-        .from('roles')
-        .select('*')
-        .order('name');
-
-      if (rolesError) {
-        console.error('Error fetching roles:', rolesError);
-        toast.error('Failed to fetch roles. Some features may be limited.');
-        setRoles([]);
-      } else {
-        console.log('Fetched roles from database:', rolesData);
-        setRoles(rolesData || []);
-      }
       
       // Fetch employees
       const { data: employeesData, error: employeesError } = await supabase
@@ -198,7 +107,7 @@ export function EmployeeAccessManagement() {
         toast.error('Failed to fetch employees.');
         setEmployees([]);
       } else {
-        setEmployees(employeesData || []);
+        setEmployees((employeesData as any) || []);
       }
 
       // Fetch user profiles
@@ -212,7 +121,57 @@ export function EmployeeAccessManagement() {
         toast.error('Failed to fetch user profiles.');
         setUserProfiles([]);
       } else {
-        setUserProfiles(profilesData || []);
+        setUserProfiles((profilesData as any) || []);
+      }
+
+      // Fetch sidebar items
+      const { data: sidebarData, error: sidebarError } = await supabase
+        .from('sidebar_items')
+        .select('*')
+        .eq('is_active', true as any)
+        .order('sort_order');
+
+      if (sidebarError) {
+        console.error('Error fetching sidebar items:', sidebarError);
+        toast.error('Failed to fetch sidebar items.');
+        setSidebarItems([]);
+      } else {
+        // Organize items into hierarchy
+        const itemsMap = new Map<string, SidebarItem>();
+        const rootItems: SidebarItem[] = [];
+        
+        (sidebarData as any)?.forEach((item: any) => {
+          itemsMap.set(item.id, { ...item, children: [] });
+        });
+        
+        (sidebarData as any)?.forEach((item: any) => {
+          if (item.parent_id) {
+            const parent = itemsMap.get(item.parent_id);
+            if (parent) {
+              parent.children?.push(itemsMap.get(item.id)!);
+            }
+          } else {
+            rootItems.push(itemsMap.get(item.id)!);
+          }
+        });
+        
+        setSidebarItems(rootItems);
+      }
+
+      // Fetch user sidebar permissions
+      const { data: permissionsData, error: permissionsError } = await supabase
+        .from('user_sidebar_permissions')
+        .select(`
+          *,
+          sidebar_item:sidebar_items(*)
+        `);
+
+      if (permissionsError) {
+        console.error('Error fetching user sidebar permissions:', permissionsError);
+        toast.error('Failed to fetch user sidebar permissions.');
+        setUserSidebarPermissions([]);
+      } else {
+        setUserSidebarPermissions((permissionsData as any) || []);
       }
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -235,56 +194,103 @@ export function EmployeeAccessManagement() {
       return;
     }
 
-    if (!newUserData.role) {
-      toast.error('Please select a system role');
-      return;
-    }
-
     try {
       setProcessingUser('creating');
       
-      // Ensure we have an access token to authorize the Edge Function call
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
-      if (!accessToken) {
-        throw new Error('Not authenticated. Please sign in again.');
-      }
-
-      // Always use the Edge Function so we can re-grant access to existing emails
-      const { data, error } = await supabase.functions.invoke('create-employee-user', {
-        body: {
+      // Create user account using regular signup (admin-created accounts)
+      let authData, authError;
+      
+      try {
+        // Use regular signup but with admin context
+        const signupResult = await supabase.auth.signUp({
           email: newUserData.email,
           password: newUserData.password,
-          fullName: selectedEmployee.full_name,
-          role: newUserData.role,
-          phone: selectedEmployee.personal_phone,
-          department: selectedEmployee.department
-        },
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-
-      if (error) {
-        let serverMsg = (data && (data as any).error) ? (data as any).error : undefined;
-        try {
-          // @ts-expect-error
-          const resp = error.context?.response as Response | undefined;
-          if (resp) {
-            const text = await resp.text();
-            if (text) {
-              try { serverMsg = JSON.parse(text).error || serverMsg; } catch { serverMsg = text || serverMsg; }
-            }
+          options: {
+            data: {
+              full_name: selectedEmployee.full_name,
+              phone: selectedEmployee.personal_phone,
+              department: selectedEmployee.department,
+              created_by_admin: true // Flag to indicate admin-created account
+            },
+            emailRedirectTo: `${window.location.origin}/login`
           }
-        } catch {}
-        throw new Error(serverMsg || error.message || 'Failed to create user');
+        });
+        authData = signupResult.data;
+        authError = signupResult.error;
+        
+        if (authError) {
+          throw new Error(`Account creation failed: ${authError.message}`);
+        }
+      } catch (signupError) {
+        console.error('Signup failed:', signupError);
+        throw new Error('Unable to create user account. Please try again or contact your system administrator.');
       }
 
-      if (!(data as any)?.success) {
-        throw new Error(((data as any)?.error) || 'Failed to create user');
+      if (authError) {
+        // If user already exists, try to find their user_id and create profile
+        if (authError.message?.includes('already registered') || authError.message?.includes('already exists')) {
+          // Try to get user by email from profiles table
+          const { data: existingProfile } = await supabase
+            .from('profiles')
+            .select('user_id')
+            .eq('email', newUserData.email as any)
+            .single();
+
+          if (existingProfile && 'user_id' in existingProfile) {
+            // Update existing profile
+            const { error: profileError } = await supabase
+              .from('profiles')
+              .update({
+                full_name: selectedEmployee.full_name,
+                phone: selectedEmployee.personal_phone,
+                department: selectedEmployee.department,
+                role: 'employee',
+                status: 'approved'
+              } as any)
+              .eq('user_id', (existingProfile as any).user_id);
+
+            if (profileError) {
+              throw new Error(profileError.message || 'Failed to update user profile');
+            }
+
+            toast.success('Employee profile updated successfully!');
+          } else {
+            throw new Error('User exists but no profile found. Please contact administrator.');
+          }
+        } else {
+          throw new Error(authError.message || 'Failed to create user account');
+        }
+      } else if (authData.user) {
+        // New user created successfully, create profile
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            user_id: authData.user.id,
+            full_name: selectedEmployee.full_name,
+            email: newUserData.email,
+            phone: selectedEmployee.personal_phone,
+            department: selectedEmployee.department,
+            role: 'employee',
+            status: 'approved'
+          } as any);
+
+        if (profileError) {
+          throw new Error(profileError.message || 'Failed to create user profile');
+        }
+
+        // Check if user needs email confirmation
+        const needsEmailConfirmation = !authData.user?.email_confirmed_at;
+        if (needsEmailConfirmation) {
+          toast.success('Employee user account created! They will receive an email confirmation link to activate their account.');
+        } else {
+          toast.success('Employee user account created successfully! They can login immediately with the provided credentials.');
+        }
+      } else {
+        throw new Error('User creation failed - no user data returned');
       }
 
-      toast.success('Employee user account created successfully!');
       setShowCreateForm(false);
-      setNewUserData({ email: '', password: '', confirmPassword: '', role: '' });
+      setNewUserData({ email: '', password: '', confirmPassword: '' });
       setSelectedEmployee(null);
       await fetchData();
     } catch (error: any) {
@@ -305,7 +311,7 @@ export function EmployeeAccessManagement() {
       await supabase
         .from('profiles')
         .delete()
-        .eq('user_id', userId);
+        .eq('user_id', userId as any);
 
       toast.success('User account deleted successfully');
       await fetchData();
@@ -354,6 +360,88 @@ export function EmployeeAccessManagement() {
     } else {
       return `${months} Month${months !== 1 ? 's' : ''}`;
     }
+  };
+
+  const updateUserSidebarPermission = async (userId: string, sidebarItemId: string, canView: boolean, canEdit: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('user_sidebar_permissions')
+        .upsert({
+          user_id: userId,
+          sidebar_item_id: sidebarItemId,
+          can_view: canView,
+          can_edit: canEdit,
+          is_override: true
+        } as any);
+
+      if (error) throw error;
+      
+      toast.success('Sidebar permission updated successfully');
+      await fetchData();
+    } catch (error) {
+      console.error('Error updating sidebar permission:', error);
+      toast.error('Failed to update sidebar permission');
+    }
+  };
+
+  const deleteUserSidebarPermission = async (permissionId: string) => {
+    try {
+      const { error } = await supabase
+        .from('user_sidebar_permissions')
+        .delete()
+        .eq('id', permissionId as any);
+
+      if (error) throw error;
+      
+      toast.success('Sidebar permission removed successfully');
+      await fetchData();
+    } catch (error) {
+      console.error('Error deleting sidebar permission:', error);
+      toast.error('Failed to delete sidebar permission');
+    }
+  };
+
+  const getUserSidebarPermission = (userId: string, sidebarItemId: string) => {
+    return userSidebarPermissions.find(
+      perm => perm.user_id === userId && perm.sidebar_item_id === sidebarItemId
+    );
+  };
+
+  const renderSidebarItem = (item: SidebarItem, userId: string, level = 0) => {
+    const permission = getUserSidebarPermission(userId, item.id);
+    const canView = permission?.can_view ?? false;
+    const canEdit = permission?.can_edit ?? false;
+
+    return (
+      <div key={item.id} className="space-y-2">
+        <div className={`flex items-center space-x-2 p-2 rounded ${level > 0 ? 'ml-4 bg-muted/50' : ''}`}>
+          <input
+            type="checkbox"
+            checked={canView}
+            onChange={(e) => {
+              updateUserSidebarPermission(userId, item.id, e.target.checked, canEdit);
+            }}
+            className="rounded"
+          />
+          <span className="text-sm font-medium">{item.title}</span>
+          {item.url && (
+            <Badge variant="outline" className="text-xs">
+              {item.url}
+            </Badge>
+          )}
+          {permission?.is_override && (
+            <Badge variant="secondary" className="text-xs">
+              Custom
+            </Badge>
+          )}
+        </div>
+        {item.children && item.children.length > 0 && (
+          <div className="ml-4 space-y-1">
+            {item.children.map(child => renderSidebarItem(child, userId, level + 1))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   useEffect(() => {
@@ -600,6 +688,9 @@ export function EmployeeAccessManagement() {
                 <DialogContent className="max-w-md">
                   <DialogHeader>
                     <DialogTitle>Create User Account for Employee</DialogTitle>
+                    <p className="text-sm text-muted-foreground">
+                      Create a system account for this employee with login credentials
+                    </p>
                   </DialogHeader>
                   <form onSubmit={handleCreateUser} className="space-y-4">
                     <div className="space-y-2">
@@ -671,36 +762,12 @@ export function EmployeeAccessManagement() {
                       />
                     </div>
 
-                                          <div className="space-y-2">
-                        <Label>System Role *</Label>
-                        <Select value={newUserData.role} onValueChange={(role) => setNewUserData(prev => ({ ...prev, role }))}>
-                          <SelectTrigger>
-                            <SelectValue placeholder={roles.length === 0 ? "Loading roles..." : "Select a role"} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {roles.length === 0 ? (
-                              <SelectItem value="" disabled>
-                                Loading roles...
-                              </SelectItem>
-                            ) : (
-                              roles.map((role) => (
-                                <SelectItem key={role.id} value={role.name}>
-                                  {role.name} ({mapRoleNameToEnum(role.name)})
-                                </SelectItem>
-                              ))
-                            )}
-                          </SelectContent>
-                        </Select>
-                        {roles.length === 0 && (
-                          <p className="text-xs text-muted-foreground">
-                            {loading ? 'Loading available roles...' : 'No roles available. Please contact an administrator.'}
-                          </p>
-                        )}
-                        {newUserData.role && (
-                          <p className="text-xs text-muted-foreground">
-                            Will be assigned as: <strong>{mapRoleNameToEnum(newUserData.role)}</strong>
-                          </p>
-                        )}
+                      <div className="p-3 bg-blue-50 rounded-lg">
+                        <p className="text-sm text-blue-800">
+                          <strong>Admin Account Creation:</strong> This employee will be assigned the default 'employee' role. 
+                          They will receive an email confirmation link to activate their account.
+                          You can customize their sidebar permissions after account creation.
+                        </p>
                       </div>
                     
                     <div className="flex justify-end space-x-2 pt-4">
@@ -713,7 +780,7 @@ export function EmployeeAccessManagement() {
                       </Button>
                       <Button
                         type="submit"
-                        disabled={processingUser === 'creating' || !selectedEmployee || !newUserData.role}
+                        disabled={processingUser === 'creating' || !selectedEmployee}
                       >
                         {processingUser === 'creating' ? 'Creating Account...' : 'Create Account'}
                       </Button>
@@ -723,6 +790,13 @@ export function EmployeeAccessManagement() {
               </Dialog>
             </div>
       </div>
+
+      {/* Temporary Database Test */}
+      <DatabaseTest />
+
+      {/* Setup Admin Permissions */}
+      <SetupAdminPermissions />
+
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
@@ -854,12 +928,11 @@ export function EmployeeAccessManagement() {
                               size="sm"
                               onClick={() => {
                                 setSelectedEmployee(employee);
-                                                               setNewUserData({
-                                 email: employee.personal_email || '',
-                                 password: '',
-                                 confirmPassword: '',
-                                 role: ''
-                               });
+                                setNewUserData({
+                                  email: employee.personal_email || '',
+                                  password: '',
+                                  confirmPassword: ''
+                                });
                                 setShowCreateForm(true);
                               }}
                             >
@@ -867,14 +940,24 @@ export function EmployeeAccessManagement() {
                               Grant Access
                             </Button>
                           ) : (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteUser(accessStatus.profile!.user_id)}
-                              disabled={processingUser === accessStatus.profile!.user_id}
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setShowSidebarPermissions(accessStatus.profile!.user_id)}
+                              >
+                                <Settings className="w-4 h-4 mr-1" />
+                                Permissions
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteUser(accessStatus.profile!.user_id)}
+                                disabled={processingUser === accessStatus.profile!.user_id}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </>
                           )}
                         </div>
                       </TableCell>
@@ -886,6 +969,72 @@ export function EmployeeAccessManagement() {
           </Table>
         </CardContent>
       </Card>
+
+      {/* Sidebar Permissions Dialog */}
+      <Dialog open={!!showSidebarPermissions} onOpenChange={() => setShowSidebarPermissions(null)}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Manage Sidebar Permissions
+              {showSidebarPermissions && (
+                <span className="text-sm font-normal text-muted-foreground ml-2">
+                  for {userProfiles.find(p => p.user_id === showSidebarPermissions)?.full_name}
+                </span>
+              )}
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              Configure which sidebar options this employee can access. These permissions override role-based permissions.
+            </p>
+          </DialogHeader>
+          
+          {showSidebarPermissions && (
+            <div className="space-y-4">
+              <div className="p-4 bg-muted rounded-lg">
+                <p className="text-sm text-muted-foreground mb-4">
+                  Check the boxes to grant access to specific sidebar options. These permissions will override role-based permissions.
+                </p>
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {sidebarItems.map(item => renderSidebarItem(item, showSidebarPermissions))}
+                </div>
+              </div>
+
+              {/* Current Custom Permissions */}
+              <div className="space-y-2">
+                <h4 className="font-medium">Current Custom Permissions</h4>
+                <div className="space-y-2">
+                  {userSidebarPermissions
+                    .filter(perm => perm.user_id === showSidebarPermissions && perm.is_override)
+                    .map((permission) => (
+                      <div key={permission.id} className="flex items-center justify-between p-2 bg-muted rounded">
+                        <div className="flex items-center space-x-2">
+                          <span className="font-medium">{permission.sidebar_item.title}</span>
+                          {permission.sidebar_item.url && (
+                            <Badge variant="outline" className="text-xs">
+                              {permission.sidebar_item.url}
+                            </Badge>
+                          )}
+                          <Badge variant="secondary" className="text-xs">
+                            Custom
+                          </Badge>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => deleteUserSidebarPermission(permission.id)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  {userSidebarPermissions.filter(perm => perm.user_id === showSidebarPermissions && perm.is_override).length === 0 && (
+                    <p className="text-sm text-muted-foreground">No custom permissions set</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

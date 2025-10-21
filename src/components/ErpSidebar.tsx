@@ -33,6 +33,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { supabase } from '@/integrations/supabase/client';
 import { getPendingOrdersCount } from '@/lib/database';
+import { useSidebarPermissions, SidebarItem as DynamicSidebarItem } from '@/hooks/useSidebarPermissions';
 
 interface SidebarItem {
   title: string;
@@ -339,6 +340,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   const { profile, user } = useAuth();
   const location = useLocation();
   const { config } = useCompanySettings();
+  const { items: dynamicSidebarItems, loading: permissionsLoading } = useSidebarPermissions();
   const [portalSettings, setPortalSettings] = useState<null | {
     can_view_orders: boolean;
     can_view_invoices: boolean;
@@ -422,8 +424,39 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
     }
   }, [location.pathname]);
 
-  // Build items based on role
-  const sidebarItems = buildSidebarItems(location.pathname, pendingOrdersCount);
+  // Icon mapping for dynamic icons
+  const iconMap: { [key: string]: any } = {
+    Home, Users, ShoppingCart, Package, Factory, CheckCircle, Truck, BarChart3, 
+    Settings, UserCog, Calculator, Palette, Building, ShoppingBag, ClipboardList, 
+    Award, AlertTriangle, Scissors, Shirt
+  };
+
+  // Convert dynamic sidebar items to the old format
+  const convertDynamicSidebarItems = (items: DynamicSidebarItem[]): SidebarItem[] => {
+    return items.map(item => ({
+      title: item.title,
+      url: item.url,
+      icon: iconMap[item.icon] || Home,
+      adminOnly: false, // This will be handled by permissions
+      children: item.children ? convertDynamicSidebarItems(item.children) : undefined
+    }));
+  };
+
+  // Build items based on role and permissions
+  const staticSidebarItems = buildSidebarItems(location.pathname, pendingOrdersCount);
+  const dynamicItems = convertDynamicSidebarItems(dynamicSidebarItems);
+  
+  // Use dynamic items if available and not loading, otherwise fall back to static
+  const sidebarItems = !permissionsLoading && dynamicSidebarItems.length > 0 ? dynamicItems : staticSidebarItems;
+  
+  // Debug logging
+  console.log('Sidebar debug:', {
+    permissionsLoading,
+    dynamicSidebarItemsLength: dynamicSidebarItems.length,
+    dynamicItemsLength: dynamicItems.length,
+    staticSidebarItemsLength: staticSidebarItems.length,
+    finalSidebarItemsLength: sidebarItems.length
+  });
   let filteredItems = sidebarItems.filter(item => !item.adminOnly || userRole === 'admin');
 
   if (userRole === 'customer' && portalSettings !== null) {
