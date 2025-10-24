@@ -307,6 +307,7 @@ export default function InvoiceDetailPage() {
       }
 
       // Refresh the page to show the invoice view
+      // This is necessary to reload the invoice data after creation
       window.location.reload();
     } catch (error) {
       console.error('Error creating invoice:', error);

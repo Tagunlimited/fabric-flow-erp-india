@@ -25,6 +25,7 @@ interface BomRecord {
     };
   };
   bom_items?: any[];
+  has_purchase_order?: boolean; // Track if PO already exists
 }
 
 export function BomList() {
@@ -64,7 +65,29 @@ export function BomList() {
       console.log('Fetched BOMs:', data);
       console.log('First BOM data structure:', data?.[0]);
       console.log('BOM number field:', data?.[0]?.bom_number);
-      setBoms(data || []);
+
+      // Check which BOMs already have purchase orders
+      const bomIds = (data || []).map(bom => bom.id);
+      const { data: existingPOs, error: poError } = await supabase
+        .from('purchase_orders')
+        .select('bom_id')
+        .in('bom_id', bomIds)
+        .not('bom_id', 'is', null);
+
+      if (poError) {
+        console.error('Error fetching purchase orders:', poError);
+      }
+
+      // Create a set of BOM IDs that already have purchase orders
+      const bomIdsWithPO = new Set((existingPOs || []).map(po => po.bom_id));
+
+      // Mark BOMs that already have purchase orders
+      const bomsWithPOStatus = (data || []).map(bom => ({
+        ...bom,
+        has_purchase_order: bomIdsWithPO.has(bom.id)
+      }));
+
+      setBoms(bomsWithPOStatus);
     } catch (error) {
       console.error('Error:', error);
       toast.error('Failed to fetch BOMs');
@@ -449,9 +472,10 @@ export function BomList() {
                             size="sm"
                             onClick={() => createPurchaseOrderFromBom(bom)}
                             className="bg-blue-600 hover:bg-blue-700"
+                            disabled={bom.has_purchase_order}
                           >
                             <FileText className="w-4 h-4 mr-1" />
-                            Create PO
+                            {bom.has_purchase_order ? 'PO Created' : 'Create PO'}
                           </Button>
                         </div>
                       </TableCell>

@@ -22,7 +22,8 @@ import {
   ChevronRight,
   AlertTriangle,
   Scissors,
-  Shirt
+  Shirt,
+  FileText
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -158,6 +159,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Customer Access", url: "/admin/customer-access", icon: Users }
       ]
     },
+    { title: "Reports", url: "/reports", icon: FileText },
     { title: "Configuration", url: "/configuration", icon: Settings }
   ];
 }

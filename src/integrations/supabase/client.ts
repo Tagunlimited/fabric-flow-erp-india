@@ -17,5 +17,7 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
     multiTab: false,
     // Use a unique storage key for this app
     storageKey: 'scissors-erp-auth',
+    // Reduce token refresh frequency to prevent excessive auth state changes
+    refreshTokenInterval: 60000, // 1 minute instead of default 30 seconds
   }
 });

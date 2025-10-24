@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ShoppingCart, Plus, Eye, Edit, Package, Truck, Clock, CheckCircle, Search, Filter } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { ShoppingCart, Plus, Eye, Edit, Package, Truck, Clock, CheckCircle, Search, Filter, Trash2 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
@@ -13,14 +14,32 @@ import { toast } from "sonner";
 import { OrderForm } from "@/components/orders/OrderForm";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 interface Order {
   id: string;
   order_number: string;
   order_date: string;
+  expected_delivery_date: string;
   customer_id: string;
   customer: {
     company_name: string;
+  };
+  sales_manager: string;
+  sales_manager_details?: {
+    id: string;
+    full_name: string;
+    avatar_url?: string;
   };
   status: string;
   total_amount: number;
@@ -31,6 +50,7 @@ interface Order {
 const OrdersPage = () => {
   const navigate = useNavigate();
   const [orders, setOrders] = useState<Order[]>([]);
+  const [salesManagers, setSalesManagers] = useState<{ [key: string]: { id: string; full_name: string; avatar_url?: string } }>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("list");
   const [showSearch, setShowSearch] = useState(false);
@@ -46,7 +66,10 @@ const OrdersPage = () => {
 
   const fetchOrders = async () => {
     try {
+      console.log('OrdersPage: fetchOrders called');
       setLoading(true);
+      
+      // Fetch orders
       const { data, error } = await supabase
         .from('orders')
         .select(`
@@ -56,12 +79,83 @@ const OrdersPage = () => {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
+      console.log('OrdersPage: Orders fetched:', data?.length || 0, 'orders');
+      
+      // Fetch sales managers if there are orders with sales_manager field
+      if (data && data.length > 0) {
+        const salesManagerIds = data
+          .map(order => order.sales_manager)
+          .filter(Boolean)
+          .filter((value, index, self) => self.indexOf(value) === index); // Remove duplicates
+
+        if (salesManagerIds.length > 0) {
+          const { data: employeesData, error: employeesError } = await supabase
+            .from('employees')
+            .select('id, full_name, avatar_url')
+            .in('id', salesManagerIds);
+
+          if (!employeesError && employeesData) {
+            const managersMap = employeesData.reduce((acc, emp) => {
+              acc[emp.id] = emp;
+              return acc;
+            }, {} as { [key: string]: { id: string; full_name: string; avatar_url?: string } });
+            setSalesManagers(managersMap);
+          }
+        }
+      }
+      
       setOrders(data || []);
     } catch (error) {
       console.error('Error fetching orders:', error);
       toast.error('Failed to fetch orders');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteOrder = async (orderId: string, orderNumber: string) => {
+    try {
+      // Use a safer approach by calling a database function that handles the deletion properly
+      const { data, error } = await supabase
+        .rpc('safe_delete_order', { order_uuid: orderId });
+      
+      if (error) {
+        console.error('Error calling safe_delete_order:', error);
+        
+        // Fallback to manual deletion if the function doesn't exist
+        console.log('Falling back to manual deletion...');
+        
+        // Try manual deletion with better error handling
+        const { error: manualError } = await supabase
+          .from('orders')
+          .delete()
+          .eq('id', orderId);
+        
+        if (manualError) {
+          console.error('Manual deletion also failed:', manualError);
+          
+          if (manualError.code === '409') {
+            toast.error('Cannot delete order: It may be referenced by other records. Please contact support.');
+          } else if (manualError.code === '23503') {
+            toast.error('Cannot delete order: Related records still exist. Please try again.');
+          } else {
+            toast.error(`Failed to delete order: ${manualError.message}`);
+          }
+          return;
+        }
+      } else if (data === false) {
+        toast.error('Order not found or already deleted');
+        await fetchOrders(); // Refresh the list
+        return;
+      }
+
+      toast.success(`Order ${orderNumber} deleted successfully`);
+      
+      // Refresh the orders list
+      await fetchOrders();
+    } catch (error) {
+      console.error('Error deleting order:', error);
+      toast.error('An unexpected error occurred while deleting the order');
     }
   };
 
@@ -263,7 +357,9 @@ const OrdersPage = () => {
                         <TableRow>
                           <TableHead>Order Number</TableHead>
                           <TableHead>Customer</TableHead>
-                          <TableHead>Date</TableHead>
+                          <TableHead>Sales Manager</TableHead>
+                          <TableHead>Order Date</TableHead>
+                          <TableHead>Expected Delivery</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Amount</TableHead>
                           <TableHead>Balance</TableHead>
@@ -280,11 +376,29 @@ const OrdersPage = () => {
                             <TableCell className="font-medium">{order.order_number}</TableCell>
                             <TableCell>{order.customer?.company_name}</TableCell>
                             <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Avatar className="w-6 h-6">
+                                  <AvatarImage src={salesManagers[order.sales_manager]?.avatar_url} alt={salesManagers[order.sales_manager]?.full_name} />
+                                  <AvatarFallback className="text-xs">
+                                    {salesManagers[order.sales_manager]?.full_name?.split(' ').map(n => n[0]).join('').toUpperCase() || 'SM'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="text-sm">{salesManagers[order.sales_manager]?.full_name || 'N/A'}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
                               {new Date(order.order_date).toLocaleDateString('en-GB', {
                                 day: '2-digit',
                                 month: 'short',
                                 year: '2-digit'
                               })}
+                            </TableCell>
+                            <TableCell>
+                              {order.expected_delivery_date ? new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: '2-digit'
+                              }) : 'N/A'}
                             </TableCell>
                             <TableCell>
                               <Badge className={getStatusColor(order.status)}>
@@ -305,6 +419,45 @@ const OrdersPage = () => {
                                 >
                                   <Eye className="w-4 h-4" />
                                 </Button>
+                                
+                                <AlertDialog>
+                                  <AlertDialogTrigger asChild>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </Button>
+                                  </AlertDialogTrigger>
+                                  <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>Delete Order</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        Are you sure you want to delete order #{order.order_number}? This action cannot be undone.
+                                      </AlertDialogDescription>
+                                      <div className="mt-3">
+                                        <p className="text-sm font-medium mb-2">This will permanently delete:</p>
+                                        <ul className="list-disc list-inside space-y-1 text-sm">
+                                          <li>The order and all its details</li>
+                                          <li>All order items and their specifications</li>
+                                          <li>Order activities and history</li>
+                                          <li>Any customizations associated with this order</li>
+                                        </ul>
+                                      </div>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                      <AlertDialogAction 
+                                        onClick={() => handleDeleteOrder(order.id, order.order_number)}
+                                        className="bg-red-600 hover:bg-red-700"
+                                      >
+                                        Delete Order
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
                               </div>
                             </TableCell>
                           </TableRow>
@@ -318,7 +471,19 @@ const OrdersPage = () => {
           </TabsContent>
 
           <TabsContent value="create" className="space-y-6">
-            <OrderForm />
+            <OrderForm 
+              onOrderCreated={async () => {
+                console.log('OrdersPage: onOrderCreated callback triggered');
+                setActiveTab("list");
+                console.log('OrdersPage: Switching to list tab');
+                // Add a small delay to ensure the tab switch completes
+                setTimeout(async () => {
+                  console.log('OrdersPage: Fetching orders after delay');
+                  await fetchOrders();
+                }, 100);
+                toast.success("Order created successfully!");
+              }}
+            />
           </TabsContent>
         </Tabs>
       </div>

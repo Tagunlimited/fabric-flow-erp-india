@@ -12,6 +12,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { ErpLayout } from '@/components/ErpLayout';
+import { useFormData } from '@/contexts/FormPersistenceContext';
 
 type Customer = { 
   id: string; 
@@ -107,7 +108,7 @@ export function BomForm() {
   const [loading, setLoading] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
-  const [bom, setBom] = useState<BomRecord>({
+  const { data: bom, updateData: setBom, resetData: resetBomData, isLoaded: isBomLoaded, hasSavedData: hasBomData } = useFormData<BomRecord>('bomForm', {
     product_name: '',
     total_order_qty: 0,
     status: 'draft',
@@ -1327,6 +1328,11 @@ export function BomForm() {
       // Success - show success message and navigate
       toast.success(bomId ? 'BOM updated successfully' : 'BOM created successfully');
       
+      // Clear saved form data after successful save (only for new BOMs)
+      if (!isEditMode) {
+        resetBomData();
+      }
+      
       // Navigate after a short delay to ensure toast is visible
       setTimeout(() => {
         navigate(`/bom/${bomId}`);
@@ -1347,10 +1353,16 @@ export function BomForm() {
     }
   };
 
-  if (loading && !isEditMode) {
+  // Show loading state while form data is being loaded
+  if (!isBomLoaded || (loading && !isEditMode)) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">
+            {!isBomLoaded ? 'Loading form data...' : 'Loading...'}
+          </p>
+        </div>
       </div>
     );
   }
@@ -1375,6 +1387,15 @@ export function BomForm() {
           </div>
         </div>
                  <div className="flex gap-2">
+            {hasBomData && !isEditMode && (
+              <Button 
+                variant="outline"
+                onClick={resetBomData}
+                className="text-red-600 hover:text-red-700"
+              >
+                Clear Saved Data
+              </Button>
+            )}
             <Button variant="outline" onClick={() => navigate('/bom')}>
              Cancel
            </Button>

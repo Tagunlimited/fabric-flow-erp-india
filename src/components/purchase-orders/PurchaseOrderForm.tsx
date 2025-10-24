@@ -23,6 +23,7 @@ type CompanySettings = {
   state: string;
   pincode: string;
   logo_url?: string;
+  authorized_signatory_url?: string;
   gstin: string;
   contact_phone: string;
   contact_email: string;
@@ -35,16 +36,11 @@ type LineItem = {
   item_name: string;
   item_image_url?: string | null;
   quantity: number;
-  unit_price: number;
-  total_price: number;
-  gst_rate?: number;
-  gst_amount?: number;
-  line_total?: number;
   unit_of_measure?: string;
-  notes?: string;
+  remarks?: string;
   attributes?: Record<string, any> | null;
   fabricSelections?: { color: string; gsm: string; quantity: number }[];
-  itemSelections?: { id: string; label: string; image_url?: string | null; quantity: number; price: number }[];
+  itemSelections?: { id: string; label: string; image_url?: string | null; quantity: number }[];
   item_category?: string | null;
   // Fabric-specific fields
   fabric_name?: string;
@@ -62,6 +58,9 @@ type PurchaseOrder = {
   notes?: string;
   delivery_address?: string;
   expected_delivery_date?: string;
+  // Transporter details
+  preferred_transporter?: string;
+  transport_remark?: string;
 };
 
 type Supplier = {
@@ -129,7 +128,7 @@ export function PurchaseOrderForm() {
   const [items, setItems] = useState<LineItem[]>([]);
   // Option lists by type
   const [fabricOptions, setFabricOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
-  const [itemOptions, setItemOptions] = useState<{ id: string; label: string; image_url?: string | null; item_type?: string; uom?: string; gst_rate?: number; type?: string }[]>([]);
+  const [itemOptions, setItemOptions] = useState<{ id: string; label: string; image_url?: string | null; item_type?: string; uom?: string; type?: string }[]>([]);
   const [productOptions, setProductOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
   const [itemTypeOptions, setItemTypeOptions] = useState<string[]>([]);
 
@@ -244,11 +243,6 @@ export function PurchaseOrderForm() {
             item_name: fabricName || item.item_name || '',
             item_image_url: fabricOption?.image_url || item.item_image_url || null,
             quantity: item.qty_total || item.to_order || item.quantity || 0,
-            unit_price: item.unit_price || 0,
-            total_price: 0,
-            gst_rate: fabricOption?.gst_rate || item.gst_rate || 18,
-            gst_amount: 0,
-            line_total: 0,
             unit_of_measure: item.unit_of_measure || 'Kgs',
             // Store fabric-specific data with parsed values
             fabric_name: fabricName || 'Unknown Fabric',
@@ -294,11 +288,6 @@ export function PurchaseOrderForm() {
             item_name: item.item_name || '',
             item_image_url: itemOption?.image_url || item.item_image_url || null,
             quantity: item.qty_total || item.to_order || item.quantity || 0,
-            unit_price: item.unit_price || 0,
-            total_price: 0,
-            gst_rate: itemOption?.gst_rate || item.gst_rate || 18,
-            gst_amount: 0,
-            line_total: 0,
             unit_of_measure: item.unit_of_measure || 'pcs',
             item_category: itemOption?.item_type || item.item_category || null,
             itemSelections: item.itemSelections || []
@@ -306,8 +295,8 @@ export function PurchaseOrderForm() {
         }
       });
       
-      // Recalculate totals for all items after loading from BOM
-      const itemsWithTotals = formattedItems.map(item => recalculateItemTotals(item));
+      // No pricing calculations needed for purchase orders
+      const itemsWithTotals = formattedItems;
       setItems(itemsWithTotals);
       console.log('Items loaded from BOM:', itemsWithTotals);
     }
@@ -426,30 +415,52 @@ export function PurchaseOrderForm() {
     }
   }, [id]);
 
-  // Function to recalculate totals for an item
-  const recalculateItemTotals = (item: LineItem) => {
-    const subtotal = item.quantity * item.unit_price;
-    const gstAmount = subtotal * (item.gst_rate || 0) / 100;
-    const lineTotal = subtotal + gstAmount;
-    
-    return { 
-      ...item,
-      total_price: subtotal,
-      gst_amount: gstAmount,
-      line_total: lineTotal,
-    };
-  };
 
-  // Function to generate PO number
-  const generatePONumber = () => {
-    const timestamp = Date.now();
-    return `PO-${timestamp}`;
+  // Function to generate PO number with TUC/PO/ prefix starting from 0001
+  const generatePONumber = async () => {
+    try {
+      // Get the latest PO number from database
+      const { data: latestPO, error } = await supabase
+        .from('purchase_orders')
+        .select('po_number')
+        .like('po_number', 'TUC/PO/%')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (error) {
+        console.error('Error fetching latest PO:', error);
+        // Fallback to 0001 if there's an error
+        return 'TUC/PO/0001';
+      }
+
+      if (!latestPO || latestPO.length === 0) {
+        // No existing PO found, start from 0001
+        return 'TUC/PO/0001';
+      }
+
+      // Extract the number from the latest PO
+      const latestNumber = latestPO[0].po_number;
+      const match = latestNumber.match(/TUC\/PO\/(\d+)/);
+      
+      if (match) {
+        const currentNumber = parseInt(match[1], 10);
+        const nextNumber = currentNumber + 1;
+        return `TUC/PO/${nextNumber.toString().padStart(4, '0')}`;
+      } else {
+        // If format doesn't match, start from 0001
+        return 'TUC/PO/0001';
+      }
+    } catch (error) {
+      console.error('Error generating PO number:', error);
+      // Fallback to 0001 if there's an error
+      return 'TUC/PO/0001';
+    }
   };
 
   // PDF Generation Functions
   const generatePDF = async () => {
     try {
-      toast.loading('Generating PDF...');
+      // Loading toast removed as requested
       
       // Ensure logo is converted to base64
       if (companySettings?.logo_url && !logoBase64) {
@@ -510,42 +521,17 @@ export function PurchaseOrderForm() {
           <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : '-'}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
           <td style="text-align: right;">${item.quantity}</td>
-          <td>${item.unit_of_measure}</td>
-          <td style="text-align: right;">₹${item.unit_price?.toFixed(2) || '0.00'}</td>
-          <td style="text-align: right;">${item.gst_rate || 0}%</td>
-          <td style="text-align: right;">₹${item.gst_amount?.toFixed(2) || '0.00'}</td>
-          <td style="text-align: right;">₹${(item.line_total || item.total_price || ((item.quantity || 0) * (item.unit_price || 0)) + (item.gst_amount || 0)).toFixed(2)}</td>
+          <td>${item.unit_of_measure || 'N/A'}</td>
+          <td>${item.remarks || '-'}</td>
         </tr>
       `;
       }).join('');
       
-      // Generate GST summary
-      const gstSummary = Object.entries(
-        items.reduce((acc, item) => {
-          const rate = item.gst_rate || 0;
-          if (!acc[rate]) {
-            acc[rate] = { subtotal: 0, gstAmount: 0, total: 0 };
-          }
-          const subtotal = (item.quantity || 0) * (item.unit_price || 0);
-          const gstAmount = subtotal * (rate / 100);
-          acc[rate].subtotal += subtotal;
-          acc[rate].gstAmount += gstAmount;
-          acc[rate].total += subtotal + gstAmount;
-          return acc;
-        }, {} as Record<number, { subtotal: number; gstAmount: number; total: number }>)
-      ).map(([rate, totals]) => `
-        <tr>
-          <td style="text-align: right;">${rate}%</td>
-          <td style="text-align: right;">₹${totals.subtotal.toFixed(2)}</td>
-          <td style="text-align: right;">₹${totals.gstAmount.toFixed(2)}</td>
-          <td style="text-align: right;">₹${totals.total.toFixed(2)}</td>
-        </tr>
-      `).join('');
-      
-      // Calculate grand totals
-      const grandSubtotal = items.reduce((sum, item) => sum + ((item.quantity || 0) * (item.unit_price || 0)), 0);
-      const grandGstAmount = items.reduce((sum, item) => sum + (item.gst_amount || 0), 0);
-      const grandTotal = grandSubtotal + grandGstAmount;
+      // No GST summary or totals needed for purchase orders
+      const gstSummary = '';
+      const grandSubtotal = 0;
+      const grandGstAmount = 0;
+      const grandTotal = 0;
       
       // Convert number to words (simple implementation)
       const numberToWords = (num: number): string => {
@@ -596,6 +582,12 @@ export function PurchaseOrderForm() {
             <div><strong>Delivery Address:</strong></div>
             <div>${po.delivery_address || companyAddress || 'Delivery Address'}</div>
             <div><strong>Expected Delivery:</strong> ${po.expected_delivery_date || 'Not specified'}</div>
+            
+            ${po.preferred_transporter || po.transport_remark ? `
+            <div style="margin-top: 15px; font-weight: bold; font-size: 12px; border-bottom: 1px solid #ccc; padding-bottom: 3px;">Transporter Details</div>
+            ${po.preferred_transporter ? `<div><strong>Preferred Transporter:</strong> ${po.preferred_transporter}</div>` : ''}
+            ${po.transport_remark ? `<div><strong>Transport Remark:</strong> ${po.transport_remark}</div>` : ''}
+            ` : ''}
           </div>
           </div>
           
@@ -609,10 +601,7 @@ export function PurchaseOrderForm() {
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">GSM</th>
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Quantity</th>
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">UOM</th>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Unit Price</th>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">GST %</th>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">GST Amount</th>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Total</th>
+              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Remarks</th>
               </tr>
             </thead>
             <tbody>
@@ -620,33 +609,23 @@ export function PurchaseOrderForm() {
             </tbody>
           </table>
           
-        <div style="margin-top: 20px;">
-          <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px;">
-              <thead>
-              <tr>
-                <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">GST Rate (%)</th>
-                <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Subtotal</th>
-                <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">GST Amount</th>
-                <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-              ${gstSummary}
-              </tbody>
-            </table>
-            </div>
-        
-        <div style="text-align: right; font-weight: bold; margin-top: 20px; font-size: 14px; border-top: 2px solid #333; padding-top: 10px;">
-          <div><strong>Grand Subtotal: ₹${grandSubtotal.toFixed(2)}</strong></div>
-          <div><strong>Total GST Amount: ₹${grandGstAmount.toFixed(2)}</strong></div>
-          <div><strong>Grand Total: ₹${grandTotal.toFixed(2)}</strong></div>
-          <div style="font-style: italic; margin-top: 5px; font-size: 11px;">Amount in Words: ${numberToWords(Math.floor(grandTotal))}</div>
-          </div>
           
         <div style="margin-top: 30px;">
           <div style="font-weight: bold; font-size: 14px; margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 5px;">Terms & Conditions</div>
           <div>${po.terms_conditions || 'Standard terms and conditions apply.'}</div>
+        </div>
+        
+        ${companySettings?.authorized_signatory_url ? `
+        <div style="margin-top: 40px; display: flex; justify-content: flex-end;">
+          <div style="text-align: center;">
+            <div style="font-weight: bold; font-size: 12px; margin-bottom: 5px;">Authorized Signatory</div>
+            <div style="margin-bottom: 10px;">
+              <img src="${companySettings.authorized_signatory_url}" alt="Authorized Signatory" style="max-width: 180px; max-height: 60px; object-fit: contain;" />
             </div>
+            <div style="border-top: 1px solid #000; width: 180px; margin: 0 auto;"></div>
+          </div>
+        </div>
+        ` : ''}
         
       `;
       
@@ -686,26 +665,24 @@ export function PurchaseOrderForm() {
       const fileName = `Purchase_Order_${po.po_number || 'Draft'}_${new Date().toISOString().split('T')[0]}.pdf`;
       pdf.save(fileName);
       
-      toast.dismiss();
+      // Loading toasts removed as requested
       toast.success('PDF generated successfully!');
     } catch (error) {
-      toast.dismiss();
+      // Loading toasts removed as requested
       console.error('Error generating PDF:', error);
       toast.error('Failed to generate PDF');
     }
   };
 
   const handlePrint = async () => {
-    // Show loading toast
-    const loadingToast = toast.loading('Preparing print preview...');
+    // Removed loading toast as requested
     
     // Ensure logo is converted to base64
     if (companySettings?.logo_url && !logoBase64) {
       await convertLogoToBase64(companySettings.logo_url);
     }
     
-    // Dismiss loading toast
-    toast.dismiss(loadingToast);
+    // Loading toast removed as requested
 
     const printWindow = window.open('', '_blank');
     if (printWindow) {
@@ -751,42 +728,17 @@ export function PurchaseOrderForm() {
           <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : '-'}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
           <td class="number-cell">${item.quantity}</td>
-          <td>${item.unit_of_measure}</td>
-          <td class="number-cell">₹${item.unit_price?.toFixed(2) || '0.00'}</td>
-          <td class="number-cell">${item.gst_rate || 0}%</td>
-          <td class="number-cell">₹${item.gst_amount?.toFixed(2) || '0.00'}</td>
-          <td class="number-cell">₹${(item.line_total || item.total_price || ((item.quantity || 0) * (item.unit_price || 0)) + (item.gst_amount || 0)).toFixed(2)}</td>
+          <td>${item.unit_of_measure || 'N/A'}</td>
+          <td>${item.remarks || '-'}</td>
         </tr>
       `;
       }).join('');
       
-      // Generate GST summary
-      const gstSummary = Object.entries(
-        items.reduce((acc, item) => {
-          const rate = item.gst_rate || 0;
-          if (!acc[rate]) {
-            acc[rate] = { subtotal: 0, gstAmount: 0, total: 0 };
-          }
-          const subtotal = (item.quantity || 0) * (item.unit_price || 0);
-          const gstAmount = subtotal * (rate / 100);
-          acc[rate].subtotal += subtotal;
-          acc[rate].gstAmount += gstAmount;
-          acc[rate].total += subtotal + gstAmount;
-          return acc;
-        }, {} as Record<number, { subtotal: number; gstAmount: number; total: number }>)
-      ).map(([rate, totals]) => `
-        <tr>
-          <td class="number-cell">${rate}%</td>
-          <td class="number-cell">₹${totals.subtotal.toFixed(2)}</td>
-          <td class="number-cell">₹${totals.gstAmount.toFixed(2)}</td>
-          <td class="number-cell">₹${totals.total.toFixed(2)}</td>
-        </tr>
-      `).join('');
-      
-      // Calculate grand totals
-      const grandSubtotal = items.reduce((sum, item) => sum + ((item.quantity || 0) * (item.unit_price || 0)), 0);
-      const grandGstAmount = items.reduce((sum, item) => sum + (item.gst_amount || 0), 0);
-      const grandTotal = grandSubtotal + grandGstAmount;
+      // No GST summary or totals needed for purchase orders
+      const gstSummary = '';
+      const grandSubtotal = 0;
+      const grandGstAmount = 0;
+      const grandTotal = 0;
       
       // Convert number to words (simple implementation)
       const numberToWords = (num: number): string => {
@@ -949,6 +901,12 @@ export function PurchaseOrderForm() {
                 <div><strong>Delivery Address:</strong></div>
                 <div>${po.delivery_address || companyAddress || 'Delivery Address'}</div>
                 <div><strong>Expected Delivery:</strong> ${po.expected_delivery_date || 'Not specified'}</div>
+                
+                ${po.preferred_transporter || po.transport_remark ? `
+                <div style="margin-top: 15px; font-weight: bold; font-size: 12px; border-bottom: 1px solid #ccc; padding-bottom: 3px;">Transporter Details</div>
+                ${po.preferred_transporter ? `<div><strong>Preferred Transporter:</strong> ${po.preferred_transporter}</div>` : ''}
+                ${po.transport_remark ? `<div><strong>Transport Remark:</strong> ${po.transport_remark}</div>` : ''}
+                ` : ''}
               </div>
           </div>
           
@@ -962,10 +920,7 @@ export function PurchaseOrderForm() {
                 <th>GSM</th>
                 <th>Quantity</th>
                 <th>UOM</th>
-                <th>Unit Price</th>
-                <th>GST %</th>
-                <th>GST Amount</th>
-                <th>Total</th>
+                <th>Remarks</th>
               </tr>
             </thead>
             <tbody>
@@ -973,33 +928,23 @@ export function PurchaseOrderForm() {
             </tbody>
           </table>
           
-            <div class="gst-summary">
-              <table class="print-table">
-              <thead>
-                  <tr>
-                    <th>GST Rate (%)</th>
-                    <th>Subtotal</th>
-                    <th>GST Amount</th>
-                    <th>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                  ${gstSummary}
-              </tbody>
-            </table>
-            </div>
-            
-            <div class="grand-total">
-              <div><strong>Grand Subtotal: ₹${grandSubtotal.toFixed(2)}</strong></div>
-              <div><strong>Total GST Amount: ₹${grandGstAmount.toFixed(2)}</strong></div>
-              <div><strong>Grand Total: ₹${grandTotal.toFixed(2)}</strong></div>
-              <div class="amount-in-words">Amount in Words: ${numberToWords(Math.floor(grandTotal))}</div>
-          </div>
           
             <div class="terms-section">
               <div class="section-title">Terms & Conditions</div>
               <div>${po.terms_conditions || 'Standard terms and conditions apply.'}</div>
             </div>
+            
+            ${companySettings?.authorized_signatory_url ? `
+            <div style="margin-top: 40px; display: flex; justify-content: flex-end;">
+              <div style="text-align: center;">
+                <div style="font-weight: bold; font-size: 12px; margin-bottom: 5px;">Authorized Signatory</div>
+                <div style="margin-bottom: 10px;">
+                  <img src="${companySettings.authorized_signatory_url}" alt="Authorized Signatory" style="max-width: 180px; max-height: 60px; object-fit: contain;" />
+                </div>
+                <div style="border-top: 1px solid #000; width: 180px; margin: 0 auto;"></div>
+              </div>
+            </div>
+            ` : ''}
             
         </body>
       </html>
@@ -1138,7 +1083,7 @@ export function PurchaseOrderForm() {
       // Fetch fabrics with comprehensive error handling
       const { data: fabrics, error: fabricError } = await supabase
         .from('fabric_master')
-        .select('id, fabric_name, color, gsm, image, fabric_description, gst_rate')
+        .select('id, fabric_name, color, gsm, image, fabric_description')
         .order('fabric_name');
       
       if (fabricError) {
@@ -1154,7 +1099,6 @@ export function PurchaseOrderForm() {
         color: f.color || 'N/A',
         gsm: f.gsm || 'N/A',
         description: f.fabric_description || '',
-        gst_rate: f.gst_rate || 18 // Default GST rate for fabrics
       }));
       console.log('Fabric options loaded:', {
         count: mappedFabrics.length,
@@ -1169,7 +1113,7 @@ export function PurchaseOrderForm() {
       // Fetch items with comprehensive error handling
       const { data: items, error: itemError } = await supabase
         .from('item_master')
-        .select('id, item_name, item_type, image_url, image, uom, gst_rate')
+        .select('id, item_name, item_type, image_url, image, uom')
         .order('item_name');
       
       if (itemError) {
@@ -1184,7 +1128,6 @@ export function PurchaseOrderForm() {
         item_type: i.item_type || 'item',
         type: i.item_type || 'item',
         uom: i.uom || 'pcs',
-        gst_rate: i.gst_rate || 18
       }));
       console.log('Item options loaded:', {
         count: mappedItems.length,
@@ -1264,10 +1207,6 @@ export function PurchaseOrderForm() {
       const processedItems = (lineItems || []).map(item => ({
         ...item,
         item_type: item.item_type || 'item', // Ensure item_type is set
-        gst_rate: item.gst_rate || 0, // Use actual GST rate from database
-        gst_amount: item.gst_amount || 0, // Use actual GST amount from database
-        line_total: item.line_total || 0, // Use actual line total from database
-        total_price: item.total_price || 0, // Use actual total price from database
         // Map fabric-specific fields from database
         fabric_name: item.fabric_name || null,
         fabric_color: item.fabric_color || null,
@@ -1276,18 +1215,11 @@ export function PurchaseOrderForm() {
         // Ensure proper field mapping
         type: item.item_type || 'item',
         quantity: item.quantity || 0,
-        unit_price: item.unit_price || 0,
         unit_of_measure: item.unit_of_measure || 'pcs'
       }));
       
-      // Only recalculate if GST fields are missing or zero
-      const itemsWithTotals = processedItems.map(item => {
-        if (item.gst_rate > 0 && item.gst_amount === 0) {
-          // Recalculate if GST rate exists but amounts are missing
-          return recalculateItemTotals(item);
-        }
-        return item; // Use existing values from database
-      });
+      // No pricing calculations needed for purchase orders
+      const itemsWithTotals = processedItems;
       setItems(itemsWithTotals);
       
     } catch (error) {
@@ -1302,10 +1234,7 @@ export function PurchaseOrderForm() {
     setItems(prev => prev.map((item, i) => {
       if (i === index) {
         const updatedItem = { ...item, ...updates };
-        // Recalculate totals if quantity, unit_price, or gst_rate changed
-        if (updates.quantity !== undefined || updates.unit_price !== undefined || updates.gst_rate !== undefined) {
-          return recalculateItemTotals(updatedItem);
-        }
+        // No pricing calculations needed
         return updatedItem;
       }
       return item;
@@ -1323,11 +1252,6 @@ export function PurchaseOrderForm() {
       item_name: '',
       item_image_url: null,
       quantity: 0,
-      unit_price: 0,
-      total_price: 0,
-      gst_rate: 18, // Default GST rate
-      gst_amount: 0,
-      line_total: 0,
       unit_of_measure: type === 'fabric' ? 'kgs' : 'pcs',
       item_category: type === 'item' ? null : undefined,
     };
@@ -1359,7 +1283,6 @@ export function PurchaseOrderForm() {
           item_name: selected.label,
           item_image_url: selected.image_url,
           unit_of_measure: 'Kgs',
-          gst_rate: 18, // Default GST rate
           fabric_name: (selected as any).fabric_name,
           fabric_color: (selected as any).color,
           fabric_gsm: (selected as any).gsm,
@@ -1375,7 +1298,6 @@ export function PurchaseOrderForm() {
           item_name: selected.label,
           item_image_url: selected.image_url,
           unit_of_measure: selected.uom || 'pcs',
-          gst_rate: selected.gst_rate || 0,
             });
           }
         }
@@ -1395,27 +1317,12 @@ export function PurchaseOrderForm() {
     try {
       setLoading(true);
 
-      // Calculate totals for each item
-      const itemsWithTotals = items.map(item => {
-        const subtotal = item.quantity * item.unit_price;
-        const gstAmount = subtotal * (item.gst_rate || 0) / 100;
-        const lineTotal = subtotal + gstAmount;
-        
-        return {
-          ...item,
-          total_price: subtotal,
-          gst_amount: gstAmount,
-          line_total: lineTotal,
-        };
-    });
-    
-    // Calculate grand totals
-      const grandSubtotal = itemsWithTotals.reduce((sum, item) => sum + item.total_price, 0);
-      const grandGstAmount = itemsWithTotals.reduce((sum, item) => sum + item.gst_amount, 0);
-    const grandTotal = grandSubtotal + grandGstAmount;
+      // No rate/amount calculations needed for purchase orders
+      const itemsWithTotals = items;
+      const grandTotal = 0; // No total amount for purchase orders
     
       // Ensure PO number is always generated
-      const poNumber = po.po_number || generatePONumber();
+      const poNumber = po.po_number || await generatePONumber();
       
       const poData = {
         supplier_id: po.supplier_id,
@@ -1427,6 +1334,11 @@ export function PurchaseOrderForm() {
         total_amount: grandTotal,
         delivery_address: (po.delivery_address && po.delivery_address.trim() !== '') ? po.delivery_address : null,
         expected_delivery_date: (po.expected_delivery_date && po.expected_delivery_date.trim() !== '') ? po.expected_delivery_date : null,
+        // Transporter details
+        preferred_transporter: (po.preferred_transporter && po.preferred_transporter.trim() !== '') ? po.preferred_transporter : null,
+        transport_remark: (po.transport_remark && po.transport_remark.trim() !== '') ? po.transport_remark : null,
+        // BOM reference
+        bom_id: bomData?.id || null, // Link to BOM if created from BOM
       };
 
       console.log('🔧 TIMESTAMP:', new Date().toISOString(), 'PO Data being saved:', poData);
@@ -1473,13 +1385,8 @@ export function PurchaseOrderForm() {
         item_name: item.item_name,
         item_image_url: item.item_image_url,
         quantity: item.quantity,
-        unit_price: item.unit_price,
-        total_price: item.total_price,
-        gst_rate: item.gst_rate || 0, // Save GST rate
-        gst_amount: item.gst_amount || 0, // Save GST amount
-        line_total: item.line_total || 0, // Save line total
         unit_of_measure: item.unit_of_measure,
-        notes: item.notes,
+        remarks: item.remarks,
         // Add fabric-specific fields for fabric items
         ...(item.item_type === 'fabric' && {
           fabric_name: item.fabric_name || null,
@@ -1518,25 +1425,7 @@ export function PurchaseOrderForm() {
     let grandSubtotal = 0;
     let grandGstAmount = 0;
     const gstGroups: Record<string, { subtotal: number; gstAmount: number; total: number }> = {};
-    
-    items.forEach(item => {
-      const subtotal = item.quantity * item.unit_price;
-      const gstAmount = subtotal * (item.gst_rate || 0) / 100;
-      const lineTotal = subtotal + gstAmount;
-
-      grandSubtotal += subtotal;
-      grandGstAmount += gstAmount;
-
-      const gstRate = (item.gst_rate || 0).toString();
-      if (!gstGroups[gstRate]) {
-        gstGroups[gstRate] = { subtotal: 0, gstAmount: 0, total: 0 };
-      }
-      gstGroups[gstRate].subtotal += subtotal;
-      gstGroups[gstRate].gstAmount += gstAmount;
-      gstGroups[gstRate].total += lineTotal;
-    });
-
-    const grandTotal = grandSubtotal + grandGstAmount;
+    const grandTotal = 0; // No pricing for purchase orders
     const amountInWords = numberToWords(Math.floor(grandTotal)) + ' Rupees Only';
 
     return {
@@ -1661,7 +1550,7 @@ export function PurchaseOrderForm() {
                 value={po.po_number || ''}
                 onChange={(e) => setPo(prev => ({ ...prev, po_number: e.target.value }))}
                 disabled={isReadOnly}
-                placeholder="Auto-generated"
+                placeholder="TUC/PO/0001 (Auto-generated)"
               />
             </div>
           </div>
@@ -1688,6 +1577,35 @@ export function PurchaseOrderForm() {
                 onChange={(e) => setPo(prev => ({ ...prev, expected_delivery_date: e.target.value }))}
                 disabled={isReadOnly}
               />
+            </div>
+          </div>
+
+          {/* Transporter Details Section */}
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold text-gray-900">Transporter Details</h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="preferred_transporter">Preferred Transporter</Label>
+                <Input
+                  id="preferred_transporter"
+                  value={po.preferred_transporter || ''}
+                  onChange={(e) => setPo(prev => ({ ...prev, preferred_transporter: e.target.value }))}
+                  disabled={isReadOnly}
+                  placeholder="Enter preferred transporter..."
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="transport_remark">Transport Remark</Label>
+                <Input
+                  id="transport_remark"
+                  value={po.transport_remark || ''}
+                  onChange={(e) => setPo(prev => ({ ...prev, transport_remark: e.target.value }))}
+                  disabled={isReadOnly}
+                  placeholder="Enter transport remarks..."
+                />
+              </div>
             </div>
           </div>
 
@@ -1756,49 +1674,49 @@ export function PurchaseOrderForm() {
                       />
 
                       {/* Fabric Details */}
-                      <div className="flex-1 grid grid-cols-8 gap-4 items-center">
+                      <div className="flex-1 grid grid-cols-12 gap-4 items-center">
                         {/* Fabric Name */}
-                        <div>
+                        <div className="col-span-2">
                           <Label className="text-sm font-medium">Fabric</Label>
                           <div className="text-sm font-medium">
                             {it.fabric_name || it.item_name || 'N/A'}
-                      </div>
+                          </div>
                         </div>
 
-                                {/* Color */}
-                        <div>
+                        {/* Color */}
+                        <div className="col-span-1">
                           <Label className="text-sm font-medium">Color</Label>
                           <div className="text-sm">
                             {it.fabric_color || 'N/A'}
-                                </div>
+                          </div>
                         </div>
 
-                                {/* GSM */}
-                        <div>
+                        {/* GSM */}
+                        <div className="col-span-1">
                           <Label className="text-sm font-medium">GSM</Label>
                           <div className="text-sm">
                             {it.fabric_gsm ? `${it.fabric_gsm} GSM` : 'N/A'}
-                                </div>
+                          </div>
                         </div>
 
                         {/* Quantity */}
-                        <div>
+                        <div className="col-span-1">
                           <Label className="text-sm font-medium">Qty</Label>
-                                  <Input
-                                    type="number"
+                          <Input
+                            type="number"
                             value={it.quantity} 
-                                    onChange={(e) => {
+                            onChange={(e) => {
                               const qty = parseFloat(e.target.value) || 0;
                               updateItem(idx, { quantity: qty });
-                                    }}
-                                    disabled={isReadOnly}
+                            }}
+                            disabled={isReadOnly}
                             className="w-full text-right" 
-                                    placeholder="Qty"
-                                  />
-                                </div>
+                            placeholder="Qty"
+                          />
+                        </div>
 
                         {/* UOM */}
-                        <div>
+                        <div className="col-span-1">
                           <Label className="text-sm font-medium">UOM</Label>
                           <Input 
                             value={it.unit_of_measure || ''} 
@@ -1809,50 +1727,18 @@ export function PurchaseOrderForm() {
                             disabled={isReadOnly} 
                             placeholder="UOM"
                           />
-                                </div>
-
-                        {/* Unit Price */}
-                        <div>
-                          <Label className="text-sm font-medium">Unit Price</Label>
-                          <Input 
-                            type="number" 
-                            value={it.unit_price || ''} 
-                            onChange={(e) => {
-                              const value = e.target.value === '' ? 0 : parseFloat(e.target.value) || 0;
-                              updateItem(idx, { unit_price: value });
-                            }} 
-                            className="w-full" 
-                            disabled={isReadOnly} 
-                            placeholder="0.00"
-                          />
-                                </div>
-
-                        {/* GST Rate */}
-                        <div>
-                          <Label className="text-sm font-medium">GST %</Label>
-                                  <Input
-                                    type="number"
-                            value={it.gst_rate ?? 0}
-                            onChange={(e) => updateItem(idx, { gst_rate: parseFloat(e.target.value) || 0 })}
-                                    className="w-full"
-                                    disabled={isReadOnly}
-                                  />
-                                </div>
-
-                        {/* GST Amount */}
-                        <div>
-                          <Label className="text-sm font-medium">GST Amt</Label>
-                          <div className="text-sm font-medium">
-                            ₹{(it.gst_amount ?? 0).toFixed(2)}
-                          </div>
                         </div>
 
-                        {/* Total */}
-                        <div>
-                          <Label className="text-sm font-medium">Total</Label>
-                          <div className="text-sm font-medium">
-                            ₹{(it.line_total ?? ((it.quantity * it.unit_price) + ((it.quantity * it.unit_price) * ((it.gst_rate || 0) / 100)))).toFixed(2)}
-                          </div>
+                        {/* Remarks */}
+                        <div className="col-span-6">
+                          <Label className="text-sm font-medium">Remarks</Label>
+                          <Input 
+                            value={it.remarks || ''} 
+                            onChange={(e) => updateItem(idx, { remarks: e.target.value })}
+                            className="w-full" 
+                            disabled={isReadOnly} 
+                            placeholder="Enter remarks for this fabric"
+                          />
                         </div>
                       </div>
 
@@ -1977,48 +1863,16 @@ export function PurchaseOrderForm() {
                           />
                         </div>
 
-                        {/* Unit Price */}
-                        <div>
-                          <Label className="text-sm font-medium">Unit Price</Label>
-                      <Input 
-                        type="number" 
-                        value={it.unit_price || ''} 
-                        onChange={(e) => {
-                          const value = e.target.value === '' ? 0 : parseFloat(e.target.value) || 0;
-                          updateItem(idx, { unit_price: value });
-                        }} 
+                        {/* Remarks */}
+                        <div className="col-span-6">
+                          <Label className="text-sm font-medium">Remarks</Label>
+                          <Input 
+                            value={it.remarks || ''} 
+                            onChange={(e) => updateItem(idx, { remarks: e.target.value })}
                             className="w-full" 
-                        disabled={isReadOnly} 
-                        placeholder="0.00"
-                      />
-                        </div>
-
-                        {/* GST Rate */}
-                        <div>
-                          <Label className="text-sm font-medium">GST %</Label>
-                      <Input
-                        type="number"
-                        value={it.gst_rate ?? 0}
-                        onChange={(e) => updateItem(idx, { gst_rate: parseFloat(e.target.value) || 0 })}
-                            className="w-full"
-                        disabled={isReadOnly}
-                      />
-                        </div>
-
-                        {/* GST Amount */}
-                        <div>
-                          <Label className="text-sm font-medium">GST Amt</Label>
-                          <div className="text-sm font-medium">
-                            ₹{(it.gst_amount ?? 0).toFixed(2)}
-                          </div>
-                        </div>
-
-                        {/* Total */}
-                        <div>
-                          <Label className="text-sm font-medium">Total</Label>
-                          <div className="text-sm font-medium">
-                            ₹{(it.line_total ?? ((it.quantity * it.unit_price) + ((it.quantity * it.unit_price) * ((it.gst_rate || 0) / 100)))).toFixed(2)}
-                          </div>
+                            disabled={isReadOnly} 
+                            placeholder="Enter remarks for this item"
+                          />
                         </div>
                       </div>
 
@@ -2044,45 +1898,7 @@ export function PurchaseOrderForm() {
 
       <Card>
         <CardContent className="pt-6">
-          {/* GST Rate-wise Breakdown Table */}
-          <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-4">GST Rate-wise Summary</h3>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>GST Rate (%)</TableHead>
-                    <TableHead className="text-right">Subtotal</TableHead>
-                    <TableHead className="text-right">GST Amount</TableHead>
-                    <TableHead className="text-right">Total</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {Object.entries(totals.gstGroups)
-                    .sort(([a], [b]) => parseFloat(a) - parseFloat(b))
-                    .map(([gstRate, group]) => (
-                      <TableRow key={gstRate}>
-                        <TableCell className="font-medium">{gstRate}%</TableCell>
-                        <TableCell className="text-right">₹{group.subtotal.toFixed(2)}</TableCell>
-                        <TableCell className="text-right">₹{group.gstAmount.toFixed(2)}</TableCell>
-                        <TableCell className="text-right">₹{group.total.toFixed(2)}</TableCell>
-                      </TableRow>
-                    ))}
-                </TableBody>
-              </Table>
-            </div>
-          </div>
 
-          {/* Grand Total */}
-          <div className="border-t pt-4">
-            <div className="flex justify-between items-center text-lg font-semibold">
-              <span>Grand Total:</span>
-              <span>₹{totals.grandTotal.toFixed(2)}</span>
-              </div>
-            <div className="text-sm text-muted-foreground mt-2">
-              Amount in Words: {totals.amountInWords}
-            </div>
-          </div>
         </CardContent>
       </Card>
       </div> {/* End of printRef */}

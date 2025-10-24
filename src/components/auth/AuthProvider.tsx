@@ -127,7 +127,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setLoading(false);
       } else if (event === 'TOKEN_REFRESHED' && session?.user) {
         setUser(session.user);
-        setLoading(false);
+        // Don't set loading to false on token refresh to prevent re-renders
+        // setLoading(false);
       }
     });
 

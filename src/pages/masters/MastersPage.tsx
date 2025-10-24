@@ -10,7 +10,9 @@ import {
   Users, 
   Shirt,
   Ruler,
-  Settings
+  Settings,
+  Tag,
+  Wrench
 } from "lucide-react";
 
 const masters = [
@@ -55,6 +57,18 @@ const masters = [
     description: "Define customer types and configurations",
     icon: Users,
     path: "/masters/customer-types"
+  },
+  {
+    title: "Branding Type Master",
+    description: "Manage branding types and their scope",
+    icon: Tag,
+    path: "/masters/branding-types"
+  },
+  {
+    title: "Product Parts Manager",
+    description: "Create and manage product customization parts",
+    icon: Wrench,
+    path: "/masters/product-parts"
   }
 ];
 

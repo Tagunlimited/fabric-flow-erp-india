@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
+import { FormPersistenceProvider } from "@/contexts/FormPersistenceContext";
 import { LoginForm } from "@/components/auth/LoginForm";
 import { SignupForm } from "@/components/auth/SignupForm";
 import { UserManagement } from "@/components/admin/UserManagement";
@@ -23,6 +24,8 @@ import WarehouseMasterPage from "./pages/masters/WarehouseMasterPage";
 import WarehouseInventoryPage from "./pages/warehouse/WarehouseInventoryPage";
 import CustomerTypeMasterPage from "./pages/masters/CustomerTypeMasterPage";
 import SupplierMasterPage from "./pages/masters/SupplierMasterPage";
+import BrandingTypePage from "./pages/masters/BrandingTypePage";
+import ProductPartsManager from "./pages/masters/ProductPartsManager";
 import NotFound from "./pages/NotFound";
 import CrmPage from "./pages/CrmPage";
 import OrdersPage from "./pages/OrdersPage";
@@ -49,6 +52,7 @@ import { BomCreator } from "./components/purchase-orders/BomCreator";
 import { GRNList } from "./components/goods-receipt-notes/GRNList";
 import { GRNForm } from "./components/goods-receipt-notes/GRNForm";
 import CompanyConfigPage from "./pages/admin/CompanyConfigPage";
+import ReportsPage from "./pages/reports/ReportsPage";
 import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
 import EmployeeDetailPage from "./pages/people/EmployeeDetailPage";
@@ -75,24 +79,38 @@ import { useEffect } from "react";
 import { ErpLayout } from "@/components/ErpLayout";
 
 function useDynamicFavicon() {
-  const { config } = useCompanySettings();
+  const { config, loading } = useCompanySettings();
   useEffect(() => {
-    // Always set favicon from company settings, with fallback to default
-    const faviconUrl = config?.favicon_url ;
-    
-    let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
-    if (!link) {
-      link = document.createElement('link');
-      link.rel = 'icon';
-      document.head.appendChild(link);
+    // Only set favicon if company settings are loaded and not loading
+    if (!loading && config?.favicon_url) {
+      const faviconUrl = config.favicon_url;
+      
+      let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
+      }
+      link.href = faviconUrl;
     }
-    link.href = faviconUrl;
-  }, [config?.favicon_url]);
+  }, [config?.favicon_url, loading]);
 }
 
 function FaviconUpdater() {
   useDynamicFavicon();
   return null;
+}
+
+// Wrapper component for protected routes that need company settings
+function ProtectedRouteWithCompanySettings({ children, requiredRole }: { children: React.ReactNode; requiredRole?: string[] }) {
+  return (
+    <CompanySettingsProvider>
+      <FaviconUpdater />
+      <ProtectedRoute requiredRole={requiredRole}>
+        {children}
+      </ProtectedRoute>
+    </CompanySettingsProvider>
+  );
 }
 
 const queryClient = new QueryClient();
@@ -102,11 +120,10 @@ const App = () => {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
         <AuthProvider>
-          <TooltipProvider>
-          <Toaster />
-          <Sonner />
-          <CompanySettingsProvider>
-            <FaviconUpdater />
+          <FormPersistenceProvider>
+            <TooltipProvider>
+            <Toaster />
+            <Sonner />
             <BrowserRouter>
               <Routes>
                 {/* Public Routes */}
@@ -115,329 +132,346 @@ const App = () => {
                 
                 {/* Protected Routes */}
                 <Route path="/" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <Index />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/crm" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <CrmPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/crm/customers" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <CustomersPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/crm/customers/:id" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <CustomerDetailPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/orders" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <OrdersPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/stock-orders" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <StockOrdersPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/orders/:id" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <OrderDetailPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/orders/:id/assign-batches" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <OrderBatchAssignmentPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/inventory" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <InventoryPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/inventory/product-categories" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ProductCategoriesPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/inventory/fabrics" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ErpLayout>
                       <FabricManagerNew />
                     </ErpLayout>
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/inventory/size-types" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <SizeTypesPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 
                 {/* Masters Routes */}
                 <Route path="/masters" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <MastersPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/masters/products" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ProductMasterPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/masters/items" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ItemMasterPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/masters/warehouses" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <WarehouseMasterPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/warehouse/inventory" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <WarehouseInventoryPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/masters/customer-types" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <CustomerTypeMasterPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/masters/suppliers" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <SupplierMasterPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/masters/branding-types" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <BrandingTypePage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/masters/product-parts" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ProductPartsManager />
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 
                 <Route path="/production" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ProductionPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/production/assign-orders" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <AssignOrdersPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/production/cutting-manager" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <CuttingManagerPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/production/tailor-management" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <TailorManagementPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/production/picker" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <PickerPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/design" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <DesignPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/procurement" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ProcurementPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/procurement/po" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <PurchaseOrderListPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/procurement/po/new" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <PurchaseOrderFormPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/procurement/po/:id" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <PurchaseOrderFormPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/bom" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <BomListPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/bom/create" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ErpLayout>
                       <BomCreator />
                     </ErpLayout>
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/bom/new" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <BomForm />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/bom/:id" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <BomForm />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/bom/:id/edit" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <BomForm />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 
                 {/* GRN Routes */}
                 <Route path="/procurement/grn" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ErpLayout>
                       <GRNList />
                     </ErpLayout>
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/procurement/grn/new" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ErpLayout>
                       <GRNForm />
                     </ErpLayout>
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/procurement/grn/:id" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ErpLayout>
                       <GRNForm />
                     </ErpLayout>
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/quality" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <QualityPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/quality/checks" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <QCPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/quality/dispatch" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <DispatchQCPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/dispatch" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <DispatchPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/dispatch/challan/:id" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <DispatchChallanPrint />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/analytics" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <AnalyticsPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/settings" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <SettingsPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/reports" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ErpLayout>
+                      <ReportsPage />
+                    </ErpLayout>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/configuration" element={
-                  <ProtectedRoute requiredRole={['admin']}>
+                  <ProtectedRouteWithCompanySettings requiredRole={['admin']}>
                     <CompanyConfigPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 
                 {/* People Routes */}
                 <Route path="/people" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <PeoplePage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/people/employees" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <EmployeesPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/people/employees/:id" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <EmployeeDetailPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/people/departments" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <DepartmentsPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/people/departments/:id" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <DepartmentDetailPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/people/designations" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <DesignationsPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/people/production-team" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ProductionTeamPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                         <Route path="/people/production-team/:id" element={
-          <ProtectedRoute>
+          <ProtectedRouteWithCompanySettings>
             <ProductionTeamDetailPage />
-          </ProtectedRoute>
+          </ProtectedRouteWithCompanySettings>
         } />
                 
                 {/* Customer Routes */}
                 <Route path="/customer" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <CustomerDashboard />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 
                 {/* Profile Routes */}
                 <Route path="/profile" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ProfileSettingsPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 
                 {/* Accounts Routes */}
                 <Route path="/accounts/quotations" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <QuotationsPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/accounts/quotations/:id" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <QuotationDetailPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
 
                 <Route path="/accounts/receipts" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <ReceiptPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
 
                 <Route path="/accounts/invoices" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <InvoicePage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/accounts/invoices/:id" element={
-                  <ProtectedRoute>
+                  <ProtectedRouteWithCompanySettings>
                     <InvoiceDetailPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 
                 {/* Admin Only Routes */}
@@ -461,8 +495,8 @@ const App = () => {
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </BrowserRouter>
-          </CompanySettingsProvider>
-          </TooltipProvider>
+            </TooltipProvider>
+          </FormPersistenceProvider>
         </AuthProvider>
       </ThemeProvider>
     </QueryClientProvider>

@@ -19,7 +19,8 @@ import {
   MessageCircle,
   Share,
   Send,
-  ChevronDown
+  ChevronDown,
+  Trash2
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -77,6 +78,7 @@ interface Order {
 interface SalesManager {
   id: string;
   full_name: string;
+  avatar_url?: string;
 }
 
 interface Fabric {
@@ -216,6 +218,65 @@ export default function OrderDetailPage() {
     }
   };
 
+  const handleDeleteOrder = async () => {
+    if (!order) return;
+    
+    try {
+      // Use a safer approach by calling a database function that handles the deletion properly
+      const { data, error } = await supabase
+        .rpc('safe_delete_order', { order_uuid: order.id });
+      
+      if (error) {
+        console.error('Error calling safe_delete_order:', error);
+        
+        // Fallback to manual deletion if the function doesn't exist
+        console.log('Falling back to manual deletion...');
+        
+        // Try manual deletion with better error handling
+        const { error: manualError } = await supabase
+          .from('orders')
+          .delete()
+          .eq('id', order.id);
+        
+        if (manualError) {
+          console.error('Manual deletion also failed:', manualError);
+          
+          if (manualError.code === '409') {
+            toast.error('Cannot delete order: It may be referenced by other records. Please contact support.');
+          } else if (manualError.code === '23503') {
+            toast.error('Cannot delete order: Related records still exist. Please try again.');
+          } else {
+            toast.error(`Failed to delete order: ${manualError.message}`);
+          }
+          return;
+        }
+      } else if (data === false) {
+        toast.error('Order not found or already deleted');
+        // Navigate back to orders list
+        const from = searchParams.get('from');
+        if (from === 'production') {
+          navigate('/production');
+        } else {
+          navigate('/orders');
+        }
+        return;
+      }
+
+      toast.success('Order deleted successfully');
+      
+      // Navigate back to orders list
+      const from = searchParams.get('from');
+      if (from === 'production') {
+        navigate('/production');
+      } else {
+        navigate('/orders');
+      }
+    } catch (error) {
+      console.error('Error deleting order:', error);
+      toast.error('An unexpected error occurred while deleting the order');
+    }
+  };
+
   useEffect(() => {
     if (id) {
       fetchOrderDetails();
@@ -254,13 +315,21 @@ export default function OrderDetailPage() {
 
         // Fetch sales manager if exists
         if ((orderData as any).sales_manager) {
-          const { data: salesManagerData } = await (supabase as any)
-            .from('employees')
-            .select('id, full_name')
-            .eq('id', (orderData as any).sales_manager)
-            .single();
-          
-          setSalesManager((salesManagerData as unknown as SalesManager) || null);
+          try {
+            const { data: salesManagerData, error: salesManagerError } = await (supabase as any)
+              .from('employees')
+              .select('id, full_name, avatar_url')
+              .eq('id', (orderData as any).sales_manager)
+              .single();
+            
+            if (salesManagerError) {
+              console.error('Error fetching sales manager:', salesManagerError);
+            } else {
+              setSalesManager((salesManagerData as unknown as SalesManager) || null);
+            }
+          } catch (error) {
+            console.error('Error fetching sales manager:', error);
+          }
         }
 
         // Fetch employees for edit dropdown (only Sales Department)
@@ -297,7 +366,10 @@ export default function OrderDetailPage() {
           
           if (fabricsData) {
             const fabricsMap = (fabricsData as any[]).reduce((acc: { [key: string]: Fabric }, fabric: any) => {
-              acc[fabric.id] = fabric as Fabric;
+              acc[fabric.id] = {
+                id: fabric.id,
+                name: fabric.fabric_name  // Map fabric_name to name
+              } as Fabric;
               return acc;
             }, {} as { [key: string]: Fabric });
             setFabrics(fabricsMap);
@@ -650,7 +722,13 @@ export default function OrderDetailPage() {
 
   // Email Sharing Functions for Orders
   const EmailSharing = {
-    generateOrderEmail: (customer: any, orderNumber: string, grandTotal: number, orderDate: string, status: string, salesManagerName: string) => {
+    generateOrderEmail: (customer: any, orderNumber: string, grandTotal: number, orderDate: string, status: string, salesManagerName?: string, companyName?: string) => {
+      const companyInfo = companyName ? `\n${companyName}` : '';
+      
+      // Only include sales manager info if we have actual data
+      const salesManagerInfo = salesManagerName ? `• Sales Manager: ${salesManagerName}\n` : '';
+      const signature = salesManagerName ? `${salesManagerName}${companyInfo}` : companyName || 'Sales Team';
+      
       return encodeURIComponent(
         `Dear ${customer.contact_person || customer.company_name},\n\n` +
         `Thank you for your order. Please find below the order details:\n\n` +
@@ -659,11 +737,11 @@ export default function OrderDetailPage() {
         `• Order Date: ${new Date(orderDate).toLocaleDateString('en-IN')}\n` +
         `• Total Amount: ${formatCurrency(grandTotal)}\n` +
         `• Current Status: ${status.replace('_', ' ').toUpperCase()}\n` +
-        `• Sales Manager: ${salesManagerName || 'Sales Team'}\n\n` +
+        `${salesManagerInfo}` +
         `We will keep you updated on the progress of your order.\n\n` +
         `Thank you for choosing us.\n\n` +
         `Best regards,\n` +
-        `${salesManagerName || 'Sales Team'}`
+        `${signature}`
       );
     },
 
@@ -732,7 +810,8 @@ export default function OrderDetailPage() {
       order.final_amount,
       order.order_date,
       order.status,
-      salesManager?.full_name || 'Sales Team'
+      salesManager?.full_name || 'Sales Team',
+      company?.company_name
     );
 
     EmailSharing.openEmail(customer.email, subject, body);
@@ -751,6 +830,12 @@ export default function OrderDetailPage() {
       
       // Then open email with PDF instructions
       const subject = `Order ${order.order_number} - Order Details (PDF Attached)`;
+      const companyInfo = company?.company_name ? `\n${company.company_name}` : '';
+      
+      // Only include sales manager info if we have actual data
+      const salesManagerInfo = salesManager?.full_name ? `• Sales Manager: ${salesManager.full_name}\n` : '';
+      const signature = salesManager?.full_name ? `${salesManager.full_name}${companyInfo}` : company?.company_name || 'Sales Team';
+      
       const body = encodeURIComponent(
         `Dear ${customer.contact_person || customer.company_name},\n\n` +
         `Please find attached the detailed order PDF for your reference.\n\n` +
@@ -758,11 +843,12 @@ export default function OrderDetailPage() {
         `• Order Number: ${order.order_number}\n` +
         `• Total Amount: ${formatCurrency(order.final_amount)}\n` +
         `• Status: ${order.status.replace('_', ' ').toUpperCase()}\n` +
-        `• Date: ${new Date(order.order_date).toLocaleDateString('en-IN')}\n\n` +
+        `• Date: ${new Date(order.order_date).toLocaleDateString('en-IN')}\n` +
+        `${salesManagerInfo}` +
         `Note: The PDF file has been downloaded. Please attach it before sending.\n\n` +
         `Thank you for your business.\n\n` +
         `Best regards,\n` +
-        `${salesManager?.full_name || 'Sales Team'}`
+        `${signature}`
       );
 
       EmailSharing.openEmail(customer.email, subject, body);
@@ -927,6 +1013,41 @@ export default function OrderDetailPage() {
                 <Download className="w-4 h-4 mr-2" />
                 Export PDF
               </Button>
+              
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" className="text-red-600 hover:text-red-700 hover:bg-red-50">
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete Order</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Are you sure you want to delete order #{order.order_number}? This action cannot be undone.
+                    </AlertDialogDescription>
+                    <div className="mt-3">
+                      <p className="text-sm font-medium mb-2">This will permanently delete:</p>
+                      <ul className="list-disc list-inside space-y-1 text-sm">
+                        <li>The order and all its details</li>
+                        <li>All order items and their specifications</li>
+                        <li>Order activities and history</li>
+                        <li>Any customizations associated with this order</li>
+                      </ul>
+                    </div>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction 
+                      onClick={handleDeleteOrder}
+                      className="bg-red-600 hover:bg-red-700"
+                    >
+                      Delete Order
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
 
               {/* Enhanced Email Dropdown */}
               <DropdownMenu>
@@ -1379,6 +1500,61 @@ export default function OrderDetailPage() {
                                   }
                                 })()}
                                 
+                                {/* Customizations */}
+                                {item.specifications && (() => {
+                                  try {
+                                    const parsed = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
+                                    const customizations = parsed.customizations || [];
+                                    
+                                    return customizations.length > 0 ? (
+                                      <div>
+                                        <p className="text-sm font-medium text-muted-foreground mb-3">Customizations:</p>
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                                          {customizations.map((customization: any, idx: number) => (
+                                            <div key={idx} className="relative p-2 border rounded-lg bg-gray-50 min-w-0">
+                                              <div className="pr-6 flex items-start gap-2">
+                                                {customization.selectedAddonImageUrl && (
+                                                  <img 
+                                                    src={customization.selectedAddonImageUrl} 
+                                                    alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
+                                                    className="w-8 h-8 object-cover rounded border flex-shrink-0"
+                                                    onError={(e) => {
+                                                      e.currentTarget.style.display = 'none';
+                                                    }}
+                                                  />
+                                                )}
+                                                <div className="flex-1 min-w-0">
+                                                  <div className="font-medium text-xs truncate" title={customization.partName}>
+                                                    {customization.partName}
+                                                  </div>
+                                                  {customization.partType === 'dropdown' && (
+                                                    <div className="text-xs text-muted-foreground truncate" title={customization.selectedAddonName}>
+                                                      {customization.selectedAddonName}
+                                                    </div>
+                                                  )}
+                                                  {customization.partType === 'number' && (
+                                                    <div className="text-xs text-muted-foreground">
+                                                      Qty: {customization.quantity}
+                                                    </div>
+                                                  )}
+                                                  {customization.priceImpact && customization.priceImpact !== 0 && (
+                                                    <div className="text-xs font-medium text-green-600">
+                                                      ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : null;
+                                  } catch (error) {
+                                    console.error('Error parsing customizations:', error);
+                                    return null;
+                                  }
+                                })()}
+                                
                                                                  {item.remarks && (
                                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
                                      <p className="text-sm">
@@ -1518,6 +1694,8 @@ export default function OrderDetailPage() {
                            <tr className="bg-gray-100">
                              <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Image</th>
                              <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Name</th>
+                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Customizations</th>
+                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Remarks</th>
                              <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Total Qty</th>
                              <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Price</th>
                              <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Amount</th>
@@ -1555,6 +1733,60 @@ export default function OrderDetailPage() {
                                      <div className="text-gray-600 text-xs">
                                        {fabrics[item.fabric_id]?.name} - {item.color}, {item.gsm} GSM
                                      </div>
+                                   </div>
+                                 </td>
+                                 <td className="border border-gray-300 px-3 py-2 text-sm">
+                                   <div className="max-w-xs">
+                                     {(() => {
+                                       try {
+                                         const parsed = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
+                                         const customizations = parsed.customizations || [];
+                                         
+                                         if (customizations.length === 0) {
+                                           return <span className="text-gray-500">-</span>;
+                                         }
+                                         
+                                         return (
+                                           <div className="space-y-1">
+                                             {customizations.slice(0, 3).map((customization: any, idx: number) => (
+                                               <div key={idx} className="text-xs bg-gray-100 rounded px-2 py-1 flex items-start gap-2">
+                                                 {customization.selectedAddonImageUrl && (
+                                                   <img 
+                                                     src={customization.selectedAddonImageUrl} 
+                                                     alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
+                                                     className="w-6 h-6 object-cover rounded border flex-shrink-0"
+                                                     onError={(e) => {
+                                                       e.currentTarget.style.display = 'none';
+                                                     }}
+                                                   />
+                                                 )}
+                                                 <div className="flex-1 min-w-0">
+                                                   <div className="font-medium truncate">{customization.partName}</div>
+                                                   {customization.partType === 'dropdown' && (
+                                                     <div className="text-gray-600 truncate">{customization.selectedAddonName}</div>
+                                                   )}
+                                                   {customization.partType === 'number' && (
+                                                     <div className="text-gray-600">Qty: {customization.quantity}</div>
+                                                   )}
+                                                 </div>
+                                               </div>
+                                             ))}
+                                             {customizations.length > 3 && (
+                                               <div className="text-xs text-gray-500">+{customizations.length - 3} more</div>
+                                             )}
+                                           </div>
+                                         );
+                                       } catch (error) {
+                                         return <span className="text-gray-500">-</span>;
+                                       }
+                                     })()}
+                                   </div>
+                                 </td>
+                                 <td className="border border-gray-300 px-3 py-2 text-sm">
+                                   <div className="max-w-xs">
+                                     <span className="text-sm text-gray-700 break-words">
+                                       {item.remarks || '-'}
+                                     </span>
                                    </div>
                                  </td>
                                  <td className="border border-gray-300 px-3 py-2 text-sm">
@@ -1635,7 +1867,20 @@ export default function OrderDetailPage() {
                   {salesManager && (
                     <div>
                       <p className="text-sm text-muted-foreground">Sales Manager</p>
-                      <p className="font-medium">{salesManager.full_name}</p>
+                      <div className="flex items-center gap-2">
+                        {salesManager.avatar_url ? (
+                          <img
+                            src={salesManager.avatar_url}
+                            alt={salesManager.full_name}
+                            className="w-8 h-8 rounded-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                            <User className="w-4 h-4 text-primary" />
+                          </div>
+                        )}
+                        <p className="font-medium">{salesManager.full_name}</p>
+                      </div>
                     </div>
                   )}
                   {order.notes && (

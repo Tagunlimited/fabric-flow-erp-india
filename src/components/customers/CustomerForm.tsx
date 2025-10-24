@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, Save, X } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { useFormData } from '@/contexts/FormPersistenceContext';
 
 interface CustomerFormProps {
   customer?: any;
@@ -28,7 +29,7 @@ interface State {
 }
 
 export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) {
-  const [formData, setFormData] = useState({
+  const { data: formData, updateData: setFormData, resetData, isLoaded, hasSavedData } = useFormData('customerForm', {
     company_name: '',
     contact_person: '',
     phone: '',
@@ -166,6 +167,10 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
       if (result.error) throw result.error;
       
       toast.success(customer ? 'Customer updated successfully' : 'Customer created successfully');
+      
+      // Clear saved form data after successful save
+      resetData();
+      
       onSave(result.data);
     } catch (error: any) {
       setError(error.message || 'Failed to save customer');
@@ -175,12 +180,46 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
     }
   };
 
+  // Show loading state while form data is being loaded
+  if (!isLoaded) {
+    return (
+      <Card className="w-full max-w-2xl mx-auto">
+        <CardHeader>
+          <CardTitle>
+            {customer ? 'Edit Customer' : 'Create New Customer'}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-center py-8">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+              <p className="text-muted-foreground">Loading form data...</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card className="w-full max-w-2xl mx-auto">
       <CardHeader>
-        <CardTitle>
-          {customer ? 'Edit Customer' : 'Create New Customer'}
-        </CardTitle>
+        <div className="flex justify-between items-center">
+          <CardTitle>
+            {customer ? 'Edit Customer' : 'Create New Customer'}
+          </CardTitle>
+          {hasSavedData && !customer && (
+            <Button 
+              type="button" 
+              variant="outline" 
+              size="sm"
+              onClick={resetData}
+              className="text-red-600 hover:text-red-700"
+            >
+              Clear Saved Data
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
