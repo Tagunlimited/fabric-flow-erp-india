@@ -7,6 +7,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { FormPersistenceProvider } from "@/contexts/FormPersistenceContext";
+import { AppCacheProvider } from "@/contexts/AppCacheContext";
+import { GlobalFormPersistenceProvider } from "@/components/GlobalFormPersistenceProvider";
 import { LoginForm } from "@/components/auth/LoginForm";
 import { SignupForm } from "@/components/auth/SignupForm";
 import { UserManagement } from "@/components/admin/UserManagement";
@@ -120,11 +122,13 @@ const App = () => {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
         <AuthProvider>
-          <FormPersistenceProvider>
-            <TooltipProvider>
-            <Toaster />
-            <Sonner />
-            <BrowserRouter>
+          <AppCacheProvider>
+            <FormPersistenceProvider>
+              <GlobalFormPersistenceProvider>
+                <TooltipProvider>
+              <Toaster />
+              <Sonner />
+              <BrowserRouter>
               <Routes>
                 {/* Public Routes */}
                 <Route path="/login" element={<LoginForm />} />
@@ -496,11 +500,13 @@ const App = () => {
               </Routes>
             </BrowserRouter>
             </TooltipProvider>
-          </FormPersistenceProvider>
-        </AuthProvider>
-      </ThemeProvider>
-    </QueryClientProvider>
-  );
+          </GlobalFormPersistenceProvider>
+        </FormPersistenceProvider>
+      </AppCacheProvider>
+    </AuthProvider>
+  </ThemeProvider>
+</QueryClientProvider>
+);
 };
 
 export default App;

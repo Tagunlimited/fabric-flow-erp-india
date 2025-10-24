@@ -14,6 +14,8 @@ import { toast } from "sonner";
 import { OrderForm } from "@/components/orders/OrderForm";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -156,6 +158,23 @@ const OrdersPage = () => {
     } catch (error) {
       console.error('Error deleting order:', error);
       toast.error('An unexpected error occurred while deleting the order');
+    }
+  };
+
+  const handleStatusChange = async (orderId: string, newStatus: string) => {
+    try {
+      const { error } = await supabase
+        .from('orders')
+        .update({ status: newStatus as any })
+        .eq('id', orderId);
+
+      if (error) throw error;
+
+      toast.success(`Order status changed to ${newStatus.replace('_', ' ').toUpperCase()}`);
+      fetchOrders();
+    } catch (error) {
+      console.error('Error updating order status:', error);
+      toast.error('Failed to update order status');
     }
   };
 
@@ -401,14 +420,55 @@ const OrdersPage = () => {
                               }) : 'N/A'}
                             </TableCell>
                             <TableCell>
-                              <Badge className={getStatusColor(order.status)}>
-                                {order.status.replace('_', ' ').toUpperCase()}
-                              </Badge>
+                              <div className="flex items-center space-x-2">
+                                <Select 
+                                  value={order.status} 
+                                  onValueChange={(newStatus) => handleStatusChange(order.id, newStatus)}
+                                >
+                                  <SelectTrigger className="w-40">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="pending">Pending</SelectItem>
+                                    <SelectItem value="confirmed">Confirmed</SelectItem>
+                                    <SelectItem value="designing_done">Designing Done</SelectItem>
+                                    <SelectItem value="under_procurement">Under Procurement</SelectItem>
+                                    <SelectItem value="in_production">In Production</SelectItem>
+                                    <SelectItem value="under_cutting">Under Cutting</SelectItem>
+                                    <SelectItem value="under_stitching">Under Stitching</SelectItem>
+                                    <SelectItem value="under_qc">Under QC</SelectItem>
+                                    <SelectItem value="quality_check">Quality Check</SelectItem>
+                                    <SelectItem value="ready_for_dispatch">Ready for Dispatch</SelectItem>
+                                    <SelectItem value="rework">Rework</SelectItem>
+                                    <SelectItem value="partial_dispatched">Partial Dispatched</SelectItem>
+                                    <SelectItem value="dispatched">Dispatched</SelectItem>
+                                    <SelectItem value="completed" className="text-green-600 font-semibold">✅ Completed</SelectItem>
+                                    <SelectItem value="cancelled" className="text-red-600">Cancelled</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <Badge className={getStatusColor(order.status)}>
+                                  {order.status.replace('_', ' ').toUpperCase()}
+                                </Badge>
+                              </div>
                             </TableCell>
                             <TableCell>₹{order.final_amount?.toFixed(2) || '0.00'}</TableCell>
                             <TableCell>₹{order.balance_amount?.toFixed(2) || '0.00'}</TableCell>
                             <TableCell>
                               <div className="flex space-x-2">
+                                {order.status !== 'completed' && order.status !== 'cancelled' && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleStatusChange(order.id, 'completed');
+                                    }}
+                                  >
+                                    ✅ Complete
+                                  </Button>
+                                )}
+                                
                                 <Button
                                   variant="outline"
                                   size="sm"

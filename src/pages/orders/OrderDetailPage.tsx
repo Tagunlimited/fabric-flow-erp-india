@@ -236,7 +236,7 @@ export default function OrderDetailPage() {
         const { error: manualError } = await supabase
           .from('orders')
           .delete()
-          .eq('id', order.id);
+          .eq('id', order.id as any);
         
         if (manualError) {
           console.error('Manual deletion also failed:', manualError);
@@ -448,6 +448,27 @@ export default function OrderDetailPage() {
       toast.error('Failed to cancel order');
     } finally {
       setCancellingOrder(false);
+    }
+  };
+
+  const handleStatusChange = async (newStatus: string) => {
+    if (!order) return;
+
+    try {
+      const { error } = await (supabase as any)
+        .from('orders')
+        .update({ status: newStatus as Database['public']['Enums']['order_status'] } as Database['public']['Tables']['orders']['Update'])
+        .eq('id', order.id);
+
+      if (error) throw error;
+
+      toast.success(`Order status changed to ${newStatus.replace('_', ' ').toUpperCase()}`);
+      setOrder({ ...order, status: newStatus });
+      await fetchOrderActivities();
+      
+    } catch (error) {
+      console.error('Error updating order status:', error);
+      toast.error('Failed to update order status');
     }
   };
 
@@ -995,14 +1016,54 @@ export default function OrderDetailPage() {
           </div>
           
           <div className="flex items-center space-x-2">
-            <Badge className={getStatusColor(order.status)}>
-              {order.status.replace('_', ' ').toUpperCase()}
-            </Badge>
+            <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-2">
+                <Label htmlFor="status-select" className="text-sm font-medium">Status:</Label>
+                <Select 
+                  value={order.status} 
+                  onValueChange={handleStatusChange}
+                >
+                  <SelectTrigger className="w-48">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="confirmed">Confirmed</SelectItem>
+                    <SelectItem value="designing_done">Designing Done</SelectItem>
+                    <SelectItem value="under_procurement">Under Procurement</SelectItem>
+                    <SelectItem value="in_production">In Production</SelectItem>
+                    <SelectItem value="under_cutting">Under Cutting</SelectItem>
+                    <SelectItem value="under_stitching">Under Stitching</SelectItem>
+                    <SelectItem value="under_qc">Under QC</SelectItem>
+                    <SelectItem value="quality_check">Quality Check</SelectItem>
+                    <SelectItem value="ready_for_dispatch">Ready for Dispatch</SelectItem>
+                    <SelectItem value="rework">Rework</SelectItem>
+                    <SelectItem value="partial_dispatched">Partial Dispatched</SelectItem>
+                    <SelectItem value="dispatched">Dispatched</SelectItem>
+                    <SelectItem value="completed" className="text-green-600 font-semibold">✅ Completed</SelectItem>
+                    <SelectItem value="cancelled" className="text-red-600">Cancelled</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Badge className={getStatusColor(order.status)}>
+                {order.status.replace('_', ' ').toUpperCase()}
+              </Badge>
+            </div>
             
             <div className="flex space-x-2">
               {/* <Button variant="outline" onClick={openEditDialog}>
                 Edit
               </Button> */}
+              
+              {order.status !== 'completed' && order.status !== 'cancelled' && (
+                <Button 
+                  variant="default" 
+                  onClick={() => handleStatusChange('completed')}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  ✅ Mark as Completed
+                </Button>
+              )}
               
               <Button variant="outline" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />

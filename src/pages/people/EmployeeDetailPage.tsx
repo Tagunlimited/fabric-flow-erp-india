@@ -22,7 +22,9 @@ import {
   Star,
   Trophy,
   Target,
-  Edit
+  Edit,
+  FileImage,
+  CreditCard
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -53,6 +55,15 @@ interface Employee {
   reports_to?: string;
   created_at: string;
   avatar_url?: string;
+  id_proof_type?: string;
+  id_proof_number?: string;
+  id_proof_image_url?: string;
+  id_proof_back_image_url?: string;
+  bank_name?: string;
+  account_holder_name?: string;
+  account_number?: string;
+  ifsc_code?: string;
+  passbook_image_url?: string;
 }
 
 const EmployeeDetailPage = () => {
@@ -412,6 +423,125 @@ const EmployeeDetailPage = () => {
             </CardContent>
           </Card>
         </div>
+
+        {/* ID Proof Documents */}
+        {employee.id_proof_type && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <CreditCard className="w-5 h-5 mr-2" />
+                ID Proof Document
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* ID Proof Details */}
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Document Type</p>
+                    <p className="font-semibold text-lg">{employee.id_proof_type}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Document Number</p>
+                    <p className="font-semibold text-lg font-mono">{employee.id_proof_number}</p>
+                  </div>
+                </div>
+
+                {/* ID Proof Images */}
+                <div className="space-y-4">
+                  {/* Front Image */}
+                  {employee.id_proof_image_url && (
+                    <div>
+                      <p className="text-sm text-muted-foreground mb-2">Front Image</p>
+                      <div className="relative group">
+                        <img
+                          src={employee.id_proof_image_url}
+                          alt="ID Proof Front"
+                          className="w-full h-48 object-cover rounded-lg border shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                          onClick={() => window.open(employee.id_proof_image_url, '_blank')}
+                        />
+                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center">
+                          <FileImage className="w-8 h-8 text-white" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Back Image */}
+                  {employee.id_proof_back_image_url && (
+                    <div>
+                      <p className="text-sm text-muted-foreground mb-2">Back Image</p>
+                      <div className="relative group">
+                        <img
+                          src={employee.id_proof_back_image_url}
+                          alt="ID Proof Back"
+                          className="w-full h-48 object-cover rounded-lg border shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                          onClick={() => window.open(employee.id_proof_back_image_url, '_blank')}
+                        />
+                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center">
+                          <FileImage className="w-8 h-8 text-white" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Bank Details */}
+        {employee.bank_name && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <CreditCard className="w-5 h-5 mr-2" />
+                Bank Details
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Bank Details Information */}
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Bank Name</p>
+                    <p className="font-semibold text-lg">{employee.bank_name}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Account Holder Name</p>
+                    <p className="font-semibold text-lg">{employee.account_holder_name}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Account Number</p>
+                    <p className="font-semibold text-lg font-mono">{employee.account_number}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">IFSC Code</p>
+                    <p className="font-semibold text-lg font-mono">{employee.ifsc_code}</p>
+                  </div>
+                </div>
+
+                {/* Passbook Image */}
+                {employee.passbook_image_url && (
+                  <div>
+                    <p className="text-sm text-muted-foreground mb-2">Passbook Image</p>
+                    <div className="relative group">
+                      <img
+                        src={employee.passbook_image_url}
+                        alt="Passbook"
+                        className="w-full h-48 object-cover rounded-lg border shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                        onClick={() => window.open(employee.passbook_image_url, '_blank')}
+                      />
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center">
+                        <FileImage className="w-8 h-8 text-white" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Edit Dialog */}
         {employee && (
