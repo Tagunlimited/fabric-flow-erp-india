@@ -480,19 +480,19 @@ const App = () => {
                 
                 {/* Admin Only Routes */}
                 <Route path="/admin/users" element={
-                  <ProtectedRoute requiredRole={['admin']}>
+                  <ProtectedRouteWithCompanySettings requiredRole={['admin']}>
                     <UserManagement />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/admin/customer-access" element={
-                  <ProtectedRoute requiredRole={['admin']}>
+                  <ProtectedRouteWithCompanySettings requiredRole={['admin']}>
                     <CustomerAccessManagement />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/admin/employee-access" element={
-                  <ProtectedRoute requiredRole={['admin']}>
+                  <ProtectedRouteWithCompanySettings requiredRole={['admin']}>
                     <EmployeeAccessManagementPage />
-                  </ProtectedRoute>
+                  </ProtectedRouteWithCompanySettings>
                 } />
                 
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

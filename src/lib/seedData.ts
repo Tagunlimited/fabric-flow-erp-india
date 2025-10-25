@@ -17,7 +17,6 @@ const sampleCustomers: Tables['customers']['Insert'][] = [
     gstin: '27AABCF1234Z1Z5',
     customer_tier: 'gold',
     customer_type: 'Wholesale',
-    credit_limit: 500000,
     outstanding_amount: 75000,
     total_orders: 25
   },
@@ -33,7 +32,6 @@ const sampleCustomers: Tables['customers']['Insert'][] = [
     gstin: '27AABCF1235Z1Z6',
     customer_tier: 'silver',
     customer_type: 'Retail',
-    credit_limit: 250000,
     outstanding_amount: 45000,
     total_orders: 15
   },
@@ -49,7 +47,6 @@ const sampleCustomers: Tables['customers']['Insert'][] = [
     gstin: '24AABCF1236Z1Z7',
     customer_tier: 'bronze',
     customer_type: 'B2B',
-    credit_limit: 100000,
     outstanding_amount: 25000,
     total_orders: 8
   }

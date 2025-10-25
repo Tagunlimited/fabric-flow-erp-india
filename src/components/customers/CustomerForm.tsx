@@ -6,10 +6,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, Save, X } from 'lucide-react';
+import { Loader2, Save, X, ArrowLeft } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useFormData } from '@/contexts/FormPersistenceContext';
+import { useNavigate } from 'react-router-dom';
 
 interface CustomerFormProps {
   customer?: any;
@@ -29,6 +30,7 @@ interface State {
 }
 
 export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) {
+  const navigate = useNavigate();
   const { data: formData, updateData: setFormData, resetData, isLoaded, hasSavedData } = useFormData('customerForm', {
     company_name: '',
     contact_person: '',
@@ -40,8 +42,7 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
     state: '',
     pincode: '',
     gstin: '',
-    pan: '',
-    credit_limit: 0
+    pan: ''
   });
   const [customerTypes, setCustomerTypes] = useState<CustomerType[]>([]);
   const [states, setStates] = useState<State[]>([]);
@@ -64,8 +65,7 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
         state: customer.state || '',
         pincode: customer.pincode || '',
         gstin: customer.gstin || '',
-        pan: customer.pan || '',
-        credit_limit: customer.credit_limit || 0
+        pan: customer.pan || ''
       });
     }
   }, [customer]);
@@ -141,7 +141,6 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
       
       const customerData = {
         ...formData,
-        credit_limit: parseFloat(formData.credit_limit.toString()) || 0,
         customer_type: formData.customer_types as any
       };
       delete customerData.customer_types;
@@ -205,9 +204,21 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
     <Card className="w-full max-w-2xl mx-auto">
       <CardHeader>
         <div className="flex justify-between items-center">
-          <CardTitle>
-            {customer ? 'Edit Customer' : 'Create New Customer'}
-          </CardTitle>
+          <div className="flex items-center gap-3">
+            <Button 
+              type="button" 
+              variant="outline" 
+              size="sm"
+              onClick={() => navigate(-1)}
+              className="flex items-center gap-2"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back
+            </Button>
+            <CardTitle>
+              {customer ? 'Edit Customer' : 'Create New Customer'}
+            </CardTitle>
+          </div>
           {hasSavedData && !customer && (
             <Button 
               type="button" 
@@ -298,17 +309,6 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
               </Select>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="credit_limit">Credit Limit</Label>
-              <Input
-                id="credit_limit"
-                type="number"
-                value={formData.credit_limit}
-                onChange={(e) => handleChange('credit_limit', parseFloat(e.target.value) || 0)}
-                placeholder="Enter credit limit"
-                disabled={isLoading}
-              />
-            </div>
           </div>
 
           <div className="space-y-2">

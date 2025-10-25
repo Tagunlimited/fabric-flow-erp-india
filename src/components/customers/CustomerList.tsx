@@ -581,8 +581,7 @@ export function CustomerList() {
                   pan: getStringValueOrNull(values[9]),
                   customer_type: customerTypeName,
                   customer_tier: customerTierName,
-                  credit_limit: parseFloat(getStringValue(values[12])) || 0,
-                  outstanding_amount: parseFloat(getStringValue(values[13])) || 0,
+                  outstanding_amount: parseFloat(getStringValue(values[12])) || 0,
                   total_orders: parseInt(getStringValue(values[14])) || 0,
                   last_order_date: getStringValueOrNull(values[15])
                 };

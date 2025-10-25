@@ -212,19 +212,31 @@ export default function OrderDetailPage() {
   const handleBackNavigation = () => {
     const from = searchParams.get('from');
     if (from === 'production') {
-      navigate('/production');
+      navigate('/production', { state: { refreshOrders: true } });
     } else {
-      navigate('/orders');
+      navigate('/orders', { state: { refreshOrders: true } });
     }
   };
 
   const handleDeleteOrder = async () => {
     if (!order) return;
     
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      `Are you sure you want to delete order ${order.order_number}?\n\nThis action cannot be undone and will delete all related data including:\n- Order items\n- Customizations\n- Activities\n- All associated records`
+    );
+    
+    if (!confirmed) {
+      console.log('Order deletion cancelled by user');
+      return;
+    }
+    
     try {
-      // Use a safer approach by calling a database function that handles the deletion properly
-      const { data, error } = await supabase
-        .rpc('safe_delete_order', { order_uuid: order.id });
+      console.log('Attempting to delete order:', order.id, order.order_number);
+      
+      // Try final delete function first (handles trigger conflicts properly)
+      const { data: finalData, error: finalError } = await supabase
+        .rpc('safe_delete_order_final', { order_uuid: order.id });
       
       if (error) {
         console.error('Error calling safe_delete_order:', error);
@@ -262,14 +274,13 @@ export default function OrderDetailPage() {
         return;
       }
 
-      toast.success('Order deleted successfully');
-      
-      // Navigate back to orders list
+      // Always navigate back to orders list after any deletion attempt
+      // (whether successful, failed, or order not found)
       const from = searchParams.get('from');
       if (from === 'production') {
-        navigate('/production');
+        navigate('/production', { state: { refreshOrders: true } });
       } else {
-        navigate('/orders');
+        navigate('/orders', { state: { refreshOrders: true } });
       }
     } catch (error) {
       console.error('Error deleting order:', error);
@@ -281,6 +292,9 @@ export default function OrderDetailPage() {
     if (id) {
       fetchOrderDetails();
       fetchOrderActivities();
+    } else {
+      toast.error('Invalid order ID');
+      handleBackNavigation();
     }
   }, [id]);
 
@@ -299,8 +313,20 @@ export default function OrderDetailPage() {
           .eq('id', id as string)
           .single();
 
-        if (orderError) throw orderError;
-        if (!orderData) throw new Error('Order not found');
+        if (orderError) {
+          if (orderError.code === 'PGRST116') {
+            // Order not found
+            toast.error('Order not found or has been deleted');
+            handleBackNavigation();
+            return;
+          }
+          throw orderError;
+        }
+        if (!orderData) {
+          toast.error('Order not found or has been deleted');
+          handleBackNavigation();
+          return;
+        }
         setOrder(orderData as unknown as Order);
 
         // Fetch customer details
@@ -394,7 +420,14 @@ export default function OrderDetailPage() {
 
     } catch (error) {
       console.error('Error fetching order details:', error);
-      toast.error('Failed to load order details');
+      
+      // Check if it's a "not found" error
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'PGRST116') {
+        toast.error('Order not found or has been deleted');
+      } else {
+        toast.error('Failed to load order details');
+      }
+      
       handleBackNavigation();
     } finally {
       setLoading(false);

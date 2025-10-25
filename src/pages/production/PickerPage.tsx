@@ -49,17 +49,7 @@ export default function PickerPage() {
     fetchTailorsWithAssignedCounts();
   }, []);
 
-  // Refresh when tab regains focus or becomes visible
-  useEffect(() => {
-    const onFocus = () => fetchTailorsWithAssignedCounts();
-    const onVisibility = () => { if (!document.hidden) fetchTailorsWithAssignedCounts(); };
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, []);
+  // Removed aggressive focus and visibility refresh to prevent resetting user work
 
   const fetchTailorsWithAssignedCounts = async () => {
     setLoadingTailors(true);

@@ -66,17 +66,7 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
     }
   }, [refreshTrigger]);
 
-  // Refresh when component becomes visible
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        fetchOrdersWithoutBom();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+  // Removed aggressive visibility refresh to prevent resetting user work
 
   const fetchOrdersWithoutBom = async () => {
     try {

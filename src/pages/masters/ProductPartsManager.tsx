@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Edit, Trash2, Settings, Save, X } from 'lucide-react';
+import { Plus, Edit, Trash2, Settings, Save, X, Upload, Image as ImageIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -89,6 +89,12 @@ export default function ProductPartsManager() {
   const [categoryForm, setCategoryForm] = useState({
     selectedCategories: [] as string[]
   });
+
+  // File upload state
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchData();
@@ -214,6 +220,18 @@ export default function ProductPartsManager() {
     }
 
     try {
+      let imageUrl = addonForm.image_url;
+      
+      // Upload file if selected
+      if (selectedFile) {
+        const uploadedUrl = await uploadImage(selectedFile);
+        if (uploadedUrl) {
+          imageUrl = uploadedUrl;
+        } else {
+          return; // Upload failed, don't create addon
+        }
+      }
+
       const { error } = await supabase
         .from('part_addons')
         .insert([{
@@ -222,7 +240,7 @@ export default function ProductPartsManager() {
           addon_value: null,
           price_adjustment: 0,
           sort_order: addonForm.sort_order,
-          image_url: addonForm.image_url || null,
+          image_url: imageUrl || null,
           image_alt_text: addonForm.image_alt_text || null
         }]);
       
@@ -231,6 +249,7 @@ export default function ProductPartsManager() {
       toast.success('Addon created successfully');
       setShowAddonDialog(false);
       resetAddonForm();
+      clearImageUpload();
       fetchData();
     } catch (error) {
       console.error('Error creating addon:', error);
@@ -247,6 +266,18 @@ export default function ProductPartsManager() {
     }
     
     try {
+      let imageUrl = addonForm.image_url;
+      
+      // Upload file if selected
+      if (selectedFile) {
+        const uploadedUrl = await uploadImage(selectedFile);
+        if (uploadedUrl) {
+          imageUrl = uploadedUrl;
+        } else {
+          return; // Upload failed, don't update addon
+        }
+      }
+
       const { error } = await supabase
         .from('part_addons')
         .update({
@@ -255,7 +286,7 @@ export default function ProductPartsManager() {
           addon_value: null,
           price_adjustment: 0,
           sort_order: addonForm.sort_order,
-          image_url: addonForm.image_url || null,
+          image_url: imageUrl || null,
           image_alt_text: addonForm.image_alt_text || null
         })
         .eq('id', editingAddon.id);
@@ -266,6 +297,7 @@ export default function ProductPartsManager() {
       setShowAddonDialog(false);
       setEditingAddon(null);
       resetAddonForm();
+      clearImageUpload();
       fetchData();
     } catch (error) {
       console.error('Error updating addon:', error);
@@ -348,6 +380,7 @@ export default function ProductPartsManager() {
       image_url: '',
       image_alt_text: ''
     });
+    clearImageUpload();
   };
 
   const openEditPart = (part: ProductPart) => {
@@ -373,6 +406,12 @@ export default function ProductPartsManager() {
       image_url: addon.image_url || '',
       image_alt_text: addon.image_alt_text || ''
     });
+    // Set image preview if existing image
+    if (addon.image_url) {
+      setImagePreview(addon.image_url);
+    } else {
+      setImagePreview(null);
+    }
     setShowAddonDialog(true);
   };
 
@@ -399,6 +438,88 @@ export default function ProductPartsManager() {
       .filter(cp => cp.part_id === partId)
       .map(cp => cp.product_categories?.category_name || 'Unknown')
       .join(', ');
+  };
+
+  // Image upload functions
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        toast.error('Please select an image file');
+        return;
+      }
+      
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error('Image size should be less than 5MB');
+        return;
+      }
+      
+      setSelectedFile(file);
+      
+      // Create preview
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setImagePreview(e.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const uploadImage = async (file: File): Promise<string | null> => {
+    try {
+      setUploadingImage(true);
+      
+      // Generate unique filename
+      const fileExt = file.name.split('.').pop() || 'jpg';
+      const fileName = `addon-${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `addon-images/${fileName}`;
+      
+      console.log('Uploading addon image to company-assets bucket:', filePath);
+      
+      // Upload to Supabase storage using company-assets bucket (same as other images)
+      const { data, error } = await supabase.storage
+        .from('company-assets')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+      
+      if (error) {
+        console.error('Storage upload error:', error);
+        if (error.message.includes('not found')) {
+          toast.error('Storage bucket not found. Please contact administrator.');
+        } else if (error.message.includes('permission')) {
+          toast.error('Permission denied. Please check your storage permissions.');
+        } else {
+          toast.error(`Upload failed: ${error.message}`);
+        }
+        return null;
+      }
+      
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('company-assets')
+        .getPublicUrl(filePath);
+      
+      console.log('Addon image uploaded successfully:', publicUrl);
+      return publicUrl;
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      toast.error('Failed to upload image');
+      return null;
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const clearImageUpload = () => {
+    setSelectedFile(null);
+    setImagePreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   if (loading) {
@@ -510,50 +631,54 @@ export default function ProductPartsManager() {
                 
                 return (
                   <div key={part.id} className="border rounded-lg p-4">
-                    <h3 className="font-medium mb-3">{part.part_name} Options</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <h3 className="font-medium mb-4">{part.part_name} Options</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                       {partAddons.map((addon) => (
-                        <div key={addon.id} className="border rounded p-3">
-                          <div className="flex items-start gap-3">
+                        <div key={addon.id} className="border rounded-lg p-4 bg-white shadow-sm hover:shadow-md transition-shadow duration-200">
+                          <div className="flex flex-col items-center text-center space-y-3">
                             {addon.image_url && (
                               <div className="flex-shrink-0">
                                 <img 
                                   src={addon.image_url} 
                                   alt={addon.image_alt_text || addon.addon_name}
-                                  className="w-12 h-12 object-cover rounded border"
+                                  className="w-20 h-20 object-cover rounded-lg border-2 border-gray-100 shadow-sm"
                                   onError={(e) => {
                                     e.currentTarget.style.display = 'none';
                                   }}
                                 />
                               </div>
                             )}
-                            <div className="flex-1 min-w-0">
-                              <div className="font-medium">{addon.addon_name}</div>
+                            <div className="flex-1 min-w-0 w-full">
+                              <div className="font-semibold text-gray-900 mb-1">{addon.addon_name}</div>
                               {addon.price_adjustment !== 0 && (
-                                <div className="text-sm text-muted-foreground">
+                                <div className="text-sm font-medium text-green-600 mb-1">
                                   ₹{addon.price_adjustment > 0 ? '+' : ''}{addon.price_adjustment}
                                 </div>
                               )}
                               {addon.image_alt_text && (
-                                <div className="text-xs text-muted-foreground mt-1">
+                                <div className="text-xs text-gray-500 mb-2">
                                   {addon.image_alt_text}
                                 </div>
                               )}
                             </div>
-                            <div className="flex gap-1">
+                            <div className="flex gap-2 w-full justify-center">
                               <Button
                                 variant="outline"
                                 size="sm"
                                 onClick={() => openEditAddon(addon)}
+                                className="flex-1"
                               >
-                                <Edit className="w-3 h-3" />
+                                <Edit className="w-4 h-4 mr-1" />
+                                Edit
                               </Button>
                               <Button
                                 variant="outline"
                                 size="sm"
                                 onClick={() => handleDeleteAddon(addon.id)}
+                                className="flex-1 text-red-600 hover:text-red-700 hover:bg-red-50"
                               >
-                                <Trash2 className="w-3 h-3" />
+                                <Trash2 className="w-4 h-4 mr-1" />
+                                Delete
                               </Button>
                             </div>
                           </div>
@@ -670,23 +795,90 @@ export default function ProductPartsManager() {
                   placeholder="0"
                 />
               </div>
-              <div>
-                <Label htmlFor="image_url">Image URL</Label>
-                <Input
-                  id="image_url"
-                  value={addonForm.image_url}
-                  onChange={(e) => setAddonForm({ ...addonForm, image_url: e.target.value })}
-                  placeholder="https://example.com/image.jpg"
-                />
-              </div>
-              <div>
-                <Label htmlFor="image_alt_text">Image Alt Text</Label>
-                <Input
-                  id="image_alt_text"
-                  value={addonForm.image_alt_text}
-                  onChange={(e) => setAddonForm({ ...addonForm, image_alt_text: e.target.value })}
-                  placeholder="Description of the image"
-                />
+              {/* Image Upload Section */}
+              <div className="space-y-4">
+                <div>
+                  <Label>Addon Image</Label>
+                  <div className="mt-2 space-y-3">
+                    {/* File Upload */}
+                    <div>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleFileSelect}
+                        className="hidden"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploadingImage}
+                        className="w-full"
+                      >
+                        <Upload className="w-4 h-4 mr-2" />
+                        {uploadingImage ? 'Uploading...' : 'Upload Image'}
+                      </Button>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Supported formats: JPG, PNG, GIF (Max 5MB)
+                      </p>
+                    </div>
+
+                    {/* Image Preview */}
+                    {imagePreview && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-sm font-medium">Preview</Label>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearImageUpload}
+                            className="text-red-600 hover:text-red-700"
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                        </div>
+                        <div className="border rounded-lg p-3 bg-gray-50">
+                          <img
+                            src={imagePreview}
+                            alt="Preview"
+                            className="w-20 h-20 object-cover rounded-lg border"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Or URL Input */}
+                    <div className="relative">
+                      <div className="absolute inset-0 flex items-center">
+                        <span className="w-full border-t" />
+                      </div>
+                      <div className="relative flex justify-center text-xs uppercase">
+                        <span className="bg-background px-2 text-muted-foreground">Or</span>
+                      </div>
+                    </div>
+                    <div>
+                      <Label htmlFor="image_url">Image URL</Label>
+                      <Input
+                        id="image_url"
+                        value={addonForm.image_url}
+                        onChange={(e) => setAddonForm({ ...addonForm, image_url: e.target.value })}
+                        placeholder="https://example.com/image.jpg"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="image_alt_text">Image Alt Text</Label>
+                  <Input
+                    id="image_alt_text"
+                    value={addonForm.image_alt_text}
+                    onChange={(e) => setAddonForm({ ...addonForm, image_alt_text: e.target.value })}
+                    placeholder="Description of the image"
+                  />
+                </div>
               </div>
             </div>
             <DialogFooter>
