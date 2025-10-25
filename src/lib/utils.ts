@@ -1,10 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
-
-// TODO: Replace with your actual Supabase project URL and anon key
-const SUPABASE_URL = 'https://vwpseddaghxktpjtriaj.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3cHNlZGRhZ2h4a3RwanRyaWFqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk4NjgzNjQsImV4cCI6MjA3NTQ0NDM2NH0.b-TPhSHiEeqJOg81dgUv50UxWvwHQWzGLcI2j1CwMBs';
-
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Import the main Supabase client to avoid multiple instances
+import { supabase } from '@/integrations/supabase/client';
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 

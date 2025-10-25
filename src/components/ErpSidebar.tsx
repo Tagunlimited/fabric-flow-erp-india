@@ -340,7 +340,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   const { profile, user } = useAuth();
   const location = useLocation();
   const { config } = useCompanySettings();
-  const { items: dynamicSidebarItems, loading: permissionsLoading } = useSidebarPermissions();
+  const { items: dynamicSidebarItems, loading: permissionsLoading, permissionsSetup } = useSidebarPermissions();
   const [portalSettings, setPortalSettings] = useState<null | {
     can_view_orders: boolean;
     can_view_invoices: boolean;
@@ -446,17 +446,20 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   const staticSidebarItems = buildSidebarItems(location.pathname, pendingOrdersCount);
   const dynamicItems = convertDynamicSidebarItems(dynamicSidebarItems);
   
-  // Use dynamic items if available and not loading, otherwise fall back to static
-  const sidebarItems = !permissionsLoading && dynamicSidebarItems.length > 0 ? dynamicItems : staticSidebarItems;
+  // Use dynamic items if permissions are loaded and properly set up
+  // For admin users, use static sidebar if permissions system is not set up
+  // For non-admin users, always use dynamic permissions (even if empty)
+  const shouldUseDynamicItems = !permissionsLoading && permissionsSetup && (userRole !== 'admin' || dynamicSidebarItems.length > 0);
   
-  // Debug logging
-  console.log('Sidebar debug:', {
-    permissionsLoading,
-    dynamicSidebarItemsLength: dynamicSidebarItems.length,
-    dynamicItemsLength: dynamicItems.length,
-    staticSidebarItemsLength: staticSidebarItems.length,
-    finalSidebarItemsLength: sidebarItems.length
-  });
+  // For non-admin users, show loading state instead of static sidebar during loading
+  // For admin users, always show static sidebar if dynamic items are not available
+  const sidebarItems = shouldUseDynamicItems ? dynamicItems : 
+    (userRole !== 'admin' && permissionsLoading ? [] : staticSidebarItems);
+  
+  // Debug logging for sidebar decision (only log when there are issues)
+  // Debug logging removed for performance
+  
+  // Debug logging removed for performance
   let filteredItems = sidebarItems.filter(item => !item.adminOnly || userRole === 'admin');
 
   if (userRole === 'customer' && portalSettings !== null) {
@@ -593,14 +596,21 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
                  onMobileClose?.();
                }
              }}>
-          {filteredItems.map((item, index) => (
-            <SidebarItemComponent 
-              key={index} 
-              item={item} 
-              collapsed={collapsed}
-              onMobileClick={onMobileClose}
-            />
-          ))}
+          {userRole !== 'admin' && permissionsLoading ? (
+            <div className="flex items-center justify-center p-4">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+              <span className="ml-2 text-sm text-muted-foreground">Loading permissions...</span>
+            </div>
+          ) : (
+            filteredItems.map((item, index) => (
+              <SidebarItemComponent 
+                key={index} 
+                item={item} 
+                collapsed={collapsed}
+                onMobileClick={onMobileClose}
+              />
+            ))
+          )}
         </nav>
         {/* Footer */}
         <div className="p-3 sm:p-4 border-t border-primary-foreground/20">

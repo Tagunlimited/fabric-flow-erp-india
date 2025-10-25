@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test URL Sync</title>
+</head>
+<body>
+    <h1>Sidebar URL Sync Test</h1>
+    <p>Open browser console and check for these messages:</p>
+    <ul>
+        <li>🔄 Global sidebar URL sync...</li>
+        <li>✅ Updated [Item Name]: [old URL] → [new URL]</li>
+        <li>✅ Global sidebar URL sync completed</li>
+    </ul>
+    
+    <h2>Expected URL Updates:</h2>
+    <ul>
+        <li>Dashboard: / → /dashboard</li>
+        <li>Orders: should have /orders</li>
+        <li>Design & Printing: should have /design</li>
+        <li>Quality Check: should have /quality</li>
+        <li>Configuration: should have /configuration</li>
+        <li>Reports: should have /reports</li>
+    </ul>
+    
+    <h2>Parent Items (should remain NULL):</h2>
+    <ul>
+        <li>CRM: NULL (parent with children)</li>
+        <li>Accounts: NULL (parent with children)</li>
+        <li>Procurement: NULL (parent with children)</li>
+        <li>Inventory: NULL (parent with children)</li>
+        <li>Production: NULL (parent with children)</li>
+        <li>People: NULL (parent with children)</li>
+        <li>Masters: NULL (parent with children)</li>
+        <li>User & Roles: NULL (parent with children)</li>
+    </ul>
+    
+    <script>
+        console.log('Test page loaded. Check the main app console for sync messages.');
+    </script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../../lib/supabase';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
@@ -25,6 +25,7 @@ interface BomRecord {
     };
   };
   bom_items?: any[];
+  bom_record_items?: any[];
 }
 
 export function BomList() {
@@ -51,7 +52,7 @@ export function BomList() {
             order_number,
             customer:customers(company_name)
           ),
-          bom_items:bom_record_items(*)
+          bom_record_items(*)
         `)
         .order('created_at', { ascending: false });
 
@@ -62,7 +63,7 @@ export function BomList() {
       }
 
       console.log('Fetched BOMs:', data);
-      setBoms(data || []);
+      setBoms((data as any) || []);
     } catch (error) {
       console.error('Error:', error);
       toast.error('Failed to fetch BOMs');
@@ -117,8 +118,8 @@ export function BomList() {
                 .single();
             }
             
-            if (!fabricResult.error && fabricResult.data?.image) {
-              imageUrl = fabricResult.data.image;
+            if (!fabricResult.error && (fabricResult.data as any)?.image) {
+              imageUrl = (fabricResult.data as any).image;
               console.log('Found fabric image:', imageUrl);
             } else {
               console.log('No fabric image found:', fabricResult.error);
@@ -137,8 +138,8 @@ export function BomList() {
               .eq('id', item.item_id)
               .single();
             
-            if (!itemResult.error && (itemResult.data?.image || itemResult.data?.image_url)) {
-              imageUrl = itemResult.data.image || itemResult.data.image_url;
+            if (!itemResult.error && ((itemResult.data as any)?.image || (itemResult.data as any)?.image_url)) {
+              imageUrl = (itemResult.data as any).image || (itemResult.data as any).image_url;
               console.log('Found item image:', imageUrl);
             } else {
               console.log('No item image found:', itemResult.error);
@@ -167,13 +168,13 @@ export function BomList() {
   const viewBomDetails = async (bom: BomRecord) => {
     console.log('Opening BOM Details for:', bom);
     console.log('BOM Items:', bom.bom_items);
-    console.log('BOM Items Length:', bom.bom_items?.length || 0);
+    console.log('BOM Items Length:', bom.bom_record_items?.length || 0);
     console.log('BOM ID:', bom.id);
     console.log('BOM Product Name:', bom.product_name);
     
-    if (bom.bom_items && bom.bom_items.length > 0) {
-      console.log('First BOM item:', bom.bom_items[0]);
-      console.log('All BOM items:', bom.bom_items.map(item => ({
+    if (bom.bom_record_items && bom.bom_record_items.length > 0) {
+      console.log('First BOM item:', bom.bom_record_items[0]);
+      console.log('All BOM items:', bom.bom_record_items.map(item => ({
         id: item.id,
         item_name: item.item_name,
         category: item.category,
@@ -187,7 +188,7 @@ export function BomList() {
     setDetailDialogOpen(true);
     
     // Process BOM items with images
-    await processBomItemsWithImages(bom.bom_items || []);
+    await processBomItemsWithImages(bom.bom_record_items || []);
   };
 
   const editBom = (bom: BomRecord) => {
@@ -195,7 +196,7 @@ export function BomList() {
   };
 
   const createPurchaseOrderFromBom = (bom: BomRecord) => {
-    const items = (bom.bom_items || []).map((it: any) => ({
+    const items = (bom.bom_record_items || []).map((it: any) => ({
       item_type: it.category === 'Fabric' ? 'fabric' : 'item',
       item_id: it.item_id || '',
       item_name: it.item_name || '',
@@ -314,7 +315,7 @@ export function BomList() {
                           <div>
                             <div className="font-medium">{bom.product_name}</div>
                             <Badge variant="secondary" className="text-xs">
-                              {bom.bom_items?.length || 0} items
+                              {bom.bom_record_items?.length || 0} items
                             </Badge>
                           </div>
                         </div>

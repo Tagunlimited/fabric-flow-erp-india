@@ -32,18 +32,14 @@ export function ErpLayout({ children }: ErpLayoutProps) {
   const [lastScrollY, setLastScrollY] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const { config } = useCompanySettings();
-  const headerLogo = config.header_logo_url || config.logo_url || 'https://i.postimg.cc/D0hJxKtP/tag-black.png';
+  const { config, loading: companySettingsLoading } = useCompanySettings();
+  const headerLogo = config?.header_logo_url || config?.logo_url || 'https://i.postimg.cc/D0hJxKtP/tag-black.png';
   
   // Handle pre-configured admin user display
   const displayName = profile?.full_name || 
     (user?.email === 'ecom@tagunlimitedclothing.com' ? 'System Administrator' : user?.email);
   const displayRole = profile?.role || 
     (user?.email === 'ecom@tagunlimitedclothing.com' ? 'admin' : 'user');
-  
-  // Debug logging (commented out since issues are resolved)
-  // console.log('ErpLayout - Profile data:', profile);
-  // console.log('ErpLayout - Avatar URL:', (profile as any)?.avatar_url);
 
   // Handle floating header
   useEffect(() => {
@@ -77,8 +73,8 @@ export function ErpLayout({ children }: ErpLayoutProps) {
         .from('profiles')
         .update({
           avatar_url: url
-        })
-        .eq('user_id', user.id);
+        } as any)
+        .eq('user_id', user.id as any);
       
       if (error) throw error;
       
@@ -99,8 +95,8 @@ export function ErpLayout({ children }: ErpLayoutProps) {
         .from('profiles')
         .update({
           avatar_url: null
-        })
-        .eq('user_id', user.id);
+        } as any)
+        .eq('user_id', user.id as any);
       
       if (error) throw error;
       
@@ -125,6 +121,18 @@ export function ErpLayout({ children }: ErpLayoutProps) {
   const handleMobileMenuClose = () => {
     setMobileMenuOpen(false);
   };
+
+  // Show loading state while company settings are being loaded
+  if (companySettingsLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading company settings...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">

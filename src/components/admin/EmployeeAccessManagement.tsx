@@ -91,10 +91,250 @@ export function EmployeeAccessManagement() {
 
 
 
+  const ensureSidebarItemsExist = async () => {
+    try {
+      console.log('Checking if sidebar items exist...');
+      
+      // Check if sidebar items exist, if not, create them
+      const { data: existingItems, error: checkError } = await supabase
+        .from('sidebar_items')
+        .select('id, title')
+        .limit(5);
+
+      console.log('Existing items check result:', { existingItems, checkError });
+
+      if (checkError) {
+        console.error('Error checking sidebar items:', checkError);
+        console.log('Error details:', {
+          message: checkError.message,
+          details: checkError.details,
+          hint: checkError.hint,
+          code: checkError.code
+        });
+        
+        // If table doesn't exist, try to create it first
+        if (checkError.message?.includes('relation "sidebar_items" does not exist')) {
+          console.log('Sidebar items table does not exist, attempting to create it...');
+          const tableCreated = await createSidebarItemsTable();
+          if (!tableCreated) {
+            console.log('❌ Could not create table automatically. Please run the SQL script manually.');
+            return false;
+          }
+        } else {
+          console.log('❌ Unknown error occurred. Please check your database connection and permissions.');
+          return false;
+        }
+      }
+
+      if (!existingItems || existingItems.length === 0) {
+        console.log('No sidebar items found, creating default items...');
+        
+        // Create comprehensive sidebar items with correct URLs
+        const defaultItems = [
+          { title: 'Dashboard', url: '/dashboard', icon: 'Home', sort_order: 1, is_active: true },
+          { title: 'CRM', url: null, icon: 'Users', sort_order: 2, is_active: true }, // Parent item, no URL
+          { title: 'Orders', url: '/orders', icon: 'ShoppingCart', sort_order: 3, is_active: true },
+          { title: 'Accounts', url: null, icon: 'Calculator', sort_order: 4, is_active: true }, // Parent item, no URL
+          { title: 'Design & Printing', url: '/design', icon: 'Palette', sort_order: 5, is_active: true },
+          { title: 'Procurement', url: null, icon: 'ShoppingBag', sort_order: 6, is_active: true }, // Parent item, no URL
+          { title: 'Inventory', url: null, icon: 'Package', sort_order: 7, is_active: true }, // Parent item, no URL
+          { title: 'Production', url: null, icon: 'Factory', sort_order: 8, is_active: true }, // Parent item, no URL
+          { title: 'Quality Check', url: '/quality', icon: 'CheckCircle', sort_order: 9, is_active: true },
+          { title: 'People', url: null, icon: 'Users', sort_order: 10, is_active: true }, // Parent item, no URL
+          { title: 'Masters', url: null, icon: 'Package', sort_order: 11, is_active: true }, // Parent item, no URL
+          { title: 'User & Roles', url: null, icon: 'UserCog', sort_order: 12, is_active: true }, // Parent item, no URL
+          { title: 'Configuration', url: '/configuration', icon: 'Settings', sort_order: 13, is_active: true },
+          { title: 'Reports', url: '/reports', icon: 'FileText', sort_order: 14, is_active: true }
+        ];
+
+        console.log('Inserting default items:', defaultItems.length);
+        const { data: insertData, error: insertError } = await supabase
+          .from('sidebar_items')
+          .insert(defaultItems as any)
+          .select();
+
+        if (insertError) {
+          console.error('Error creating default sidebar items:', insertError);
+          return false;
+        }
+
+        console.log('Default sidebar items created successfully:', insertData?.length);
+      } else {
+        console.log('Sidebar items already exist:', existingItems.length);
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error in ensureSidebarItemsExist:', error);
+      return false;
+    }
+  };
+
+  const createSidebarItemsTable = async () => {
+    try {
+      console.log('Creating sidebar_items table...');
+      
+      // Try to create the table using a direct SQL approach
+      // First, let's try to insert a test item to see if the table exists
+      const testItem = {
+        title: 'Test Item',
+        url: '/test',
+        icon: 'Test',
+        sort_order: 999,
+        is_active: true
+      };
+
+      const { data: testData, error: testError } = await supabase
+        .from('sidebar_items')
+        .insert([testItem] as any)
+        .select();
+
+      if (testError) {
+        console.error('Table creation test failed:', testError);
+        
+        // If the error indicates table doesn't exist, we need to run the migration
+        if (testError.message?.includes('relation "sidebar_items" does not exist')) {
+          console.log('Table does not exist. Please run the migration first.');
+          console.log('Run this SQL in your Supabase SQL editor:');
+          console.log(`
+            CREATE TABLE IF NOT EXISTS sidebar_items (
+              id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+              title TEXT NOT NULL,
+              url TEXT,
+              icon TEXT NOT NULL,
+              parent_id UUID REFERENCES sidebar_items(id) ON DELETE CASCADE,
+              sort_order INTEGER DEFAULT 0,
+              is_active BOOLEAN DEFAULT true,
+              created_at TIMESTAMPTZ DEFAULT NOW(),
+              updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+          `);
+          return false;
+        }
+        return false;
+      }
+
+      // If test succeeded, delete the test item
+      if (testData && testData.length > 0) {
+        await supabase
+          .from('sidebar_items')
+          .delete()
+          .eq('title', 'Test Item' as any);
+        console.log('Table exists and is accessible');
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error in createSidebarItemsTable:', error);
+      return false;
+    }
+  };
+
+  const syncSidebarItems = async () => {
+    try {
+      console.log('Syncing sidebar items with current sidebar configuration...');
+      
+      // Extract sidebar items from the actual static sidebar configuration
+      // This matches the buildSidebarItems function in ErpSidebar.tsx
+      const currentSidebarItems = [
+        { title: 'Dashboard', url: '/dashboard', icon: 'Home', sort_order: 1, is_active: true },
+        { title: 'CRM', url: null, icon: 'Users', sort_order: 2, is_active: true }, // Parent item, no URL
+        { title: 'Orders', url: '/orders', icon: 'ShoppingCart', sort_order: 3, is_active: true },
+        { title: 'Accounts', url: null, icon: 'Calculator', sort_order: 4, is_active: true }, // Parent item, no URL
+        { title: 'Design & Printing', url: '/design', icon: 'Palette', sort_order: 5, is_active: true },
+        { title: 'Procurement', url: null, icon: 'ShoppingBag', sort_order: 6, is_active: true }, // Parent item, no URL
+        { title: 'Inventory', url: null, icon: 'Package', sort_order: 7, is_active: true }, // Parent item, no URL
+        { title: 'Production', url: null, icon: 'Factory', sort_order: 8, is_active: true }, // Parent item, no URL
+        { title: 'Quality Check', url: '/quality', icon: 'CheckCircle', sort_order: 9, is_active: true },
+        { title: 'People', url: null, icon: 'Users', sort_order: 10, is_active: true }, // Parent item, no URL
+        { title: 'Masters', url: null, icon: 'Package', sort_order: 11, is_active: true }, // Parent item, no URL
+        { title: 'User & Roles', url: null, icon: 'UserCog', sort_order: 12, is_active: true }, // Parent item, no URL
+        { title: 'Configuration', url: '/configuration', icon: 'Settings', sort_order: 13, is_active: true },
+        { title: 'Reports', url: '/reports', icon: 'FileText', sort_order: 14, is_active: true }
+      ];
+
+      // Get existing items from database
+      const { data: existingItems, error: fetchError } = await supabase
+        .from('sidebar_items')
+        .select('title, url, icon, sort_order')
+        .eq('is_active', true as any);
+
+      if (fetchError) {
+        console.error('Error fetching existing sidebar items:', fetchError);
+        return;
+      }
+
+      // Find items that need to be added or updated
+      const existingTitles = existingItems?.map((item: any) => item.title) || [];
+      const newItems = currentSidebarItems.filter(item => !existingTitles.includes(item.title));
+      
+      // Find items that need URL updates (force update all items to ensure they match)
+      const itemsToUpdate = currentSidebarItems.filter(currentItem => {
+        const existingItem = existingItems?.find((item: any) => item.title === currentItem.title);
+        if (!existingItem) return false;
+        
+        // Update if URL is different OR if URL is null but should have a value
+        const urlDifferent = (existingItem as any).url !== currentItem.url;
+        const shouldHaveUrl = currentItem.url !== null;
+        const hasNullUrl = (existingItem as any).url === null;
+        
+        return urlDifferent || (shouldHaveUrl && hasNullUrl);
+      });
+
+      // Add new items
+      if (newItems.length > 0) {
+        console.log('Adding new sidebar items:', newItems.map(item => item.title));
+        
+        const { error: insertError } = await supabase
+          .from('sidebar_items')
+          .insert(newItems as any);
+
+        if (insertError) {
+          console.error('Error adding new sidebar items:', insertError);
+        } else {
+          console.log('Successfully added new sidebar items');
+        }
+      }
+
+      // Update existing items with correct URLs
+      if (itemsToUpdate.length > 0) {
+        console.log('Updating sidebar items with correct URLs:', itemsToUpdate.map(item => item.title));
+        
+        for (const item of itemsToUpdate) {
+          const { error: updateError } = await supabase
+            .from('sidebar_items')
+            .update({ 
+              url: item.url,
+              icon: item.icon,
+              sort_order: item.sort_order
+            } as any)
+            .eq('title', item.title as any);
+
+          if (updateError) {
+            console.error(`Error updating ${item.title}:`, updateError);
+          } else {
+            console.log(`Successfully updated ${item.title}`);
+          }
+        }
+      }
+
+      if (newItems.length === 0 && itemsToUpdate.length === 0) {
+        console.log('All sidebar items are up to date');
+      }
+    } catch (error) {
+      console.error('Error in syncSidebarItems:', error);
+    }
+  };
+
   const fetchData = async () => {
     try {
       setLoading(true);
       
+      // Ensure sidebar items exist first
+      await ensureSidebarItemsExist();
+      
+      // Sync with current sidebar configuration
+      await syncSidebarItems();
       
       // Fetch employees
       const { data: employeesData, error: employeesError } = await supabase
@@ -131,6 +371,8 @@ export function EmployeeAccessManagement() {
         .eq('is_active', true as any)
         .order('sort_order');
 
+      console.log('Sidebar items fetch result:', { sidebarData, sidebarError });
+
       if (sidebarError) {
         console.error('Error fetching sidebar items:', sidebarError);
         toast.error('Failed to fetch sidebar items.');
@@ -154,7 +396,9 @@ export function EmployeeAccessManagement() {
             rootItems.push(itemsMap.get(item.id)!);
           }
         });
-        
+
+        console.log('Processed sidebar items:', { rootItems, totalItems: sidebarData?.length });
+        console.log('Setting sidebar items state with:', rootItems.length, 'items');
         setSidebarItems(rootItems);
       }
 
@@ -181,6 +425,63 @@ export function EmployeeAccessManagement() {
     }
   };
 
+  const setupDefaultEmployeePermissions = async (userId: string) => {
+    try {
+      // Check if user already has permissions
+      const { data: existingPermissions, error: checkError } = await supabase
+        .from('user_sidebar_permissions')
+        .select('id')
+        .eq('user_id', userId as any)
+        .limit(1);
+
+      if (checkError) {
+        console.error('Error checking existing permissions:', checkError);
+        return;
+      }
+
+      // If user already has permissions, don't add default ones
+      if (existingPermissions && existingPermissions.length > 0) {
+        console.log('User already has permissions, skipping default setup');
+        return;
+      }
+
+      // Get basic sidebar items that employees should have access to by default
+      const { data: basicItems, error: itemsError } = await supabase
+        .from('sidebar_items')
+        .select('id')
+        .in('title', ['Dashboard', 'Orders', 'Production', 'Quality Check'] as any)
+        .eq('is_active', true as any);
+
+      if (itemsError) {
+        console.error('Error fetching basic sidebar items:', itemsError);
+        return;
+      }
+
+      if (basicItems && basicItems.length > 0) {
+        // Create default permissions for basic items
+        const permissions = basicItems.map((item: any) => ({
+          user_id: userId,
+          sidebar_item_id: item.id,
+          can_view: true,
+          can_edit: false,
+          is_override: false
+        }));
+
+        const { error: permError } = await supabase
+          .from('user_sidebar_permissions')
+          .insert(permissions as any);
+
+        if (permError) {
+          console.error('Error setting up default permissions:', permError);
+        } else {
+          console.log('Default permissions set up for new employee');
+        }
+      }
+    } catch (error) {
+      console.error('Error in setupDefaultEmployeePermissions:', error);
+    }
+  };
+
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -197,11 +498,20 @@ export function EmployeeAccessManagement() {
     try {
       setProcessingUser('creating');
       
-      // Create user account using regular signup (admin-created accounts)
+      // Create user account using admin signup (doesn't auto-login)
       let authData, authError;
       
       try {
-        // Use regular signup but with admin context
+        // Store current admin session before creating user
+        const { data: currentSession } = await supabase.auth.getSession();
+        const adminUserId = currentSession?.session?.user?.id;
+        
+        if (!adminUserId) {
+          throw new Error('Admin session not found. Please log in again.');
+        }
+        
+        // Create user account using a temporary signup approach
+        // We'll use a different method to avoid auto-login
         const signupResult = await supabase.auth.signUp({
           email: newUserData.email,
           password: newUserData.password,
@@ -218,6 +528,15 @@ export function EmployeeAccessManagement() {
         authData = signupResult.data;
         authError = signupResult.error;
         
+        // Immediately sign out the new user and restore admin session
+        if (authData?.user) {
+          await supabase.auth.signOut();
+          // Restore admin session
+          if (currentSession?.session) {
+            await supabase.auth.setSession(currentSession.session);
+          }
+        }
+        
         if (authError) {
           throw new Error(`Account creation failed: ${authError.message}`);
         }
@@ -226,6 +545,7 @@ export function EmployeeAccessManagement() {
         throw new Error('Unable to create user account. Please try again or contact your system administrator.');
       }
 
+      // Handle the result after restoring admin session
       if (authError) {
         // If user already exists, try to find their user_id and create profile
         if (authError.message?.includes('already registered') || authError.message?.includes('already exists')) {
@@ -253,6 +573,9 @@ export function EmployeeAccessManagement() {
               throw new Error(profileError.message || 'Failed to update user profile');
             }
 
+            // Set up default permissions for the existing employee if they don't have any
+            await setupDefaultEmployeePermissions((existingProfile as any).user_id);
+
             toast.success('Employee profile updated successfully!');
           } else {
             throw new Error('User exists but no profile found. Please contact administrator.');
@@ -262,6 +585,7 @@ export function EmployeeAccessManagement() {
         }
       } else if (authData.user) {
         // New user created successfully, create profile
+        // Note: We already signed out the new user and restored admin session above
         const { error: profileError } = await supabase
           .from('profiles')
           .insert({
@@ -277,6 +601,9 @@ export function EmployeeAccessManagement() {
         if (profileError) {
           throw new Error(profileError.message || 'Failed to create user profile');
         }
+
+        // Set up default permissions for the new employee
+        await setupDefaultEmployeePermissions(authData.user.id);
 
         // Check if user needs email confirmation
         const needsEmailConfirmation = !authData.user?.email_confirmed_at;
@@ -446,6 +773,23 @@ export function EmployeeAccessManagement() {
 
   useEffect(() => {
     fetchData();
+  }, []);
+
+  // Auto-sync sidebar URLs on component mount
+  useEffect(() => {
+    const autoSync = async () => {
+      try {
+        console.log('🔄 Auto-syncing sidebar URLs...');
+        await syncSidebarItems();
+        console.log('✅ Auto-sync completed');
+      } catch (error) {
+        console.error('❌ Auto-sync failed:', error);
+      }
+    };
+    
+    // Run auto-sync after a short delay to ensure component is mounted
+    const timer = setTimeout(autoSync, 1000);
+    return () => clearTimeout(timer);
   }, []);
 
   const stats = {
@@ -994,7 +1338,125 @@ export function EmployeeAccessManagement() {
                   Check the boxes to grant access to specific sidebar options. These permissions will override role-based permissions.
                 </p>
                 <div className="space-y-2 max-h-96 overflow-y-auto">
-                  {sidebarItems.map(item => renderSidebarItem(item, showSidebarPermissions))}
+                  {sidebarItems.length === 0 ? (
+                    <div className="text-center py-8">
+                      <p className="text-muted-foreground mb-2">No sidebar items found</p>
+                      <p className="text-sm text-muted-foreground mb-4">
+                        Sidebar items: {sidebarItems.length} | 
+                        Loading: {loading ? 'Yes' : 'No'}
+                      </p>
+                      <div className="space-y-2">
+                        <Button 
+                          onClick={fetchData}
+                          variant="outline"
+                          size="sm"
+                        >
+                          Refresh Sidebar Items
+                        </Button>
+                        <Button 
+                          onClick={syncSidebarItems}
+                          variant="outline"
+                          size="sm"
+                        >
+                          Sync with Current Sidebar
+                        </Button>
+                        <Button 
+                          onClick={async () => {
+                            console.log('🔧 Manual setup triggered...');
+                            await ensureSidebarItemsExist();
+                            await fetchData();
+                          }}
+                          variant="default"
+                          size="sm"
+                        >
+                          Force Setup Sidebar Items
+                        </Button>
+                        <Button 
+                          onClick={async () => {
+                            console.log('🔍 Debugging sidebar permissions...');
+                            if (showSidebarPermissions) {
+                              const { data: userPerms } = await supabase
+                                .from('user_sidebar_permissions')
+                                .select(`
+                                  *,
+                                  sidebar_item:sidebar_items(*)
+                                `)
+                                .eq('user_id', showSidebarPermissions as any);
+                              
+                              console.log('👤 User permissions for', showSidebarPermissions, ':', userPerms);
+                              
+                              const { data: allItems } = await supabase
+                                .from('sidebar_items')
+                                .select('*')
+                                .eq('is_active', true as any)
+                                .order('sort_order');
+                              
+                              console.log('📋 All sidebar items:', allItems);
+                            }
+                          }}
+                          variant="outline"
+                          size="sm"
+                        >
+                          Debug Permissions
+                        </Button>
+                        <Button 
+                          onClick={async () => {
+                            console.log('🔄 Manual sync triggered...');
+                            await syncSidebarItems();
+                            await fetchData();
+                            toast.success('Sidebar URLs synced successfully');
+                          }}
+                          variant="default"
+                          size="sm"
+                        >
+                          Fix NULL URLs
+                        </Button>
+                        <Button 
+                          onClick={async () => {
+                            console.log('🔄 Testing URL sync...');
+                            // Test the sync function directly
+                            const currentSidebarItems = [
+                              { title: 'Dashboard', url: '/dashboard', icon: 'Home', sort_order: 1, is_active: true },
+                              { title: 'Orders', url: '/orders', icon: 'ShoppingCart', sort_order: 3, is_active: true },
+                              { title: 'Design & Printing', url: '/design', icon: 'Palette', sort_order: 5, is_active: true },
+                              { title: 'Quality Check', url: '/quality', icon: 'CheckCircle', sort_order: 9, is_active: true },
+                              { title: 'Configuration', url: '/configuration', icon: 'Settings', sort_order: 13, is_active: true },
+                              { title: 'Reports', url: '/reports', icon: 'FileText', sort_order: 14, is_active: true }
+                            ];
+                            
+                            const { data: existingItems } = await supabase
+                              .from('sidebar_items')
+                              .select('title, url')
+                              .eq('is_active', true as any);
+                            
+                            console.log('📊 Current database items:', existingItems);
+                            
+                            for (const item of currentSidebarItems) {
+                              const existing = existingItems?.find((e: any) => e.title === item.title);
+                              if (existing) {
+                                console.log(`${item.title}: DB="${(existing as any).url}" → Expected="${item.url}"`);
+                                if ((existing as any).url !== item.url) {
+                                  await supabase
+                                    .from('sidebar_items')
+                                    .update({ url: item.url } as any)
+                                    .eq('title', item.title as any);
+                                  console.log(`✅ Updated ${item.title}`);
+                                }
+                              }
+                            }
+                            
+                            toast.success('URL sync test completed - check console');
+                          }}
+                          variant="outline"
+                          size="sm"
+                        >
+                          Test URL Sync
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    sidebarItems.map(item => renderSidebarItem(item, showSidebarPermissions))
+                  )}
                 </div>
               </div>
 

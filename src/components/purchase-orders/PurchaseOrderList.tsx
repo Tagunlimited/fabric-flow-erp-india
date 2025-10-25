@@ -123,6 +123,26 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
       
       if (poErr) throw poErr;
 
+      console.log('Raw PO data from database:', poData);
+      console.log('Number of POs fetched:', poData?.length || 0);
+      
+      // Log detailed PO information for debugging
+      if (poData && poData.length > 0) {
+        console.log('Detailed PO data:');
+        poData.forEach((po: any, index: number) => {
+          console.log(`PO ${index + 1}:`, {
+            id: po.id,
+            po_number: po.po_number,
+            bom_id: po.bom_id,
+            supplier_id: po.supplier_id,
+            status: po.status,
+            created_at: po.created_at,
+            supplier: po.supplier,
+            items_count: po.items?.length || 0
+          });
+        });
+      }
+
       // Process the joined data
       const supplierMap: Record<string, Supplier> = {};
       const firstImageMap: Record<string, string | null> = {};
@@ -178,6 +198,11 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
         };
         processedPOs.push(processedPO);
       });
+
+      console.log('Processed POs:', processedPOs);
+      console.log('Supplier map:', supplierMap);
+      console.log('First image map:', firstImageMap);
+      console.log('Total quantity map:', totalQuantityMap);
 
       setPurchaseOrders(processedPOs);
       setSuppliers(supplierMap);
