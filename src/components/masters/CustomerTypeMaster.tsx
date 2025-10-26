@@ -8,80 +8,130 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Edit, Trash2, Search, Users } from "lucide-react";
+import { Plus, Edit, Trash2, Search, Users, Loader2 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 interface CustomerType {
-  id: string;
-  type_name: string;
+  id: number;
+  name: string;
   description?: string;
   discount_percentage?: number;
   is_active: boolean;
   created_at: string;
+  updated_at?: string;
 }
 
-export function SimplifiedCustomerTypeMaster() {
-  const [customerTypes, setCustomerTypes] = useState<CustomerType[]>([
-    {
-      id: '1',
-      type_name: 'Wholesale',
-      description: 'Bulk purchase customers',
-      discount_percentage: 15,
-      is_active: true,
-      created_at: new Date().toISOString()
-    },
-    {
-      id: '2', 
-      type_name: 'Retail',
-      description: 'Individual customers',
-      discount_percentage: 0,
-      is_active: true,
-      created_at: new Date().toISOString()
-    },
-    {
-      id: '3',
-      type_name: 'VIP',
-      description: 'Premium customers',
-      discount_percentage: 25,
-      is_active: true,
-      created_at: new Date().toISOString()
-    }
-  ]);
-  const [loading, setLoading] = useState(false);
+export function CustomerTypeMaster() {
+  const [customerTypes, setCustomerTypes] = useState<CustomerType[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
   const [editingType, setEditingType] = useState<CustomerType | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const { toast } = useToast();
 
   const [formData, setFormData] = useState({
-    type_name: "",
+    name: "",
     description: "",
     discount_percentage: "",
     is_active: true
   });
 
+  // Fetch customer types from database
+  const fetchCustomerTypes = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('customer_types')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching customer types:', error);
+        toast({
+          title: "Error",
+          description: "Failed to fetch customer types",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setCustomerTypes(data || []);
+    } catch (error) {
+      console.error('Error fetching customer types:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch customer types",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCustomerTypes();
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    if (!formData.name.trim()) {
+      toast({
+        title: "Error",
+        description: "Customer type name is required",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSubmitting(true);
+    
     try {
       const typeData = {
-        id: editingType?.id || Date.now().toString(),
-        type_name: formData.type_name,
-        description: formData.description || undefined,
+        name: formData.name.trim(),
+        description: formData.description.trim() || null,
         discount_percentage: formData.discount_percentage ? parseFloat(formData.discount_percentage) : 0,
-        is_active: formData.is_active,
-        created_at: editingType?.created_at || new Date().toISOString()
+        is_active: formData.is_active
       };
 
       if (editingType) {
-        setCustomerTypes(prev => prev.map(type => 
-          type.id === editingType.id ? typeData : type
-        ));
+        // Update existing customer type
+        const { error } = await supabase
+          .from('customer_types')
+          .update(typeData)
+          .eq('id', editingType.id);
+
+        if (error) {
+          console.error('Error updating customer type:', error);
+          toast({
+            title: "Error",
+            description: error.message || "Failed to update customer type",
+            variant: "destructive",
+          });
+          return;
+        }
+
         toast({
           title: "Success",
           description: "Customer type updated successfully!",
         });
       } else {
-        setCustomerTypes(prev => [...prev, typeData]);
+        // Create new customer type
+        const { error } = await supabase
+          .from('customer_types')
+          .insert([typeData]);
+
+        if (error) {
+          console.error('Error creating customer type:', error);
+          toast({
+            title: "Error",
+            description: error.message || "Failed to create customer type",
+            variant: "destructive",
+          });
+          return;
+        }
+
         toast({
           title: "Success", 
           description: "Customer type created successfully!",
@@ -91,6 +141,7 @@ export function SimplifiedCustomerTypeMaster() {
       setShowDialog(false);
       setEditingType(null);
       resetForm();
+      fetchCustomerTypes(); // Refresh the list
     } catch (error) {
       console.error('Error saving customer type:', error);
       toast({
@@ -98,13 +149,15 @@ export function SimplifiedCustomerTypeMaster() {
         description: "Failed to save customer type",
         variant: "destructive",
       });
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleEdit = (type: CustomerType) => {
     setEditingType(type);
     setFormData({
-      type_name: type.type_name,
+      name: type.name,
       description: type.description || "",
       discount_percentage: type.discount_percentage?.toString() || "",
       is_active: type.is_active
@@ -112,13 +165,33 @@ export function SimplifiedCustomerTypeMaster() {
     setShowDialog(true);
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (id: number) => {
+    if (!window.confirm('Are you sure you want to delete this customer type? This action cannot be undone.')) {
+      return;
+    }
+
     try {
-      setCustomerTypes(prev => prev.filter(type => type.id !== id));
+      const { error } = await supabase
+        .from('customer_types')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error deleting customer type:', error);
+        toast({
+          title: "Error",
+          description: error.message || "Failed to delete customer type",
+          variant: "destructive",
+        });
+        return;
+      }
+
       toast({
         title: "Success",
         description: "Customer type deleted successfully!",
       });
+      
+      fetchCustomerTypes(); // Refresh the list
     } catch (error) {
       console.error('Error deleting customer type:', error);
       toast({
@@ -131,7 +204,7 @@ export function SimplifiedCustomerTypeMaster() {
 
   const resetForm = () => {
     setFormData({
-      type_name: "",
+      name: "",
       description: "",
       discount_percentage: "",
       is_active: true
@@ -145,7 +218,7 @@ export function SimplifiedCustomerTypeMaster() {
   };
 
   const filteredTypes = customerTypes.filter(type =>
-    type.type_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    type.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (type.description && type.description.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
@@ -175,11 +248,11 @@ export function SimplifiedCustomerTypeMaster() {
             </DialogHeader>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <Label htmlFor="type_name">Type Name</Label>
+                <Label htmlFor="name">Type Name *</Label>
                 <Input
-                  id="type_name"
-                  value={formData.type_name}
-                  onChange={(e) => setFormData({ ...formData, type_name: e.target.value })}
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   placeholder="e.g., Wholesale, Retail, VIP"
                   required
                 />
@@ -199,6 +272,8 @@ export function SimplifiedCustomerTypeMaster() {
                   id="discount_percentage"
                   type="number"
                   step="0.01"
+                  min="0"
+                  max="100"
                   value={formData.discount_percentage}
                   onChange={(e) => setFormData({ ...formData, discount_percentage: e.target.value })}
                   placeholder="0"
@@ -215,11 +290,29 @@ export function SimplifiedCustomerTypeMaster() {
                 <Label htmlFor="is_active">Active</Label>
               </div>
               <div className="flex justify-end space-x-2">
-                <Button type="button" variant="outline" onClick={() => setShowDialog(false)}>
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  onClick={() => setShowDialog(false)}
+                  disabled={submitting}
+                >
                   Cancel
                 </Button>
-                <Button type="submit" className="bg-gradient-primary hover:bg-gradient-primary/90">
-                  {editingType ? 'Update' : 'Create'} Customer Type
+                <Button 
+                  type="submit" 
+                  className="bg-gradient-primary hover:bg-gradient-primary/90"
+                  disabled={submitting}
+                >
+                  {submitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      {editingType ? 'Updating...' : 'Creating...'}
+                    </>
+                  ) : (
+                    <>
+                      {editingType ? 'Update' : 'Create'} Customer Type
+                    </>
+                  )}
                 </Button>
               </div>
             </form>
@@ -243,7 +336,27 @@ export function SimplifiedCustomerTypeMaster() {
         <CardContent>
           {loading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+              <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              <span className="ml-2">Loading customer types...</span>
+            </div>
+          ) : filteredTypes.length === 0 ? (
+            <div className="text-center py-8">
+              <Users className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-muted-foreground mb-2">
+                {searchTerm ? 'No customer types found' : 'No customer types yet'}
+              </h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                {searchTerm 
+                  ? 'Try adjusting your search terms' 
+                  : 'Get started by creating your first customer type'
+                }
+              </p>
+              {!searchTerm && (
+                <Button onClick={openDialog} className="bg-gradient-primary hover:bg-gradient-primary/90">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Customer Type
+                </Button>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -256,7 +369,7 @@ export function SimplifiedCustomerTypeMaster() {
                           <Users className="w-5 h-5 text-primary" />
                         </div>
                         <div>
-                          <CardTitle className="text-lg font-semibold">{type.type_name}</CardTitle>
+                          <CardTitle className="text-lg font-semibold">{type.name}</CardTitle>
                           <Badge 
                             variant={type.is_active ? 'default' : 'secondary'}
                             className="mt-1 text-xs"

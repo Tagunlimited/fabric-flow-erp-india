@@ -7,8 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Badge } from '../ui/badge';
-import { Search, Eye, Edit, FileText, Plus } from 'lucide-react';
+import { Search, Eye, Edit, FileText, Plus, Users, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
 import { BomDisplayCard } from './BomDisplayCard';
+import { BomToPOWizardDialog } from './BomToPOWizardDialog';
+import { getBomCompletionStatus } from '@/services/bomPOTracking';
 import { toast } from 'sonner';
 
 interface BomRecord {
@@ -26,20 +28,38 @@ interface BomRecord {
   };
   bom_items?: any[];
   has_purchase_order?: boolean; // Track if PO already exists
+  completionStatus?: {
+    totalItems: number;
+    orderedItems: number;
+    completionPercentage: number;
+    status: 'not_started' | 'in_progress' | 'completed';
+  };
 }
 
-export function BomList() {
+interface BomListProps {
+  refreshTrigger?: number;
+}
+
+export function BomList({ refreshTrigger }: BomListProps) {
   const navigate = useNavigate();
   const [boms, setBoms] = useState<BomRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBom, setSelectedBom] = useState<BomRecord | null>(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
+  const [wizardDialogOpen, setWizardDialogOpen] = useState(false);
   const [processedBomItems, setProcessedBomItems] = useState<any[]>([]);
 
   useEffect(() => {
     fetchBoms();
   }, []);
+
+  // Refresh when refreshTrigger changes
+  useEffect(() => {
+    if (refreshTrigger) {
+      fetchBoms();
+    }
+  }, [refreshTrigger]);
 
   const fetchBoms = async () => {
     try {
@@ -81,10 +101,14 @@ export function BomList() {
       // Create a set of BOM IDs that already have purchase orders
       const bomIdsWithPO = new Set((existingPOs || []).map(po => po.bom_id));
 
-      // Mark BOMs that already have purchase orders
-      const bomsWithPOStatus = (data || []).map(bom => ({
-        ...bom,
-        has_purchase_order: bomIdsWithPO.has(bom.id)
+      // Mark BOMs that already have purchase orders and load completion status
+      const bomsWithPOStatus = await Promise.all((data || []).map(async (bom) => {
+        const completionStatus = await getBomCompletionStatus(bom.id);
+        return {
+          ...bom,
+          has_purchase_order: bomIdsWithPO.has(bom.id),
+          completionStatus
+        };
       }));
 
       setBoms(bomsWithPOStatus);
@@ -346,6 +370,48 @@ export function BomList() {
     navigate(`/procurement/po/new?bom=${encoded}`);
   };
 
+  const openMultiSupplierWizard = (bom: BomRecord) => {
+    setSelectedBom(bom);
+    setWizardDialogOpen(true);
+  };
+
+  const handleWizardComplete = (createdPOs: string[]) => {
+    setWizardDialogOpen(false);
+    setSelectedBom(null);
+    // Refresh the BOM list to show updated status
+    fetchBoms();
+    toast.success(`Successfully created ${createdPOs.length} purchase order${createdPOs.length !== 1 ? 's' : ''}`);
+  };
+
+  const getStatusBadge = (bom: BomRecord) => {
+    if (!bom.completionStatus) return null;
+    
+    const { status, completionPercentage } = bom.completionStatus;
+    
+    if (status === 'completed') {
+      return (
+        <Badge variant="default" className="bg-green-600 hover:bg-green-700 text-white">
+          <CheckCircle2 className="w-3 h-3 mr-1" />
+          Complete
+        </Badge>
+      );
+    } else if (status === 'in_progress') {
+      return (
+        <Badge variant="secondary" className="bg-orange-100 text-orange-800 border-orange-300">
+          <Clock className="w-3 h-3 mr-1" />
+          {completionPercentage}% Complete
+        </Badge>
+      );
+    } else {
+      return (
+        <Badge variant="outline" className="text-gray-600 border-gray-300">
+          <AlertCircle className="w-3 h-3 mr-1" />
+          Not Started
+        </Badge>
+      );
+    }
+  };
+
   const filteredBoms = boms.filter(bom => {
     const term = searchTerm.toLowerCase();
     return (
@@ -416,6 +482,7 @@ export function BomList() {
                     <TableHead>Order</TableHead>
                     <TableHead>Customer</TableHead>
                     <TableHead>Quantity</TableHead>
+                    <TableHead>Status</TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
@@ -447,6 +514,9 @@ export function BomList() {
                       <TableCell>{bom.order?.customer?.company_name || 'N/A'}</TableCell>
                       <TableCell>{bom.total_order_qty}</TableCell>
                       <TableCell>
+                        {getStatusBadge(bom)}
+                      </TableCell>
+                      <TableCell>
                         {new Date(bom.created_at).toLocaleDateString()}
                       </TableCell>
                       <TableCell>
@@ -463,19 +533,26 @@ export function BomList() {
                             size="sm"
                             onClick={() => editBom(bom)}
                             variant="outline"
-                            className="mr-2"
                           >
                             <Edit className="w-4 h-4 mr-1" />
                             Edit
                           </Button>
                           <Button
                             size="sm"
+                            onClick={() => openMultiSupplierWizard(bom)}
+                            className="bg-primary hover:bg-primary/90 text-white"
+                          >
+                            <Users className="w-4 h-4 mr-1" />
+                            Multi-Supplier PO
+                          </Button>
+                          <Button
+                            size="sm"
                             onClick={() => createPurchaseOrderFromBom(bom)}
-                            className="bg-blue-600 hover:bg-blue-700"
+                            variant="outline"
                             disabled={bom.has_purchase_order}
                           >
                             <FileText className="w-4 h-4 mr-1" />
-                            {bom.has_purchase_order ? 'PO Created' : 'Create PO'}
+                            {bom.has_purchase_order ? 'PO Created' : 'Single PO'}
                           </Button>
                         </div>
                       </TableCell>
@@ -510,6 +587,17 @@ export function BomList() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Multi-Supplier Wizard Dialog */}
+      {selectedBom && (
+        <BomToPOWizardDialog
+          open={wizardDialogOpen}
+          onOpenChange={setWizardDialogOpen}
+          bomId={selectedBom.id}
+          bomNumber={selectedBom.bom_number}
+          onComplete={handleWizardComplete}
+        />
+      )}
     </div>
   );
 }

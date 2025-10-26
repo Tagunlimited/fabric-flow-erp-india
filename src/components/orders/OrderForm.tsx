@@ -1029,14 +1029,13 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
           remarks: product.remarks || '',
           size_type_id: product.size_type_id,
           sizes_quantities: product.sizes_quantities || {},
-          // gst_rate: product.gst_rate, // Temporarily disabled - column may not exist yet
+          gst_rate: product.gst_rate,
           specifications: {
             branding_items: product.branding_items || [],
             reference_images: uploadedImages.reference_images || [],
             mockup_images: uploadedImages.mockup_images || [],
             attachments: uploadedImages.attachments || [],
-            customizations: product.customizations || [],
-            gst_rate: product.gst_rate // Store GST rate in specifications as backup
+            customizations: product.customizations || []
           }
         };
 

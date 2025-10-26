@@ -124,7 +124,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       children: [
         { title: "Dashboard", url: "/people", icon: BarChart3 },
         { title: "Our People", url: "/people/employees", icon: Users },
-        { title: "Production Team", url: "/people/production-team", icon: Scissors },
+        // { title: "Production Team", url: "/people/production-team", icon: Scissors },
         // { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
         // { title: "Incentive Programme", url: "/people/incentives", icon: Award },
         { title: "Departments", url: "/people/departments", icon: Building },

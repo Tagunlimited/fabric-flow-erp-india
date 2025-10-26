@@ -52,14 +52,19 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
   useEffect(() => {
     fetchCustomerTypes();
     fetchStates();
-    
-    if (customer) {
+  }, []);
+
+  useEffect(() => {
+    if (customer && customerTypes.length > 0) {
+      // Find the customer type name from the ID
+      const customerTypeName = customerTypes.find(type => type.id === customer.customer_type)?.name || 'Retail';
+      
       setFormData({
         company_name: customer.company_name || '',
         contact_person: customer.contact_person || '',
         phone: customer.phone || '',
         email: customer.email || '',
-        customer_types: customer.customer_type || 'Retail',
+        customer_types: customerTypeName,
         address: customer.address || '',
         city: customer.city || '',
         state: customer.state || '',
@@ -68,14 +73,27 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
         pan: customer.pan || ''
       });
     }
-  }, [customer]);
+  }, [customer, customerTypes]);
 
   const fetchCustomerTypes = async () => {
     try {
-      // Fallback customer types from enum
-      const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
-      setCustomerTypes(types.map((name, id) => ({ id, name })));
+      const { data, error } = await supabase
+        .from('customer_types')
+        .select('id, name')
+        .eq('is_active', true)
+        .order('name');
+
+      if (error) {
+        console.error('Error fetching customer types:', error);
+        // Fallback customer types
+        const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
+        setCustomerTypes(types.map((name, id) => ({ id, name })));
+        return;
+      }
+
+      setCustomerTypes(data || []);
     } catch (error) {
+      console.error('Error fetching customer types:', error);
       // Fallback customer types
       const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
       setCustomerTypes(types.map((name, id) => ({ id, name })));
@@ -139,9 +157,12 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
     try {
       setIsLoading(true);
       
+      // Find the customer type ID from the selected name
+      const selectedCustomerType = customerTypes.find(type => type.name === formData.customer_types);
+      
       const customerData = {
         ...formData,
-        customer_type: formData.customer_types as any
+        customer_type: selectedCustomerType?.id || null
       };
       delete customerData.customer_types;
 

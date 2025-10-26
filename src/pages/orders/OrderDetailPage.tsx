@@ -29,7 +29,6 @@ import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import { ErpLayout } from "@/components/ErpLayout";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
-import { PaymentRecordDialog } from '@/components/orders/PaymentRecordDialog';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Input } from "@/components/ui/input";
@@ -169,7 +168,31 @@ function calculateOrderSummary(orderItems: any[], order: Order | null) {
                    (order?.gst_rate ?? 0);
     gstAmount += (amount * gstRate) / 100;
   });
+
   return { subtotal, gstAmount, grandTotal: subtotal + gstAmount };
+}
+
+// 2. Add a function to calculate GST rates breakdown
+function calculateGSTRatesBreakdown(orderItems: any[], order: Order | null) {
+  const gstRatesMap = new Map<number, number>();
+  
+  orderItems.forEach(item => {
+    const amount = item.quantity * item.unit_price;
+    // Try to get GST rate from item.gst_rate first, then from specifications, then from order
+    const gstRate = item.gst_rate ?? 
+                   (item.specifications?.gst_rate) ?? 
+                   (order?.gst_rate ?? 0);
+    
+    if (gstRate > 0) {
+      const gstAmount = (amount * gstRate) / 100;
+      const currentAmount = gstRatesMap.get(gstRate) || 0;
+      gstRatesMap.set(gstRate, currentAmount + gstAmount);
+    }
+  });
+  
+  return Array.from(gstRatesMap.entries())
+    .map(([rate, amount]) => ({ rate, amount }))
+    .sort((a, b) => a.rate - b.rate);
 }
 
 export default function OrderDetailPage() {
@@ -206,7 +229,6 @@ export default function OrderDetailPage() {
   const [editItems, setEditItems] = useState<Array<{ id: string; product_description: string; quantity: number; unit_price: number; gst_rate: number }>>([]);
   const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
-  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
 
   // Handle back navigation based on referrer
   const handleBackNavigation = () => {
@@ -238,8 +260,8 @@ export default function OrderDetailPage() {
       const { data: finalData, error: finalError } = await supabase
         .rpc('safe_delete_order_final', { order_uuid: order.id });
       
-      if (error) {
-        console.error('Error calling safe_delete_order:', error);
+      if (finalError) {
+        console.error('Error calling safe_delete_order_final:', finalError);
         
         // Fallback to manual deletion if the function doesn't exist
         console.log('Falling back to manual deletion...');
@@ -262,16 +284,12 @@ export default function OrderDetailPage() {
           }
           return;
         }
-      } else if (data === false) {
+      } else if (finalData === 0) {
         toast.error('Order not found or already deleted');
-        // Navigate back to orders list
-        const from = searchParams.get('from');
-        if (from === 'production') {
-          navigate('/production');
-        } else {
-          navigate('/orders');
-        }
-        return;
+      } else if (finalData === 1) {
+        toast.success('Order deleted successfully');
+      } else if (finalData === -1) {
+        toast.error('Error occurred during deletion');
       }
 
       // Always navigate back to orders list after any deletion attempt
@@ -376,7 +394,11 @@ export default function OrderDetailPage() {
           .select('*')
           .eq('order_id', id as string);
 
-        if (itemsError) throw itemsError;
+        if (itemsError) {
+          console.error('Error fetching order items:', itemsError);
+          throw itemsError;
+        }
+        
         setOrderItems((itemsData as unknown as OrderItem[]) || []);
 
         // Fetch fabric details for all items
@@ -2035,10 +2057,39 @@ export default function OrderDetailPage() {
                     <span>Subtotal</span>
                     <span>{formatCurrency(order.total_amount)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>GST ({order.gst_rate}%)</span>
-                    <span>{formatCurrency(order.tax_amount)}</span>
-                  </div>
+                  {(() => {
+                    const gstBreakdown = calculateGSTRatesBreakdown(orderItems, order);
+                    if (gstBreakdown.length === 0) {
+                      return (
+                        <div className="flex justify-between">
+                          <span>GST (0%)</span>
+                          <span>{formatCurrency(0)}</span>
+                        </div>
+                      );
+                    } else if (gstBreakdown.length === 1) {
+                      return (
+                        <div className="flex justify-between">
+                          <span>GST ({gstBreakdown[0].rate}%)</span>
+                          <span>{formatCurrency(gstBreakdown[0].amount)}</span>
+                        </div>
+                      );
+                    } else {
+                      return (
+                        <div className="space-y-1">
+                          {gstBreakdown.map((gst, index) => (
+                            <div key={index} className="flex justify-between text-sm">
+                              <span>GST ({gst.rate}%)</span>
+                              <span>{formatCurrency(gst.amount)}</span>
+                            </div>
+                          ))}
+                          <div className="flex justify-between font-medium border-t pt-1">
+                            <span>Total GST</span>
+                            <span>{formatCurrency(gstBreakdown.reduce((sum, gst) => sum + gst.amount, 0))}</span>
+                          </div>
+                        </div>
+                      );
+                    }
+                  })()}
                   <div className="flex justify-between">
                     <span>Advance Paid</span>
                     <span className="text-green-600">{formatCurrency(order.advance_amount)}</span>
@@ -2046,24 +2097,44 @@ export default function OrderDetailPage() {
                   <hr />
                   <div className="flex justify-between font-bold text-lg">
                     <span>Total Amount</span>
-                    <span>{formatCurrency(order.final_amount)}</span>
+                    <span>{formatCurrency(calculateOrderSummary(orderItems, order).grandTotal)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Balance Due</span>
-                    <span className={order.balance_amount > 0 ? "text-orange-600" : "text-green-600"}>
-                      {formatCurrency(order.balance_amount)}
+                    <span className={(() => {
+                      const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
+                      const balance = calculatedTotal - (order.advance_amount || 0);
+                      return balance > 0 ? "text-orange-600" : "text-green-600";
+                    })()}>
+                      {formatCurrency(calculateOrderSummary(orderItems, order).grandTotal - (order.advance_amount || 0))}
                     </span>
                   </div>
                   
-                  {order.balance_amount > 0 && (
+                  {(() => {
+                    const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
+                    const balance = calculatedTotal - (order.advance_amount || 0);
+                    return balance > 0;
+                  })() && (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
                       className="w-full mt-2"
-                      onClick={() => setPaymentDialogOpen(true)}
+                      onClick={() => navigate('/accounts/receipts', { 
+                        state: { 
+                          prefill: { 
+                            type: 'order', 
+                            id: order.id, 
+                            number: order.order_number, 
+                            date: order.order_date, 
+                            customer_id: order.customer_id, 
+                            amount: calculateOrderSummary(orderItems, order).grandTotal - (order.advance_amount || 0) 
+                          }, 
+                          tab: 'create' 
+                        } 
+                      })}
                     >
-                      💳 Record Payment
+                      💳 Create Receipt
                     </Button>
                   )}
                   
@@ -2362,18 +2433,6 @@ export default function OrderDetailPage() {
         </div>
       </div>
       
-      {/* Payment Record Dialog */}
-      <PaymentRecordDialog
-        open={paymentDialogOpen}
-        onOpenChange={setPaymentDialogOpen}
-        orderId={order.id}
-        orderNumber={order.order_number}
-        balanceAmount={order.balance_amount}
-        onPaymentRecorded={() => {
-          fetchOrderDetails();
-          fetchOrderActivities();
-        }}
-      />
     </ErpLayout>
   );
 }
