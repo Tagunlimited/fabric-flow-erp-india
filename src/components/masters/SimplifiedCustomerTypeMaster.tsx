@@ -15,7 +15,6 @@ interface CustomerType {
   type_name: string;
   description?: string;
   discount_percentage?: number;
-  credit_days?: number;
   is_active: boolean;
   created_at: string;
 }
@@ -27,7 +26,6 @@ export function SimplifiedCustomerTypeMaster() {
       type_name: 'Wholesale',
       description: 'Bulk purchase customers',
       discount_percentage: 15,
-      credit_days: 30,
       is_active: true,
       created_at: new Date().toISOString()
     },
@@ -36,7 +34,6 @@ export function SimplifiedCustomerTypeMaster() {
       type_name: 'Retail',
       description: 'Individual customers',
       discount_percentage: 0,
-      credit_days: 0,
       is_active: true,
       created_at: new Date().toISOString()
     },
@@ -45,7 +42,6 @@ export function SimplifiedCustomerTypeMaster() {
       type_name: 'VIP',
       description: 'Premium customers',
       discount_percentage: 25,
-      credit_days: 45,
       is_active: true,
       created_at: new Date().toISOString()
     }
@@ -60,7 +56,6 @@ export function SimplifiedCustomerTypeMaster() {
     type_name: "",
     description: "",
     discount_percentage: "",
-    credit_days: "",
     is_active: true
   });
 
@@ -73,7 +68,6 @@ export function SimplifiedCustomerTypeMaster() {
         type_name: formData.type_name,
         description: formData.description || undefined,
         discount_percentage: formData.discount_percentage ? parseFloat(formData.discount_percentage) : 0,
-        credit_days: formData.credit_days ? parseInt(formData.credit_days) : 0,
         is_active: formData.is_active,
         created_at: editingType?.created_at || new Date().toISOString()
       };
@@ -113,7 +107,6 @@ export function SimplifiedCustomerTypeMaster() {
       type_name: type.type_name,
       description: type.description || "",
       discount_percentage: type.discount_percentage?.toString() || "",
-      credit_days: type.credit_days?.toString() || "",
       is_active: type.is_active
     });
     setShowDialog(true);
@@ -141,7 +134,6 @@ export function SimplifiedCustomerTypeMaster() {
       type_name: "",
       description: "",
       discount_percentage: "",
-      credit_days: "",
       is_active: true
     });
   };
@@ -201,28 +193,16 @@ export function SimplifiedCustomerTypeMaster() {
                   placeholder="Describe this customer type..."
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="discount_percentage">Discount %</Label>
-                  <Input
-                    id="discount_percentage"
-                    type="number"
-                    step="0.01"
-                    value={formData.discount_percentage}
-                    onChange={(e) => setFormData({ ...formData, discount_percentage: e.target.value })}
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="credit_days">Credit Days</Label>
-                  <Input
-                    id="credit_days"
-                    type="number"
-                    value={formData.credit_days}
-                    onChange={(e) => setFormData({ ...formData, credit_days: e.target.value })}
-                    placeholder="0"
-                  />
-                </div>
+              <div>
+                <Label htmlFor="discount_percentage">Discount %</Label>
+                <Input
+                  id="discount_percentage"
+                  type="number"
+                  step="0.01"
+                  value={formData.discount_percentage}
+                  onChange={(e) => setFormData({ ...formData, discount_percentage: e.target.value })}
+                  placeholder="0"
+                />
               </div>
               <div className="flex items-center space-x-2">
                 <input
@@ -266,59 +246,31 @@ export function SimplifiedCustomerTypeMaster() {
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Type Name</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Benefits</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredTypes.map((type) => (
-                  <TableRow key={type.id}>
-                    <TableCell>
-                      <div className="flex items-center space-x-2">
-                        <Users className="w-4 h-4 text-muted-foreground" />
-                        <div className="font-medium">{type.type_name}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="text-sm">
-                        {type.description || 'No description'}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        {type.discount_percentage && type.discount_percentage > 0 && (
-                          <Badge variant="secondary" className="text-xs">
-                            {type.discount_percentage}% Discount
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              {filteredTypes.map((type) => (
+                <Card key={type.id} className="hover:shadow-lg transition-shadow duration-200 border-0 shadow-md">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <div className="p-2 bg-primary/10 rounded-lg">
+                          <Users className="w-5 h-5 text-primary" />
+                        </div>
+                        <div>
+                          <CardTitle className="text-lg font-semibold">{type.type_name}</CardTitle>
+                          <Badge 
+                            variant={type.is_active ? 'default' : 'secondary'}
+                            className="mt-1 text-xs"
+                          >
+                            {type.is_active ? 'Active' : 'Inactive'}
                           </Badge>
-                        )}
-                        {type.credit_days && type.credit_days > 0 && (
-                          <Badge variant="outline" className="text-xs">
-                            {type.credit_days} Days Credit
-                          </Badge>
-                        )}
-                        {(!type.discount_percentage || type.discount_percentage === 0) && 
-                         (!type.credit_days || type.credit_days === 0) && (
-                          <span className="text-muted-foreground text-sm">No special benefits</span>
-                        )}
+                        </div>
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={type.is_active ? 'default' : 'secondary'}>
-                        {type.is_active ? 'Active' : 'Inactive'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center space-x-2">
+                      <div className="flex items-center space-x-1">
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleEdit(type)}
+                          className="h-8 w-8 p-0 hover:bg-primary/10"
                         >
                           <Edit className="w-4 h-4" />
                         </Button>
@@ -326,16 +278,45 @@ export function SimplifiedCustomerTypeMaster() {
                           variant="ghost"
                           size="sm"
                           onClick={() => handleDelete(type.id)}
-                          className="text-error hover:text-error"
+                          className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-sm text-muted-foreground line-clamp-2">
+                          {type.description || 'No description provided'}
+                        </p>
+                      </div>
+                      
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          {type.discount_percentage && type.discount_percentage > 0 ? (
+                            <Badge variant="secondary" className="text-xs font-medium">
+                              {type.discount_percentage}% Discount
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-xs">
+                              No Discount
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <div className="pt-2 border-t border-gray-100">
+                        <p className="text-xs text-muted-foreground">
+                          Created: {new Date(type.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>

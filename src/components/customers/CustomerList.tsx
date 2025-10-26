@@ -68,7 +68,7 @@ export function CustomerList() {
     try {
       setLoading(true);
       
-      // Fetch customers with joined data
+      // Fetch customers
       const { data, error } = await supabase
         .from('customers')
         .select('*')
@@ -76,10 +76,21 @@ export function CustomerList() {
 
       if (error) throw error;
       
-      // Transform the data to include the names (using enum values directly)
+      // Fetch customer types separately
+      const { data: customerTypes } = await supabase
+        .from('customer_types')
+        .select('id, name');
+      
+      // Create a map for quick lookup
+      const customerTypeMap = new Map();
+      (customerTypes || []).forEach(type => {
+        customerTypeMap.set(type.id, type.name);
+      });
+      
+      // Transform the data to include the names
       const transformedData = (data || []).map(customer => ({
         ...customer,
-        customer_type_name: customer.customer_type || 'Unknown',
+        customer_type_name: customerTypeMap.get(customer.customer_type) || 'Unknown',
         state_name: customer.state || 'Unknown'
       }));
       
@@ -581,8 +592,7 @@ export function CustomerList() {
                   pan: getStringValueOrNull(values[9]),
                   customer_type: customerTypeName,
                   customer_tier: customerTierName,
-                  credit_limit: parseFloat(getStringValue(values[12])) || 0,
-                  outstanding_amount: parseFloat(getStringValue(values[13])) || 0,
+                  outstanding_amount: parseFloat(getStringValue(values[12])) || 0,
                   total_orders: parseInt(getStringValue(values[14])) || 0,
                   last_order_date: getStringValueOrNull(values[15])
                 };

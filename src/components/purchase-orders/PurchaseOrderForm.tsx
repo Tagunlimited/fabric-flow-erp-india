@@ -510,19 +510,13 @@ export function PurchaseOrderForm() {
         
         return `
         <tr>
-          <td style="width: 40px; text-align: center;">
-            ${item.item_image_url ? 
-              `<img src="${item.item_image_url}" alt="${item.item_name}" style="width: 30px; height: 30px; object-fit: cover; border-radius: 3px;">` : 
-              '<div style="width: 30px; height: 30px; background-color: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 10px;">IMG</div>'
-            }
-          </td>
           <td>${item.item_name}</td>
+          <td>${item.remarks || '-'}</td>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : '-'}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
           <td style="text-align: right;">${item.quantity}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
-          <td>${item.remarks || '-'}</td>
         </tr>
       `;
       }).join('');
@@ -594,14 +588,13 @@ export function PurchaseOrderForm() {
         <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px;">
             <thead>
               <tr>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Image</th>
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Item</th>
+              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Remarks</th>
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Type</th>
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Color</th>
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">GSM</th>
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Quantity</th>
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">UOM</th>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Remarks</th>
               </tr>
             </thead>
             <tbody>
@@ -717,19 +710,13 @@ export function PurchaseOrderForm() {
         
         return `
         <tr>
-          <td class="image-cell">
-            ${item.item_image_url ? 
-              `<img src="${item.item_image_url}" alt="${item.item_name}" style="width: 30px; height: 30px; object-fit: cover; border-radius: 3px;">` : 
-              '<div style="width: 30px; height: 30px; background-color: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 10px;">IMG</div>'
-            }
-          </td>
-          <td>${item.item_name}</td>
+          <td>${item.item_name || 'N/A'}</td>
+          <td>${item.notes || item.remarks || '-'}</td>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : '-'}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
           <td class="number-cell">${item.quantity}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
-          <td>${item.remarks || '-'}</td>
         </tr>
       `;
       }).join('');
@@ -913,14 +900,13 @@ export function PurchaseOrderForm() {
             <table class="print-table">
             <thead>
               <tr>
-                <th>Image</th>
                 <th>Item</th>
+                <th>Remarks</th>
                 <th>Type</th>
                 <th>Color</th>
                 <th>GSM</th>
                 <th>Quantity</th>
                 <th>UOM</th>
-                <th>Remarks</th>
               </tr>
             </thead>
             <tbody>
@@ -1853,51 +1839,72 @@ export function PurchaseOrderForm() {
                         {/* Item Name */}
                         <div>
                           <Label className="text-sm font-medium">Item Name</Label>
-                          <div className="text-sm font-medium">
-                            {it.item_name || 'N/A'}
-                                </div>
-                              </div>
+                          {isReadOnly ? (
+                            <div className="w-full p-2 border rounded-md bg-muted text-sm font-medium">
+                              {it.item_name || 'N/A'}
+                            </div>
+                          ) : (
+                            <div className="text-sm font-medium">
+                              {it.item_name || 'N/A'}
+                            </div>
+                          )}
+                        </div>
 
                         {/* Quantity */}
                         <div>
                           <Label className="text-sm font-medium">Qty</Label>
-                      <Input 
-                        type="number" 
-                        value={it.quantity} 
-                        onChange={(e) => {
-                          const qty = parseFloat(e.target.value) || 0;
-                          updateItem(idx, { quantity: qty });
-                        }}
-                        disabled={isReadOnly} 
-                            className="w-full text-right" 
-                        placeholder="Qty"
-                      />
+                          {isReadOnly ? (
+                            <div className="w-full p-2 border rounded-md bg-muted text-sm text-right">
+                              {it.quantity}
+                            </div>
+                          ) : (
+                            <Input 
+                              type="number" 
+                              value={it.quantity} 
+                              onChange={(e) => {
+                                const qty = parseFloat(e.target.value) || 0;
+                                updateItem(idx, { quantity: qty });
+                              }}
+                              className="w-full text-right" 
+                              placeholder="Qty"
+                            />
+                          )}
                         </div>
 
                         {/* UOM */}
                         <div>
                           <Label className="text-sm font-medium">UOM</Label>
-                      <Input 
-                        value={it.unit_of_measure || ''} 
-                        onChange={(e) => {
-                          updateItem(idx, { unit_of_measure: e.target.value });
-                        }} 
-                            className="w-full" 
-                        disabled={isReadOnly} 
-                            placeholder="UOM"
-                          />
+                          {isReadOnly ? (
+                            <div className="w-full p-2 border rounded-md bg-muted text-sm">
+                              {it.unit_of_measure || 'pcs'}
+                            </div>
+                          ) : (
+                            <Input 
+                              value={it.unit_of_measure || ''} 
+                              onChange={(e) => {
+                                updateItem(idx, { unit_of_measure: e.target.value });
+                              }} 
+                              className="w-full" 
+                              placeholder="UOM"
+                            />
+                          )}
                         </div>
 
                         {/* Remarks */}
                         <div className="col-span-6">
                           <Label className="text-sm font-medium">Remarks</Label>
-                          <Input 
-                            value={it.remarks || ''} 
-                            onChange={(e) => updateItem(idx, { remarks: e.target.value })}
-                            className="w-full" 
-                            disabled={isReadOnly} 
-                            placeholder="Enter remarks for this item"
-                          />
+                          {isReadOnly ? (
+                            <div className="w-full p-2 border rounded-md bg-muted text-sm">
+                              {it.notes || it.remarks || '-'}
+                            </div>
+                          ) : (
+                            <Input 
+                              value={it.notes || it.remarks || ''} 
+                              onChange={(e) => updateItem(idx, { notes: e.target.value })}
+                              className="w-full" 
+                              placeholder="Enter remarks for this item"
+                            />
+                          )}
                         </div>
                       </div>
 

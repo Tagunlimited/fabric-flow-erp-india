@@ -8,7 +8,6 @@ export interface BestSupplier {
   primary_contact_email: string | null;
   total_outstanding_amount: number | null;
   priority: number | null;
-  credit_limit: number | null;
 }
 
 /**
@@ -162,8 +161,7 @@ export async function getSuppliersBySpecializationType(
           supplier_name,
           primary_contact_phone,
           primary_contact_email,
-          total_outstanding_amount,
-          credit_limit
+          total_outstanding_amount
         )
       `)
       .eq('specialization_type', specializationType)

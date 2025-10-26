@@ -1,10 +1,10 @@
 import { ErpLayout } from "@/components/ErpLayout";
-import { SimplifiedCustomerTypeMaster } from "@/components/masters/SimplifiedCustomerTypeMaster";
+import { CustomerTypeMaster } from "@/components/masters/CustomerTypeMaster";
 
 const CustomerTypeMasterPage = () => {
   return (
     <ErpLayout>
-      <SimplifiedCustomerTypeMaster />
+      <CustomerTypeMaster />
     </ErpLayout>
   );
 };

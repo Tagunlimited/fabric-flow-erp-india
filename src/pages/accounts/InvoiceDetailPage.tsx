@@ -507,10 +507,41 @@ export default function InvoiceDetailPage() {
                   </div>
                 </div>
 
+                {/* Authorized Signatory Section */}
+                <div className="mt-12 pt-6 border-t">
+                  <div className="flex justify-between items-end">
+                    {/* Customer Signature */}
+                    <div className="text-center">
+                      <div className="border-b border-gray-400 w-40 mb-2"></div>
+                      <div className="text-sm text-gray-600">Customer Signature</div>
+                    </div>
+                    
+                    {/* Company Authorized Signatory */}
+                    <div className="text-center">
+                      <div className="mb-3">
+                        {company?.authorized_signatory_url ? (
+                          <img 
+                            src={company.authorized_signatory_url} 
+                            alt="Authorized Signatory" 
+                            className="w-20 h-16 object-contain mx-auto"
+                          />
+                        ) : (
+                          <div className="w-20 h-16 border border-gray-300 mx-auto flex items-center justify-center">
+                            <span className="text-xs text-gray-400">Signature</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="border-b border-gray-400 w-40 mb-2"></div>
+                      <div className="text-sm text-gray-600">Authorized Signatory</div>
+                      <div className="text-xs text-gray-500 mt-1">{company?.company_name || 'Company Name'}</div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Footer */}
-                <div className="mt-12 text-center text-sm text-muted-foreground">
+                <div className="mt-8 text-center text-sm text-muted-foreground">
                   <p>Thank you for your business!</p>
-                  <p className="mt-4">Payment due within 30 days</p>
+                  <p className="mt-2">Payment due within 30 days</p>
                 </div>
               </div>
             </div>

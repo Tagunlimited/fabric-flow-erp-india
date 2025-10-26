@@ -25,7 +25,6 @@ interface Customer {
   pan: string;
   customer_tier: string;
   customer_type: string;
-  credit_limit: number;
   outstanding_amount: number;
   total_orders: number;
   last_order_date: string;
@@ -190,17 +189,6 @@ const CustomerDetailPage = () => {
 
         {/* Customer Overview Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center space-x-2">
-                <CreditCard className="w-8 h-8 text-primary" />
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Credit Limit</p>
-                  <p className="text-2xl font-bold">{formatCurrency(customer.credit_limit || 0)}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
 
           <Card>
             <CardContent className="p-6">

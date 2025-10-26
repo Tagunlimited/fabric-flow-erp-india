@@ -126,7 +126,7 @@ export function AppCacheProvider({ children }: { children: ReactNode }) {
   }, [memoryCache, isInitialized]);
 
   // Core cache operations
-  const setCache = useCallback(<T>(key: string, data: T, config: Partial<CacheConfig> = {}) => {
+  const setCache = useCallback(<T,>(key: string, data: T, config: Partial<CacheConfig> = {}) => {
     const finalConfig = { ...defaultConfig, ...config };
     
     const entry: CacheEntry<T> = {
@@ -156,7 +156,7 @@ export function AppCacheProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const getCache = useCallback(<T>(key: string): T | null => {
+  const getCache = useCallback(<T,>(key: string): T | null => {
     const entry = memoryCache.get(key);
     
     if (!entry) return null;
@@ -213,7 +213,7 @@ export function AppCacheProvider({ children }: { children: ReactNode }) {
   }, [removeCache]);
 
   // Data persistence
-  const persistData = useCallback(<T>(key: string, data: T) => {
+  const persistData = useCallback(<T,>(key: string, data: T) => {
     try {
       const persistKey = `persist_${key}`;
       localStorage.setItem(persistKey, JSON.stringify({
@@ -225,7 +225,7 @@ export function AppCacheProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const getPersistedData = useCallback(<T>(key: string): T | null => {
+  const getPersistedData = useCallback(<T,>(key: string): T | null => {
     try {
       const persistKey = `persist_${key}`;
       const stored = localStorage.getItem(persistKey);

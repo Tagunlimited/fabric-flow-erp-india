@@ -1029,14 +1029,13 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
           remarks: product.remarks || '',
           size_type_id: product.size_type_id,
           sizes_quantities: product.sizes_quantities || {},
-          // gst_rate: product.gst_rate, // Temporarily disabled - column may not exist yet
+          gst_rate: product.gst_rate,
           specifications: {
             branding_items: product.branding_items || [],
             reference_images: uploadedImages.reference_images || [],
             mockup_images: uploadedImages.mockup_images || [],
             attachments: uploadedImages.attachments || [],
-            customizations: product.customizations || [],
-            gst_rate: product.gst_rate // Store GST rate in specifications as backup
+            customizations: product.customizations || []
           }
         };
 
@@ -1582,43 +1581,43 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
         <Label className="text-base font-semibold text-gray-700 mb-2 block">Customizations</Label>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
           {(product.customizations || []).map((customization, index) => (
-            <div key={`${customization.partId}-${index}`} className="relative p-2 border rounded-lg bg-gray-50 min-w-0">
+            <div key={`${customization.partId}-${index}`} className="relative p-3 border rounded-lg bg-white shadow-sm min-w-0">
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 onClick={() => removeCustomization(productIndex, index)}
-                className="absolute top-1 right-1 h-5 w-5 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                className="absolute top-2 right-2 h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
               >
-                <X className="w-3 h-3" />
+                <X className="w-4 h-4" />
               </Button>
-              <div className="pr-6 flex items-start gap-2">
+              <div className="pr-8 flex items-start gap-3">
                 {customization.selectedAddonImageUrl && (
                   <img 
                     src={customization.selectedAddonImageUrl} 
                     alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
-                    className="w-8 h-8 object-cover rounded border flex-shrink-0"
+                    className="w-12 h-12 object-cover rounded-lg border-2 border-gray-100 flex-shrink-0"
                     onError={(e) => {
                       e.currentTarget.style.display = 'none';
                     }}
                   />
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-xs truncate" title={customization.partName}>
+                  <div className="text-sm font-semibold text-gray-900 truncate" title={customization.partName}>
                     {customization.partName}
                   </div>
                   {customization.partType === 'dropdown' && (
-                    <div className="text-xs text-muted-foreground truncate" title={customization.selectedAddonName}>
+                    <div className="text-xs text-gray-600 truncate mt-1" title={customization.selectedAddonName}>
                       {customization.selectedAddonName}
                     </div>
                   )}
-                  {customization.partType === 'number' && (
-                    <div className="text-xs text-muted-foreground">
+                  {customization.partType === 'number' && customization.quantity !== undefined && (
+                    <div className="text-xs text-gray-600 mt-1">
                       Qty: {customization.quantity}
                     </div>
                   )}
                   {customization.priceImpact && customization.priceImpact !== 0 && (
-                    <div className="text-xs font-medium text-green-600">
+                    <div className="text-xs font-medium text-green-600 mt-1">
                       ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
                     </div>
                   )}

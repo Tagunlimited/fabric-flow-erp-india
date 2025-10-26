@@ -114,6 +114,22 @@ export function BomForm() {
     status: 'draft',
   });
   const [items, setItems] = useState<BomLineItem[]>([]);
+
+  // Clear BOM ID when creating a new BOM (not editing and not from order)
+  useEffect(() => {
+    if (!isEditMode && !isReadOnly && !orderParam && bom.id) {
+      console.log('Clearing BOM ID for new BOM creation (no order param)');
+      setBom(prev => ({ ...prev, id: undefined }));
+    }
+  }, [isEditMode, isReadOnly, orderParam, bom.id, setBom]);
+
+  // Clear all form data when creating a new BOM (not editing and not from order)
+  useEffect(() => {
+    if (!isEditMode && !isReadOnly && !id && !orderParam) {
+      console.log('Clearing all form data for new BOM creation (no order param)');
+      resetBomData();
+    }
+  }, [isEditMode, isReadOnly, id, orderParam, resetBomData]);
   
   // Option lists by type
   const [fabricOptions, setFabricOptions] = useState<{ id: string; label: string; image_url?: string | null; color?: string; gsm?: string; rate?: number }[]>([]);
@@ -278,6 +294,7 @@ export function BomForm() {
         
         // Pre-fill BOM data from order
         if (decodedOrderData.order_item) {
+          console.log('Setting BOM data from decoded order data:', decodedOrderData);
           setBom(prev => ({
             ...prev,
             order_id: decodedOrderData.order_id,
@@ -520,12 +537,14 @@ export function BomForm() {
       // Pre-fill BOM data from order
       if ((order as any)?.order_items && (order as any).order_items.length > 0) {
         const firstItem = (order as any).order_items[0];
+        const totalQty = (order as any).order_items.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0);
+        console.log('Setting BOM data from fetched order:', { orderId: (order as any).id, totalQty, orderItems: (order as any).order_items });
         setBom(prev => ({
           ...prev,
           order_id: (order as any).id,
           product_name: firstItem.product_description || firstItem.product?.name || '',
           product_image_url: firstItem.category_image_url || firstItem.product?.image_url || null,
-          total_order_qty: (order as any).order_items.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0),
+          total_order_qty: totalQty,
         }));
       }
     } catch (error) {
@@ -1133,6 +1152,12 @@ export function BomForm() {
 
       let bomId = bom.id;
 
+      // Ensure we're not accidentally updating when we should be creating
+      if (bomId && !isEditMode) {
+        console.log('Warning: BOM ID exists but not in edit mode. Clearing ID for new BOM creation.');
+        bomId = undefined;
+      }
+
       if (bomId) {
         // Update existing BOM
         console.log('Updating existing BOM:', bomId);
@@ -1175,6 +1200,7 @@ export function BomForm() {
       } else {
         // Create new BOM
         console.log('Creating new BOM with data:', bomData);
+        console.log('BOM ID is undefined, proceeding with new BOM creation');
         
         // Create BOM record in bom_records table
         const result = await supabase

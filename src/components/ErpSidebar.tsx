@@ -94,8 +94,6 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
     {
       title: "Inventory",
       icon: Package,
-      badge: "500",
-      badgeColor: "bg-inventory",
       children: [
         { title: "Dashboard", url: "/warehouse/inventory", icon: Building },
         // { title: "Dashboard", url: "/inventory", icon: BarChart3 },
@@ -106,8 +104,6 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
     {
       title: "Production",
       icon: Factory,
-      badge: "300",
-      badgeColor: "bg-warning",
       children: [
         { title: "Production Dashboard", url: "/production", icon: Factory },
         { title: "Assign Orders", url: "/production/assign-orders", icon: Users },
@@ -115,7 +111,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Tailor Management", url: "/production/tailor-management", icon: Users }
       ]
     },
-    { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality",
+    { title: "Quality Check", url: "/quality", icon: CheckCircle,
       children: [
         { title: "Picker", url: "/production/picker", icon: Package },
         { title: "QC", url: "/quality/checks", icon: CheckCircle },
@@ -128,7 +124,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       children: [
         { title: "Dashboard", url: "/people", icon: BarChart3 },
         { title: "Our People", url: "/people/employees", icon: Users },
-        { title: "Production Team", url: "/people/production-team", icon: Scissors },
+        // { title: "Production Team", url: "/people/production-team", icon: Scissors },
         // { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
         // { title: "Incentive Programme", url: "/people/incentives", icon: Award },
         { title: "Departments", url: "/people/departments", icon: Building },

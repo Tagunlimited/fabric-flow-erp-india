@@ -6,9 +6,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ShoppingCart, Plus, Eye, Edit, Package, Truck, Clock, CheckCircle, Search, Filter, Trash2 } from "lucide-react";
+import { ShoppingCart, Plus, Eye, Edit, Package, Truck, Clock, CheckCircle, Search, Filter, Trash2, RefreshCw } from "lucide-react";
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { OrderForm } from "@/components/orders/OrderForm";
@@ -51,6 +51,7 @@ interface Order {
 
 const OrdersPage = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [orders, setOrders] = useState<Order[]>([]);
   const [salesManagers, setSalesManagers] = useState<{ [key: string]: { id: string; full_name: string; avatar_url?: string } }>({});
   const [loading, setLoading] = useState(true);
@@ -60,16 +61,33 @@ const OrdersPage = () => {
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<string>("date_desc");
 
+  // Only refresh on tab change, not on visibility changes or focus
   useEffect(() => {
     if (activeTab === "list") {
       fetchOrders();
     }
   }, [activeTab]);
 
-  const fetchOrders = async () => {
+  // Handle navigation state to refresh orders when returning from order detail
+  useEffect(() => {
+    if (location.state?.refreshOrders && activeTab === "list") {
+      console.log('OrdersPage: Navigation state indicates refresh needed');
+      fetchOrders(true); // Force refresh when returning from order detail
+      // Clear the state to prevent unnecessary refreshes
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, activeTab, navigate, location.pathname]);
+
+  const fetchOrders = async (forceRefresh = false) => {
     try {
-      console.log('OrdersPage: fetchOrders called');
+      console.log('OrdersPage: fetchOrders called', forceRefresh ? '(force refresh)' : '');
       setLoading(true);
+      
+      // Clear orders state first if force refresh
+      if (forceRefresh) {
+        setOrders([]);
+        setSalesManagers({});
+      }
       
       // Fetch orders
       const { data, error } = await supabase
@@ -349,6 +367,10 @@ const OrdersPage = () => {
                         <DropdownMenuItem onClick={() => setSortBy("amount_asc")} className={sortBy === "amount_asc" ? 'bg-accent/20 font-semibold' : ''}>Amount Low-High</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    <Button variant="outline" size="sm" onClick={() => fetchOrders(true)} disabled={loading}>
+                      <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                      Force Refresh
+                    </Button>
                     <Button onClick={() => setActiveTab("create")}> <Plus className="w-4 h-4 mr-2" /> New Order </Button>
                   </div>
                 </div>
