@@ -28,6 +28,7 @@ const WarehouseInventoryPage: React.FC = () => {
   const [grnHeader, setGrnHeader] = useState<any | null>(null);
   const [poHeader, setPoHeader] = useState<any | null>(null);
   const [bomItems, setBomItems] = useState<any[]>([]);
+  const [relatedOrders, setRelatedOrders] = useState<any[]>([]);
 
   const loadTotals = async () => {
     try {
@@ -109,18 +110,23 @@ const WarehouseInventoryPage: React.FC = () => {
       setGrnHeader(null);
       setPoHeader(null);
       setBomItems([]);
+      setRelatedOrders([]);
 
+      console.log('Loading related details for inventory:', inv);
+
+      // 1. Fetch GRN Header
       let grnData: any = null;
       {
         const { data, error } = await supabase
           .from('grn_master' as any)
           .select(`id, grn_number, grn_date, received_date, status, po_id,
                    supplier_master:supplier_id (supplier_name, supplier_code),
-                   purchase_orders:po_id (id, po_number, status)`)
+                   purchase_orders:po_id (id, po_number, status, bom_id)`)
           .eq('id', inv.grn_id as any)
           .single();
         if (!error && data) {
           grnData = data;
+          console.log('GRN fetched:', grnData);
         } else {
           const { data: alt } = await supabase
             .from('goods_receipt_notes' as any)
@@ -132,29 +138,100 @@ const WarehouseInventoryPage: React.FC = () => {
       }
       if (grnData) setGrnHeader(grnData);
 
+      // 2. Fetch Purchase Order from GRN
       let poData = grnData?.purchase_orders || null;
       const poId = grnData?.po_id || grnData?.purchase_orders?.id;
       if (!poData && poId) {
         const { data } = await supabase
           .from('purchase_orders' as any)
-          .select('id, po_number, status, total_amount, supplier_id')
+          .select('id, po_number, status, total_amount, supplier_id, bom_id')
           .eq('id', poId as any)
           .single();
         if (data) poData = data;
       }
-      if (poData) setPoHeader(poData);
+      if (poData) {
+        setPoHeader(poData);
+        console.log('PO fetched:', poData);
 
-      if (inv.item_id || inv.item_code) {
-        let query = supabase
-          .from('bom_record_items' as any)
-          .select(`id, bom_id, item_name, item_code, unit_of_measure, qty_per_product, qty_total,
-                   bom_records:bom_id (id, product_name, status)`) 
-          .limit(25);
-        if (inv.item_id) query = query.eq('item_id', inv.item_id as any);
-        else if (inv.item_code) query = query.eq('item_code', inv.item_code as any);
-        const { data } = await query;
-        if (data) setBomItems(data as any[]);
+        // 3. Fetch BOM from PO
+        if (poData.bom_id) {
+          console.log('PO has BOM ID:', poData.bom_id);
+          
+          const { data: bomData } = await supabase
+            .from('bom_records' as any)
+            .select(`id, bom_number, product_name, status, order_id,
+                     bom_record_items(*)`)
+            .eq('id', poData.bom_id as any)
+            .single();
+
+          if (bomData) {
+            console.log('BOM fetched:', bomData);
+            const bomOrderId = (bomData as any).order_id;
+            console.log('BOM order_id:', bomOrderId);
+
+            // 4. Fetch Order from BOM
+            if (bomOrderId) {
+              const { data: orderData } = await supabase
+                .from('orders' as any)
+                .select(`id, order_number, order_date, status, final_amount, customer_id,
+                          customers:customer_id (company_name)`)
+                .eq('id', bomOrderId as any)
+                .single();
+
+              if (orderData) {
+                console.log('Order fetched:', orderData);
+                setRelatedOrders([orderData]);
+              }
+            }
+          }
+        }
+
+        // Alternative approach: Match BOM items by item_id/item_code to find related orders
+        if (inv.item_id || inv.item_code) {
+          console.log('Searching for BOM items matching item_id:', inv.item_id, 'or item_code:', inv.item_code);
+          
+          const bomItemQuery = supabase
+            .from('bom_record_items' as any)
+            .select(`id, bom_id, item_name, item_code, unit_of_measure, qty_per_product, qty_total,
+                     bom_records:bom_id (id, bom_number, product_name, status, order_id)`);
+
+          if (inv.item_id) {
+            bomItemQuery.eq('item_id', inv.item_id as any);
+          } else if (inv.item_code) {
+            bomItemQuery.eq('item_code', inv.item_code as any);
+          }
+
+          const { data: bomItemsData } = await bomItemQuery.limit(25);
+
+          if (bomItemsData && bomItemsData.length > 0) {
+            console.log('Found BOM items:', bomItemsData.length);
+            setBomItems(bomItemsData as any[]);
+
+            // Extract and fetch unique orders from BOM items
+            const uniqueOrderIds = Array.from(new Set(
+              bomItemsData
+                .map((bi: any) => bi.bom_records?.order_id)
+                .filter(Boolean)
+            ));
+
+            if (uniqueOrderIds.length > 0) {
+              const { data: ordersData } = await supabase
+                .from('orders' as any)
+                .select(`id, order_number, order_date, status, final_amount, customer_id,
+                          customers:customer_id (company_name)`)
+                .in('id', uniqueOrderIds)
+                .limit(10);
+
+              if (ordersData && ordersData.length > 0) {
+                console.log('Fetched orders from BOM items:', ordersData);
+                setRelatedOrders(ordersData as any[]);
+              }
+            }
+          }
+        }
       }
+    } catch (error) {
+      console.error('Error loading related details:', error);
     } finally {
       setLoadingDetails(false);
     }
@@ -495,7 +572,21 @@ const WarehouseInventoryPage: React.FC = () => {
 
               {/* Related Records */}
               <div className="pt-2 border-t space-y-4">
-                <h3 className="font-semibold">Related Records</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold">Related Records</h3>
+                  {/* Flow Diagram */}
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <span>Order</span>
+                    <span className="font-bold">→</span>
+                    <span>BOM</span>
+                    <span className="font-bold">→</span>
+                    <span>PO</span>
+                    <span className="font-bold">→</span>
+                    <span>GRN</span>
+                    <span className="font-bold">→</span>
+                    <span>Inventory</span>
+                  </div>
+                </div>
                 {loadingDetails && (
                   <div className="text-sm text-muted-foreground">Loading related records...</div>
                 )}
@@ -543,6 +634,66 @@ const WarehouseInventoryPage: React.FC = () => {
                       >
                         View PO
                       </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Debug Info */}
+                {process.env.NODE_ENV === 'development' && (
+                  <div className="text-xs text-blue-600 p-2 bg-blue-50 border border-blue-200 rounded">
+                    Debug: Looking for orders with item_id="{selectedInventory?.item_id}" or item_code="{selectedInventory?.item_code}". 
+                    Found {relatedOrders.length} order(s).
+                  </div>
+                )}
+
+                {/* Related Orders */}
+                {relatedOrders && relatedOrders.length > 0 && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-semibold text-sm">Original Customer Order</h4>
+                      <Badge variant="default" className="bg-blue-600">
+                        Active Order
+                      </Badge>
+                    </div>
+                    <div className="space-y-3">
+                      {relatedOrders.map((order: any) => (
+                        <div key={order.id} className="bg-white rounded p-3 border border-blue-100">
+                          <div className="grid grid-cols-2 gap-3 text-sm mb-3">
+                            <div>
+                              <div className="text-muted-foreground text-xs">Order Number</div>
+                              <div className="font-medium">{order.order_number}</div>
+                            </div>
+                            <div>
+                              <div className="text-muted-foreground text-xs">Status</div>
+                              <Badge variant={order.status === 'completed' ? 'default' : 'secondary'}>
+                                {order.status}
+                              </Badge>
+                            </div>
+                            <div>
+                              <div className="text-muted-foreground text-xs">Order Date</div>
+                              <div className="font-medium">
+                                {order.order_date ? new Date(order.order_date).toLocaleDateString() : '-'}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-muted-foreground text-xs">Customer</div>
+                              <div className="font-medium">{order.customers?.company_name || 'N/A'}</div>
+                            </div>
+                            {order.final_amount && (
+                              <div className="col-span-2">
+                                <div className="text-muted-foreground text-xs">Order Value</div>
+                                <div className="font-bold text-blue-600">₹{order.final_amount}</div>
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 px-4 rounded-md font-medium transition-colors"
+                            onClick={() => navigate(`/orders/${order.id}`)}
+                          >
+                            View Order Details
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}

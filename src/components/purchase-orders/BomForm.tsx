@@ -442,11 +442,11 @@ export function BomForm() {
       let data = null;
       let error = null;
 
-      // First try product_master
+      // First try product_master with both possible column names
       const result1 = await supabase
         .from('product_master')
-        .select('id, product_name, image_url')
-        .order('product_name');
+        .select('id, name, product_name, image_url')
+        .order('name');
       
       if (result1.error) {
         console.log('product_master failed, trying products table...');

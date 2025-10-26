@@ -1,3 +1,4 @@
+import React from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -12,6 +13,8 @@ import { GlobalFormPersistenceProvider } from "@/components/GlobalFormPersistenc
 import { LoginForm } from "@/components/auth/LoginForm";
 import { SignupForm } from "@/components/auth/SignupForm";
 import { UserManagement } from "@/components/admin/UserManagement";
+import { PermissionAwareRedirect } from "@/components/PermissionAwareRedirect";
+import { supabase } from "@/integrations/supabase/client";
 import Index from "./pages/Index";
 import CustomersPage from "./pages/crm/CustomersPage";
 import CustomerDetailPage from "./pages/crm/CustomerDetailPage";
@@ -117,7 +120,98 @@ function ProtectedRouteWithCompanySettings({ children, requiredRole }: { childre
 
 const queryClient = new QueryClient();
 
+// Global sidebar sync function
+const syncSidebarUrls = async () => {
+  try {
+    console.log('🔄 Global sidebar URL sync starting...');
+    
+    const currentSidebarItems = [
+      { title: 'Dashboard', url: '/dashboard', icon: 'Home', sort_order: 1, is_active: true },
+      { title: 'CRM', url: null, icon: 'Users', sort_order: 2, is_active: true },
+      { title: 'Orders', url: '/orders', icon: 'ShoppingCart', sort_order: 3, is_active: true },
+      { title: 'Accounts', url: null, icon: 'Calculator', sort_order: 4, is_active: true },
+      { title: 'Design & Printing', url: '/design', icon: 'Palette', sort_order: 5, is_active: true },
+      { title: 'Procurement', url: null, icon: 'ShoppingBag', sort_order: 6, is_active: true },
+      { title: 'Inventory', url: null, icon: 'Package', sort_order: 7, is_active: true },
+      { title: 'Production', url: null, icon: 'Factory', sort_order: 8, is_active: true },
+      { title: 'Quality Check', url: '/quality', icon: 'CheckCircle', sort_order: 9, is_active: true },
+      { title: 'People', url: null, icon: 'Users', sort_order: 10, is_active: true },
+      { title: 'Masters', url: null, icon: 'Package', sort_order: 11, is_active: true },
+      { title: 'User & Roles', url: null, icon: 'UserCog', sort_order: 12, is_active: true },
+      { title: 'Configuration', url: '/configuration', icon: 'Settings', sort_order: 13, is_active: true },
+      { title: 'Reports', url: '/reports', icon: 'FileText', sort_order: 14, is_active: true }
+    ];
+
+    console.log('📋 Current sidebar items:', currentSidebarItems.length);
+
+    // Get existing items
+    const { data: existingItems, error: fetchError } = await supabase
+      .from('sidebar_items')
+      .select('title, url, icon, sort_order')
+      .eq('is_active', true as any);
+
+    if (fetchError) {
+      console.error('❌ Error fetching existing items:', fetchError);
+      return;
+    }
+
+    if (!existingItems) {
+      console.log('⚠️ No existing items found');
+      return;
+    }
+
+    console.log('📊 Existing items in database:', existingItems.length);
+    console.log('📊 Existing items:', existingItems.map((item: any) => ({ title: item.title, url: item.url })));
+
+    let updateCount = 0;
+
+    // Update items with correct URLs
+    for (const currentItem of currentSidebarItems) {
+      const existingItem = existingItems.find((item: any) => item.title === currentItem.title);
+      if (existingItem) {
+        const urlDifferent = (existingItem as any).url !== currentItem.url;
+        const shouldHaveUrl = currentItem.url !== null;
+        const hasNullUrl = (existingItem as any).url === null;
+        
+        if (urlDifferent || (shouldHaveUrl && hasNullUrl)) {
+          console.log(`🔄 Updating ${currentItem.title}: "${(existingItem as any).url}" → "${currentItem.url}"`);
+          
+          const { error: updateError } = await supabase
+            .from('sidebar_items')
+            .update({ 
+              url: currentItem.url,
+              icon: currentItem.icon,
+              sort_order: currentItem.sort_order
+            } as any)
+            .eq('title', currentItem.title as any);
+          
+          if (updateError) {
+            console.error(`❌ Error updating ${currentItem.title}:`, updateError);
+          } else {
+            console.log(`✅ Successfully updated ${currentItem.title}`);
+            updateCount++;
+          }
+        } else {
+          console.log(`✓ ${currentItem.title} is already correct: "${(existingItem as any).url}"`);
+        }
+      } else {
+        console.log(`⚠️ ${currentItem.title} not found in database`);
+      }
+    }
+    
+    console.log(`✅ Global sidebar URL sync completed. Updated ${updateCount} items.`);
+  } catch (error) {
+    console.error('❌ Global sidebar URL sync failed:', error);
+  }
+};
+
 const App = () => {
+  // Run sidebar URL sync on app startup
+  React.useEffect(() => {
+    console.log('🚀 App started - running sidebar URL sync...');
+    syncSidebarUrls();
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
@@ -136,6 +230,11 @@ const App = () => {
                 
                 {/* Protected Routes */}
                 <Route path="/" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <PermissionAwareRedirect />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/dashboard" element={
                   <ProtectedRouteWithCompanySettings>
                     <Index />
                   </ProtectedRouteWithCompanySettings>

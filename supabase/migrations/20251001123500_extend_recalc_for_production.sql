@@ -77,22 +77,53 @@ begin
     from public.dispatch_order_items doi
    where doi.order_id = p_order_id;
 
-  -- Determine target status in progression; do not override late-terminal states
+  -- Determine target status in progression; later stages override earlier stages
+  -- Priority order: dispatched > partial_dispatched > rework > ready_for_dispatch > under_qc > under_stitching > under_cutting > under_procurement > confirmed > designing_done > pending
   v_target := 'pending';
-  if v_has_receipt then v_target := 'confirmed'; end if;
-  if v_item_count > 0 and v_done_count = v_item_count then v_target := 'designing_done'; end if;
-  if v_has_bom then v_target := 'under_procurement'; end if;
-  if v_has_cutting then v_target := 'under_cutting'; end if;
-  if v_has_batch then v_target := 'under_stitching'; end if;
-  if v_total_picked > 0 then v_target := 'under_qc'; end if;
+  
+  -- When mockup/reference images are uploaded, set to designing_done (base design stage)
+  if v_item_count > 0 and v_done_count = v_item_count then
+    v_target := 'designing_done';
+  end if;
+  
+  -- When receipt is generated, set to confirmed (this overrides designing_done)
+  if v_has_receipt then
+    v_target := 'confirmed';
+  end if;
+  
+  -- Production flow stages - each overrides the previous
+  if v_has_bom then
+    v_target := 'under_procurement';
+  end if;
+  
+  if v_has_cutting then
+    v_target := 'under_cutting';
+  end if;
+  
+  if v_has_batch then
+    v_target := 'under_stitching';
+  end if;
+  
+  if v_total_picked > 0 then
+    v_target := 'under_qc';
+  end if;
+  
   -- Ready when approved covers effective picked (picked minus rejected)
-  if v_total_approved > 0 and v_total_approved >= greatest(v_total_picked - v_total_rejected, 1) then v_target := 'ready_for_dispatch'; end if;
-  if v_total_rejected > 0 then v_target := 'rework'; end if;
+  if v_total_approved > 0 and v_total_approved >= greatest(v_total_picked - v_total_rejected, 1) then
+    v_target := 'ready_for_dispatch';
+  end if;
+  
+  -- Rework overrides most states (when rejected items exist)
+  if v_total_rejected > 0 then
+    v_target := 'rework';
+  end if;
 
+  -- Dispatch states override earlier production states
   -- Partial / full dispatch states based on dispatched vs approved
   if v_total_dispatched > 0 and v_total_dispatched < greatest(v_total_approved - v_total_rejected, 1) then
     v_target := 'partial_dispatched';
   end if;
+  
   if v_total_dispatched >= greatest(v_total_approved - v_total_rejected, 1) and v_total_approved > 0 then
     v_target := 'dispatched';
   end if;

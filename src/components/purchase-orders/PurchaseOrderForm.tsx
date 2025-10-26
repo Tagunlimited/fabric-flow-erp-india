@@ -1308,7 +1308,8 @@ export function PurchaseOrderForm() {
       const grandTotal = 0; // No total amount for purchase orders
     
       // Ensure PO number is always generated
-      const poNumber = po.po_number || await generatePONumber();
+      // If creating from BOM, always generate new PO number to avoid conflicts
+      const poNumber = (bomData?.id && !po.po_number) ? await generatePONumber() : (po.po_number || await generatePONumber());
       
       const poData = {
         supplier_id: po.supplier_id,
@@ -1330,13 +1331,35 @@ export function PurchaseOrderForm() {
       console.log('🔧 TIMESTAMP:', new Date().toISOString(), 'PO Data being saved:', poData);
       console.log('🔧 PO Number in data:', poData.po_number);
       console.log('🔧 PO Number type:', typeof poData.po_number);
+      console.log('🔧 BOM ID in data:', poData.bom_id);
       console.log('🔧 Expected delivery date:', po.expected_delivery_date);
       console.log('🔧 Expected delivery date processed:', poData.expected_delivery_date);
+      
+      // Check if there are existing POs with the same BOM ID
+      if (poData.bom_id) {
+        const { data: existingPOs, error: existingPOsError } = await supabase
+          .from('purchase_orders')
+          .select('id, po_number, created_at')
+          .eq('bom_id', poData.bom_id);
+        
+        console.log('🔍 Existing POs with same BOM ID:', existingPOs);
+        console.log('🔍 Existing POs count:', existingPOs?.length || 0);
+      }
 
       let poId = po.id;
 
-      if (poId) {
-        // Update existing PO
+      // FORCE CREATE NEW PO - Don't update existing ones when coming from BOM
+      if (bomData?.id) {
+        // If creating from BOM, always create new PO (clear existing ID)
+        console.log('🆕 Creating new PO from BOM - clearing existing PO ID');
+        poId = null;
+      }
+
+      if (poId && !bomData?.id) {
+        // Only update existing PO if it's NOT from a BOM
+        console.log('🔄 Updating existing PO with ID:', poId);
+        console.log('🔄 Update data:', poData);
+        
         const { error: updateError } = await supabase
           .from('purchase_orders')
           .update(poData)
@@ -1353,6 +1376,8 @@ export function PurchaseOrderForm() {
         if (deleteError) throw deleteError;
     } else {
         // Create new PO
+        console.log('🆕 Creating new PO with data:', poData);
+        
         const { data: newPo, error: createError } = await supabase
           .from('purchase_orders')
           .insert(poData)

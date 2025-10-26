@@ -18,20 +18,22 @@ export interface SidebarPermissions {
   items: SidebarItem[];
   loading: boolean;
   error: string | null;
+  permissionsSetup: boolean; // Whether permissions system is properly set up
 }
 
 export function useSidebarPermissions() {
   const [permissions, setPermissions] = useState<SidebarPermissions>({
     items: [],
     loading: true,
-    error: null
+    error: null,
+    permissionsSetup: false
   });
   
   const { user } = useAuth();
 
   const fetchUserSidebarPermissions = async () => {
     if (!user) {
-      setPermissions({ items: [], loading: false, error: 'No user' });
+      setPermissions({ items: [], loading: false, error: 'No user', permissionsSetup: false });
       return;
     }
 
@@ -50,8 +52,22 @@ export function useSidebarPermissions() {
         setPermissions(prev => ({ 
           ...prev, 
           loading: false, 
-          error: 'Failed to fetch user profile' 
+          error: 'Failed to fetch user profile',
+          permissionsSetup: false
         }));
+        return;
+      }
+
+      // If user is admin, bypass all permission checks and return empty array
+      // The sidebar will use static items for admin users
+      if ((profile as any)?.role === 'admin') {
+        console.log('👑 Admin user - bypassing permission system');
+        setPermissions({
+          items: [],
+          loading: false,
+          error: null,
+          permissionsSetup: true
+        });
         return;
       }
 
@@ -62,35 +78,60 @@ export function useSidebarPermissions() {
           *,
           sidebar_item:sidebar_items(*)
         `)
-        .eq('user_id', user.id as any)
-        .eq('can_view', true as any);
+        .eq('user_id', user.id as any);
 
       if (userPermsError) {
         console.error('Error fetching user permissions:', userPermsError);
         setPermissions(prev => ({ 
           ...prev, 
           loading: false, 
-          error: 'Failed to fetch user permissions' 
+          error: 'Failed to fetch user permissions',
+          permissionsSetup: false
         }));
         return;
       }
 
       // Get role-based sidebar permissions
-      const { data: rolePermissions, error: rolePermsError } = await supabase
-        .from('role_sidebar_permissions')
-        .select(`
-          *,
-          sidebar_item:sidebar_items(*)
-        `)
-        .eq('role_id', (profile as any)?.role)
-        .eq('can_view', true as any);
+      // First, get the role ID from the roles table
+      let rolePermissions = null;
+      let rolePermsError = null;
+      
+      if ((profile as any)?.role) {
+        const { data: roleData, error: roleError } = await supabase
+          .from('roles')
+          .select('id')
+          .eq('name', (profile as any).role)
+          .single();
+          
+        if (roleData && !roleError) {
+          const { data: rolePerms, error: rolePermsErr } = await supabase
+            .from('role_sidebar_permissions')
+            .select(`
+              *,
+              sidebar_item:sidebar_items(*)
+            `)
+            .eq('role_id', (roleData as any).id as any);
+            
+          rolePermissions = rolePerms;
+          rolePermsError = rolePermsErr;
+        } else {
+          console.log('No role found for:', (profile as any).role);
+          // If no role found, just continue without role permissions
+          rolePermissions = [];
+          rolePermsError = null;
+        }
+      } else {
+        rolePermissions = [];
+        rolePermsError = null;
+      }
 
       if (rolePermsError) {
         console.error('Error fetching role permissions:', rolePermsError);
         setPermissions(prev => ({ 
           ...prev, 
           loading: false, 
-          error: 'Failed to fetch role permissions' 
+          error: 'Failed to fetch role permissions',
+          permissionsSetup: false
         }));
         return;
       }
@@ -104,7 +145,8 @@ export function useSidebarPermissions() {
           effectivePermissions.set(perm.sidebar_item.id, {
             ...perm.sidebar_item,
             can_view: perm.can_view,
-            can_edit: perm.can_edit
+            can_edit: perm.can_edit,
+            permission_source: 'role'
           });
         }
       });
@@ -115,26 +157,126 @@ export function useSidebarPermissions() {
           effectivePermissions.set(perm.sidebar_item.id, {
             ...perm.sidebar_item,
             can_view: perm.can_view,
-            can_edit: perm.can_edit
+            can_edit: perm.can_edit,
+            permission_source: 'user'
           });
         }
       });
 
-      // If no permissions found, return empty array to fall back to static sidebar
+      // If no permissions found, check if this is because no permissions are set up at all
+      // or if the user simply has no access to any items
       if (effectivePermissions.size === 0) {
-        console.log('No sidebar permissions found, falling back to static sidebar');
-        setPermissions({
-          items: [],
-          loading: false,
-          error: null
-        });
-        return;
+        // Check if there are any sidebar items in the database at all
+        const { data: allSidebarItems, error: allItemsError } = await supabase
+          .from('sidebar_items')
+          .select('id')
+          .eq('is_active', true as any)
+          .limit(1);
+        
+        if (allItemsError) {
+          console.error('Error checking sidebar items:', allItemsError);
+          setPermissions(prev => ({ 
+            ...prev, 
+            loading: false, 
+            error: 'Failed to check sidebar items',
+            permissionsSetup: false
+          }));
+          return;
+        }
+        
+        // If there are sidebar items but no permissions, this means the user has no access
+        if (allSidebarItems && allSidebarItems.length > 0) {
+          // For admin users, give them access to all sidebar items
+          if ((profile as any)?.role === 'admin') {
+            console.log('Admin user with no specific permissions - granting access to all items');
+            
+            // Get all sidebar items for admin
+            const { data: allItems, error: allItemsErr } = await supabase
+              .from('sidebar_items')
+              .select('*')
+              .eq('is_active', true as any)
+              .order('sort_order');
+              
+            if (allItemsErr) {
+              console.error('Error fetching all sidebar items for admin:', allItemsErr);
+              setPermissions({
+                items: [],
+                loading: false,
+                error: 'Failed to fetch sidebar items',
+                permissionsSetup: true
+              });
+              return;
+            }
+            
+            // Organize items into hierarchy for admin
+            const itemsMap = new Map<string, SidebarItem>();
+            const rootItems: SidebarItem[] = [];
+            
+            allItems?.forEach((item: any) => {
+              itemsMap.set(item.id, { 
+                ...item, 
+                can_view: true,
+                can_edit: true,
+                children: [] 
+              });
+            });
+            
+            allItems?.forEach((item: any) => {
+              if (item.parent_id) {
+                const parent = itemsMap.get(item.parent_id);
+                if (parent) {
+                  parent.children?.push(itemsMap.get(item.id)!);
+                }
+              } else {
+                rootItems.push(itemsMap.get(item.id)!);
+              }
+            });
+            
+            // Sort items by sort_order
+            const sortItems = (items: SidebarItem[]): SidebarItem[] => {
+              return items
+                .sort((a, b) => a.sort_order - b.sort_order)
+                .map(item => ({
+                  ...item,
+                  children: item.children ? sortItems(item.children) : []
+                }));
+            };
+            
+            setPermissions({
+              items: sortItems(rootItems),
+              loading: false,
+              error: null,
+              permissionsSetup: true
+            });
+            return;
+          } else {
+            console.log('Non-admin user has no sidebar permissions - showing empty sidebar');
+            setPermissions({
+              items: [],
+              loading: false,
+              error: null,
+              permissionsSetup: true
+            });
+            return;
+          }
+        } else {
+          // No sidebar items exist at all, fall back to static sidebar
+          console.log('No sidebar items in database, falling back to static sidebar');
+          setPermissions({
+            items: [],
+            loading: false,
+            error: null,
+            permissionsSetup: false
+          });
+          return;
+        }
       }
 
-      // Convert to array and organize into hierarchy
+      // Convert to array and organize into hierarchy - only include items with can_view = true
       const itemsMap = new Map<string, SidebarItem>();
       const rootItems: SidebarItem[] = [];
       
+      // First pass: create items that have can_view = true
       effectivePermissions.forEach((item, id) => {
         if (item.can_view) {
           itemsMap.set(id, { 
@@ -144,6 +286,7 @@ export function useSidebarPermissions() {
         }
       });
       
+      // Second pass: organize hierarchy for items that can be viewed
       effectivePermissions.forEach((item, id) => {
         if (item.can_view) {
           if (item.parent_id) {
@@ -167,18 +310,21 @@ export function useSidebarPermissions() {
           }));
       };
 
-      console.log('Sidebar permissions debug:', {
-        profile: profile,
-        rolePermissions: rolePermissions,
-        userPermissions: userPermissions,
-        effectivePermissions: Array.from(effectivePermissions.entries()),
-        rootItems: rootItems
-      });
+      // Debug logging only when there are issues
+      if (effectivePermissions.size === 0 && (profile as any)?.role !== 'admin') {
+        console.log('🔍 Sidebar permissions debug:', {
+          userRole: (profile as any)?.role,
+          userPermissionsCount: userPermissions?.length || 0,
+          rolePermissionsCount: rolePermissions?.length || 0,
+          effectivePermissionsCount: effectivePermissions.size
+        });
+      }
 
       setPermissions({
         items: sortItems(rootItems),
         loading: false,
-        error: null
+        error: null,
+        permissionsSetup: true
       });
 
     } catch (error) {
@@ -186,13 +332,17 @@ export function useSidebarPermissions() {
       setPermissions(prev => ({ 
         ...prev, 
         loading: false, 
-        error: 'An unexpected error occurred' 
+        error: 'An unexpected error occurred',
+        permissionsSetup: false
       }));
     }
   };
 
   useEffect(() => {
-    fetchUserSidebarPermissions();
+    if (user?.id) {
+      console.log('🔄 useSidebarPermissions useEffect triggered, user.id:', user?.id);
+      fetchUserSidebarPermissions();
+    }
   }, [user?.id]);
 
   return {
