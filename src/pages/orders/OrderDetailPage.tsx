@@ -229,6 +229,7 @@ export default function OrderDetailPage() {
   const [editItems, setEditItems] = useState<Array<{ id: string; product_description: string; quantity: number; unit_price: number; gst_rate: number }>>([]);
   const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
+  const [totalReceipts, setTotalReceipts] = useState<number>(0);
 
   // Handle back navigation based on referrer
   const handleBackNavigation = () => {
@@ -315,6 +316,24 @@ export default function OrderDetailPage() {
       handleBackNavigation();
     }
   }, [id]);
+
+  useEffect(() => {
+    if (order?.order_number) {
+      fetchTotalReceipts();
+    }
+  }, [order?.order_number]);
+
+  // Refresh receipts when page regains focus (e.g., after creating a receipt)
+  useEffect(() => {
+    const handleFocus = () => {
+      if (order?.order_number) {
+        fetchTotalReceipts();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [order?.order_number]);
 
   const fetchOrderDetails = async () => {
       try {
@@ -478,6 +497,29 @@ export default function OrderDetailPage() {
       toast.error('Failed to load order activities');
     } finally {
       setLoadingActivities(false);
+    }
+  };
+
+  const fetchTotalReceipts = async () => {
+    try {
+      if (!order?.order_number) return;
+      
+      const { data: receiptsData, error: receiptsError } = await (supabase as any)
+        .from('receipts')
+        .select('amount')
+        .eq('reference_number', order.order_number)
+        .eq('reference_type', 'order');
+
+      if (receiptsError) {
+        console.error('Error fetching receipts:', receiptsError);
+        return;
+      }
+
+      const total = (receiptsData || []).reduce((sum: number, receipt: any) => sum + Number(receipt.amount), 0);
+      setTotalReceipts(total);
+      
+    } catch (error) {
+      console.error('Error calculating total receipts:', error);
     }
   };
 
@@ -2091,8 +2133,8 @@ export default function OrderDetailPage() {
                     }
                   })()}
                   <div className="flex justify-between">
-                    <span>Advance Paid</span>
-                    <span className="text-green-600">{formatCurrency(order.advance_amount)}</span>
+                    <span>Amount Paid</span>
+                    <span className="text-green-600">{formatCurrency(totalReceipts)}</span>
                   </div>
                   <hr />
                   <div className="flex justify-between font-bold text-lg">
@@ -2103,16 +2145,16 @@ export default function OrderDetailPage() {
                     <span className="text-muted-foreground">Balance Due</span>
                     <span className={(() => {
                       const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
-                      const balance = calculatedTotal - (order.advance_amount || 0);
+                      const balance = calculatedTotal - totalReceipts;
                       return balance > 0 ? "text-orange-600" : "text-green-600";
                     })()}>
-                      {formatCurrency(calculateOrderSummary(orderItems, order).grandTotal - (order.advance_amount || 0))}
+                      {formatCurrency(calculateOrderSummary(orderItems, order).grandTotal - totalReceipts)}
                     </span>
                   </div>
                   
                   {(() => {
                     const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
-                    const balance = calculatedTotal - (order.advance_amount || 0);
+                    const balance = calculatedTotal - totalReceipts;
                     return balance > 0;
                   })() && (
                     <Button
@@ -2128,7 +2170,7 @@ export default function OrderDetailPage() {
                             number: order.order_number, 
                             date: order.order_date, 
                             customer_id: order.customer_id, 
-                            amount: calculateOrderSummary(orderItems, order).grandTotal - (order.advance_amount || 0) 
+                            amount: calculateOrderSummary(orderItems, order).grandTotal - totalReceipts 
                           }, 
                           tab: 'create' 
                         } 

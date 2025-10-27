@@ -210,15 +210,6 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
         
         if (totalQty === 0) continue; // Skip batches with no quantity
 
-        // Calculate size quantities for this batch
-        const sizeQuantities = Object.entries(batchQty).reduce((acc, [size, qty]) => {
-          if (qty > 0) {
-            acc[`size_${size.toLowerCase()}_quantity`] = qty;
-          }
-          return acc;
-        }, {} as Record<string, number>);
-
-
         // Insert batch assignment
         const assignmentData = {
           order_id: orderId,
@@ -227,7 +218,6 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
           assigned_by_name: user?.user_metadata?.full_name || user?.email || 'System',
           assignment_date: new Date().toISOString().split('T')[0],
           total_quantity: totalQty,
-          ...sizeQuantities, // Include size quantities
           notes: `Order ${orderNumber} assigned to ${batch.batch_name}`
         };
         

@@ -168,7 +168,7 @@ export function BomToPOWizard({
             
             // Add fabric-specific attributes if it's a fabric item
             if (itemType === 'fabric' && bomItem) {
-              // Store fabric details in item_name and notes since fabric columns don't exist
+              // Store fabric details in dedicated columns
               const fabricDetails = [
                 bomItem.fabric_name,
                 bomItem.fabric_color,
@@ -177,7 +177,13 @@ export function BomToPOWizard({
               
               return {
                 ...baseItem,
-                item_name: fabricDetails || item.itemName,
+                // Store in dedicated columns for proper data persistence
+                fabric_name: bomItem.fabric_name || '',
+                fabric_color: bomItem.fabric_color || '',
+                fabric_gsm: bomItem.fabric_gsm || '',
+                // Keep item_name as fabric name for display
+                item_name: bomItem.fabric_name || item.itemName,
+                // Store full details in notes as backup
                 notes: (item.remarks || '') + (fabricDetails ? ` | Fabric: ${fabricDetails}` : '')
               };
             }
