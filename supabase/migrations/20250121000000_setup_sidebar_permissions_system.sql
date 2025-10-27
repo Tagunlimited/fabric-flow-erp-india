@@ -158,8 +158,20 @@ ALTER TABLE user_sidebar_permissions ENABLE ROW LEVEL SECURITY;
 
 -- Create policies for sidebar_items (drop if exists first)
 DROP POLICY IF EXISTS "Authenticated users can view sidebar items" ON sidebar_items;
+DROP POLICY IF EXISTS "Authenticated users can insert sidebar items" ON sidebar_items;
+DROP POLICY IF EXISTS "Authenticated users can update sidebar items" ON sidebar_items;
+
+-- Allow SELECT (view)
 CREATE POLICY "Authenticated users can view sidebar items" ON sidebar_items
     FOR SELECT TO authenticated USING (true);
+
+-- Allow INSERT (create)
+CREATE POLICY "Authenticated users can insert sidebar items" ON sidebar_items
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+-- Allow UPDATE (modify)
+CREATE POLICY "Authenticated users can update sidebar items" ON sidebar_items
+    FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 
 -- Create policies for role_sidebar_permissions (drop if exists first)
 DROP POLICY IF EXISTS "Authenticated users can view role sidebar permissions" ON role_sidebar_permissions;
