@@ -13,6 +13,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { ErpLayout } from '@/components/ErpLayout';
 import { useFormData } from '@/contexts/FormPersistenceContext';
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 
 type Customer = { 
   id: string; 
@@ -300,7 +301,7 @@ export function BomForm() {
             order_id: decodedOrderData.order_id,
             order_item_id: decodedOrderData.order_item_id,
             product_name: decodedOrderData.order_item.product_description || '',
-            product_image_url: decodedOrderData.order_item.category_image_url || null,
+            product_image_url: getOrderItemDisplayImage(decodedOrderData.order_item) || null,
             total_order_qty: decodedOrderData.order_item.quantity || 0,
           }));
         }
@@ -494,6 +495,8 @@ export function BomForm() {
             total_price,
             product_description,
             category_image_url,
+            mockup_images,
+            specifications,
             fabric_id,
             gsm,
             color,
@@ -543,7 +546,7 @@ export function BomForm() {
           ...prev,
           order_id: (order as any).id,
           product_name: firstItem.product_description || firstItem.product?.name || '',
-          product_image_url: firstItem.category_image_url || firstItem.product?.image_url || null,
+          product_image_url: getOrderItemDisplayImage(firstItem) || firstItem.product?.image_url || null,
           total_order_qty: totalQty,
         }));
       }
@@ -1035,11 +1038,34 @@ export function BomForm() {
     }
   };
 
+  // Helper function to calculate qty_total based on item type
+  const calculateQtyTotal = (item: BomLineItem, totalOrderQty: number): number => {
+    if (item.item_type === 'fabric') {
+      // For fabric: division calculation (total_order_qty ÷ pcs_in_1_unit)
+      if (!item.qty_per_product || item.qty_per_product <= 0) {
+        return 0;
+      }
+      return totalOrderQty / item.qty_per_product;
+    } else {
+      // For non-fabric: multiplication calculation (qty_per_product × total_order_qty)
+      return (item.qty_per_product || 0) * totalOrderQty;
+    }
+  };
+
+  // Helper function to get label text based on item type
+  const getQtyLabel = (item: BomLineItem): string => {
+    if (item.item_type === 'fabric') {
+      const uom = item.unit_of_measure?.toLowerCase() || 'kg';
+      return `Pcs in 1 ${uom}`;
+    }
+    return 'Qty/Pc';
+  };
+
   // Handle Qty/Pc change with auto-reset to 1 on focus
   const handleQtyPerProductChange = (index: number, value: string) => {
-    const qtyPerProduct = parseFloat(value) || 0; // Default to 1 instead of 0
+    const qtyPerProduct = parseFloat(value) || 0;
     const item = items[index];
-    const qtyTotal = qtyPerProduct * bom.total_order_qty;
+    const qtyTotal = calculateQtyTotal({ ...item, qty_per_product: qtyPerProduct }, bom.total_order_qty);
     const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
     
     updateItem(index, { 
@@ -1069,7 +1095,7 @@ export function BomForm() {
   useEffect(() => {
     items.forEach((item, index) => {
       if (item.qty_per_product && bom.total_order_qty > 0) {
-        const qtyTotal = item.qty_per_product * bom.total_order_qty;
+        const qtyTotal = calculateQtyTotal(item, bom.total_order_qty);
         const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
         
         updateItem(index, {
@@ -1113,6 +1139,16 @@ export function BomForm() {
 
     if (items.length === 0) {
       toast.error('At least one item is required');
+      return;
+    }
+
+    // Validate fabric items have qty_per_product > 0
+    const invalidFabricItems = items.filter(
+      item => item.item_type === 'fabric' && (!item.qty_per_product || item.qty_per_product <= 0)
+    );
+    if (invalidFabricItems.length > 0) {
+      const uom = invalidFabricItems[0].unit_of_measure?.toLowerCase() || 'kg';
+      toast.error(`Fabric items require "Pcs in 1 ${uom}" to be greater than 0`);
       return;
     }
 
@@ -1620,15 +1656,15 @@ export function BomForm() {
                           )}
                           </div>
 
-                        {/* Qty/Pc */}
+                        {/* Qty/Pc or Pcs in 1 {uom} */}
                           <div>
-                          <Label className="text-sm font-medium">Qty/Pc</Label>
+                          <Label className="text-sm font-medium">{getQtyLabel(item)}</Label>
                             <Input
                             type="number"
                             value={item.qty_per_product}
                             onChange={(e) => {
                               const qtyPerProduct = parseFloat(e.target.value) || 0;
-                              const qtyTotal = qtyPerProduct * bom.total_order_qty;
+                              const qtyTotal = calculateQtyTotal({ ...item, qty_per_product: qtyPerProduct }, bom.total_order_qty);
                               const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
                               
                               updateItemById(item.id, { 
@@ -1774,15 +1810,15 @@ export function BomForm() {
                                  </Select>
                                </div>
 
-                        {/* Qty/Pc */}
+                        {/* Qty/Pc or Pcs in 1 {uom} */}
                           <div>
-                          <Label className="text-sm font-medium">Qty/Pc</Label>
+                          <Label className="text-sm font-medium">{getQtyLabel(item)}</Label>
                             <Input
                               type="number"
                             value={item.qty_per_product}
                               onChange={(e) => {
                               const qtyPerProduct = parseFloat(e.target.value) || 1; // Default to 1 instead of 0
-                              const qtyTotal = qtyPerProduct * bom.total_order_qty;
+                              const qtyTotal = calculateQtyTotal({ ...item, qty_per_product: qtyPerProduct }, bom.total_order_qty);
                               const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
                                 updateItem(index, { 
                                   qty_per_product: qtyPerProduct,

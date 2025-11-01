@@ -58,7 +58,7 @@ const PeoplePage = () => {
             <CardContent>
               <div className="text-2xl font-bold">25</div>
               <p className="text-xs text-muted-foreground">
-                Pattern Masters, Cutters, Tailors
+                Cutters and Tailors
               </p>
             </CardContent>
           </Card>
@@ -127,7 +127,7 @@ const PeoplePage = () => {
                   Production Team
                 </CardTitle>
                 <CardDescription>
-                  Manage pattern masters, cutting managers, and tailors
+                  Manage cutting managers and tailors
                 </CardDescription>
               </CardHeader>
               <CardContent>

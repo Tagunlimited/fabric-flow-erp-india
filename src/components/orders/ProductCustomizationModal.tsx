@@ -389,9 +389,9 @@ export function ProductCustomizationModal({
                 <div>
                   <Label>Select Part</Label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
-                    {parts
-                      .filter(p => !customizations.some(c => c.partId === p.id))
-                      .map((part) => (
+                      {parts
+                        .filter(p => !customizations.some(c => c.partId === p.id))
+                        .map((part) => (
                         <button
                           key={part.id}
                           onClick={() => setSelectedPart(part.id)}
@@ -510,21 +510,92 @@ export function ProductCustomizationModal({
                           <div>
                             <Label>Select Option</Label>
                             {availableAddons.length > 0 ? (
-                              <div className="space-y-3">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  onClick={() => handleOpenAddonSelection(part)}
-                                  className="w-full h-12 flex items-center justify-center gap-3 border-2 border-dashed border-gray-300 hover:border-blue-400 hover:bg-blue-50 transition-colors"
-                                >
-                                  <Eye className="w-5 h-5 text-blue-600" />
-                                  <span className="text-blue-600 font-medium">
-                                    Browse {availableAddons.length} Option{availableAddons.length > 1 ? 's' : ''}
-                                  </span>
-                                </Button>
-                                <div className="text-xs text-gray-500 text-center">
-                                  Click to view options in a beautiful card interface
-                                </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                                {availableAddons.map((addon) => {
+                                  const isAlreadyAdded = customizations.some(c => c.partId === part.id && c.selectedAddonId === addon.id);
+                                  return (
+                                  <button
+                                    key={addon.id}
+                                    type="button"
+                                    onClick={() => {
+                                      if (isAlreadyAdded) {
+                                        toast.error('This option is already added');
+                                        return;
+                                      }
+                                      setSelectedAddon(addon.id);
+                                      // Small delay to show selection feedback before adding
+                                      setTimeout(() => {
+                                        handleAddCustomization();
+                                      }, 100);
+                                    }}
+                                    disabled={isAlreadyAdded}
+                                    className={`p-4 border-2 rounded-lg text-left transition-all duration-200 ${
+                                      isAlreadyAdded
+                                        ? 'border-green-500 bg-green-50 opacity-75 cursor-not-allowed'
+                                        : selectedAddon === addon.id
+                                        ? 'border-blue-500 bg-blue-50 shadow-md'
+                                        : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+                                    }`}
+                                  >
+                                    <div className="flex items-start gap-3">
+                                      {/* Addon Image */}
+                                      <div className="flex-shrink-0">
+                                        {addon.image_url ? (
+                                          <img
+                                            src={addon.image_url}
+                                            alt={addon.image_alt_text || addon.addon_name}
+                                            className="w-16 h-16 object-cover rounded-lg border border-gray-200"
+                                            onError={(e) => {
+                                              e.currentTarget.style.display = 'none';
+                                            }}
+                                          />
+                                        ) : (
+                                          <div className="w-16 h-16 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center">
+                                            <span className="text-xs text-gray-400">No Image</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                      
+                                      {/* Addon Details */}
+                                      <div className="flex-1 min-w-0">
+                                        <div className="font-medium text-gray-900 truncate">
+                                          {addon.addon_name}
+                                        </div>
+                                        {addon.image_alt_text && (
+                                          <div className="text-xs text-gray-600 truncate mt-1">
+                                            {addon.image_alt_text}
+                                          </div>
+                                        )}
+                                      {addon.price_adjustment !== 0 && (
+                                          <div className="mt-2">
+                                            <Badge 
+                                              variant={addon.price_adjustment > 0 ? 'default' : 'secondary'}
+                                              className="text-xs"
+                                            >
+                                          ₹{addon.price_adjustment > 0 ? '+' : ''}{addon.price_adjustment}
+                                        </Badge>
+                                          </div>
+                                        )}
+                                      </div>
+                                      
+                                      {/* Selection Indicator */}
+                                      <div className="flex-shrink-0 mt-1">
+                                        {isAlreadyAdded ? (
+                                          <div className="w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
+                                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                            </svg>
+                                          </div>
+                                        ) : (
+                                          <div className={`w-3 h-3 rounded-full ${
+                                            selectedAddon === addon.id ? 'bg-blue-500' : 'bg-gray-300'
+                                          }`} />
+                                        )}
+                                      </div>
+                                    </div>
+                                  </button>
+                                  );
+                                })}
                               </div>
                             ) : (
                               <div className="mt-2">
@@ -705,24 +776,24 @@ export function ProductCustomizationModal({
                           )}
                           {customization.partType === 'number' && customization.quantity !== undefined && (
                             <div className="text-sm text-gray-600 mt-1">
-                              Quantity: {customization.quantity}
-                            </div>
-                          )}
-                          {customization.priceImpact && customization.priceImpact !== 0 && (
+                            Quantity: {customization.quantity}
+                          </div>
+                        )}
+                        {customization.priceImpact && customization.priceImpact !== 0 && (
                             <Badge variant={customization.priceImpact > 0 ? 'default' : 'secondary'} className="mt-2 text-xs">
-                              ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
-                            </Badge>
-                          )}
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleRemoveCustomization(customization.partId)}
-                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                        >
-                          <X className="w-4 h-4" />
-                        </Button>
+                            ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
+                          </Badge>
+                        )}
                       </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleRemoveCustomization(customization.partId)}
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
                     );
                   })}
                   

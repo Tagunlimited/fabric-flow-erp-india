@@ -10,7 +10,7 @@ const ProductionTeamPage = () => {
             Production Team
           </h1>
           <p className="text-muted-foreground mt-1">
-            Manage pattern masters, cutting managers, and tailors
+            Manage cutting managers and tailors
           </p>
         </div>
         <ProductionTeamList />

@@ -9,6 +9,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Minus, Plus } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { generateBatchAssignmentPDF } from '@/utils/batchAssignmentPDF';
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 
 interface Batch {
   id: string;
@@ -158,6 +160,122 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
     return true;
   };
 
+  const generateBatchAssignmentPDFAfterSave = async () => {
+    console.log('🚀 Starting PDF generation process...');
+    try {
+      // Fetch stitching prices from order_assignments
+      console.log('📊 Fetching stitching prices...');
+      const { data: priceData, error: priceError } = await supabase
+        .from('order_assignments')
+        .select('cutting_price_single_needle, cutting_price_overlock_flatlock')
+        .eq('order_id', orderId)
+        .single();
+
+      if (priceError) {
+        console.error('❌ Error fetching pricing data:', priceError);
+        return;
+      }
+      console.log('✅ Pricing data fetched:', priceData);
+
+      // Fetch order details with customizations
+      console.log('📋 Fetching order details...');
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          order_items (
+            *,
+            mockup_images,
+            specifications,
+            category_image_url,
+            product_categories (
+              category_name,
+              category_image_url
+            ),
+            fabrics (
+              name,
+              description,
+              image_url
+            )
+          )
+        `)
+        .eq('id', orderId)
+        .single();
+
+      if (orderError) {
+        console.error('❌ Error fetching order data:', orderError);
+        return;
+      }
+      console.log('✅ Order data fetched:', orderData);
+
+      // Fetch company settings
+      console.log('🏢 Fetching company settings...');
+      const { data: companySettings, error: settingsError } = await supabase
+        .from('company_settings')
+        .select('*')
+        .single();
+
+      if (settingsError) {
+        console.error('❌ Error fetching company settings:', settingsError);
+        return;
+      }
+      console.log('✅ Company settings fetched:', companySettings);
+
+      // Prepare batch assignment data
+      console.log('🔧 Preparing batch assignment data...');
+      const batchAssignments = selectedBatchIds.map(batchId => {
+        const batch = batches.find(b => b.id === batchId);
+        const batchQty = batchQuantities[batchId];
+        const sizeDistributions = Object.entries(batchQty)
+          .filter(([_, qty]) => qty > 0)
+          .map(([size, qty]) => ({ size, quantity: qty }));
+
+        // Determine price per piece based on tailor type
+        const pricePerPiece = batch?.tailor_type === 'single_needle' 
+          ? (priceData?.cutting_price_single_needle || 0)
+          : (priceData?.cutting_price_overlock_flatlock || 0);
+
+        return {
+          batchName: batch?.batch_name || '',
+          batchLeaderName: batch?.batch_leader_name || '',
+          tailorType: batch?.tailor_type as 'single_needle' | 'overlock_flatlock' || 'single_needle',
+          sizeDistributions,
+          pricePerPiece
+        };
+      });
+      console.log('✅ Batch assignments prepared:', batchAssignments);
+
+      // Prepare customizations (simplified since branding_items and order_item_addons don't exist)
+      const customizations = {
+        branding: null, // These relationships don't exist in current schema
+        addons: null,   // These relationships don't exist in current schema
+        special_instructions: orderData.special_instructions || orderData.notes
+      };
+      console.log('✅ Customizations prepared:', customizations);
+
+      // Generate PDF
+      console.log('📄 Calling PDF generation function...');
+      await generateBatchAssignmentPDF({
+        orderNumber,
+        customerName,
+        orderItems: orderData.order_items || [],
+        batchAssignments,
+        companySettings,
+        stitchingPrices: {
+          single_needle: priceData?.cutting_price_single_needle || 0,
+          overlock_flatlock: priceData?.cutting_price_overlock_flatlock || 0
+        },
+        customizations,
+        dueDate: orderData.expected_delivery_date
+      });
+      console.log('🎉 PDF generation completed successfully!');
+
+    } catch (error) {
+      console.error('❌ Error in PDF generation:', error);
+      throw error;
+    }
+  };
+
   const handleSave = async () => {
     if (!validateDistribution()) return;
 
@@ -274,6 +392,24 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
         description: `Batch assignments saved for order ${orderNumber}`,
       });
 
+      // Generate PDF after successful save
+      console.log('📄 Starting PDF generation after successful save...');
+      try {
+        await generateBatchAssignmentPDFAfterSave();
+        console.log('✅ PDF generation completed successfully');
+        toast({
+          title: "Success",
+          description: `Batch assignments saved and PDF generated for order ${orderNumber}`,
+        });
+      } catch (pdfError) {
+        console.error('❌ PDF generation failed:', pdfError);
+        toast({
+          title: "Warning",
+          description: "Batch assignments saved, but PDF generation failed. Check console for details.",
+          variant: "destructive",
+        });
+      }
+
       onSuccess();
     } catch (error: any) {
       console.error('Error saving batch assignments:', error);
@@ -311,17 +447,20 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
             <div className="flex space-x-6">
               {/* Product Image */}
               <div className="w-24 h-24 bg-blue-100 rounded-lg overflow-hidden flex items-center justify-center">
-                {orderItems[0]?.product_category?.category_image_url || orderItems[0]?.category_image_url ? (
-                  <img 
-                    src={orderItems[0].product_category?.category_image_url || orderItems[0].category_image_url} 
-                    alt={orderItems[0].product_category?.category_name}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="w-12 h-12 bg-blue-200 rounded flex items-center justify-center">
-                    <span className="text-blue-600 text-xs">IMG</span>
-                  </div>
-                )}
+                {(() => {
+                  const displayImage = orderItems[0] ? getOrderItemDisplayImage(orderItems[0]) : null;
+                  return displayImage ? (
+                    <img 
+                      src={displayImage} 
+                      alt={orderItems[0]?.product_category?.category_name || 'Product'}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 bg-blue-200 rounded flex items-center justify-center">
+                      <span className="text-blue-600 text-xs">IMG</span>
+                    </div>
+                  );
+                })()}
               </div>
               <div className="flex-1 space-y-1">
                 <p className="text-sm"><span className="font-medium">Order:</span> {orderNumber}</p>

@@ -129,7 +129,6 @@ export function ProductionTeamList() {
 
   const getDesignationBadgeVariant = (designation: string) => {
     switch (designation) {
-      case 'Pattern Master': return 'default';
       case 'Cutting Manager': return 'secondary';
       case 'Single Needle Tailor': return 'outline';
       case 'Overlock/Flatlock Tailor': return 'destructive';
@@ -139,7 +138,6 @@ export function ProductionTeamList() {
 
   const getDesignationIcon = (designation: string) => {
     switch (designation) {
-      case 'Pattern Master': return Palette;
       case 'Cutting Manager': return Scissors;
       case 'Single Needle Tailor': return UserCheck;
       case 'Overlock/Flatlock Tailor': return UserCheck;
@@ -209,7 +207,7 @@ export function ProductionTeamList() {
         <div>
           <h3 className="text-lg font-semibold">Production Team Directory</h3>
           <p className="text-sm text-muted-foreground">
-            Manage pattern masters, cutting managers, and tailors
+            Manage cutting managers and tailors
           </p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>

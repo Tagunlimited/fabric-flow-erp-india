@@ -89,14 +89,12 @@ const AssignOrdersPage = () => {
 
   // Schedule dialog state (choose working date on assignment)
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
-  const [scheduleRole, setScheduleRole] = useState<'cutting' | 'pattern' | null>(null);
+  const [scheduleRole, setScheduleRole] = useState<'cutting' | null>(null);
   const [scheduleAssignmentId, setScheduleAssignmentId] = useState<string | null>(null);
   const [scheduleWorkerId, setScheduleWorkerId] = useState<string | null>(null);
   const [scheduleDate, setScheduleDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [scheduleCuttingPriceSingleNeedle, setScheduleCuttingPriceSingleNeedle] = useState<string>('');
   const [scheduleCuttingPriceOverlockFlatlock, setScheduleCuttingPriceOverlockFlatlock] = useState<string>('');
-  const [schedulePatternPriceSingleNeedle, setSchedulePatternPriceSingleNeedle] = useState<string>('');
-  const [schedulePatternPriceOverlockFlatlock, setSchedulePatternPriceOverlockFlatlock] = useState<string>('');
 
   // View schedule dialog for a worker
   const [viewScheduleOpen, setViewScheduleOpen] = useState(false);
@@ -155,13 +153,8 @@ const AssignOrdersPage = () => {
       cutting_master_id: string | null;
       cutting_master_name: string | null;
       cutting_work_date: string | null;
-      pattern_master_id: string | null;
-      pattern_master_name: string | null;
-      pattern_work_date: string | null;
       cutting_price_single_needle: number | null;
       cutting_price_overlock_flatlock: number | null;
-      pattern_price_single_needle: number | null;
-      pattern_price_overlock_flatlock: number | null;
     }>
   ) => {
     try {
@@ -198,14 +191,14 @@ const AssignOrdersPage = () => {
     }
   };
 
-  // Load employees: Pattern Masters and Cutting Masters
+  // Load employees: Cutting Managers and Cutting Masters
   useEffect(() => {
     const loadProductionTeam = async () => {
       try {
         const { data, error } = await supabase
           .from('employees' as any)
           .select('id, full_name, designation, avatar_url')
-          .in('designation', ['Pattern Master', 'Cutting Manager', 'Cutting Master'] as any);
+          .in('designation', ['Cutting Manager', 'Cutting Master'] as any);
         if (error) {
           console.error('Failed to load production_team:', error);
           return;
@@ -1311,32 +1304,6 @@ const AssignOrdersPage = () => {
                       placeholder="0.00"
                       value={scheduleCuttingPriceOverlockFlatlock}
                       onChange={(e) => setScheduleCuttingPriceOverlockFlatlock(e.target.value)}
-                    />
-                  </div>
-                </div>
-              )}
-              {scheduleRole === 'pattern' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <Label>Tailor (SN)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="0.00"
-                      value={schedulePatternPriceSingleNeedle}
-                      onChange={(e) => setSchedulePatternPriceSingleNeedle(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <Label>Tailor (OF)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="0.00"
-                      value={schedulePatternPriceOverlockFlatlock}
-                      onChange={(e) => setSchedulePatternPriceOverlockFlatlock(e.target.value)}
                     />
                   </div>
                 </div>

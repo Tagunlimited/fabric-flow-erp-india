@@ -1023,7 +1023,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
           product_category_id: product.product_category_id,
           category_image_url: product.category_image_url || null,
           product_description: product.product_description || '',
-          fabric_id: product.fabric_id,
+          fabric_id: product.fabric_id || null, // Now references fabric_master table
           gsm: product.gsm || '',
           color: product.color || '',
           remarks: product.remarks || '',
@@ -2075,22 +2075,28 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
                           return (
                             <tr key={index} className="hover:bg-gray-50">
                               <td className="border border-gray-300 px-3 py-2">
-                                {product.category_image_url && (
-                                  <img 
-                                    src={product.category_image_url} 
-                                    alt="Product" 
-                                    className="w-20 h-20 object-cover rounded" // bigger image
-                                  />
-                                )}
+                                {(() => {
+                                  // In form context, use helper that handles File objects
+                                  const image = getOrderItemDisplayImageForForm(product);
+                                  const imageSrc = getImageSrcFromFileOrUrl(image);
+                                  
+                                  return imageSrc ? (
+                                    <img 
+                                      src={imageSrc} 
+                                      alt="Product" 
+                                      className="w-20 h-20 object-cover rounded" // bigger image
+                                    />
+                                  ) : null;
+                                })()}
                               </td>
                               <td className="border border-gray-300 px-3 py-2">
                                 <div className="text-sm">
+                                  <div className="text-gray-600 text-xs font-medium">
+                                    {fabrics.find(f => f.id === product.fabric_id)?.fabric_name} - {product.color}, {product.gsm} GSM
+                                  </div>
                                   <div className="font-medium">{product.product_description}</div>
                                   <div className="text-gray-600 text-xs">
                                     {productCategories.find(c => c.id === product.product_category_id)?.category_name}
-                                  </div>
-                                  <div className="text-gray-600 text-xs">
-                                    {fabrics.find(f => f.id === product.fabric_id)?.fabric_name} - {product.color}, {product.gsm} GSM
                                   </div>
                                 </div>
                               </td>

@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -145,7 +146,7 @@ export default function InvoiceDetailPage() {
       // Fetch order items
       const { data: itemsData, error: itemsError } = await supabase
         .from('order_items')
-        .select('*')
+        .select('*, mockup_images, specifications, category_image_url')
         .eq('order_id', orderId as any);
 
       if (itemsError) throw itemsError;
@@ -464,7 +465,21 @@ export default function InvoiceDetailPage() {
                       {orderItems.map((item, index) => (
                         <tr key={index}>
                           <td className="border border-gray-300 px-4 py-2">
-                            {productCategories[item.product_category_id]?.category_name || 'N/A'}
+                            <div className="flex items-start gap-3">
+                              {(() => {
+                                const displayImage = getOrderItemDisplayImage(item);
+                                return displayImage ? (
+                                  <img
+                                    src={displayImage}
+                                    alt="Product"
+                                    className="w-16 h-16 object-cover rounded flex-shrink-0"
+                                  />
+                                ) : null;
+                              })()}
+                              <div className="flex-1">
+                                {productCategories[item.product_category_id]?.category_name || 'N/A'}
+                              </div>
+                            </div>
                           </td>
                           <td className="border border-gray-300 px-4 py-2">
                             {item.product_description}
