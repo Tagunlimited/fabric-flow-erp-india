@@ -138,34 +138,137 @@ export function BomToPOWizardDialog({
             
             // If not found in order data, try to derive from item name or fetch from fabric_master
             if (!fabricName) {
-              // Try to parse fabric name from item_name (e.g., "Cotton - Blue - 200 GSM")
+              // Try to parse fabric name from item_name (e.g., "Dotknit 180 GSM - Turquoise Blue - 180 GSM")
               const nameParts = item.item_name?.split(' - ') || [];
               fabricName = nameParts[0] || item.item_name || '';
               fabricColor = nameParts[1] || '';
               fabricGsm = nameParts[2] || '';
+              
+              console.log('🔍 Parsed fabric details from item name:', { 
+                itemName: item.item_name, 
+                parsedName: fabricName, 
+                parsedColor: fabricColor, 
+                parsedGsm: fabricGsm 
+              });
             }
             
             // Fetch fabric details from fabric_master if we have fabric name
             if (fabricName && !imageUrl) {
               try {
-                console.log('Fetching fabric details for:', { fabricName, fabricColor, fabricGsm });
+                console.log('🔍 Fetching fabric details for:', { fabricName, fabricColor, fabricGsm });
                 
-                // Try exact match first
-                let fabricResult = await supabase
+                // First, let's see what fabrics are available
+                const { data: allFabrics, error: listError } = await supabase
                   .from('fabric_master')
                   .select('fabric_name, color, gsm, image')
-                  .eq('fabric_name', fabricName)
-                  .eq('color', fabricColor)
-                  .eq('gsm', fabricGsm)
-                  .single();
+                  .limit(10);
                 
-                if (fabricResult.error) {
-                  // Try partial match - just name
+                if (!listError && allFabrics) {
+                  console.log('📋 Available fabrics:', allFabrics);
+                }
+                
+                // Try multiple matching strategies
+                let fabricResult = null;
+                
+                // Strategy 1: Exact match on all fields
+                if (fabricName && fabricColor && fabricGsm) {
+                  fabricResult = await supabase
+                    .from('fabric_master')
+                    .select('fabric_name, color, gsm, image')
+                    .eq('fabric_name', fabricName)
+                    .eq('color', fabricColor)
+                    .eq('gsm', fabricGsm)
+                    .single();
+                  
+                  if (!fabricResult.error) {
+                    console.log('✅ Exact match found:', fabricResult.data);
+                  } else {
+                    console.log('❌ Exact match failed:', fabricResult.error.message);
+                  }
+                }
+                
+                // Strategy 2: Match fabric name only
+                if (fabricResult?.error && fabricName) {
                   fabricResult = await supabase
                     .from('fabric_master')
                     .select('fabric_name, color, gsm, image')
                     .eq('fabric_name', fabricName)
                     .single();
+                  
+                  if (!fabricResult.error) {
+                    console.log('✅ Name match found:', fabricResult.data);
+                  } else {
+                    console.log('❌ Name match failed:', fabricResult.error.message);
+                  }
+                }
+                
+                // Strategy 3: Fuzzy match - contains name
+                if (fabricResult?.error && fabricName) {
+                  fabricResult = await supabase
+                    .from('fabric_master')
+                    .select('fabric_name, color, gsm, image')
+                    .ilike('fabric_name', `%${fabricName}%`)
+                    .single();
+                  
+                  if (!fabricResult.error) {
+                    console.log('✅ Fuzzy match found:', fabricResult.data);
+                  } else {
+                    console.log('❌ Fuzzy match failed:', fabricResult.error.message);
+                  }
+                }
+                
+                // Strategy 4: Try without GSM in the name (for cases like "Dotknit 180 GSM")
+                if (fabricResult?.error && fabricName.includes('GSM')) {
+                  const nameWithoutGsm = fabricName.replace(/\s+\d+\s+GSM/i, '').trim();
+                  console.log('🔍 Trying without GSM:', nameWithoutGsm);
+                  
+                  fabricResult = await supabase
+                    .from('fabric_master')
+                    .select('fabric_name, color, gsm, image')
+                    .ilike('fabric_name', `%${nameWithoutGsm}%`)
+                    .single();
+                  
+                  if (!fabricResult.error) {
+                    console.log('✅ Name without GSM match found:', fabricResult.data);
+                  } else {
+                    console.log('❌ Name without GSM match failed:', fabricResult.error.message);
+                  }
+                }
+                
+                // Strategy 5: Try matching by color only
+                if (fabricResult?.error && fabricColor) {
+                  console.log('🔍 Trying color match:', fabricColor);
+                  
+                  fabricResult = await supabase
+                    .from('fabric_master')
+                    .select('fabric_name, color, gsm, image')
+                    .ilike('color', `%${fabricColor}%`)
+                    .single();
+                  
+                  if (!fabricResult.error) {
+                    console.log('✅ Color match found:', fabricResult.data);
+                  } else {
+                    console.log('❌ Color match failed:', fabricResult.error.message);
+                  }
+                }
+                
+                // Strategy 6: Get any fabric with an image as last resort
+                if (fabricResult?.error) {
+                  console.log('🔍 Trying to get any fabric with image...');
+                  
+                  fabricResult = await supabase
+                    .from('fabric_master')
+                    .select('fabric_name, color, gsm, image')
+                    .not('image', 'is', null)
+                    .not('image', 'eq', '')
+                    .limit(1)
+                    .single();
+                  
+                  if (!fabricResult.error) {
+                    console.log('✅ Found fabric with image:', fabricResult.data);
+                  } else {
+                    console.log('❌ No fabrics with images found:', fabricResult.error.message);
+                  }
                 }
                 
                 if (!fabricResult.error && fabricResult.data) {
@@ -173,9 +276,9 @@ export function BomToPOWizardDialog({
                   fabricColor = fabricResult.data.color || fabricColor;
                   fabricGsm = fabricResult.data.gsm || fabricGsm;
                   imageUrl = fabricResult.data.image || null;
-                  console.log('Found fabric details:', { fabricName, fabricColor, fabricGsm, imageUrl });
+                  console.log('✅ Found fabric details:', { fabricName, fabricColor, fabricGsm, imageUrl });
                 } else {
-                  console.log('No fabric found in master table:', fabricResult.error);
+                  console.log('❌ No fabric found in master table:', fabricResult.error);
                 }
               } catch (error) {
                 console.log('Error fetching fabric details:', error);
@@ -223,7 +326,13 @@ export function BomToPOWizardDialog({
             }
           }
           
-          return {
+          // Use BOM product image as fallback if no specific image found
+          if (!imageUrl && bomRecord?.product_image_url) {
+            imageUrl = bomRecord.product_image_url;
+            console.log('🔄 Using BOM product image as fallback:', imageUrl);
+          }
+          
+          const result = {
             bom_id: bomId,
             bom_number: bomNumber,
             bom_item_id: item.id,
@@ -244,6 +353,15 @@ export function BomToPOWizardDialog({
             category: item.category,
             unit_of_measure: item.unit_of_measure
           };
+          
+          console.log(`🔍 Processed ${item.category} item:`, {
+            name: result.item_name,
+            category: result.category,
+            image_url: result.image_url,
+            fabric_name: result.fabric_name
+          });
+          
+          return result;
         })
       );
 

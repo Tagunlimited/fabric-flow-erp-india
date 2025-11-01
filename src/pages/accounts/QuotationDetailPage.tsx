@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -124,7 +125,7 @@ export default function QuotationDetailPage() {
       // Fetch order items
       const { data: itemsData, error: itemsError } = await supabase
         .from('order_items')
-        .select('*')
+        .select('*, mockup_images, specifications, category_image_url')
         .eq('order_id', orderId);
       if (itemsError) throw itemsError;
       setOrderItems(itemsData || []);
@@ -812,18 +813,32 @@ export default function QuotationDetailPage() {
                           return (
                             <tr key={item.id}>
                               <td className="border border-gray-400 px-3 py-2">
-                                <div className="font-semibold">{item.product_description}</div>
-                                <div className="text-sm text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
-                                <div className="text-sm text-gray-600">
-                                  {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
-                                </div>
-                                {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
-                                  <div className="text-sm text-gray-600">
-                                    Sizes: {sortSizes(item.sizes_quantities)
-                                      .map(([size, qty]) => `${size}(${qty})`)
-                                        .join(', ')}
+                                <div className="flex items-start gap-3">
+                                  {(() => {
+                                    const displayImage = getOrderItemDisplayImage(item);
+                                    return displayImage ? (
+                                      <img
+                                        src={displayImage}
+                                        alt="Product"
+                                        className="w-16 h-16 object-cover rounded flex-shrink-0"
+                                      />
+                                    ) : null;
+                                  })()}
+                                  <div className="flex-1">
+                                    <div className="text-sm text-gray-600 font-semibold">
+                                      {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
+                                    </div>
+                                    <div className="font-semibold">{item.product_description}</div>
+                                    <div className="text-sm text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
+                                    {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
+                                      <div className="text-sm text-gray-600">
+                                        Sizes: {sortSizes(item.sizes_quantities)
+                                          .map(([size, qty]) => `${size}(${qty})`)
+                                            .join(', ')}
+                                      </div>
+                                    )}
                                   </div>
-                                )}
+                                </div>
                               </td>
                               <td className="border border-gray-400 px-3 py-2 text-center">
                                 <div className="font-semibold">{item.quantity}</div>

@@ -127,7 +127,6 @@ export default function ProductionTeamDetailPage() {
 
   const getDesignationIcon = (designation: string) => {
     switch (designation) {
-      case 'Pattern Master': return Palette;
       case 'Cutting Manager': return Scissors;
       case 'Single Needle Tailor': return UserCheck;
       case 'Overlock/Flatlock Tailor': return UserCheck;
@@ -137,7 +136,6 @@ export default function ProductionTeamDetailPage() {
 
   const getDesignationBadgeVariant = (designation: string) => {
     switch (designation) {
-      case 'Pattern Master': return 'default';
       case 'Cutting Manager': return 'secondary';
       case 'Single Needle Tailor': return 'outline';
       case 'Overlock/Flatlock Tailor': return 'destructive';

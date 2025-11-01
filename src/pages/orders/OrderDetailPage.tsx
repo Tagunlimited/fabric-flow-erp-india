@@ -35,6 +35,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -229,6 +230,7 @@ export default function OrderDetailPage() {
   const [editItems, setEditItems] = useState<Array<{ id: string; product_description: string; quantity: number; unit_price: number; gst_rate: number }>>([]);
   const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
+  const [totalReceipts, setTotalReceipts] = useState<number>(0);
 
   // Handle back navigation based on referrer
   const handleBackNavigation = () => {
@@ -316,6 +318,24 @@ export default function OrderDetailPage() {
     }
   }, [id]);
 
+  useEffect(() => {
+    if (order?.order_number) {
+      fetchTotalReceipts();
+    }
+  }, [order?.order_number]);
+
+  // Refresh receipts when page regains focus (e.g., after creating a receipt)
+  useEffect(() => {
+    const handleFocus = () => {
+      if (order?.order_number) {
+        fetchTotalReceipts();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [order?.order_number]);
+
   const fetchOrderDetails = async () => {
       try {
         setLoading(true);
@@ -391,7 +411,7 @@ export default function OrderDetailPage() {
         // Fetch order items
         const { data: itemsData, error: itemsError } = await (supabase as any)
           .from('order_items')
-          .select('*')
+          .select('*, mockup_images, specifications, category_image_url')
           .eq('order_id', id as string);
 
         if (itemsError) {
@@ -478,6 +498,29 @@ export default function OrderDetailPage() {
       toast.error('Failed to load order activities');
     } finally {
       setLoadingActivities(false);
+    }
+  };
+
+  const fetchTotalReceipts = async () => {
+    try {
+      if (!order?.order_number) return;
+      
+      const { data: receiptsData, error: receiptsError } = await (supabase as any)
+        .from('receipts')
+        .select('amount')
+        .eq('reference_number', order.order_number)
+        .eq('reference_type', 'order');
+
+      if (receiptsError) {
+        console.error('Error fetching receipts:', receiptsError);
+        return;
+      }
+
+      const total = (receiptsData || []).reduce((sum: number, receipt: any) => sum + Number(receipt.amount), 0);
+      setTotalReceipts(total);
+      
+    } catch (error) {
+      console.error('Error calculating total receipts:', error);
     }
   };
 
@@ -1298,159 +1341,55 @@ export default function OrderDetailPage() {
                       };
 
                       return (
-                      <div key={index} className="border rounded-lg p-4 space-y-4">
-                        <div className="flex flex-col xl:flex-row gap-6">
-                          {/* Product Images Section - Better aspect ratio and space utilization */}
-                          <div className="xl:w-2/5 space-y-6">
-                            {/* Category Image with 1.3:1.5 aspect ratio */}
-                            {item.category_image_url && (
-                              <div>
-                                <p className="text-sm font-medium text-muted-foreground mb-3">Category Image:</p>
-                                <div className="aspect-[3/3.5] w-full overflow-hidden rounded-lg border shadow-md">
-                                  <img 
-                                    src={item.category_image_url} 
-                                    alt="Category"
-                                    className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
-                                    onClick={() => {
-                                      const modal = document.createElement('div');
-                                      modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
-                                      modal.innerHTML = `
-                                        <div class="relative max-w-4xl max-h-full">
-                                          <img src="${item.category_image_url}" alt="Category" class="max-w-full max-h-ful object-contain rounded-lg" />
-                                          <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
-                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                              <line x1="18" y1="6" x2="6" y2="18"></line>
-                                              <line x1="6" y1="6" x2="18" y2="18"></line>
-                                            </svg>
-                                          </button>
-       </div>
+                        <div key={index} className="border rounded-lg p-4 space-y-4">
+                          <div className="flex flex-col xl:flex-row gap-6">
+                            {/* Product Images Section - Better aspect ratio and space utilization */}
+                            <div className="xl:w-2/5 space-y-6">
+                              {/* Product Image with priority: mockup > category */}
+                              {(() => {
+                                const displayImage = getOrderItemDisplayImage(item);
+                                const { mockup_images } = extractImagesFromSpecifications(item.specifications);
+                                const hasMockup = (item.mockup_images && item.mockup_images.length > 0) || 
+                                                 (mockup_images && mockup_images.length > 0);
+                                
+                                return displayImage ? (
+                                  <div>
+                                    <p className="text-sm font-medium text-muted-foreground mb-3">
+                                      {hasMockup ? 'Product Image (Mockup)' : 'Category Image'}
+                                    </p>
+                                    <div className="aspect-[3/3.5] w-full overflow-hidden rounded-lg border shadow-md">
+                                      <img 
+                                        src={displayImage} 
+                                        alt={hasMockup ? "Product Mockup" : "Category"}
+                                        className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
+                                        onClick={() => {
+                                          const modal = document.createElement('div');
+                                          modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
+                                          modal.innerHTML = `
+                                            <div class="relative max-w-4xl max-h-full">
+                                              <img src="${displayImage}" alt="${hasMockup ? 'Product Mockup' : 'Category'}" class="max-w-full max-h-full object-contain rounded-lg" />
+                                              <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                                                </svg>
+                                              </button>
+                                            </div>
+                                          `;
+                                          document.body.appendChild(modal);
+                                          modal.onclick = (e) => {
+                                            if (e.target === modal) {
+                                              document.body.removeChild(modal);
+                                            }
+                                          };
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                ) : null;
+                              })()}
 
-      {/* Edit Dialog */}
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-5xl">
-          <DialogHeader>
-            <DialogTitle>Edit Order</DialogTitle>
-          </DialogHeader>
-          {editDraft && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <Label>Order Date</Label>
-                  <Input type="date" value={editDraft.order_date} onChange={e => setEditDraft({ ...editDraft, order_date: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Expected Delivery</Label>
-                  <Input type="date" value={editDraft.expected_delivery_date} onChange={e => setEditDraft({ ...editDraft, expected_delivery_date: e.target.value })} />
-                </div>
-                <div>
-                  <Label>GST Rate (%)</Label>
-                  <Input type="number" value={editDraft.gst_rate} onChange={e => setEditDraft({ ...editDraft, gst_rate: parseFloat(e.target.value) || 0 })} />
-                </div>
-                <div>
-                  <Label>Sales Manager</Label>
-                  <Select value={editDraft.sales_manager || ''} onValueChange={(v) => setEditDraft({ ...editDraft, sales_manager: v || null })}>
-                    <SelectTrigger><SelectValue placeholder="Select manager" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="">None</SelectItem>
-                      {employees.map(emp => (
-                        <SelectItem key={emp.id} value={emp.id}>{emp.full_name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>Payment Method</Label>
-                  <Input value={editDraft.payment_channel || ''} onChange={e => setEditDraft({ ...editDraft, payment_channel: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Reference ID</Label>
-                  <Input value={editDraft.reference_id || ''} onChange={e => setEditDraft({ ...editDraft, reference_id: e.target.value })} />
-                </div>
-                <div className="md:col-span-3">
-                  <Label>Notes</Label>
-                  <Input value={editDraft.notes || ''} onChange={e => setEditDraft({ ...editDraft, notes: e.target.value })} />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <h3 className="font-semibold">Items</h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full border">
-                    <thead className="bg-muted/50 text-sm">
-                      <tr>
-                        <th className="p-2 border text-left">Product</th>
-                        <th className="p-2 border">Qty</th>
-                        <th className="p-2 border">Unit Price</th>
-                        <th className="p-2 border">GST %</th>
-                        <th className="p-2 border">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {editItems.map((it, idx) => {
-                        const amount = it.quantity * it.unit_price;
-                        return (
-                          <tr key={it.id} className="text-sm">
-                            <td className="p-2 border text-left">{it.product_description}</td>
-                            <td className="p-2 border w-24">
-                              <Input type="number" value={it.quantity} onChange={e => {
-                                const v = parseInt(e.target.value) || 0;
-                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, quantity: v } : p));
-                              }} />
-                            </td>
-                            <td className="p-2 border w-32">
-                              <Input type="number" value={it.unit_price} onChange={e => {
-                                const v = parseFloat(e.target.value) || 0;
-                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, unit_price: v } : p));
-                              }} />
-                            </td>
-                            <td className="p-2 border w-24">
-                              <Input type="number" value={it.gst_rate} onChange={e => {
-                                const v = parseFloat(e.target.value) || 0;
-                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, gst_rate: v } : p));
-                              }} />
-                            </td>
-                            <td className="p-2 border text-right">{formatCurrency(amount)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                {(() => {
-                  const { subtotal, gstTotal, grandTotal } = computeDraftTotals();
-                  return (
-                    <div className="text-right space-y-1 text-sm">
-                      <div>Subtotal: {formatCurrency(subtotal)}</div>
-                      <div>GST Total: {formatCurrency(gstTotal)}</div>
-                      <div className="font-semibold">Grand Total: {formatCurrency(grandTotal)}</div>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline" disabled={savingEdit}>Cancel</Button>
-            </DialogClose>
-            <Button onClick={handleSaveEdit} disabled={savingEdit}>{savingEdit ? 'Saving...' : 'Save Changes'}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-                                      `;
-                                      modal.onclick = (e) => {
-                                        if (e.target === modal) {
-                                          document.body.removeChild(modal);
-                                        }
-                                      };
-                                      document.body.appendChild(modal);
-                                    }}
-                                  />
-                                </div>
-                              </div>
-                            )}
-
-                                                         {/* Mockup Images - Amazon Style Layout */}
+                            {/* Mockup Images - Amazon Style Layout */}
                              
 
                             {/* Attachments */}
@@ -1487,12 +1426,12 @@ export default function OrderDetailPage() {
                                 </div>
                               ) : null;
                             })()}
-                          </div>
+                            </div>
 
-                           {/* Product Details Section */}
-                          <div className="xl:w-3/5 space-y-4">
-                            <div className="flex justify-between items-start">
-                              <div className="flex-1 space-y-4">
+                            {/* Product Details Section */}
+                            <div className="xl:w-3/5 space-y-4">
+                              <div className="flex justify-between items-start">
+                                <div className="flex-1 space-y-4">
                                 {/* Product Category Name */}
                                 {productCategories[item.product_category_id] && (
                                   <p className="text-sm font-medium text-muted-foreground">
@@ -1671,7 +1610,7 @@ export default function OrderDetailPage() {
                                   }
                                 })()}
                                 
-                                                                 {item.remarks && (
+                                {item.remarks && (
                                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
                                      <p className="text-sm">
                                        <span className="font-semibold text-amber-800">Remarks:</span>
@@ -1679,120 +1618,116 @@ export default function OrderDetailPage() {
                                      </p>
                                    </div>
                                  )}
-                               </div>
-                             </div>
-                           </div>
-                         </div>
-                         <div className="flex flex-nowrap justify-center gap-6">
-  {(() => {
-    const { mockup_images, reference_images } = extractImagesFromSpecifications(item.specifications);
+                                </div>
+                              </div>
+                              <div className="flex flex-nowrap justify-center gap-6">
+                              {(() => {
+                                const { mockup_images, reference_images } = extractImagesFromSpecifications(item.specifications);
 
-    // First column: either Mockup or Reference (if Mockup missing)
-    const firstBlock = mockup_images && mockup_images.length > 0
-      ? {
-          title: "Mockup Images",
-          images: mockup_images,
-          selected: selectedMockupImages,
-          setSelected: setSelectedMockupImages
-        }
-      : reference_images && reference_images.length > 0
-        ? {
-            title: "Reference Images",
-            images: reference_images,
-            selected: selectedReferenceImages,
-            setSelected: setSelectedReferenceImages
-          }
-        : null;
+                                // First column: either Mockup or Reference (if Mockup missing)
+                                const firstBlock = mockup_images && mockup_images.length > 0
+                                  ? {
+                                      title: "Mockup Images",
+                                      images: mockup_images,
+                                      selected: selectedMockupImages,
+                                      setSelected: setSelectedMockupImages
+                                    }
+                                  : reference_images && reference_images.length > 0
+                                    ? {
+                                        title: "Reference Images",
+                                        images: reference_images,
+                                        selected: selectedReferenceImages,
+                                        setSelected: setSelectedReferenceImages
+                                      }
+                                    : null;
 
-    // Second column: only shown if both types are available
-    const secondBlock =
-      mockup_images && mockup_images.length > 0 && reference_images && reference_images.length > 0
-        ? {
-            title: "Reference Images",
-            images: reference_images,
-            selected: selectedReferenceImages,
-            setSelected: setSelectedReferenceImages
-          }
-        : null;
+                                // Second column: only shown if both types are available
+                                const secondBlock =
+                                  mockup_images && mockup_images.length > 0 && reference_images && reference_images.length > 0
+                                    ? {
+                                        title: "Reference Images",
+                                        images: reference_images,
+                                        selected: selectedReferenceImages,
+                                        setSelected: setSelectedReferenceImages
+                                      }
+                                    : null;
 
-    // Render a block
-    const renderImageBlock = (block: any, blockIndex: number) => (
-      <div key={blockIndex} className="flex-none w-[40%] ">
-        <p className="text-sm font-medium text-muted-foreground mb-3 justify-content-center">{block.title}:</p>
-        <div className="space-y-3">
-          {/* Main large image */}
-          <div className="aspect-square w-full overflow-hidden rounded-lg border shadow-md">
-            <img
-              src={block.images[block.selected[index] || 0]}
-              alt={block.title}
-              className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
-              onClick={() => {
-                const currentImage = block.images[block.selected[index] || 0];
-                const modal = document.createElement('div');
-                modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
-                modal.innerHTML = `
-                  <div class="relative max-w-4xl max-h-full">
-                    <img src="${currentImage}" alt="${block.title}" class="max-w-full max-h-full object-contain rounded-lg" />
-                    <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                      </svg>
-                    </button>
-                  </div>
-                `;
-                modal.onclick = (e) => { if (e.target === modal) document.body.removeChild(modal); };
-                document.body.appendChild(modal);
-              }}
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-            />
-          </div>
+                                // Render a block
+                                const renderImageBlock = (block: any, blockIndex: number) => (
+                                  <div key={blockIndex} className="flex-none w-[40%] ">
+                                    <p className="text-sm font-medium text-muted-foreground mb-3 justify-content-center">{block.title}:</p>
+                                    <div className="space-y-3">
+                                      {/* Main large image */}
+                                      <div className="aspect-square w-full overflow-hidden rounded-lg border shadow-md">
+                                        <img
+                                          src={block.images[block.selected[index] || 0]}
+                                          alt={block.title}
+                                          className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
+                                          onClick={() => {
+                                            const currentImage = block.images[block.selected[index] || 0];
+                                            const modal = document.createElement('div');
+                                            modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
+                                            modal.innerHTML = `
+                                              <div class="relative max-w-4xl max-h-full">
+                                                <img src="${currentImage}" alt="${block.title}" class="max-w-full max-h-full object-contain rounded-lg" />
+                                                <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
+                                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                                  </svg>
+                                                </button>
+                                              </div>
+                                            `;
+                                            modal.onclick = (e) => { if (e.target === modal) document.body.removeChild(modal); };
+                                            document.body.appendChild(modal);
+                                          }}
+                                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                        />
+                                      </div>
 
-          {/* Thumbnails */}
-          {block.images.length > 1 && (
-            <div className="grid grid-cols-4 gap-2">
-              {block.images.map((url: string, idx: number) => (
-                <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm relative group">
-                  <img
-                    src={url}
-                    alt={`${block.title} ${idx + 1}`}
-                    className={`w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300 ${
-                      (block.selected[index] || 0) === idx ? 'ring-2 ring-primary' : ''
-                    }`}
-                    onClick={() => {
-                      block.setSelected(prev => ({ ...prev, [index]: idx }));
-                    }}
-                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                  />
-                  <button
-                    className="absolute top-1 right-1 hidden group-hover:block bg-white/90 hover:bg-white rounded px-1 text-[10px]"
-                    onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); handleRemoveImage(item.id, block.title.includes('Mockup') ? 'mockup' : 'reference', url); }}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+                                      {/* Thumbnails */}
+                                      {block.images.length > 1 && (
+                                        <div className="grid grid-cols-4 gap-2">
+                                          {block.images.map((url: string, idx: number) => (
+                                            <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm relative group">
+                                              <img
+                                                src={url}
+                                                alt={`${block.title} ${idx + 1}`}
+                                                className={`w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300 ${
+                                                  (block.selected[index] || 0) === idx ? 'ring-2 ring-primary' : ''
+                                                }`}
+                                                onClick={() => {
+                                                  block.setSelected(prev => ({ ...prev, [index]: idx }));
+                                                }}
+                                                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                              />
+                                              <button
+                                                className="absolute top-1 right-1 hidden group-hover:block bg-white/90 hover:bg-white rounded px-1 text-[10px]"
+                                                onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); handleRemoveImage(item.id, block.title.includes('Mockup') ? 'mockup' : 'reference', url); }}
+                                              >
+                                                Remove
+                                              </button>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
 
-      
-    );
-
-    return (
-      <>
-        {firstBlock && renderImageBlock(firstBlock, 1)}
-        {secondBlock && renderImageBlock(secondBlock, 2)}
-      </>
-    );
-  })()}
-</div>
-
-
-                       </div>
-                       );
-                     })}
+                                return (
+                                  <>
+                                    {firstBlock && renderImageBlock(firstBlock, 1)}
+                                    {secondBlock && renderImageBlock(secondBlock, 2)}
+                                  </>
+                                );
+                              })()}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                    </div>
                  </CardContent>
                </Card>
@@ -1832,22 +1767,25 @@ export default function OrderDetailPage() {
                              return (
                                <tr key={index} className="hover:bg-gray-50">
                                  <td className="border border-gray-300 px-3 py-2">
-                                   {item.category_image_url && (
-                                     <img
-                                       src={item.category_image_url}
-                                       alt="Product"
-                                       className="w-20 h-20 object-cover rounded"
-                                     />
-                                   )}
+                                   {(() => {
+                                     const displayImage = getOrderItemDisplayImage(item);
+                                     return displayImage ? (
+                                       <img
+                                         src={displayImage}
+                                         alt="Product"
+                                         className="w-20 h-20 object-cover rounded"
+                                       />
+                                     ) : null;
+                                   })()}
                                  </td>
                                  <td className="border border-gray-300 px-3 py-2">
                                    <div className="text-sm">
+                                     <div className="text-gray-600 text-xs font-medium">
+                                       {fabrics[item.fabric_id]?.name} - {item.color}, {item.gsm} GSM
+                                     </div>
                                      <div className="font-medium">{item.product_description}</div>
                                      <div className="text-gray-600 text-xs">
                                        {productCategories[item.product_category_id]?.category_name}
-                                     </div>
-                                     <div className="text-gray-600 text-xs">
-                                       {fabrics[item.fabric_id]?.name} - {item.color}, {item.gsm} GSM
                                      </div>
                                    </div>
                                  </td>
@@ -2091,8 +2029,8 @@ export default function OrderDetailPage() {
                     }
                   })()}
                   <div className="flex justify-between">
-                    <span>Advance Paid</span>
-                    <span className="text-green-600">{formatCurrency(order.advance_amount)}</span>
+                    <span>Amount Paid</span>
+                    <span className="text-green-600">{formatCurrency(totalReceipts)}</span>
                   </div>
                   <hr />
                   <div className="flex justify-between font-bold text-lg">
@@ -2103,16 +2041,16 @@ export default function OrderDetailPage() {
                     <span className="text-muted-foreground">Balance Due</span>
                     <span className={(() => {
                       const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
-                      const balance = calculatedTotal - (order.advance_amount || 0);
+                      const balance = calculatedTotal - totalReceipts;
                       return balance > 0 ? "text-orange-600" : "text-green-600";
                     })()}>
-                      {formatCurrency(calculateOrderSummary(orderItems, order).grandTotal - (order.advance_amount || 0))}
+                      {formatCurrency(calculateOrderSummary(orderItems, order).grandTotal - totalReceipts)}
                     </span>
                   </div>
                   
                   {(() => {
                     const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
-                    const balance = calculatedTotal - (order.advance_amount || 0);
+                    const balance = calculatedTotal - totalReceipts;
                     return balance > 0;
                   })() && (
                     <Button
@@ -2128,7 +2066,7 @@ export default function OrderDetailPage() {
                             number: order.order_number, 
                             date: order.order_date, 
                             customer_id: order.customer_id, 
-                            amount: calculateOrderSummary(orderItems, order).grandTotal - (order.advance_amount || 0) 
+                            amount: calculateOrderSummary(orderItems, order).grandTotal - totalReceipts 
                           }, 
                           tab: 'create' 
                         } 
@@ -2432,6 +2370,119 @@ export default function OrderDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Edit Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Edit Order</DialogTitle>
+          </DialogHeader>
+          {editDraft && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <Label>Order Date</Label>
+                  <Input type="date" value={editDraft.order_date} onChange={e => setEditDraft({ ...editDraft, order_date: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Expected Delivery</Label>
+                  <Input type="date" value={editDraft.expected_delivery_date} onChange={e => setEditDraft({ ...editDraft, expected_delivery_date: e.target.value })} />
+                </div>
+                <div>
+                  <Label>GST Rate (%)</Label>
+                  <Input type="number" value={editDraft.gst_rate} onChange={e => setEditDraft({ ...editDraft, gst_rate: parseFloat(e.target.value) || 0 })} />
+                </div>
+                <div>
+                  <Label>Sales Manager</Label>
+                  <Select value={editDraft.sales_manager || ''} onValueChange={(v) => setEditDraft({ ...editDraft, sales_manager: v || null })}>
+                    <SelectTrigger><SelectValue placeholder="Select manager" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None</SelectItem>
+                      {employees.map(emp => (
+                        <SelectItem key={emp.id} value={emp.id}>{emp.full_name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Payment Method</Label>
+                  <Input value={editDraft.payment_channel || ''} onChange={e => setEditDraft({ ...editDraft, payment_channel: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Reference ID</Label>
+                  <Input value={editDraft.reference_id || ''} onChange={e => setEditDraft({ ...editDraft, reference_id: e.target.value })} />
+                </div>
+                <div className="md:col-span-3">
+                  <Label>Notes</Label>
+                  <Input value={editDraft.notes || ''} onChange={e => setEditDraft({ ...editDraft, notes: e.target.value })} />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h3 className="font-semibold">Items</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full border">
+                    <thead className="bg-muted/50 text-sm">
+                      <tr>
+                        <th className="p-2 border text-left">Product</th>
+                        <th className="p-2 border">Qty</th>
+                        <th className="p-2 border">Unit Price</th>
+                        <th className="p-2 border">GST %</th>
+                        <th className="p-2 border">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editItems.map((it, idx) => {
+                        const amount = it.quantity * it.unit_price;
+                        return (
+                          <tr key={it.id} className="text-sm">
+                            <td className="p-2 border text-left">{it.product_description}</td>
+                            <td className="p-2 border w-24">
+                              <Input type="number" value={it.quantity} onChange={e => {
+                                const v = parseInt(e.target.value) || 0;
+                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, quantity: v } : p));
+                              }} />
+                            </td>
+                            <td className="p-2 border w-32">
+                              <Input type="number" value={it.unit_price} onChange={e => {
+                                const v = parseFloat(e.target.value) || 0;
+                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, unit_price: v } : p));
+                              }} />
+                            </td>
+                            <td className="p-2 border w-24">
+                              <Input type="number" value={it.gst_rate} onChange={e => {
+                                const v = parseFloat(e.target.value) || 0;
+                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, gst_rate: v } : p));
+                              }} />
+                            </td>
+                            <td className="p-2 border text-right">{formatCurrency(amount)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {(() => {
+                  const { subtotal, gstTotal, grandTotal } = computeDraftTotals();
+                  return (
+                    <div className="text-right space-y-1 text-sm">
+                      <div>Subtotal: {formatCurrency(subtotal)}</div>
+                      <div>GST Total: {formatCurrency(gstTotal)}</div>
+                      <div className="font-semibold">Grand Total: {formatCurrency(grandTotal)}</div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={savingEdit}>Cancel</Button>
+            </DialogClose>
+            <Button onClick={handleSaveEdit} disabled={savingEdit}>{savingEdit ? 'Saving...' : 'Save Changes'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
     </ErpLayout>
   );

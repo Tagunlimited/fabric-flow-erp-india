@@ -161,6 +161,29 @@ export function BomCreator() {
     setItems(items.filter((_, i) => i !== index));
   };
 
+  // Helper function to calculate qty_total based on item type
+  const calculateQtyTotal = (item: BomItem, totalOrderQty: number): number => {
+    if (item.item_type === 'fabric') {
+      // For fabric: division calculation (total_order_qty ÷ pcs_in_1_unit)
+      if (!item.qty_per_product || item.qty_per_product <= 0) {
+        return 0;
+      }
+      return totalOrderQty / item.qty_per_product;
+    } else {
+      // For non-fabric: multiplication calculation (qty_per_product × total_order_qty)
+      return (item.qty_per_product || 0) * totalOrderQty;
+    }
+  };
+
+  // Helper function to get label text based on item type
+  const getQtyLabel = (item: BomItem): string => {
+    if (item.item_type === 'fabric') {
+      const uom = item.unit_of_measure?.toLowerCase() || 'kg';
+      return `Pcs in 1 ${uom}`;
+    }
+    return 'Qty per Product';
+  };
+
   const updateItem = (index: number, field: keyof BomItem, value: any) => {
     const updatedItems = [...items];
     updatedItems[index] = { ...updatedItems[index], [field]: value };
@@ -168,7 +191,7 @@ export function BomCreator() {
     // Auto-calculate qty_total when qty_per_product changes
     if (field === 'qty_per_product' && orderData?.order_items?.[0]) {
       const totalOrderQty = orderData.order_items[0].quantity;
-      updatedItems[index].qty_total = value * totalOrderQty;
+      updatedItems[index].qty_total = calculateQtyTotal(updatedItems[index], totalOrderQty);
     }
     
     // Auto-calculate to_order when stock changes
@@ -195,6 +218,20 @@ export function BomCreator() {
       toast({
         title: 'Error',
         description: 'Please add at least one item to the BOM',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    // Validate fabric items have qty_per_product > 0
+    const invalidFabricItems = items.filter(
+      item => item.item_type === 'fabric' && (!item.qty_per_product || item.qty_per_product <= 0)
+    );
+    if (invalidFabricItems.length > 0) {
+      const uom = invalidFabricItems[0].unit_of_measure?.toLowerCase() || 'kg';
+      toast({
+        title: 'Error',
+        description: `Fabric items require "Pcs in 1 ${uom}" to be greater than 0`,
         variant: 'destructive'
       });
       return;
@@ -363,7 +400,7 @@ export function BomCreator() {
                   </div>
 
                   <div>
-                    <Label>Qty per Product</Label>
+                    <Label>{getQtyLabel(item)}</Label>
                     <Input
                       type="number"
                       step="0.01"

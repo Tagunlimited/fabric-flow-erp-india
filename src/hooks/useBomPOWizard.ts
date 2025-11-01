@@ -8,6 +8,8 @@ export interface SelectedBomItem {
   totalOrdered: number;
   remainingQuantity: number;
   selected: boolean;
+  image_url?: string | null;  // ADD THIS
+  category?: string;           // ADD THIS to differentiate fabric vs item
 }
 
 export interface SupplierAssignment {
@@ -54,7 +56,9 @@ export function useBomPOWizard(bomItems: BomItemOrderStatus[]) {
       totalRequired: item.total_required,
       totalOrdered: item.total_ordered,
       remainingQuantity: item.remaining_quantity,
-      selected: false
+      selected: false,
+      image_url: item.image_url,     // ADD THIS
+      category: item.category         // ADD THIS
     }));
 
     setState(prev => ({
