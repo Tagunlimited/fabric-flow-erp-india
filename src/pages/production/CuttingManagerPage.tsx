@@ -38,7 +38,6 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleBatchAssignmentDialog";
 import { UpdateCuttingQuantityDialog } from "@/components/production/UpdateCuttingQuantityDialog";
-import { FabricPickingDialog } from "@/components/production/FabricPickingDialog";
 import { generateBatchAssignmentPDF } from "@/utils/batchAssignmentPDF";
 
 interface CuttingJob {
@@ -137,10 +136,6 @@ const CuttingManagerPage = () => {
   // Batch assignment dialog state
   const [batchAssignmentOpen, setBatchAssignmentOpen] = useState(false);
   const [selectedJobForBatch, setSelectedJobForBatch] = useState<CuttingJob | null>(null);
-
-  // Fabric picking dialog state
-  const [fabricPickingOpen, setFabricPickingOpen] = useState(false);
-  const [selectedJobForFabricPicking, setSelectedJobForFabricPicking] = useState<CuttingJob | null>(null);
   
   // PDF generation state
   const [generatingPDF, setGeneratingPDF] = useState<string | null>(null);
@@ -155,11 +150,6 @@ const CuttingManagerPage = () => {
     // Order items are already loaded in the job object
     setSelectedJobForBatch(job);
     setBatchAssignmentOpen(true);
-  };
-
-  const handlePickFabric = (job: CuttingJob) => {
-    setSelectedJobForFabricPicking(job);
-    setFabricPickingOpen(true);
   };
 
   const handleBatchAssignmentSuccess = () => {
@@ -484,10 +474,15 @@ const CuttingManagerPage = () => {
               contact_person: (customersMap[o.customer_id] as any).contact_person || ''
             } : undefined,
           };
-        });
+          return job;
+        }).filter((job): job is CuttingJob => job !== undefined);
 
         // Fetch batch assignments for each order
         const jobsWithBatchAssignments = await Promise.all(jobs.map(async (job) => {
+          if (!job || !job.id) {
+            console.error('Invalid job found, skipping:', job);
+            return null;
+          }
           try {
             const { data: batchAssignments } = await supabase
               .from('order_batch_assignments_with_details')
@@ -505,7 +500,7 @@ const CuttingManagerPage = () => {
               batchAssignments: []
             };
           }
-        }));
+        })).then(results => results.filter((job): job is CuttingJob => job !== null));
 
         setCuttingJobs(jobsWithBatchAssignments as CuttingJob[]);
       } catch (err) {
@@ -865,7 +860,7 @@ const CuttingManagerPage = () => {
                                     <div className="flex items-center justify-between">
                                       <div className="flex items-center space-x-3">
                                         <Avatar className="w-8 h-8">
-                                          <AvatarImage src={assignment.batch_leader_avatar} alt={assignment.batch_leader_name} />
+                                          <AvatarImage src={assignment.batch_leader_avatar_url} alt={assignment.batch_leader_name} />
                                           <AvatarFallback className="bg-gray-200 text-gray-700 text-xs">
                                             {assignment.batch_leader_name?.charAt(0) || assignment.batch_name.charAt(0)}
                                           </AvatarFallback>
@@ -936,10 +931,6 @@ const CuttingManagerPage = () => {
                                 <Edit className="w-4 h-4 mr-2" />
                             Add Cut Qty
                           </Button>
-                          <Button variant="outline" size="sm" onClick={() => handlePickFabric(job)}>
-                            <Package className="w-4 h-4 mr-2" />
-                            Pick Fabric
-                              </Button>
                             </div>
                           </TableCell>
                         </TableRow>
@@ -1208,21 +1199,6 @@ const CuttingManagerPage = () => {
           notes: ba.notes
         })) || []}
         orderItems={selectedJobForBatch?.orderItems || []}
-        />
-
-        {/* Fabric Picking Dialog */}
-        <FabricPickingDialog
-          isOpen={fabricPickingOpen}
-          onClose={() => {
-            setFabricPickingOpen(false);
-            setSelectedJobForFabricPicking(null);
-          }}
-          onSuccess={() => {
-            refreshData();
-          }}
-          orderId={selectedJobForFabricPicking?.id || ''}
-          orderNumber={selectedJobForFabricPicking?.orderNumber || ''}
-          customerName={selectedJobForFabricPicking?.customerName || ''}
         />
       </div>
     </ErpLayout>
