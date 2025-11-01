@@ -402,7 +402,7 @@ const OrdersPage = () => {
                           <TableHead>Sales Manager</TableHead>
                           <TableHead>Order Date</TableHead>
                           <TableHead>Expected Delivery</TableHead>
-                          <TableHead>Status</TableHead>
+                          <TableHead className="text-left w-56">Status</TableHead>
                           <TableHead>Amount</TableHead>
                           <TableHead>Balance</TableHead>
                           <TableHead>Actions</TableHead>
@@ -419,9 +419,9 @@ const OrdersPage = () => {
                             <TableCell>{order.customer?.company_name}</TableCell>
                             <TableCell>
                               <div className="flex items-center gap-2">
-                                <Avatar className="w-6 h-6">
+                                <Avatar className="w-12 h-12">
                                   <AvatarImage src={salesManagers[order.sales_manager]?.avatar_url} alt={salesManagers[order.sales_manager]?.full_name} />
-                                  <AvatarFallback className="text-xs">
+                                  <AvatarFallback className="text-sm">
                                     {salesManagers[order.sales_manager]?.full_name?.split(' ').map(n => n[0]).join('').toUpperCase() || 'SM'}
                                   </AvatarFallback>
                                 </Avatar>
@@ -443,12 +443,12 @@ const OrdersPage = () => {
                               }) : 'N/A'}
                             </TableCell>
                             <TableCell>
-                              <div className="flex items-center space-x-2">
+                              <div className="flex items-center justify-start text-left">
                                 <Select 
                                   value={order.status} 
                                   onValueChange={(newStatus) => handleStatusChange(order.id, newStatus)}
                                 >
-                                  <SelectTrigger className="w-40">
+                                  <SelectTrigger className="w-56 text-left">
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
@@ -469,9 +469,6 @@ const OrdersPage = () => {
                                     <SelectItem value="cancelled" className="text-red-600">Cancelled</SelectItem>
                                   </SelectContent>
                                 </Select>
-                                <Badge className={getStatusColor(order.status)}>
-                                  {order.status.replace('_', ' ').toUpperCase()}
-                                </Badge>
                               </div>
                             </TableCell>
                             <TableCell>₹{order.final_amount?.toFixed(2) || '0.00'}</TableCell>
