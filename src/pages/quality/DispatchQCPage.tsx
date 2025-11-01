@@ -625,6 +625,77 @@ export default function DispatchQCPage() {
           .from('orders')
           .update({ status: newStatus } as any)
           .eq('id', dispatchTarget.order_id);
+
+        // For readymade orders, update product_master stock when dispatched
+        if (isReadymadeOrder && dispatchedTotal > 0) {
+          try {
+            // Get all order_items with product_master_id from specifications
+            const { data: orderItemsData } = await (supabase as any)
+              .from('order_items')
+              .select('id, quantity, specifications')
+              .eq('order_id', dispatchTarget.order_id);
+
+            if (orderItemsData && orderItemsData.length > 0) {
+              const totalOrderQty = orderItemsData.reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
+              
+              // Calculate remaining to distribute (to handle rounding errors)
+              let remainingDispatch = dispatchedTotal;
+              
+              // Process each order item and update stock proportionally
+              for (let i = 0; i < orderItemsData.length; i++) {
+                const orderItem = orderItemsData[i];
+                const specs = orderItem.specifications || {};
+                const productMasterId = specs.product_master_id;
+                
+                if (!productMasterId) continue;
+
+                const orderItemQty = Number(orderItem.quantity || 0);
+                
+                // Calculate proportional dispatched quantity for this product
+                // For the last item, use remaining dispatch to avoid rounding errors
+                let proportionalDispatch: number;
+                if (i === orderItemsData.length - 1) {
+                  proportionalDispatch = remainingDispatch;
+                } else {
+                  proportionalDispatch = totalOrderQty > 0 
+                    ? Math.round((orderItemQty / totalOrderQty) * dispatchedTotal)
+                    : 0;
+                  remainingDispatch -= proportionalDispatch;
+                }
+
+                if (proportionalDispatch > 0) {
+                  // Get current stock
+                  const { data: productData, error: productError } = await (supabase as any)
+                    .from('product_master')
+                    .select('current_stock')
+                    .eq('id', productMasterId)
+                    .single();
+
+                  if (!productError && productData) {
+                    const currentStock = Number(productData.current_stock || 0);
+                    const newStock = Math.max(0, currentStock - proportionalDispatch);
+
+                    // Update product_master stock
+                    const { error: updateError } = await (supabase as any)
+                      .from('product_master')
+                      .update({ current_stock: newStock } as any)
+                      .eq('id', productMasterId);
+
+                    if (updateError) {
+                      console.error(`Error updating stock for product ${productMasterId}:`, updateError);
+                    } else {
+                      console.log(`Updated stock for product ${productMasterId}: ${currentStock} - ${proportionalDispatch} = ${newStock}`);
+                    }
+                  }
+                }
+              }
+            }
+          } catch (stockError) {
+            console.error('Error updating product stock for readymade order:', stockError);
+            // Don't fail the dispatch if stock update fails, but log the error
+            // Note: Stock should be updated manually if this fails
+          }
+        }
       } catch {}
 
       // Log activity with note
