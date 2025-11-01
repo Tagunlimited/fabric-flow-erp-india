@@ -12,6 +12,8 @@ import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { AvatarUploader } from "@/components/ui/avatar-uploader";
+import { IdProofUploader } from "@/components/ui/id-proof-uploader";
+import { BankDetailsUploader } from "@/components/ui/bank-details-uploader";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 const INDIAN_STATES = [
@@ -56,7 +58,16 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
     department: initialData?.department || "",
     joining_date: initialData?.joining_date ? new Date(initialData.joining_date) : undefined,
     employment_type: initialData?.employment_type || "",
-    reports_to: initialData?.reports_to || ""
+    reports_to: initialData?.reports_to || "",
+    id_proof_type: initialData?.id_proof_type || "",
+    id_proof_number: initialData?.id_proof_number || "",
+    id_proof_image_url: initialData?.id_proof_image_url || "",
+    id_proof_back_image_url: initialData?.id_proof_back_image_url || "",
+    bank_name: initialData?.bank_name || "",
+    account_holder_name: initialData?.account_holder_name || "",
+    account_number: initialData?.account_number || "",
+    ifsc_code: initialData?.ifsc_code || "",
+    passbook_image_url: initialData?.passbook_image_url || ""
   });
 
   const [loading, setLoading] = useState(false);
@@ -145,10 +156,13 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
         !formData.emergency_contact_phone || !formData.address_line1 || 
         !formData.city || !formData.state || !formData.pincode || 
         !formData.designation || !formData.department || !formData.joining_date || 
-        !formData.employment_type) {
+        !formData.employment_type || !formData.id_proof_type || 
+        !formData.id_proof_number || !formData.id_proof_image_url ||
+        !formData.bank_name || !formData.account_holder_name ||
+        !formData.account_number || !formData.ifsc_code || !formData.passbook_image_url) {
       toast({
         title: "Error",
-        description: "Please fill in all required fields.",
+        description: "Please fill in all required fields including ID proof and bank details.",
         variant: "destructive",
       });
       return;
@@ -176,7 +190,16 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
         joining_date: format(formData.joining_date, 'yyyy-MM-dd'),
         employment_type: formData.employment_type,
         reports_to: formData.reports_to || null,
-        avatar_url: avatarUrl
+        avatar_url: avatarUrl,
+        id_proof_type: formData.id_proof_type,
+        id_proof_number: formData.id_proof_number,
+        id_proof_image_url: formData.id_proof_image_url,
+        id_proof_back_image_url: formData.id_proof_back_image_url || null,
+        bank_name: formData.bank_name,
+        account_holder_name: formData.account_holder_name,
+        account_number: formData.account_number,
+        ifsc_code: formData.ifsc_code,
+        passbook_image_url: formData.passbook_image_url
       };
 
       let error;
@@ -513,6 +536,40 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
             </div>
           </CardContent>
         </Card>
+
+        {/* ID Proof Section */}
+        {user && (
+          <IdProofUploader
+            idProofType={formData.id_proof_type}
+            idProofNumber={formData.id_proof_number}
+            frontImageUrl={formData.id_proof_image_url}
+            backImageUrl={formData.id_proof_back_image_url}
+            onIdProofTypeChange={(type) => setFormData(prev => ({ ...prev, id_proof_type: type }))}
+            onIdProofNumberChange={(number) => setFormData(prev => ({ ...prev, id_proof_number: number }))}
+            onFrontImageChange={(url) => setFormData(prev => ({ ...prev, id_proof_image_url: url }))}
+            onBackImageChange={(url) => setFormData(prev => ({ ...prev, id_proof_back_image_url: url }))}
+            userId={user.id}
+            disabled={loading}
+          />
+        )}
+
+        {/* Bank Details Section */}
+        {user && (
+          <BankDetailsUploader
+            bankName={formData.bank_name}
+            accountHolderName={formData.account_holder_name}
+            accountNumber={formData.account_number}
+            ifscCode={formData.ifsc_code}
+            passbookImageUrl={formData.passbook_image_url}
+            onBankNameChange={(name) => setFormData(prev => ({ ...prev, bank_name: name }))}
+            onAccountHolderNameChange={(name) => setFormData(prev => ({ ...prev, account_holder_name: name }))}
+            onAccountNumberChange={(number) => setFormData(prev => ({ ...prev, account_number: number }))}
+            onIfscCodeChange={(code) => setFormData(prev => ({ ...prev, ifsc_code: code }))}
+            onPassbookImageChange={(url) => setFormData(prev => ({ ...prev, passbook_image_url: url }))}
+            userId={user.id}
+            disabled={loading}
+          />
+        )}
       </div>
 
       <div className="flex justify-end gap-4">

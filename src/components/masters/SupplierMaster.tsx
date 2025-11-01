@@ -17,7 +17,6 @@ interface Supplier {
   id: string;
   supplier_code: string;
   supplier_name: string;
-  credit_limit: number | null;
   pan: string | null;
   gst_number: string | null;
   contact_person: string | null;
@@ -78,7 +77,6 @@ export function SupplierMaster() {
   const [formData, setFormData] = useState({
     supplier_code: '',
     supplier_name: '',
-    credit_limit: '',
     pan: '',
     gst_number: '',
     contact_person: '',
@@ -195,8 +193,7 @@ export function SupplierMaster() {
     e.preventDefault();
     try {
       const supplierData = {
-        ...formData,
-        credit_limit: formData.credit_limit ? parseFloat(formData.credit_limit) : null
+        ...formData
       };
 
       if (editingSupplier) {
@@ -294,7 +291,6 @@ export function SupplierMaster() {
     setFormData({
       supplier_code: '',
       supplier_name: '',
-      credit_limit: '',
       pan: '',
       gst_number: '',
       contact_person: '',
@@ -312,7 +308,6 @@ export function SupplierMaster() {
       setFormData({
         supplier_code: supplier.supplier_code,
         supplier_name: supplier.supplier_name,
-        credit_limit: supplier.credit_limit?.toString() || '',
         pan: supplier.pan || '',
         gst_number: supplier.gst_number || '',
         contact_person: supplier.contact_person || '',
@@ -527,7 +522,6 @@ export function SupplierMaster() {
            const supplierData = {
              supplier_code: data['Supplier Code*'].toString().trim(),
              supplier_name: data['Supplier Name*'].toString().trim(),
-             credit_limit: data['Credit Limit'] ? parseFloat(data['Credit Limit']) : null,
              pan: data['PAN']?.toString().trim() || null,
              gst_number: data['GST Number']?.toString().trim() || null,
              contact_person: data['Contact Person']?.toString().trim() || null,
@@ -783,11 +777,6 @@ export function SupplierMaster() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <span className="font-bold text-emerald-700">
-                          {supplier.credit_limit ? formatCurrency(supplier.credit_limit) : '-'}
-                        </span>
-                      </TableCell>
-                      <TableCell>
                         <span className={`font-bold ${
                           (supplier.total_outstanding_amount || 0) > 0 
                             ? 'text-red-600' 
@@ -931,12 +920,6 @@ export function SupplierMaster() {
                     {/* Financial Information */}
                     <div className="grid grid-cols-2 gap-4 p-3 bg-emerald-50 rounded-lg">
                       <div>
-                        <p className="text-xs text-emerald-700 font-medium">Credit Limit</p>
-                        <p className="text-sm font-bold text-emerald-800">
-                          {supplier.credit_limit ? formatCurrency(supplier.credit_limit) : '-'}
-                        </p>
-                      </div>
-                      <div>
                         <p className="text-xs text-emerald-700 font-medium">Outstanding</p>
                         <p className={`text-sm font-bold ${
                           (supplier.total_outstanding_amount || 0) > 0 
@@ -1023,15 +1006,6 @@ export function SupplierMaster() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="credit_limit">Credit Limit</Label>
-                    <Input
-                      id="credit_limit"
-                      type="number"
-                      value={formData.credit_limit}
-                      onChange={(e) => setFormData({ ...formData, credit_limit: e.target.value })}
-                    />
-                  </div>
                   <div>
                     <Label htmlFor="pan">PAN</Label>
                     <Input

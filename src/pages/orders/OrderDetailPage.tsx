@@ -19,7 +19,8 @@ import {
   MessageCircle,
   Share,
   Send,
-  ChevronDown
+  ChevronDown,
+  Trash2
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -28,13 +29,13 @@ import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import { ErpLayout } from "@/components/ErpLayout";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
-import { PaymentRecordDialog } from '@/components/orders/PaymentRecordDialog';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -77,6 +78,7 @@ interface Order {
 interface SalesManager {
   id: string;
   full_name: string;
+  avatar_url?: string;
 }
 
 interface Fabric {
@@ -167,7 +169,31 @@ function calculateOrderSummary(orderItems: any[], order: Order | null) {
                    (order?.gst_rate ?? 0);
     gstAmount += (amount * gstRate) / 100;
   });
+
   return { subtotal, gstAmount, grandTotal: subtotal + gstAmount };
+}
+
+// 2. Add a function to calculate GST rates breakdown
+function calculateGSTRatesBreakdown(orderItems: any[], order: Order | null) {
+  const gstRatesMap = new Map<number, number>();
+  
+  orderItems.forEach(item => {
+    const amount = item.quantity * item.unit_price;
+    // Try to get GST rate from item.gst_rate first, then from specifications, then from order
+    const gstRate = item.gst_rate ?? 
+                   (item.specifications?.gst_rate) ?? 
+                   (order?.gst_rate ?? 0);
+    
+    if (gstRate > 0) {
+      const gstAmount = (amount * gstRate) / 100;
+      const currentAmount = gstRatesMap.get(gstRate) || 0;
+      gstRatesMap.set(gstRate, currentAmount + gstAmount);
+    }
+  });
+  
+  return Array.from(gstRatesMap.entries())
+    .map(([rate, amount]) => ({ rate, amount }))
+    .sort((a, b) => a.rate - b.rate);
 }
 
 export default function OrderDetailPage() {
@@ -204,15 +230,81 @@ export default function OrderDetailPage() {
   const [editItems, setEditItems] = useState<Array<{ id: string; product_description: string; quantity: number; unit_price: number; gst_rate: number }>>([]);
   const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
-  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+  const [totalReceipts, setTotalReceipts] = useState<number>(0);
 
   // Handle back navigation based on referrer
   const handleBackNavigation = () => {
     const from = searchParams.get('from');
     if (from === 'production') {
-      navigate('/production');
+      navigate('/production', { state: { refreshOrders: true } });
     } else {
-      navigate('/orders');
+      navigate('/orders', { state: { refreshOrders: true } });
+    }
+  };
+
+  const handleDeleteOrder = async () => {
+    if (!order) return;
+    
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      `Are you sure you want to delete order ${order.order_number}?\n\nThis action cannot be undone and will delete all related data including:\n- Order items\n- Customizations\n- Activities\n- All associated records`
+    );
+    
+    if (!confirmed) {
+      console.log('Order deletion cancelled by user');
+      return;
+    }
+    
+    try {
+      console.log('Attempting to delete order:', order.id, order.order_number);
+      
+      // Try final delete function first (handles trigger conflicts properly)
+      const { data: finalData, error: finalError } = await supabase
+        .rpc('safe_delete_order_final', { order_uuid: order.id });
+      
+      if (finalError) {
+        console.error('Error calling safe_delete_order_final:', finalError);
+        
+        // Fallback to manual deletion if the function doesn't exist
+        console.log('Falling back to manual deletion...');
+        
+        // Try manual deletion with better error handling
+        const { error: manualError } = await supabase
+          .from('orders')
+          .delete()
+          .eq('id', order.id as any);
+        
+        if (manualError) {
+          console.error('Manual deletion also failed:', manualError);
+          
+          if (manualError.code === '409') {
+            toast.error('Cannot delete order: It may be referenced by other records. Please contact support.');
+          } else if (manualError.code === '23503') {
+            toast.error('Cannot delete order: Related records still exist. Please try again.');
+          } else {
+            toast.error(`Failed to delete order: ${manualError.message}`);
+          }
+          return;
+        }
+      } else if (finalData === 0) {
+        toast.error('Order not found or already deleted');
+      } else if (finalData === 1) {
+        toast.success('Order deleted successfully');
+      } else if (finalData === -1) {
+        toast.error('Error occurred during deletion');
+      }
+
+      // Always navigate back to orders list after any deletion attempt
+      // (whether successful, failed, or order not found)
+      const from = searchParams.get('from');
+      if (from === 'production') {
+        navigate('/production', { state: { refreshOrders: true } });
+      } else {
+        navigate('/orders', { state: { refreshOrders: true } });
+      }
+    } catch (error) {
+      console.error('Error deleting order:', error);
+      toast.error('An unexpected error occurred while deleting the order');
     }
   };
 
@@ -220,8 +312,29 @@ export default function OrderDetailPage() {
     if (id) {
       fetchOrderDetails();
       fetchOrderActivities();
+    } else {
+      toast.error('Invalid order ID');
+      handleBackNavigation();
     }
   }, [id]);
+
+  useEffect(() => {
+    if (order?.order_number) {
+      fetchTotalReceipts();
+    }
+  }, [order?.order_number]);
+
+  // Refresh receipts when page regains focus (e.g., after creating a receipt)
+  useEffect(() => {
+    const handleFocus = () => {
+      if (order?.order_number) {
+        fetchTotalReceipts();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [order?.order_number]);
 
   const fetchOrderDetails = async () => {
       try {
@@ -238,8 +351,20 @@ export default function OrderDetailPage() {
           .eq('id', id as string)
           .single();
 
-        if (orderError) throw orderError;
-        if (!orderData) throw new Error('Order not found');
+        if (orderError) {
+          if (orderError.code === 'PGRST116') {
+            // Order not found
+            toast.error('Order not found or has been deleted');
+            handleBackNavigation();
+            return;
+          }
+          throw orderError;
+        }
+        if (!orderData) {
+          toast.error('Order not found or has been deleted');
+          handleBackNavigation();
+          return;
+        }
         setOrder(orderData as unknown as Order);
 
         // Fetch customer details
@@ -254,13 +379,21 @@ export default function OrderDetailPage() {
 
         // Fetch sales manager if exists
         if ((orderData as any).sales_manager) {
-          const { data: salesManagerData } = await (supabase as any)
-            .from('employees')
-            .select('id, full_name')
-            .eq('id', (orderData as any).sales_manager)
-            .single();
-          
-          setSalesManager((salesManagerData as unknown as SalesManager) || null);
+          try {
+            const { data: salesManagerData, error: salesManagerError } = await (supabase as any)
+              .from('employees')
+              .select('id, full_name, avatar_url')
+              .eq('id', (orderData as any).sales_manager)
+              .single();
+            
+            if (salesManagerError) {
+              console.error('Error fetching sales manager:', salesManagerError);
+            } else {
+              setSalesManager((salesManagerData as unknown as SalesManager) || null);
+            }
+          } catch (error) {
+            console.error('Error fetching sales manager:', error);
+          }
         }
 
         // Fetch employees for edit dropdown (only Sales Department)
@@ -278,10 +411,14 @@ export default function OrderDetailPage() {
         // Fetch order items
         const { data: itemsData, error: itemsError } = await (supabase as any)
           .from('order_items')
-          .select('*')
+          .select('*, mockup_images, specifications, category_image_url')
           .eq('order_id', id as string);
 
-        if (itemsError) throw itemsError;
+        if (itemsError) {
+          console.error('Error fetching order items:', itemsError);
+          throw itemsError;
+        }
+        
         setOrderItems((itemsData as unknown as OrderItem[]) || []);
 
         // Fetch fabric details for all items
@@ -297,7 +434,10 @@ export default function OrderDetailPage() {
           
           if (fabricsData) {
             const fabricsMap = (fabricsData as any[]).reduce((acc: { [key: string]: Fabric }, fabric: any) => {
-              acc[fabric.id] = fabric as Fabric;
+              acc[fabric.id] = {
+                id: fabric.id,
+                name: fabric.fabric_name  // Map fabric_name to name
+              } as Fabric;
               return acc;
             }, {} as { [key: string]: Fabric });
             setFabrics(fabricsMap);
@@ -322,7 +462,14 @@ export default function OrderDetailPage() {
 
     } catch (error) {
       console.error('Error fetching order details:', error);
-      toast.error('Failed to load order details');
+      
+      // Check if it's a "not found" error
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'PGRST116') {
+        toast.error('Order not found or has been deleted');
+      } else {
+        toast.error('Failed to load order details');
+      }
+      
       handleBackNavigation();
     } finally {
       setLoading(false);
@@ -354,6 +501,29 @@ export default function OrderDetailPage() {
     }
   };
 
+  const fetchTotalReceipts = async () => {
+    try {
+      if (!order?.order_number) return;
+      
+      const { data: receiptsData, error: receiptsError } = await (supabase as any)
+        .from('receipts')
+        .select('amount')
+        .eq('reference_number', order.order_number)
+        .eq('reference_type', 'order');
+
+      if (receiptsError) {
+        console.error('Error fetching receipts:', receiptsError);
+        return;
+      }
+
+      const total = (receiptsData || []).reduce((sum: number, receipt: any) => sum + Number(receipt.amount), 0);
+      setTotalReceipts(total);
+      
+    } catch (error) {
+      console.error('Error calculating total receipts:', error);
+    }
+  };
+
   const handleCancelOrder = async () => {
     if (!order) return;
 
@@ -376,6 +546,27 @@ export default function OrderDetailPage() {
       toast.error('Failed to cancel order');
     } finally {
       setCancellingOrder(false);
+    }
+  };
+
+  const handleStatusChange = async (newStatus: string) => {
+    if (!order) return;
+
+    try {
+      const { error } = await (supabase as any)
+        .from('orders')
+        .update({ status: newStatus as Database['public']['Enums']['order_status'] } as Database['public']['Tables']['orders']['Update'])
+        .eq('id', order.id);
+
+      if (error) throw error;
+
+      toast.success(`Order status changed to ${newStatus.replace('_', ' ').toUpperCase()}`);
+      setOrder({ ...order, status: newStatus });
+      await fetchOrderActivities();
+      
+    } catch (error) {
+      console.error('Error updating order status:', error);
+      toast.error('Failed to update order status');
     }
   };
 
@@ -650,7 +841,13 @@ export default function OrderDetailPage() {
 
   // Email Sharing Functions for Orders
   const EmailSharing = {
-    generateOrderEmail: (customer: any, orderNumber: string, grandTotal: number, orderDate: string, status: string, salesManagerName: string) => {
+    generateOrderEmail: (customer: any, orderNumber: string, grandTotal: number, orderDate: string, status: string, salesManagerName?: string, companyName?: string) => {
+      const companyInfo = companyName ? `\n${companyName}` : '';
+      
+      // Only include sales manager info if we have actual data
+      const salesManagerInfo = salesManagerName ? `• Sales Manager: ${salesManagerName}\n` : '';
+      const signature = salesManagerName ? `${salesManagerName}${companyInfo}` : companyName || 'Sales Team';
+      
       return encodeURIComponent(
         `Dear ${customer.contact_person || customer.company_name},\n\n` +
         `Thank you for your order. Please find below the order details:\n\n` +
@@ -659,11 +856,11 @@ export default function OrderDetailPage() {
         `• Order Date: ${new Date(orderDate).toLocaleDateString('en-IN')}\n` +
         `• Total Amount: ${formatCurrency(grandTotal)}\n` +
         `• Current Status: ${status.replace('_', ' ').toUpperCase()}\n` +
-        `• Sales Manager: ${salesManagerName || 'Sales Team'}\n\n` +
+        `${salesManagerInfo}` +
         `We will keep you updated on the progress of your order.\n\n` +
         `Thank you for choosing us.\n\n` +
         `Best regards,\n` +
-        `${salesManagerName || 'Sales Team'}`
+        `${signature}`
       );
     },
 
@@ -732,7 +929,8 @@ export default function OrderDetailPage() {
       order.final_amount,
       order.order_date,
       order.status,
-      salesManager?.full_name || 'Sales Team'
+      salesManager?.full_name || 'Sales Team',
+      company?.company_name
     );
 
     EmailSharing.openEmail(customer.email, subject, body);
@@ -751,6 +949,12 @@ export default function OrderDetailPage() {
       
       // Then open email with PDF instructions
       const subject = `Order ${order.order_number} - Order Details (PDF Attached)`;
+      const companyInfo = company?.company_name ? `\n${company.company_name}` : '';
+      
+      // Only include sales manager info if we have actual data
+      const salesManagerInfo = salesManager?.full_name ? `• Sales Manager: ${salesManager.full_name}\n` : '';
+      const signature = salesManager?.full_name ? `${salesManager.full_name}${companyInfo}` : company?.company_name || 'Sales Team';
+      
       const body = encodeURIComponent(
         `Dear ${customer.contact_person || customer.company_name},\n\n` +
         `Please find attached the detailed order PDF for your reference.\n\n` +
@@ -758,11 +962,12 @@ export default function OrderDetailPage() {
         `• Order Number: ${order.order_number}\n` +
         `• Total Amount: ${formatCurrency(order.final_amount)}\n` +
         `• Status: ${order.status.replace('_', ' ').toUpperCase()}\n` +
-        `• Date: ${new Date(order.order_date).toLocaleDateString('en-IN')}\n\n` +
+        `• Date: ${new Date(order.order_date).toLocaleDateString('en-IN')}\n` +
+        `${salesManagerInfo}` +
         `Note: The PDF file has been downloaded. Please attach it before sending.\n\n` +
         `Thank you for your business.\n\n` +
         `Best regards,\n` +
-        `${salesManager?.full_name || 'Sales Team'}`
+        `${signature}`
       );
 
       EmailSharing.openEmail(customer.email, subject, body);
@@ -909,14 +1114,54 @@ export default function OrderDetailPage() {
           </div>
           
           <div className="flex items-center space-x-2">
-            <Badge className={getStatusColor(order.status)}>
-              {order.status.replace('_', ' ').toUpperCase()}
-            </Badge>
+            <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-2">
+                <Label htmlFor="status-select" className="text-sm font-medium">Status:</Label>
+                <Select 
+                  value={order.status} 
+                  onValueChange={handleStatusChange}
+                >
+                  <SelectTrigger className="w-48">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="confirmed">Confirmed</SelectItem>
+                    <SelectItem value="designing_done">Designing Done</SelectItem>
+                    <SelectItem value="under_procurement">Under Procurement</SelectItem>
+                    <SelectItem value="in_production">In Production</SelectItem>
+                    <SelectItem value="under_cutting">Under Cutting</SelectItem>
+                    <SelectItem value="under_stitching">Under Stitching</SelectItem>
+                    <SelectItem value="under_qc">Under QC</SelectItem>
+                    <SelectItem value="quality_check">Quality Check</SelectItem>
+                    <SelectItem value="ready_for_dispatch">Ready for Dispatch</SelectItem>
+                    <SelectItem value="rework">Rework</SelectItem>
+                    <SelectItem value="partial_dispatched">Partial Dispatched</SelectItem>
+                    <SelectItem value="dispatched">Dispatched</SelectItem>
+                    <SelectItem value="completed" className="text-green-600 font-semibold">✅ Completed</SelectItem>
+                    <SelectItem value="cancelled" className="text-red-600">Cancelled</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Badge className={getStatusColor(order.status)}>
+                {order.status.replace('_', ' ').toUpperCase()}
+              </Badge>
+            </div>
             
             <div className="flex space-x-2">
               {/* <Button variant="outline" onClick={openEditDialog}>
                 Edit
               </Button> */}
+              
+              {order.status !== 'completed' && order.status !== 'cancelled' && (
+                <Button 
+                  variant="default" 
+                  onClick={() => handleStatusChange('completed')}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  ✅ Mark as Completed
+                </Button>
+              )}
               
               <Button variant="outline" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
@@ -927,6 +1172,41 @@ export default function OrderDetailPage() {
                 <Download className="w-4 h-4 mr-2" />
                 Export PDF
               </Button>
+              
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" className="text-red-600 hover:text-red-700 hover:bg-red-50">
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete Order</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Are you sure you want to delete order #{order.order_number}? This action cannot be undone.
+                    </AlertDialogDescription>
+                    <div className="mt-3">
+                      <p className="text-sm font-medium mb-2">This will permanently delete:</p>
+                      <ul className="list-disc list-inside space-y-1 text-sm">
+                        <li>The order and all its details</li>
+                        <li>All order items and their specifications</li>
+                        <li>Order activities and history</li>
+                        <li>Any customizations associated with this order</li>
+                      </ul>
+                    </div>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction 
+                      onClick={handleDeleteOrder}
+                      className="bg-red-600 hover:bg-red-700"
+                    >
+                      Delete Order
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
 
               {/* Enhanced Email Dropdown */}
               <DropdownMenu>
@@ -1061,159 +1341,55 @@ export default function OrderDetailPage() {
                       };
 
                       return (
-                      <div key={index} className="border rounded-lg p-4 space-y-4">
-                        <div className="flex flex-col xl:flex-row gap-6">
-                          {/* Product Images Section - Better aspect ratio and space utilization */}
-                          <div className="xl:w-2/5 space-y-6">
-                            {/* Category Image with 1.3:1.5 aspect ratio */}
-                            {item.category_image_url && (
-                              <div>
-                                <p className="text-sm font-medium text-muted-foreground mb-3">Category Image:</p>
-                                <div className="aspect-[3/3.5] w-full overflow-hidden rounded-lg border shadow-md">
-                                  <img 
-                                    src={item.category_image_url} 
-                                    alt="Category"
-                                    className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
-                                    onClick={() => {
-                                      const modal = document.createElement('div');
-                                      modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
-                                      modal.innerHTML = `
-                                        <div class="relative max-w-4xl max-h-full">
-                                          <img src="${item.category_image_url}" alt="Category" class="max-w-full max-h-ful object-contain rounded-lg" />
-                                          <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
-                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                              <line x1="18" y1="6" x2="6" y2="18"></line>
-                                              <line x1="6" y1="6" x2="18" y2="18"></line>
-                                            </svg>
-                                          </button>
-       </div>
+                        <div key={index} className="border rounded-lg p-4 space-y-4">
+                          <div className="flex flex-col xl:flex-row gap-6">
+                            {/* Product Images Section - Better aspect ratio and space utilization */}
+                            <div className="xl:w-2/5 space-y-6">
+                              {/* Product Image with priority: mockup > category */}
+                              {(() => {
+                                const displayImage = getOrderItemDisplayImage(item);
+                                const { mockup_images } = extractImagesFromSpecifications(item.specifications);
+                                const hasMockup = (item.mockup_images && item.mockup_images.length > 0) || 
+                                                 (mockup_images && mockup_images.length > 0);
+                                
+                                return displayImage ? (
+                                  <div>
+                                    <p className="text-sm font-medium text-muted-foreground mb-3">
+                                      {hasMockup ? 'Product Image (Mockup)' : 'Category Image'}
+                                    </p>
+                                    <div className="aspect-[3/3.5] w-full overflow-hidden rounded-lg border shadow-md">
+                                      <img 
+                                        src={displayImage} 
+                                        alt={hasMockup ? "Product Mockup" : "Category"}
+                                        className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
+                                        onClick={() => {
+                                          const modal = document.createElement('div');
+                                          modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
+                                          modal.innerHTML = `
+                                            <div class="relative max-w-4xl max-h-full">
+                                              <img src="${displayImage}" alt="${hasMockup ? 'Product Mockup' : 'Category'}" class="max-w-full max-h-full object-contain rounded-lg" />
+                                              <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                                                </svg>
+                                              </button>
+                                            </div>
+                                          `;
+                                          document.body.appendChild(modal);
+                                          modal.onclick = (e) => {
+                                            if (e.target === modal) {
+                                              document.body.removeChild(modal);
+                                            }
+                                          };
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                ) : null;
+                              })()}
 
-      {/* Edit Dialog */}
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-5xl">
-          <DialogHeader>
-            <DialogTitle>Edit Order</DialogTitle>
-          </DialogHeader>
-          {editDraft && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <Label>Order Date</Label>
-                  <Input type="date" value={editDraft.order_date} onChange={e => setEditDraft({ ...editDraft, order_date: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Expected Delivery</Label>
-                  <Input type="date" value={editDraft.expected_delivery_date} onChange={e => setEditDraft({ ...editDraft, expected_delivery_date: e.target.value })} />
-                </div>
-                <div>
-                  <Label>GST Rate (%)</Label>
-                  <Input type="number" value={editDraft.gst_rate} onChange={e => setEditDraft({ ...editDraft, gst_rate: parseFloat(e.target.value) || 0 })} />
-                </div>
-                <div>
-                  <Label>Sales Manager</Label>
-                  <Select value={editDraft.sales_manager || ''} onValueChange={(v) => setEditDraft({ ...editDraft, sales_manager: v || null })}>
-                    <SelectTrigger><SelectValue placeholder="Select manager" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="">None</SelectItem>
-                      {employees.map(emp => (
-                        <SelectItem key={emp.id} value={emp.id}>{emp.full_name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>Payment Method</Label>
-                  <Input value={editDraft.payment_channel || ''} onChange={e => setEditDraft({ ...editDraft, payment_channel: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Reference ID</Label>
-                  <Input value={editDraft.reference_id || ''} onChange={e => setEditDraft({ ...editDraft, reference_id: e.target.value })} />
-                </div>
-                <div className="md:col-span-3">
-                  <Label>Notes</Label>
-                  <Input value={editDraft.notes || ''} onChange={e => setEditDraft({ ...editDraft, notes: e.target.value })} />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <h3 className="font-semibold">Items</h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full border">
-                    <thead className="bg-muted/50 text-sm">
-                      <tr>
-                        <th className="p-2 border text-left">Product</th>
-                        <th className="p-2 border">Qty</th>
-                        <th className="p-2 border">Unit Price</th>
-                        <th className="p-2 border">GST %</th>
-                        <th className="p-2 border">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {editItems.map((it, idx) => {
-                        const amount = it.quantity * it.unit_price;
-                        return (
-                          <tr key={it.id} className="text-sm">
-                            <td className="p-2 border text-left">{it.product_description}</td>
-                            <td className="p-2 border w-24">
-                              <Input type="number" value={it.quantity} onChange={e => {
-                                const v = parseInt(e.target.value) || 0;
-                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, quantity: v } : p));
-                              }} />
-                            </td>
-                            <td className="p-2 border w-32">
-                              <Input type="number" value={it.unit_price} onChange={e => {
-                                const v = parseFloat(e.target.value) || 0;
-                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, unit_price: v } : p));
-                              }} />
-                            </td>
-                            <td className="p-2 border w-24">
-                              <Input type="number" value={it.gst_rate} onChange={e => {
-                                const v = parseFloat(e.target.value) || 0;
-                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, gst_rate: v } : p));
-                              }} />
-                            </td>
-                            <td className="p-2 border text-right">{formatCurrency(amount)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                {(() => {
-                  const { subtotal, gstTotal, grandTotal } = computeDraftTotals();
-                  return (
-                    <div className="text-right space-y-1 text-sm">
-                      <div>Subtotal: {formatCurrency(subtotal)}</div>
-                      <div>GST Total: {formatCurrency(gstTotal)}</div>
-                      <div className="font-semibold">Grand Total: {formatCurrency(grandTotal)}</div>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline" disabled={savingEdit}>Cancel</Button>
-            </DialogClose>
-            <Button onClick={handleSaveEdit} disabled={savingEdit}>{savingEdit ? 'Saving...' : 'Save Changes'}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-                                      `;
-                                      modal.onclick = (e) => {
-                                        if (e.target === modal) {
-                                          document.body.removeChild(modal);
-                                        }
-                                      };
-                                      document.body.appendChild(modal);
-                                    }}
-                                  />
-                                </div>
-                              </div>
-                            )}
-
-                                                         {/* Mockup Images - Amazon Style Layout */}
+                            {/* Mockup Images - Amazon Style Layout */}
                              
 
                             {/* Attachments */}
@@ -1250,12 +1426,12 @@ export default function OrderDetailPage() {
                                 </div>
                               ) : null;
                             })()}
-                          </div>
+                            </div>
 
-                           {/* Product Details Section */}
-                          <div className="xl:w-3/5 space-y-4">
-                            <div className="flex justify-between items-start">
-                              <div className="flex-1 space-y-4">
+                            {/* Product Details Section */}
+                            <div className="xl:w-3/5 space-y-4">
+                              <div className="flex justify-between items-start">
+                                <div className="flex-1 space-y-4">
                                 {/* Product Category Name */}
                                 {productCategories[item.product_category_id] && (
                                   <p className="text-sm font-medium text-muted-foreground">
@@ -1379,7 +1555,62 @@ export default function OrderDetailPage() {
                                   }
                                 })()}
                                 
-                                                                 {item.remarks && (
+                                {/* Customizations */}
+                                {item.specifications && (() => {
+                                  try {
+                                    const parsed = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
+                                    const customizations = parsed.customizations || [];
+                                    
+                                    return customizations.length > 0 ? (
+                                      <div>
+                                        <p className="text-sm font-medium text-muted-foreground mb-3">Customizations:</p>
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                                          {customizations.map((customization: any, idx: number) => (
+                                            <div key={idx} className="relative p-2 border rounded-lg bg-gray-50 min-w-0">
+                                              <div className="pr-6 flex items-start gap-2">
+                                                {customization.selectedAddonImageUrl && (
+                                                  <img 
+                                                    src={customization.selectedAddonImageUrl} 
+                                                    alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
+                                                    className="w-8 h-8 object-cover rounded border flex-shrink-0"
+                                                    onError={(e) => {
+                                                      e.currentTarget.style.display = 'none';
+                                                    }}
+                                                  />
+                                                )}
+                                                <div className="flex-1 min-w-0">
+                                                  <div className="font-medium text-xs truncate" title={customization.partName}>
+                                                    {customization.partName}
+                                                  </div>
+                                                  {customization.partType === 'dropdown' && (
+                                                    <div className="text-xs text-muted-foreground truncate" title={customization.selectedAddonName}>
+                                                      {customization.selectedAddonName}
+                                                    </div>
+                                                  )}
+                                                  {customization.partType === 'number' && (
+                                                    <div className="text-xs text-muted-foreground">
+                                                      Qty: {customization.quantity}
+                                                    </div>
+                                                  )}
+                                                  {customization.priceImpact && customization.priceImpact !== 0 && (
+                                                    <div className="text-xs font-medium text-green-600">
+                                                      ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : null;
+                                  } catch (error) {
+                                    console.error('Error parsing customizations:', error);
+                                    return null;
+                                  }
+                                })()}
+                                
+                                {item.remarks && (
                                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
                                      <p className="text-sm">
                                        <span className="font-semibold text-amber-800">Remarks:</span>
@@ -1387,120 +1618,116 @@ export default function OrderDetailPage() {
                                      </p>
                                    </div>
                                  )}
-                               </div>
-                             </div>
-                           </div>
-                         </div>
-                         <div className="flex flex-nowrap justify-center gap-6">
-  {(() => {
-    const { mockup_images, reference_images } = extractImagesFromSpecifications(item.specifications);
+                                </div>
+                              </div>
+                              <div className="flex flex-nowrap justify-center gap-6">
+                              {(() => {
+                                const { mockup_images, reference_images } = extractImagesFromSpecifications(item.specifications);
 
-    // First column: either Mockup or Reference (if Mockup missing)
-    const firstBlock = mockup_images && mockup_images.length > 0
-      ? {
-          title: "Mockup Images",
-          images: mockup_images,
-          selected: selectedMockupImages,
-          setSelected: setSelectedMockupImages
-        }
-      : reference_images && reference_images.length > 0
-        ? {
-            title: "Reference Images",
-            images: reference_images,
-            selected: selectedReferenceImages,
-            setSelected: setSelectedReferenceImages
-          }
-        : null;
+                                // First column: either Mockup or Reference (if Mockup missing)
+                                const firstBlock = mockup_images && mockup_images.length > 0
+                                  ? {
+                                      title: "Mockup Images",
+                                      images: mockup_images,
+                                      selected: selectedMockupImages,
+                                      setSelected: setSelectedMockupImages
+                                    }
+                                  : reference_images && reference_images.length > 0
+                                    ? {
+                                        title: "Reference Images",
+                                        images: reference_images,
+                                        selected: selectedReferenceImages,
+                                        setSelected: setSelectedReferenceImages
+                                      }
+                                    : null;
 
-    // Second column: only shown if both types are available
-    const secondBlock =
-      mockup_images && mockup_images.length > 0 && reference_images && reference_images.length > 0
-        ? {
-            title: "Reference Images",
-            images: reference_images,
-            selected: selectedReferenceImages,
-            setSelected: setSelectedReferenceImages
-          }
-        : null;
+                                // Second column: only shown if both types are available
+                                const secondBlock =
+                                  mockup_images && mockup_images.length > 0 && reference_images && reference_images.length > 0
+                                    ? {
+                                        title: "Reference Images",
+                                        images: reference_images,
+                                        selected: selectedReferenceImages,
+                                        setSelected: setSelectedReferenceImages
+                                      }
+                                    : null;
 
-    // Render a block
-    const renderImageBlock = (block: any, blockIndex: number) => (
-      <div key={blockIndex} className="flex-none w-[40%] ">
-        <p className="text-sm font-medium text-muted-foreground mb-3 justify-content-center">{block.title}:</p>
-        <div className="space-y-3">
-          {/* Main large image */}
-          <div className="aspect-square w-full overflow-hidden rounded-lg border shadow-md">
-            <img
-              src={block.images[block.selected[index] || 0]}
-              alt={block.title}
-              className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
-              onClick={() => {
-                const currentImage = block.images[block.selected[index] || 0];
-                const modal = document.createElement('div');
-                modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
-                modal.innerHTML = `
-                  <div class="relative max-w-4xl max-h-full">
-                    <img src="${currentImage}" alt="${block.title}" class="max-w-full max-h-full object-contain rounded-lg" />
-                    <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                      </svg>
-                    </button>
-                  </div>
-                `;
-                modal.onclick = (e) => { if (e.target === modal) document.body.removeChild(modal); };
-                document.body.appendChild(modal);
-              }}
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-            />
-          </div>
+                                // Render a block
+                                const renderImageBlock = (block: any, blockIndex: number) => (
+                                  <div key={blockIndex} className="flex-none w-[40%] ">
+                                    <p className="text-sm font-medium text-muted-foreground mb-3 justify-content-center">{block.title}:</p>
+                                    <div className="space-y-3">
+                                      {/* Main large image */}
+                                      <div className="aspect-square w-full overflow-hidden rounded-lg border shadow-md">
+                                        <img
+                                          src={block.images[block.selected[index] || 0]}
+                                          alt={block.title}
+                                          className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
+                                          onClick={() => {
+                                            const currentImage = block.images[block.selected[index] || 0];
+                                            const modal = document.createElement('div');
+                                            modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
+                                            modal.innerHTML = `
+                                              <div class="relative max-w-4xl max-h-full">
+                                                <img src="${currentImage}" alt="${block.title}" class="max-w-full max-h-full object-contain rounded-lg" />
+                                                <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
+                                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                                  </svg>
+                                                </button>
+                                              </div>
+                                            `;
+                                            modal.onclick = (e) => { if (e.target === modal) document.body.removeChild(modal); };
+                                            document.body.appendChild(modal);
+                                          }}
+                                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                        />
+                                      </div>
 
-          {/* Thumbnails */}
-          {block.images.length > 1 && (
-            <div className="grid grid-cols-4 gap-2">
-              {block.images.map((url: string, idx: number) => (
-                <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm relative group">
-                  <img
-                    src={url}
-                    alt={`${block.title} ${idx + 1}`}
-                    className={`w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300 ${
-                      (block.selected[index] || 0) === idx ? 'ring-2 ring-primary' : ''
-                    }`}
-                    onClick={() => {
-                      block.setSelected(prev => ({ ...prev, [index]: idx }));
-                    }}
-                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                  />
-                  <button
-                    className="absolute top-1 right-1 hidden group-hover:block bg-white/90 hover:bg-white rounded px-1 text-[10px]"
-                    onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); handleRemoveImage(item.id, block.title.includes('Mockup') ? 'mockup' : 'reference', url); }}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+                                      {/* Thumbnails */}
+                                      {block.images.length > 1 && (
+                                        <div className="grid grid-cols-4 gap-2">
+                                          {block.images.map((url: string, idx: number) => (
+                                            <div key={idx} className="aspect-square overflow-hidden rounded-lg border shadow-sm relative group">
+                                              <img
+                                                src={url}
+                                                alt={`${block.title} ${idx + 1}`}
+                                                className={`w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-300 ${
+                                                  (block.selected[index] || 0) === idx ? 'ring-2 ring-primary' : ''
+                                                }`}
+                                                onClick={() => {
+                                                  block.setSelected(prev => ({ ...prev, [index]: idx }));
+                                                }}
+                                                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                              />
+                                              <button
+                                                className="absolute top-1 right-1 hidden group-hover:block bg-white/90 hover:bg-white rounded px-1 text-[10px]"
+                                                onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); handleRemoveImage(item.id, block.title.includes('Mockup') ? 'mockup' : 'reference', url); }}
+                                              >
+                                                Remove
+                                              </button>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
 
-      
-    );
-
-    return (
-      <>
-        {firstBlock && renderImageBlock(firstBlock, 1)}
-        {secondBlock && renderImageBlock(secondBlock, 2)}
-      </>
-    );
-  })()}
-</div>
-
-
-                       </div>
-                       );
-                     })}
+                                return (
+                                  <>
+                                    {firstBlock && renderImageBlock(firstBlock, 1)}
+                                    {secondBlock && renderImageBlock(secondBlock, 2)}
+                                  </>
+                                );
+                              })()}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                    </div>
                  </CardContent>
                </Card>
@@ -1518,6 +1745,8 @@ export default function OrderDetailPage() {
                            <tr className="bg-gray-100">
                              <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Image</th>
                              <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Name</th>
+                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Customizations</th>
+                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Remarks</th>
                              <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Total Qty</th>
                              <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Price</th>
                              <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Amount</th>
@@ -1538,23 +1767,80 @@ export default function OrderDetailPage() {
                              return (
                                <tr key={index} className="hover:bg-gray-50">
                                  <td className="border border-gray-300 px-3 py-2">
-                                   {item.category_image_url && (
-                                     <img
-                                       src={item.category_image_url}
-                                       alt="Product"
-                                       className="w-20 h-20 object-cover rounded"
-                                     />
-                                   )}
+                                   {(() => {
+                                     const displayImage = getOrderItemDisplayImage(item);
+                                     return displayImage ? (
+                                       <img
+                                         src={displayImage}
+                                         alt="Product"
+                                         className="w-20 h-20 object-cover rounded"
+                                       />
+                                     ) : null;
+                                   })()}
                                  </td>
                                  <td className="border border-gray-300 px-3 py-2">
                                    <div className="text-sm">
+                                     <div className="text-gray-600 text-xs font-medium">
+                                       {fabrics[item.fabric_id]?.name} - {item.color}, {item.gsm} GSM
+                                     </div>
                                      <div className="font-medium">{item.product_description}</div>
                                      <div className="text-gray-600 text-xs">
                                        {productCategories[item.product_category_id]?.category_name}
                                      </div>
-                                     <div className="text-gray-600 text-xs">
-                                       {fabrics[item.fabric_id]?.name} - {item.color}, {item.gsm} GSM
-                                     </div>
+                                   </div>
+                                 </td>
+                                 <td className="border border-gray-300 px-3 py-2 text-sm">
+                                   <div className="max-w-xs">
+                                     {(() => {
+                                       try {
+                                         const parsed = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
+                                         const customizations = parsed.customizations || [];
+                                         
+                                         if (customizations.length === 0) {
+                                           return <span className="text-gray-500">-</span>;
+                                         }
+                                         
+                                         return (
+                                           <div className="space-y-1">
+                                             {customizations.slice(0, 3).map((customization: any, idx: number) => (
+                                               <div key={idx} className="text-xs bg-gray-100 rounded px-2 py-1 flex items-start gap-2">
+                                                 {customization.selectedAddonImageUrl && (
+                                                   <img 
+                                                     src={customization.selectedAddonImageUrl} 
+                                                     alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
+                                                     className="w-6 h-6 object-cover rounded border flex-shrink-0"
+                                                     onError={(e) => {
+                                                       e.currentTarget.style.display = 'none';
+                                                     }}
+                                                   />
+                                                 )}
+                                                 <div className="flex-1 min-w-0">
+                                                   <div className="font-medium truncate">{customization.partName}</div>
+                                                   {customization.partType === 'dropdown' && (
+                                                     <div className="text-gray-600 truncate">{customization.selectedAddonName}</div>
+                                                   )}
+                                                   {customization.partType === 'number' && (
+                                                     <div className="text-gray-600">Qty: {customization.quantity}</div>
+                                                   )}
+                                                 </div>
+                                               </div>
+                                             ))}
+                                             {customizations.length > 3 && (
+                                               <div className="text-xs text-gray-500">+{customizations.length - 3} more</div>
+                                             )}
+                                           </div>
+                                         );
+                                       } catch (error) {
+                                         return <span className="text-gray-500">-</span>;
+                                       }
+                                     })()}
+                                   </div>
+                                 </td>
+                                 <td className="border border-gray-300 px-3 py-2 text-sm">
+                                   <div className="max-w-xs">
+                                     <span className="text-sm text-gray-700 break-words">
+                                       {item.remarks || '-'}
+                                     </span>
                                    </div>
                                  </td>
                                  <td className="border border-gray-300 px-3 py-2 text-sm">
@@ -1635,7 +1921,20 @@ export default function OrderDetailPage() {
                   {salesManager && (
                     <div>
                       <p className="text-sm text-muted-foreground">Sales Manager</p>
-                      <p className="font-medium">{salesManager.full_name}</p>
+                      <div className="flex items-center gap-2">
+                        {salesManager.avatar_url ? (
+                          <img
+                            src={salesManager.avatar_url}
+                            alt={salesManager.full_name}
+                            className="w-8 h-8 rounded-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                            <User className="w-4 h-4 text-primary" />
+                          </div>
+                        )}
+                        <p className="font-medium">{salesManager.full_name}</p>
+                      </div>
                     </div>
                   )}
                   {order.notes && (
@@ -1696,35 +1995,84 @@ export default function OrderDetailPage() {
                     <span>Subtotal</span>
                     <span>{formatCurrency(order.total_amount)}</span>
                   </div>
+                  {(() => {
+                    const gstBreakdown = calculateGSTRatesBreakdown(orderItems, order);
+                    if (gstBreakdown.length === 0) {
+                      return (
+                        <div className="flex justify-between">
+                          <span>GST (0%)</span>
+                          <span>{formatCurrency(0)}</span>
+                        </div>
+                      );
+                    } else if (gstBreakdown.length === 1) {
+                      return (
+                        <div className="flex justify-between">
+                          <span>GST ({gstBreakdown[0].rate}%)</span>
+                          <span>{formatCurrency(gstBreakdown[0].amount)}</span>
+                        </div>
+                      );
+                    } else {
+                      return (
+                        <div className="space-y-1">
+                          {gstBreakdown.map((gst, index) => (
+                            <div key={index} className="flex justify-between text-sm">
+                              <span>GST ({gst.rate}%)</span>
+                              <span>{formatCurrency(gst.amount)}</span>
+                            </div>
+                          ))}
+                          <div className="flex justify-between font-medium border-t pt-1">
+                            <span>Total GST</span>
+                            <span>{formatCurrency(gstBreakdown.reduce((sum, gst) => sum + gst.amount, 0))}</span>
+                          </div>
+                        </div>
+                      );
+                    }
+                  })()}
                   <div className="flex justify-between">
-                    <span>GST ({order.gst_rate}%)</span>
-                    <span>{formatCurrency(order.tax_amount)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Advance Paid</span>
-                    <span className="text-green-600">{formatCurrency(order.advance_amount)}</span>
+                    <span>Amount Paid</span>
+                    <span className="text-green-600">{formatCurrency(totalReceipts)}</span>
                   </div>
                   <hr />
                   <div className="flex justify-between font-bold text-lg">
                     <span>Total Amount</span>
-                    <span>{formatCurrency(order.final_amount)}</span>
+                    <span>{formatCurrency(calculateOrderSummary(orderItems, order).grandTotal)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Balance Due</span>
-                    <span className={order.balance_amount > 0 ? "text-orange-600" : "text-green-600"}>
-                      {formatCurrency(order.balance_amount)}
+                    <span className={(() => {
+                      const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
+                      const balance = calculatedTotal - totalReceipts;
+                      return balance > 0 ? "text-orange-600" : "text-green-600";
+                    })()}>
+                      {formatCurrency(calculateOrderSummary(orderItems, order).grandTotal - totalReceipts)}
                     </span>
                   </div>
                   
-                  {order.balance_amount > 0 && (
+                  {(() => {
+                    const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
+                    const balance = calculatedTotal - totalReceipts;
+                    return balance > 0;
+                  })() && (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
                       className="w-full mt-2"
-                      onClick={() => setPaymentDialogOpen(true)}
+                      onClick={() => navigate('/accounts/receipts', { 
+                        state: { 
+                          prefill: { 
+                            type: 'order', 
+                            id: order.id, 
+                            number: order.order_number, 
+                            date: order.order_date, 
+                            customer_id: order.customer_id, 
+                            amount: calculateOrderSummary(orderItems, order).grandTotal - totalReceipts 
+                          }, 
+                          tab: 'create' 
+                        } 
+                      })}
                     >
-                      💳 Record Payment
+                      💳 Create Receipt
                     </Button>
                   )}
                   
@@ -2022,19 +2370,120 @@ export default function OrderDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Edit Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Edit Order</DialogTitle>
+          </DialogHeader>
+          {editDraft && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <Label>Order Date</Label>
+                  <Input type="date" value={editDraft.order_date} onChange={e => setEditDraft({ ...editDraft, order_date: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Expected Delivery</Label>
+                  <Input type="date" value={editDraft.expected_delivery_date} onChange={e => setEditDraft({ ...editDraft, expected_delivery_date: e.target.value })} />
+                </div>
+                <div>
+                  <Label>GST Rate (%)</Label>
+                  <Input type="number" value={editDraft.gst_rate} onChange={e => setEditDraft({ ...editDraft, gst_rate: parseFloat(e.target.value) || 0 })} />
+                </div>
+                <div>
+                  <Label>Sales Manager</Label>
+                  <Select value={editDraft.sales_manager || ''} onValueChange={(v) => setEditDraft({ ...editDraft, sales_manager: v || null })}>
+                    <SelectTrigger><SelectValue placeholder="Select manager" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None</SelectItem>
+                      {employees.map(emp => (
+                        <SelectItem key={emp.id} value={emp.id}>{emp.full_name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Payment Method</Label>
+                  <Input value={editDraft.payment_channel || ''} onChange={e => setEditDraft({ ...editDraft, payment_channel: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Reference ID</Label>
+                  <Input value={editDraft.reference_id || ''} onChange={e => setEditDraft({ ...editDraft, reference_id: e.target.value })} />
+                </div>
+                <div className="md:col-span-3">
+                  <Label>Notes</Label>
+                  <Input value={editDraft.notes || ''} onChange={e => setEditDraft({ ...editDraft, notes: e.target.value })} />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h3 className="font-semibold">Items</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full border">
+                    <thead className="bg-muted/50 text-sm">
+                      <tr>
+                        <th className="p-2 border text-left">Product</th>
+                        <th className="p-2 border">Qty</th>
+                        <th className="p-2 border">Unit Price</th>
+                        <th className="p-2 border">GST %</th>
+                        <th className="p-2 border">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editItems.map((it, idx) => {
+                        const amount = it.quantity * it.unit_price;
+                        return (
+                          <tr key={it.id} className="text-sm">
+                            <td className="p-2 border text-left">{it.product_description}</td>
+                            <td className="p-2 border w-24">
+                              <Input type="number" value={it.quantity} onChange={e => {
+                                const v = parseInt(e.target.value) || 0;
+                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, quantity: v } : p));
+                              }} />
+                            </td>
+                            <td className="p-2 border w-32">
+                              <Input type="number" value={it.unit_price} onChange={e => {
+                                const v = parseFloat(e.target.value) || 0;
+                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, unit_price: v } : p));
+                              }} />
+                            </td>
+                            <td className="p-2 border w-24">
+                              <Input type="number" value={it.gst_rate} onChange={e => {
+                                const v = parseFloat(e.target.value) || 0;
+                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, gst_rate: v } : p));
+                              }} />
+                            </td>
+                            <td className="p-2 border text-right">{formatCurrency(amount)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {(() => {
+                  const { subtotal, gstTotal, grandTotal } = computeDraftTotals();
+                  return (
+                    <div className="text-right space-y-1 text-sm">
+                      <div>Subtotal: {formatCurrency(subtotal)}</div>
+                      <div>GST Total: {formatCurrency(gstTotal)}</div>
+                      <div className="font-semibold">Grand Total: {formatCurrency(grandTotal)}</div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={savingEdit}>Cancel</Button>
+            </DialogClose>
+            <Button onClick={handleSaveEdit} disabled={savingEdit}>{savingEdit ? 'Saving...' : 'Save Changes'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
-      {/* Payment Record Dialog */}
-      <PaymentRecordDialog
-        open={paymentDialogOpen}
-        onOpenChange={setPaymentDialogOpen}
-        orderId={order.id}
-        orderNumber={order.order_number}
-        balanceAmount={order.balance_amount}
-        onPaymentRecorded={() => {
-          fetchOrderDetails();
-          fetchOrderActivities();
-        }}
-      />
     </ErpLayout>
   );
 }

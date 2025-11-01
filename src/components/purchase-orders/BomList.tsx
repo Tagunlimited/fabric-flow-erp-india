@@ -7,8 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Badge } from '../ui/badge';
-import { Search, Eye, Edit, FileText, Plus } from 'lucide-react';
+import { Search, Eye, Edit, FileText, Plus, Users, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
 import { BomDisplayCard } from './BomDisplayCard';
+import { BomToPOWizardDialog } from './BomToPOWizardDialog';
+import { getBomCompletionStatus } from '@/services/bomPOTracking';
 import { toast } from 'sonner';
 
 interface BomRecord {
@@ -25,20 +27,41 @@ interface BomRecord {
     };
   };
   bom_items?: any[];
+  bom_record_items?: any[];
+  has_purchase_order?: boolean; // Track if PO already exists
+  completionStatus?: {
+    totalItems: number;
+    orderedItems: number;
+    completionPercentage: number;
+    status: 'not_started' | 'in_progress' | 'completed';
+  };
 }
 
-export function BomList() {
+interface BomListProps {
+  refreshTrigger?: number;
+}
+
+export function BomList({ refreshTrigger }: BomListProps) {
   const navigate = useNavigate();
   const [boms, setBoms] = useState<BomRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBom, setSelectedBom] = useState<BomRecord | null>(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
+  const [wizardDialogOpen, setWizardDialogOpen] = useState(false);
   const [processedBomItems, setProcessedBomItems] = useState<any[]>([]);
+  const [recentlyCreatedPOs, setRecentlyCreatedPOs] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchBoms();
   }, []);
+
+  // Refresh when refreshTrigger changes
+  useEffect(() => {
+    if (refreshTrigger) {
+      fetchBoms();
+    }
+  }, [refreshTrigger]);
 
   const fetchBoms = async () => {
     try {
@@ -51,7 +74,7 @@ export function BomList() {
             order_number,
             customer:customers(company_name)
           ),
-          bom_items:bom_record_items(*)
+          bom_record_items(*)
         `)
         .order('created_at', { ascending: false });
 
@@ -61,10 +84,94 @@ export function BomList() {
         return;
       }
 
-      console.log('Fetched BOMs:', data);
+      console.log('=== BOM FETCH DEBUG ===');
+      console.log('Raw data from Supabase:', data);
+      console.log('Number of BOMs fetched:', data?.length || 0);
+      console.log('Data type:', typeof data);
+      console.log('Is array:', Array.isArray(data));
       console.log('First BOM data structure:', data?.[0]);
-      console.log('BOM number field:', data?.[0]?.bom_number);
-      setBoms(data || []);
+      console.log('All BOM IDs:', (data as any)?.map((bom: any) => bom.id));
+      console.log('All BOM Numbers:', (data as any)?.map((bom: any) => bom.bom_number));
+      console.log('========================');
+
+      // Check which BOMs already have purchase orders
+      const bomIds = ((data as any) || []).map((bom: any) => bom.id);
+      console.log('Checking for POs for BOM IDs:', bomIds);
+      console.log('BOM details being checked:', ((data as any) || []).map((bom: any) => ({
+        id: bom.id,
+        bom_number: bom.bom_number,
+        product_name: bom.product_name,
+        order_id: bom.order_id,
+        order_number: (bom as any).order?.order_number,
+        order_data: (bom as any).order
+      })));
+      
+      // Log the full order relationship for debugging
+      if (data && data.length > 0) {
+        console.log('Full order relationship data:', (data[0] as any).order);
+      }
+      
+      const { data: existingPOs, error: poError } = await supabase
+        .from('purchase_orders')
+        .select('bom_id, po_number, created_at')
+        .in('bom_id', bomIds)
+        .not('bom_id', 'is', null);
+
+      if (poError) {
+        console.error('Error fetching purchase orders:', poError);
+      }
+
+      console.log('Existing POs found:', existingPOs);
+      console.log('Number of POs found:', existingPOs?.length || 0);
+      
+      // Log detailed PO information
+      if (existingPOs && existingPOs.length > 0) {
+        console.log('Detailed PO information:');
+        existingPOs.forEach((po: any, index: number) => {
+          console.log(`PO ${index + 1}:`, {
+            id: po.id,
+            bom_id: po.bom_id,
+            po_number: po.po_number,
+            created_at: po.created_at
+          });
+        });
+        
+        // Check if these POs actually belong to this BOM
+        console.log('=== BOM-PO RELATIONSHIP CHECK ===');
+        console.log('Current BOM ID:', bomIds[0]);
+        console.log('POs found for this BOM:');
+        existingPOs.forEach((po: any) => {
+          const belongsToThisBom = po.bom_id === bomIds[0];
+          console.log(`PO ${po.po_number}: bom_id=${po.bom_id}, belongs_to_this_bom=${belongsToThisBom}`);
+        });
+        console.log('================================');
+      }
+
+      // Allow multiple POs per BOM - don't disable button based on existing POs
+      // This allows users to create multiple purchase orders for the same BOM
+      const validPOs = (existingPOs || []).filter((po: any) => bomIds.includes(po.bom_id));
+      const bomIdsWithPO = new Set(); // Empty set - don't disable any buttons
+      
+      console.log('Valid POs for current BOMs:', validPOs.length);
+      console.log('BOM IDs with valid POs:', Array.from(bomIdsWithPO));
+      console.log('Allowing multiple POs per BOM - buttons will remain enabled');
+
+      // Mark BOMs that already have purchase orders and load completion status
+      const bomsWithPOStatus = await Promise.all((data || []).map(async (bom) => {
+        const completionStatus = await getBomCompletionStatus(bom.id);
+        return {
+          ...bom,
+          has_purchase_order: bomIdsWithPO.has(bom.id),
+          completionStatus
+        };
+      }));
+
+      console.log('Final BOMs with PO status:', bomsWithPOStatus.map((bom: any) => ({
+        bom_number: bom.bom_number,
+        has_purchase_order: bom.has_purchase_order
+      })));
+
+      setBoms(bomsWithPOStatus as any);
     } catch (error) {
       console.error('Error:', error);
       toast.error('Failed to fetch BOMs');
@@ -119,8 +226,8 @@ export function BomList() {
                 .single();
             }
             
-            if (!fabricResult.error && fabricResult.data?.image) {
-              imageUrl = fabricResult.data.image;
+            if (!fabricResult.error && (fabricResult.data as any)?.image) {
+              imageUrl = (fabricResult.data as any).image;
               console.log('Found fabric image:', imageUrl);
             } else {
               console.log('No fabric image found:', fabricResult.error);
@@ -139,8 +246,8 @@ export function BomList() {
               .eq('id', item.item_id)
               .single();
             
-            if (!itemResult.error && (itemResult.data?.image || itemResult.data?.image_url)) {
-              imageUrl = itemResult.data.image || itemResult.data.image_url;
+            if (!itemResult.error && ((itemResult.data as any)?.image || (itemResult.data as any)?.image_url)) {
+              imageUrl = (itemResult.data as any).image || (itemResult.data as any).image_url;
               console.log('Found item image:', imageUrl);
             } else {
               console.log('No item image found:', itemResult.error);
@@ -169,13 +276,13 @@ export function BomList() {
   const viewBomDetails = async (bom: BomRecord) => {
     console.log('Opening BOM Details for:', bom);
     console.log('BOM Items:', bom.bom_items);
-    console.log('BOM Items Length:', bom.bom_items?.length || 0);
+    console.log('BOM Items Length:', bom.bom_record_items?.length || 0);
     console.log('BOM ID:', bom.id);
     console.log('BOM Product Name:', bom.product_name);
     
-    if (bom.bom_items && bom.bom_items.length > 0) {
-      console.log('First BOM item:', bom.bom_items[0]);
-      console.log('All BOM items:', bom.bom_items.map(item => ({
+    if (bom.bom_record_items && bom.bom_record_items.length > 0) {
+      console.log('First BOM item:', bom.bom_record_items[0]);
+      console.log('All BOM items:', bom.bom_record_items.map(item => ({
         id: item.id,
         item_name: item.item_name,
         category: item.category,
@@ -189,7 +296,7 @@ export function BomList() {
     setDetailDialogOpen(true);
     
     // Process BOM items with images
-    await processBomItemsWithImages(bom.bom_items || []);
+    await processBomItemsWithImages(bom.bom_record_items || []);
   };
 
   const editBom = (bom: BomRecord) => {
@@ -198,10 +305,27 @@ export function BomList() {
 
   const createPurchaseOrderFromBom = async (bom: BomRecord) => {
     console.log('Creating PO from BOM:', bom);
-    console.log('BOM items to process:', bom.bom_items);
+    console.log('BOM items to process:', bom.bom_record_items);
+    console.log('BOM has_purchase_order status:', bom.has_purchase_order);
+    
+    // Double-check if this specific BOM actually has a PO
+    const { data: specificPOs, error: specificPOError } = await supabase
+      .from('purchase_orders')
+      .select('id, po_number, created_at')
+        .eq('bom_id', bom.id as any);
+    
+    console.log('Specific POs for this BOM:', specificPOs);
+    console.log('Specific PO count:', specificPOs?.length || 0);
+    
+    if (specificPOs && specificPOs.length > 0) {
+      console.warn('This BOM already has POs, but allowing creation of additional POs');
+      console.log('Existing POs:', specificPOs);
+      console.log('Creating additional PO for same BOM - this is allowed');
+      // Don't return - allow creation of additional POs
+    }
     
     // Process BOM items with images for PO creation
-    const bomItems = bom.bom_items || [];
+    const bomItems = bom.bom_record_items || [];
     console.log('Raw BOM items:', bomItems);
     console.log('BOM items detailed:', bomItems.map((item: any) => ({
       id: item.id,
@@ -229,7 +353,6 @@ export function BomList() {
         item_name: item.item_name,
         qty_total: item.qty_total,
         to_order: item.to_order,
-        item_type: item.item_type,
         category: item.category,
         fabric_name: item.fabric_name,
         has_item_id: !!item.item_id,
@@ -267,7 +390,7 @@ export function BomList() {
         } else {
           // Fetch image from fabric_master or item_master
           try {
-            if (item.item_type === 'fabric' || item.category === 'Fabric') {
+            if (item.category === 'Fabric') {
               // For fabric items, use fabric_name, fabric_color, fabric_gsm to find the fabric
               const { data: fabricData } = await supabase
                 .from('fabric_master')
@@ -276,7 +399,7 @@ export function BomList() {
                 .eq('color', item.fabric_color || '')
                 .eq('gsm', item.fabric_gsm || '')
                 .single();
-              imageUrl = fabricData?.image || null;
+              imageUrl = (fabricData as any)?.image || null;
               
               // If not found with exact match, try just fabric name
               if (!imageUrl && item.fabric_name) {
@@ -285,7 +408,7 @@ export function BomList() {
                   .select('image')
                   .eq('fabric_name', item.fabric_name)
                   .single();
-                imageUrl = fabricData2?.image || null;
+                imageUrl = (fabricData2 as any)?.image || null;
               }
             } else {
               const { data: itemData } = await supabase
@@ -293,7 +416,7 @@ export function BomList() {
                 .select('image_url, image')
                 .eq('id', item.item_id)
                 .single();
-              imageUrl = itemData?.image_url || itemData?.image || null;
+              imageUrl = (itemData as any)?.image_url || (itemData as any)?.image || null;
             }
           } catch (error) {
             console.warn('Failed to fetch image for item:', item.item_name || item.fabric_name, error);
@@ -320,7 +443,54 @@ export function BomList() {
     console.log('BOM payload for PO:', bomPayload);
 
     const encoded = encodeURIComponent(JSON.stringify(bomPayload));
+    console.log('Navigating to PO form with BOM data');
+    
+    // Mark this BOM as having a PO created in this session
+    setRecentlyCreatedPOs(prev => new Set([...prev, bom.id]));
+    
     navigate(`/procurement/po/new?bom=${encoded}`);
+  };
+
+  const openMultiSupplierWizard = (bom: BomRecord) => {
+    setSelectedBom(bom);
+    setWizardDialogOpen(true);
+  };
+
+  const handleWizardComplete = (createdPOs: string[]) => {
+    setWizardDialogOpen(false);
+    setSelectedBom(null);
+    // Refresh the BOM list to show updated status
+    fetchBoms();
+    toast.success(`Successfully created ${createdPOs.length} purchase order${createdPOs.length !== 1 ? 's' : ''}`);
+  };
+
+  const getStatusBadge = (bom: BomRecord) => {
+    if (!bom.completionStatus) return null;
+    
+    const { status, completionPercentage } = bom.completionStatus;
+    
+    if (status === 'completed') {
+      return (
+        <Badge variant="default" className="bg-green-600 hover:bg-green-700 text-white">
+          <CheckCircle2 className="w-3 h-3 mr-1" />
+          Complete
+        </Badge>
+      );
+    } else if (status === 'in_progress') {
+      return (
+        <Badge variant="secondary" className="bg-orange-100 text-orange-800 border-orange-300">
+          <Clock className="w-3 h-3 mr-1" />
+          {completionPercentage}% Complete
+        </Badge>
+      );
+    } else {
+      return (
+        <Badge variant="outline" className="text-gray-600 border-gray-300">
+          <AlertCircle className="w-3 h-3 mr-1" />
+          Not Started
+        </Badge>
+      );
+    }
   };
 
   const filteredBoms = boms.filter(bom => {
@@ -332,6 +502,13 @@ export function BomList() {
       bom.order?.customer?.company_name?.toLowerCase().includes(term)
     );
   });
+
+  console.log('=== BOM FILTERING DEBUG ===');
+  console.log('Total BOMs in state:', boms.length);
+  console.log('Search term:', searchTerm);
+  console.log('Filtered BOMs count:', filteredBoms.length);
+  console.log('Filtered BOM IDs:', filteredBoms.map(bom => bom.id));
+  console.log('===========================');
 
   if (loading) {
     return (
@@ -393,12 +570,15 @@ export function BomList() {
                     <TableHead>Order</TableHead>
                     <TableHead>Customer</TableHead>
                     <TableHead>Quantity</TableHead>
+                    <TableHead>Status</TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredBoms.map((bom) => (
+                  {filteredBoms.map((bom, index) => {
+                    console.log(`Rendering BOM ${index + 1}:`, bom.id, bom.bom_number);
+                    return (
                     <TableRow key={bom.id}>
                       <TableCell className="font-medium">
                         {bom.bom_number || `BOM-${bom.id?.slice(-8) || 'N/A'}`}
@@ -415,7 +595,7 @@ export function BomList() {
                           <div>
                             <div className="font-medium">{bom.product_name}</div>
                             <Badge variant="secondary" className="text-xs">
-                              {bom.bom_items?.length || 0} items
+                              {bom.bom_record_items?.length || 0} items
                             </Badge>
                           </div>
                         </div>
@@ -423,6 +603,9 @@ export function BomList() {
                       <TableCell>{bom.order?.order_number || 'N/A'}</TableCell>
                       <TableCell>{bom.order?.customer?.company_name || 'N/A'}</TableCell>
                       <TableCell>{bom.total_order_qty}</TableCell>
+                      <TableCell>
+                        {getStatusBadge(bom)}
+                      </TableCell>
                       <TableCell>
                         {new Date(bom.created_at).toLocaleDateString()}
                       </TableCell>
@@ -440,23 +623,32 @@ export function BomList() {
                             size="sm"
                             onClick={() => editBom(bom)}
                             variant="outline"
-                            className="mr-2"
                           >
                             <Edit className="w-4 h-4 mr-1" />
                             Edit
                           </Button>
                           <Button
                             size="sm"
+                            onClick={() => openMultiSupplierWizard(bom)}
+                            className="bg-primary hover:bg-primary/90 text-white"
+                          >
+                            <Users className="w-4 h-4 mr-1" />
+                            Multi-Supplier PO
+                          </Button>
+                          <Button
+                            size="sm"
                             onClick={() => createPurchaseOrderFromBom(bom)}
-                            className="bg-blue-600 hover:bg-blue-700"
+                            variant="outline"
+                            disabled={bom.has_purchase_order}
                           >
                             <FileText className="w-4 h-4 mr-1" />
-                            Create PO
+                            {bom.has_purchase_order ? 'PO Created' : 'Single PO'}
                           </Button>
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -486,6 +678,17 @@ export function BomList() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Multi-Supplier Wizard Dialog */}
+      {selectedBom && (
+        <BomToPOWizardDialog
+          open={wizardDialogOpen}
+          onOpenChange={setWizardDialogOpen}
+          bomId={selectedBom.id}
+          bomNumber={selectedBom.bom_number}
+          onComplete={handleWizardComplete}
+        />
+      )}
     </div>
   );
 }

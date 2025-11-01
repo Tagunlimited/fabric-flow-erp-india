@@ -9,6 +9,9 @@ import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Upload, User, X } from "lucide-react";
+import { IdProofUploader } from "@/components/ui/id-proof-uploader";
+import { BankDetailsUploader } from "@/components/ui/bank-details-uploader";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 interface TailorFormProps {
   tailor?: any;
@@ -27,6 +30,7 @@ interface Batch {
 }
 
 export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
+  const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -52,7 +56,16 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
     joining_date: tailor?.joining_date || '',
     employment_type: tailor?.employment_type || 'Full-time',
     salary: tailor?.salary || '',
-    work_hours_per_day: tailor?.work_hours_per_day || 8
+    work_hours_per_day: tailor?.work_hours_per_day || 8,
+    id_proof_type: tailor?.id_proof_type || '',
+    id_proof_number: tailor?.id_proof_number || '',
+    id_proof_image_url: tailor?.id_proof_image_url || '',
+    id_proof_back_image_url: tailor?.id_proof_back_image_url || '',
+    bank_name: tailor?.bank_name || '',
+    account_holder_name: tailor?.account_holder_name || '',
+    account_number: tailor?.account_number || '',
+    ifsc_code: tailor?.ifsc_code || '',
+    passbook_image_url: tailor?.passbook_image_url || ''
   });
 
   const { toast } = useToast();
@@ -128,6 +141,21 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Validate required fields including ID proof and bank details
+    if (!formData.tailor_code || !formData.full_name || !formData.tailor_type || 
+        !formData.personal_phone || !formData.id_proof_type || 
+        !formData.id_proof_number || !formData.id_proof_image_url ||
+        !formData.bank_name || !formData.account_holder_name ||
+        !formData.account_number || !formData.ifsc_code || !formData.passbook_image_url) {
+      toast({
+        title: "Error",
+        description: "Please fill in all required fields including ID proof and bank details.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
     setLoading(true);
 
     try {
@@ -157,7 +185,16 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
         joining_date: formData.joining_date || null,
         employment_type: formData.employment_type,
         salary: formData.salary ? parseFloat(formData.salary) : null,
-        work_hours_per_day: parseInt(formData.work_hours_per_day) || 8
+        work_hours_per_day: parseInt(formData.work_hours_per_day) || 8,
+        id_proof_type: formData.id_proof_type,
+        id_proof_number: formData.id_proof_number,
+        id_proof_image_url: formData.id_proof_image_url,
+        id_proof_back_image_url: formData.id_proof_back_image_url || null,
+        bank_name: formData.bank_name,
+        account_holder_name: formData.account_holder_name,
+        account_number: formData.account_number,
+        ifsc_code: formData.ifsc_code,
+        passbook_image_url: formData.passbook_image_url
       };
 
       if (tailor) {
@@ -527,6 +564,40 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
               </div>
             </div>
           </div>
+
+          {/* ID Proof Section */}
+          {user && (
+            <IdProofUploader
+              idProofType={formData.id_proof_type}
+              idProofNumber={formData.id_proof_number}
+              frontImageUrl={formData.id_proof_image_url}
+              backImageUrl={formData.id_proof_back_image_url}
+              onIdProofTypeChange={(type) => setFormData(prev => ({ ...prev, id_proof_type: type }))}
+              onIdProofNumberChange={(number) => setFormData(prev => ({ ...prev, id_proof_number: number }))}
+              onFrontImageChange={(url) => setFormData(prev => ({ ...prev, id_proof_image_url: url }))}
+              onBackImageChange={(url) => setFormData(prev => ({ ...prev, id_proof_back_image_url: url }))}
+              userId={user.id}
+              disabled={loading}
+            />
+          )}
+
+          {/* Bank Details Section */}
+          {user && (
+            <BankDetailsUploader
+              bankName={formData.bank_name}
+              accountHolderName={formData.account_holder_name}
+              accountNumber={formData.account_number}
+              ifscCode={formData.ifsc_code}
+              passbookImageUrl={formData.passbook_image_url}
+              onBankNameChange={(name) => setFormData(prev => ({ ...prev, bank_name: name }))}
+              onAccountHolderNameChange={(name) => setFormData(prev => ({ ...prev, account_holder_name: name }))}
+              onAccountNumberChange={(number) => setFormData(prev => ({ ...prev, account_number: number }))}
+              onIfscCodeChange={(code) => setFormData(prev => ({ ...prev, ifsc_code: code }))}
+              onPassbookImageChange={(url) => setFormData(prev => ({ ...prev, passbook_image_url: url }))}
+              userId={user.id}
+              disabled={loading}
+            />
+          )}
 
           {/* Form Actions */}
           <div className="flex justify-end space-x-4 pt-6">

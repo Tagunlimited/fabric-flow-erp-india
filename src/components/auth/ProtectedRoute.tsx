@@ -45,7 +45,11 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
             Your account is waiting for admin approval. You will receive an email once approved.
           </p>
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              // Refresh the profile status by reloading the page
+              // This is necessary to check the latest approval status
+              window.location.reload();
+            }}
             className="text-primary hover:underline"
           >
             Refresh Status

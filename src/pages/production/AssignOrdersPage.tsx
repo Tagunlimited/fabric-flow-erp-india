@@ -89,14 +89,12 @@ const AssignOrdersPage = () => {
 
   // Schedule dialog state (choose working date on assignment)
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
-  const [scheduleRole, setScheduleRole] = useState<'cutting' | 'pattern' | null>(null);
+  const [scheduleRole, setScheduleRole] = useState<'cutting' | null>(null);
   const [scheduleAssignmentId, setScheduleAssignmentId] = useState<string | null>(null);
   const [scheduleWorkerId, setScheduleWorkerId] = useState<string | null>(null);
   const [scheduleDate, setScheduleDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [scheduleCuttingPriceSingleNeedle, setScheduleCuttingPriceSingleNeedle] = useState<string>('');
   const [scheduleCuttingPriceOverlockFlatlock, setScheduleCuttingPriceOverlockFlatlock] = useState<string>('');
-  const [schedulePatternPriceSingleNeedle, setSchedulePatternPriceSingleNeedle] = useState<string>('');
-  const [schedulePatternPriceOverlockFlatlock, setSchedulePatternPriceOverlockFlatlock] = useState<string>('');
 
   // View schedule dialog for a worker
   const [viewScheduleOpen, setViewScheduleOpen] = useState(false);
@@ -155,13 +153,8 @@ const AssignOrdersPage = () => {
       cutting_master_id: string | null;
       cutting_master_name: string | null;
       cutting_work_date: string | null;
-      pattern_master_id: string | null;
-      pattern_master_name: string | null;
-      pattern_work_date: string | null;
       cutting_price_single_needle: number | null;
       cutting_price_overlock_flatlock: number | null;
-      pattern_price_single_needle: number | null;
-      pattern_price_overlock_flatlock: number | null;
     }>
   ) => {
     try {
@@ -198,14 +191,14 @@ const AssignOrdersPage = () => {
     }
   };
 
-  // Load employees: Pattern Masters and Cutting Masters
+  // Load employees: Cutting Managers and Cutting Masters
   useEffect(() => {
     const loadProductionTeam = async () => {
       try {
         const { data, error } = await supabase
           .from('employees' as any)
           .select('id, full_name, designation, avatar_url')
-          .in('designation', ['Pattern Master', 'Cutting Manager', 'Cutting Master'] as any);
+          .in('designation', ['Cutting Manager', 'Cutting Master'] as any);
         if (error) {
           console.error('Failed to load production_team:', error);
           return;
@@ -302,86 +295,54 @@ const AssignOrdersPage = () => {
         // 4) Fetch BOM items for all BOMs to determine material availability
         const { data: bomItems, error: bomItemsErr } = await supabase
           .from('bom_record_items' as any)
-          .select('bom_id, item_id, item_code, qty_total')
+          .select('bom_id, item_id, item_code, item_name, qty_total')
           .in('bom_id', bomIds as any);
         if (bomItemsErr) throw bomItemsErr;
 
-        // Build per-order required quantities, preferring item_id over item_code per row
-        const orderReqById: Record<string, Record<string, number>> = {};
-        const orderReqByCode: Record<string, Record<string, number>> = {};
-        const allItemIds = new Set<string>();
-        const allItemCodes = new Set<string>();
+        // NEW: Fetch all POs created from these BOMs
+        const { data: posFromBoms } = await supabase
+          .from('purchase_orders')
+          .select('id, bom_id')
+          .in('bom_id', bomIds);
+
+        const poIds = (posFromBoms || []).map(po => po.id);
+
+        // NEW: Fetch GRN items for these POs (approved items only)
+        let grnItemsData: any[] = [];
+        if (poIds.length > 0) {
+          const { data: grnMasterData } = await supabase
+            .from('grn_master')
+            .select('id')
+            .in('po_id', poIds);
+          
+          const grnIds = (grnMasterData || []).map(g => g.id);
+          
+          if (grnIds.length > 0) {
+            const { data: grnItems } = await supabase
+              .from('grn_items')
+              .select('po_item_id, approved_quantity, item_name')
+              .in('grn_id', grnIds)
+              .eq('quality_status', 'approved');
+            grnItemsData = grnItems || [];
+          }
+        }
+
+        // Build mapping: BOM item_name → total approved quantity
+        const approvedQtyByItemName = new Map<string, number>();
+        grnItemsData.forEach(gi => {
+          const current = approvedQtyByItemName.get(gi.item_name) || 0;
+          approvedQtyByItemName.set(gi.item_name, current + (gi.approved_quantity || 0));
+        });
+
+        // Check availability by matching BOM item names with GRN approved items
+        const reqByItemName: Record<string, Record<string, number>> = {};
         (bomItems || []).forEach((bi: any) => {
           const orderId = bomIdToOrderId[bi.bom_id];
           if (!orderId) return;
           const reqQty = Number(bi.qty_total || 0) || 0;
-          if (bi.item_id) {
-            const id = bi.item_id as string;
-            (orderReqById[orderId] ||= {});
-            orderReqById[orderId][id] = (orderReqById[orderId][id] || 0) + reqQty;
-            allItemIds.add(id);
-          } else if (bi.item_code) {
-            const code = bi.item_code as string;
-            (orderReqByCode[orderId] ||= {});
-            orderReqByCode[orderId][code] = (orderReqByCode[orderId][code] || 0) + reqQty;
-            allItemCodes.add(code);
-          }
-        });
-
-        // 5) Check availability in warehouse_inventory for item_ids and item_codes
-        const itemIdsArr = Array.from(allItemIds);
-        const itemCodesArr = Array.from(allItemCodes);
-
-        const availableQtyByItemId = new Map<string, number>();
-        const availableQtyByItemCodeWI = new Map<string, number>();
-
-        if (itemIdsArr.length > 0) {
-          const { data: wi1 } = await supabase
-            .from('warehouse_inventory' as any)
-            .select('item_id, quantity')
-            .in('item_id', itemIdsArr as any);
-          (wi1 || []).forEach((r: any) => {
-            if (r?.item_id) {
-              const q = Number(r.quantity || 0) || 0;
-              availableQtyByItemId.set(r.item_id, (availableQtyByItemId.get(r.item_id) || 0) + q);
-            }
-          });
-        }
-        if (itemCodesArr.length > 0) {
-          const { data: wi2 } = await supabase
-            .from('warehouse_inventory' as any)
-            .select('item_code, quantity')
-            .in('item_code', itemCodesArr as any);
-          (wi2 || []).forEach((r: any) => {
-            if (r?.item_code) {
-              const q = Number(r.quantity || 0) || 0;
-              availableQtyByItemCodeWI.set(r.item_code, (availableQtyByItemCodeWI.get(r.item_code) || 0) + q);
-            }
-          });
-        }
-
-        // 6) Also check legacy inventory table by item_code
-        const availableQtyByItemCodeInv = new Map<string, number>();
-        if (itemCodesArr.length > 0) {
-          const { data: inv } = await supabase
-            .from('inventory' as any)
-            .select('item_code, current_stock')
-            .in('item_code', itemCodesArr as any);
-          (inv || []).forEach((r: any) => {
-            if (r?.item_code) {
-              const q = Number(r.current_stock || 0) || 0;
-              availableQtyByItemCodeInv.set(r.item_code, q);
-            }
-          });
-        }
-
-        // Merge WI and legacy inventory by item_code
-        const availableQtyByItemCode = new Map<string, number>();
-        availableQtyByItemCodeWI.forEach((q, code) => {
-          availableQtyByItemCode.set(code, (availableQtyByItemCode.get(code) || 0) + q);
-        });
-        availableQtyByItemCodeInv.forEach((q, code) => {
-          availableQtyByItemCode.set(code, (availableQtyByItemCode.get(code) || 0) + q);
+          const itemName = bi.item_name;
+          (reqByItemName[orderId] ||= {});
+          reqByItemName[orderId][itemName] = (reqByItemName[orderId][itemName] || 0) + reqQty;
         });
 
         // 4) Build assignments from orders + grouped BOMs
@@ -439,22 +400,23 @@ const AssignOrdersPage = () => {
           const due = o.expected_delivery_date || '';
 
           // Determine material availability by comparing required vs available quantities
-          const reqIds = orderReqById[o.id] || {};
-          const reqCodes = orderReqByCode[o.id] || {};
+          const required = reqByItemName[o.id] || {};
           let allOk = true;
-          for (const id of Object.keys(reqIds)) {
-            const req = Number(reqIds[id] || 0) || 0;
-            const avail = Number(availableQtyByItemId.get(id) || 0) || 0;
-            if (avail < req) { allOk = false; break; }
-          }
-          if (allOk) {
-            for (const code of Object.keys(reqCodes)) {
-              const req = Number(reqCodes[code] || 0) || 0;
-              const avail = Number(availableQtyByItemCode.get(code) || 0) || 0;
-              if (avail < req) { allOk = false; break; }
+          for (const itemName of Object.keys(required)) {
+            const req = required[itemName];
+            const avail = approvedQtyByItemName.get(itemName) || 0;
+            if (avail < req) {
+              allOk = false;
+              break;
             }
           }
           const materialStatus: OrderAssignment['materialStatus'] = allOk ? 'Available' : 'Not Available';
+
+          // Debug logging
+          console.log('Order:', o.order_number);
+          console.log('Required materials:', required);
+          console.log('Available materials:', Array.from(approvedQtyByItemName.entries()));
+          console.log('Material Status:', materialStatus);
 
           const base: OrderAssignment = {
             id: o.id,
@@ -1342,32 +1304,6 @@ const AssignOrdersPage = () => {
                       placeholder="0.00"
                       value={scheduleCuttingPriceOverlockFlatlock}
                       onChange={(e) => setScheduleCuttingPriceOverlockFlatlock(e.target.value)}
-                    />
-                  </div>
-                </div>
-              )}
-              {scheduleRole === 'pattern' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <Label>Tailor (SN)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="0.00"
-                      value={schedulePatternPriceSingleNeedle}
-                      onChange={(e) => setSchedulePatternPriceSingleNeedle(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <Label>Tailor (OF)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="0.00"
-                      value={schedulePatternPriceOverlockFlatlock}
-                      onChange={(e) => setSchedulePatternPriceOverlockFlatlock(e.target.value)}
                     />
                   </div>
                 </div>

@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -124,7 +125,7 @@ export default function QuotationDetailPage() {
       // Fetch order items
       const { data: itemsData, error: itemsError } = await supabase
         .from('order_items')
-        .select('*')
+        .select('*, mockup_images, specifications, category_image_url')
         .eq('order_id', orderId);
       if (itemsError) throw itemsError;
       setOrderItems(itemsData || []);
@@ -139,7 +140,7 @@ export default function QuotationDetailPage() {
             .in('id', fabricIds);
           if (fabricsData) {
             const fabricsMap = fabricsData.reduce((acc, fabric) => {
-              acc[fabric.id] = fabric;
+              acc[fabric.id] = { ...fabric, name: fabric.fabric_name };
               return acc;
             }, {} as { [key: string]: Fabric });
             setFabrics(fabricsMap);
@@ -196,6 +197,30 @@ export default function QuotationDetailPage() {
     const seqStr = nextSeq.toString().padStart(3, '0');
     return `SO/${fyStr}/${month}/${seqStr}`;
   };
+
+  // Helper: sort sizes in proper order (S, M, L, XL, XXL, etc.)
+  function sortSizes(sizes: { [key: string]: number }): Array<[string, number]> {
+    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', '28', '30', '32', '34', '36', '38', '40', '42', '44', '46', '48', '50'];
+    
+    return Object.entries(sizes)
+      .filter(([_, qty]) => (qty as number) > 0)
+      .sort(([a], [b]) => {
+        const indexA = sizeOrder.indexOf(a.toUpperCase());
+        const indexB = sizeOrder.indexOf(b.toUpperCase());
+        
+        // If both sizes are in the predefined order, sort by that order
+        if (indexA !== -1 && indexB !== -1) {
+          return indexA - indexB;
+        }
+        
+        // If only one is in the predefined order, prioritize it
+        if (indexA !== -1) return -1;
+        if (indexB !== -1) return 1;
+        
+        // If neither is in the predefined order, sort alphabetically
+        return a.localeCompare(b);
+      });
+  }
 
   // Helper: number to words
   function numberToWords(num: number): string {
@@ -706,33 +731,342 @@ export default function QuotationDetailPage() {
             </div>
           </CardHeader>
           <CardContent>
+            {/* Screen View - Hidden when printing */}
+            <div className="screen-only bg-white p-6 rounded-lg shadow-sm">
+              <div className="max-w-4xl mx-auto">
+                {/* Company Header with Logo */}
+                <div className="flex justify-between items-start border-b-2 border-gray-800 pb-4 mb-6">
+                  <div className="flex items-center space-x-4">
+                    {(company as any)?.logo_url && (
+                      <img 
+                        src={(company as any).logo_url} 
+                        alt="Company Logo" 
+                        className="w-28 h-28 object-contain"
+                      />
+                    )}
+                    <div>
+                      <h1 className="text-2xl font-bold text-gray-800">{(company as any)?.company_name || 'Company Name'}</h1>
+                      <p className="text-sm text-gray-600">{(company as any)?.address || 'Company Address'}</p>
+                      <p className="text-sm text-gray-600">
+                        {(company as any)?.city || 'City'}, {(company as any)?.state || 'State'} - {(company as any)?.pincode || 'Pincode'}
+                      </p>
+                      <p className="text-sm text-gray-600">GSTIN: {(company as any)?.gstin || 'GSTIN'}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <h2 className="text-3xl font-bold text-gray-800">QUOTATION</h2>
+                    <p className="text-sm text-gray-600">Quotation #: {quotationNumber}</p>
+                    <p className="text-sm text-gray-600">Date: {new Date().toLocaleDateString('en-IN')}</p>
+                    <p className="text-sm text-gray-600">Valid Until: {new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN')}</p>
+                  </div>
+                </div>
+
+                {/* Customer Information */}
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Bill To:</h3>
+                  <div className="bg-gray-50 p-4 rounded">
+                    <p className="font-semibold text-gray-800">{customer?.company_name || 'Customer Name'}</p>
+                    <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
+                    <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
+                    <p className="text-sm text-gray-600">
+                      {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
+                    </p>
+                    <p className="text-sm text-gray-600">GSTIN: {customer?.gstin || 'GSTIN'}</p>
+                  </div>
+                </div>
+
+                {/* Order Information */}
+                <div className="mb-6">
+                  <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded">
+                    <div><strong>Order Number:</strong> {order?.order_number || 'N/A'}</div>
+                    <div><strong>Order Date:</strong> {order?.order_date ? new Date(order.order_date).toLocaleDateString('en-IN') : 'N/A'}</div>
+                    <div><strong>Expected Delivery:</strong> {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
+                    <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
+                    <div><strong>Status:</strong> <span className="capitalize">{order?.status?.replace('_', ' ') || 'N/A'}</span></div>
+                    <div><strong>Payment Terms:</strong> {(order as any).payment_channel || 'As per agreement'}</div>
+                  </div>
+                </div>
+
+                {/* Order Summary Table */}
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-3">ORDER SUMMARY</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse border border-gray-400 text-sm">
+                      <thead>
+                        <tr className="bg-gray-100">
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Product Details</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Qty</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Rate</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Amount</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">GST</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {orderItems.map((item, idx) => {
+                          const amount = item.quantity * item.unit_price;
+                          const gstRate = (item as any).gst_rate ?? 
+                                         ((item.specifications as any)?.gst_rate) ?? 
+                                         (order?.gst_rate ?? 0);
+                          const gstAmt = (amount * gstRate) / 100;
+                          const total = amount + gstAmt;
+                          return (
+                            <tr key={item.id}>
+                              <td className="border border-gray-400 px-3 py-2">
+                                <div className="flex items-start gap-3">
+                                  {(() => {
+                                    const displayImage = getOrderItemDisplayImage(item);
+                                    return displayImage ? (
+                                      <img
+                                        src={displayImage}
+                                        alt="Product"
+                                        className="w-16 h-16 object-cover rounded flex-shrink-0"
+                                      />
+                                    ) : null;
+                                  })()}
+                                  <div className="flex-1">
+                                    <div className="text-sm text-gray-600 font-semibold">
+                                      {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
+                                    </div>
+                                    <div className="font-semibold">{item.product_description}</div>
+                                    <div className="text-sm text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
+                                    {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
+                                      <div className="text-sm text-gray-600">
+                                        Sizes: {sortSizes(item.sizes_quantities)
+                                          .map(([size, qty]) => `${size}(${qty})`)
+                                            .join(', ')}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="border border-gray-400 px-3 py-2 text-center">
+                                <div className="font-semibold">{item.quantity}</div>
+                                <div className="text-sm">Pcs</div>
+                              </td>
+                              <td className="border border-gray-400 px-3 py-2 text-right">{formatCurrency(item.unit_price)}</td>
+                              <td className="border border-gray-400 px-3 py-2 text-right">{formatCurrency(amount)}</td>
+                              <td className="border border-gray-400 px-3 py-2 text-center">
+                                <div className="text-sm">{gstRate}%</div>
+                                <div className="text-sm">{formatCurrency(gstAmt)}</div>
+                              </td>
+                              <td className="border border-gray-400 px-3 py-2 text-right font-semibold">{formatCurrency(total)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Totals Summary */}
+                <div className="mt-6 border-t-2 border-gray-800 pt-4">
+                  <div className="flex justify-end">
+                    <div className="w-80 space-y-2">
+                      <div className="flex justify-between">
+                        <span>Subtotal:</span>
+                        <span>{formatCurrency(orderItems.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0))}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>GST Total:</span>
+                        <span>{formatCurrency(orderItems.reduce((sum, item) => {
+                          const amount = item.quantity * item.unit_price;
+                          const gstRate = (item as any).gst_rate ?? ((item.specifications as any)?.gst_rate) ?? (order?.gst_rate ?? 0);
+                          return sum + (amount * gstRate) / 100;
+                        }, 0))}</span>
+                      </div>
+                      <div className="border-t border-gray-400 pt-2">
+                        <div className="flex justify-between text-lg font-bold">
+                          <span>GRAND TOTAL:</span>
+                          <span>{formatCurrency(order?.final_amount || 0)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Amount in Words */}
+                  <div className="mt-4 p-3 bg-gray-100 border border-gray-400">
+                    <div className="text-sm text-gray-600">Amount in words:</div>
+                    <div className="font-bold">INR {numberToWords(Math.round(order?.final_amount || 0))}</div>
+                  </div>
+                </div>
+
+                {/* Terms and Conditions */}
+                <div className="mt-6 border-t border-gray-400 pt-4">
+                  <h3 className="text-sm font-bold text-gray-800 mb-2">Terms & Conditions:</h3>
+                  <div className="grid grid-cols-3 gap-4 text-sm">
+                    <div className="space-y-1">
+                      <div>• Payment: 50% advance, 50% on delivery</div>
+                      <div>• Delivery: {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : '15-20 working days'}</div>
+                      <div>• Prices inclusive of GST</div>
+                    </div>
+                    <div className="space-y-1">
+                      <div>• Subject to change without notice</div>
+                      <div>• Quality as per industry standards</div>
+                      <div>• Return policy as per guidelines</div>
+                    </div>
+                    <div className="space-y-1">
+                      <div>• Installation & training included</div>
+                      <div>• Warranty: 1 year from delivery</div>
+                      <div>• Support: 9am–6pm, Mon–Sat</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Authorized Signatory Section */}
+                <div className="mt-8 pt-4 border-t border-gray-400">
+                  <div className="flex justify-between items-end">
+                    {/* Customer Signature */}
+                    <div className="text-center">
+                      <div className="border-b border-gray-400 w-40 mb-2"></div>
+                      <div className="text-sm text-gray-600">Customer Signature</div>
+                    </div>
+                    
+                    {/* Company Authorized Signatory */}
+                    <div className="text-center">
+                      <div className="mb-3">
+                        {company?.authorized_signatory_url ? (
+                          <img 
+                            src={company.authorized_signatory_url} 
+                            alt="Authorized Signatory" 
+                            className="w-44 h-36 object-contain mx-auto"
+                          />
+                        ) : (
+                          <div className="w-44 h-36 border border-gray-300 mx-auto flex items-center justify-center">
+                            <span className="text-lg text-gray-400">Signature</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="border-b border-gray-400 w-40 mb-2"></div>
+                      <div className="text-sm text-gray-600">Authorized Signatory</div>
+                      <div className="text-xs text-gray-500 mt-1">{company?.company_name || 'Company Name'}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="mt-6 pt-3 border-t border-gray-400 text-right text-sm text-gray-600">
+                  <div>Generated: {new Date().toLocaleDateString('en-IN')}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Print View - Only visible when printing */}
             <div
               id="quotation-print"
               ref={printRef}
-              className="bg-white"
-              style={{ padding: '15mm', minHeight: '297mm', width: '210mm', margin: '0 auto', fontSize: '10px', lineHeight: '1.3' }}
+              className="bg-white print-only"
+              style={{ padding: '10mm', width: '210mm', margin: '0 auto', fontSize: '9px', lineHeight: '1.2' }}
             >
               <style>{`
-                /* Better top margin on subsequent pages */
-                @page { size: A4; margin: 12mm 8mm 10mm 8mm; }
+                /* Print-only styles - hide everything except quotation content */
+                @page { 
+                  size: A4; 
+                  margin: 8mm; 
+                }
+                
                 @media print {
-                  .print\\:hidden { display: none !important; }
-                  header, nav, .header, .navigation { display: none !important; }
-                  .print-content { display: block !important; }
-                  /* Print-only compact layout and minimal margins */
+                  /* Hide all non-print elements */
+                  body * { visibility: hidden; }
+                  #quotation-print, #quotation-print * { visibility: visible; }
                   #quotation-print { 
+                    position: absolute; 
+                    left: 0; 
+                    top: 0; 
+                    width: 100% !important;
+                    height: 100% !important;
                     padding: 8mm !important; 
-                    width: auto !important; 
-                    line-height: 1.2 !important; 
-                    font-size: 9.5px !important;
+                    margin: 0 !important;
+                    font-size: 11px !important;
+                    line-height: 1.3 !important;
+                    background: white !important;
                   }
-                  /* Keep sections and rows from breaking awkwardly */
+                  
+                  /* Hide header, navigation, buttons, etc. */
+                  header, nav, .header, .navigation, .print\\:hidden, 
+                  button, .btn, [role="button"], .card-header, .card-footer,
+                  .flex.gap-2, .dropdown-menu, .dropdown-content { 
+                    display: none !important; 
+                  }
+                  
+                  /* Reasonable spacing for readability */
+                  #quotation-print .mb-6 { margin-bottom: 12px !important; }
+                  #quotation-print .mb-4 { margin-bottom: 8px !important; }
+                  #quotation-print .mb-3 { margin-bottom: 6px !important; }
+                  #quotation-print .mb-2 { margin-bottom: 4px !important; }
+                  #quotation-print .mt-6 { margin-top: 12px !important; }
+                  #quotation-print .mt-4 { margin-top: 8px !important; }
+                  #quotation-print .mt-3 { margin-top: 6px !important; }
+                  #quotation-print .mt-2 { margin-top: 4px !important; }
+                  #quotation-print .pt-4 { padding-top: 8px !important; }
+                  #quotation-print .pt-3 { padding-top: 6px !important; }
+                  #quotation-print .pt-2 { padding-top: 4px !important; }
+                  #quotation-print .pb-4 { padding-bottom: 8px !important; }
+                  #quotation-print .pb-3 { padding-bottom: 6px !important; }
+                  #quotation-print .pb-2 { padding-bottom: 4px !important; }
+                  
+                  /* Readable table styling */
+                  #quotation-print table { 
+                    font-size: 10px !important;
+                    border-collapse: collapse !important;
+                    width: 100% !important;
+                  }
+                  #quotation-print table th, 
+                  #quotation-print table td { 
+                    padding: 3px 4px !important; 
+                    border: 1px solid #000 !important;
+                    font-size: 10px !important;
+                    line-height: 1.2 !important; 
+                  }
+                  
+                  /* Readable text sizes */
+                  #quotation-print h1 { font-size: 18px !important; margin: 4px 0 !important; }
+                  #quotation-print h2 { font-size: 16px !important; margin: 3px 0 !important; }
+                  #quotation-print h3 { font-size: 14px !important; margin: 2px 0 !important; }
+                  #quotation-print .text-lg { font-size: 14px !important; }
+                  #quotation-print .text-base { font-size: 12px !important; }
+                  #quotation-print .text-sm { font-size: 10px !important; }
+                  #quotation-print .text-xs { font-size: 9px !important; }
+                  #quotation-print .text-\[10px\] { font-size: 9px !important; }
+                  #quotation-print .text-\[9px\] { font-size: 8px !important; }
+                  
+                  /* Larger image sizes for print */
+                  #quotation-print img { 
+                    max-width: 50px !important; 
+                    max-height: 50px !important; 
+                  }
+                  #quotation-print .w-16 { width: 30px !important; }
+                  #quotation-print .h-16 { height: 30px !important; }
+                  #quotation-print .w-20 { width: 40px !important; }
+                  #quotation-print .h-20 { height: 40px !important; }
+                  #quotation-print .w-24 { width: 60px !important; }
+                  #quotation-print .h-24 { height: 60px !important; }
+                  #quotation-print .w-28 { width: 70px !important; }
+                  #quotation-print .h-28 { height: 70px !important; }
+                  #quotation-print .w-32 { width: 80px !important; }
+                  #quotation-print .h-32 { height: 80px !important; }
+                  #quotation-print .w-36 { width: 90px !important; }
+                  #quotation-print .h-36 { height: 90px !important; }
+                  #quotation-print .w-40 { width: 100px !important; }
+                  #quotation-print .h-32 { height: 80px !important; }
+                  #quotation-print .w-44 { width: 110px !important; }
+                  #quotation-print .h-36 { height: 90px !important; }
+                  
+                  /* Prevent page breaks */
                   .avoid-break { break-inside: avoid; page-break-inside: avoid; }
                   #quotation-print table { page-break-inside: auto; }
                   #quotation-print thead { display: table-header-group; }
                   #quotation-print tr { break-inside: avoid; page-break-inside: avoid; }
-                  #quotation-print table th, 
-                  #quotation-print table td { padding-top: 2px !important; padding-bottom: 2px !important; }
+                }
+                
+                /* Screen-only styles */
+                @media screen {
+                  .print-only { display: none; }
+                }
+                
+                /* Hide screen view when printing */
+                @media print {
+                  .screen-only { display: none !important; }
                 }
               `}</style>
               {/* Company Header with Logo */}
@@ -742,8 +1076,7 @@ export default function QuotationDetailPage() {
                     <img 
                       src={(company as any).logo_url} 
                       alt="Company Logo" 
-                      className="w-16 h-16 object-contain"
-                      style={{ maxWidth: '60px', maxHeight: '60px' }}
+                      className="w-36 h-36 object-contain"
                     />
                   )}
                   <div>
@@ -811,10 +1144,9 @@ export default function QuotationDetailPage() {
                 <table className="w-full border-collapse border border-gray-400 text-xs">
                     <thead>
                     <tr className="bg-gray-100">
-                      <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '8%' }}>Image</th>
-                       <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '40%' }}>Product Details</th>
-                       <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '8%' }}>Qty</th>
-                      <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '12%' }}>Rate</th>
+                       <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '50%' }}>Product Details</th>
+                       <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '10%' }}>Qty</th>
+                      <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '15%' }}>Rate</th>
                       <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '15%' }}>Amount</th>
                       <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '10%' }}>GST</th>
                       <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '10%' }}>Total</th>
@@ -831,18 +1163,14 @@ export default function QuotationDetailPage() {
                         return (
                           <tr key={item.id}>
                           <td className="border border-gray-400 px-1 py-1 align-top">
-                              {item.category_image_url && (
-                              <img src={item.category_image_url} alt="Product" className="w-8 h-8 object-cover" />
-                              )}
-                            </td>
-                          <td className="border border-gray-400 px-1 py-1 align-top">
                             <div className="font-semibold text-xs">{item.product_description}</div>
                             <div className="text-xs text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
-                            <div className="text-xs text-gray-600">{fabrics[item.fabric_id]?.name} - {item.color}, {item.gsm}GSM</div>
+                            <div className="text-xs text-gray-600">
+                              {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
+                            </div>
                             {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
                               <div className="text-xs text-gray-600">
-                                Sizes: {Object.entries(item.sizes_quantities)
-                                  .filter(([_, qty]) => (qty as number) > 0)
+                                Sizes: {sortSizes(item.sizes_quantities)
                                   .map(([size, qty]) => `${size}(${qty})`)
                                     .join(', ')}
                               </div>
@@ -943,6 +1271,37 @@ export default function QuotationDetailPage() {
                     <div>• Installation & training included</div>
                     <div>• Warranty: 1 year from delivery</div>
                     <div>• Support: 9am–6pm, Mon–Sat</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Authorized Signatory Section */}
+              <div className="mt-6 pt-3 border-t border-gray-400 avoid-break">
+                <div className="flex justify-between items-end">
+                  {/* Customer Signature */}
+                  <div className="text-center">
+                    <div className="border-b border-gray-400 w-32 mb-1"></div>
+                    <div className="text-[10px] text-gray-600">Customer Signature</div>
+                  </div>
+                  
+                  {/* Company Authorized Signatory */}
+                  <div className="text-center">
+                    <div className="mb-2">
+                      {company?.authorized_signatory_url ? (
+                        <img 
+                          src={company.authorized_signatory_url} 
+                          alt="Authorized Signatory" 
+                          className="w-44 h-36 object-contain mx-auto"
+                        />
+                      ) : (
+                        <div className="w-44 h-36 border border-gray-300 mx-auto flex items-center justify-center">
+                          <span className="text-[16px] text-gray-400">Signature</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="border-b border-gray-400 w-32 mb-1"></div>
+                    <div className="text-[10px] text-gray-600">Authorized Signatory</div>
+                    <div className="text-[9px] text-gray-500 mt-1">{company?.company_name || 'Company Name'}</div>
                   </div>
                 </div>
               </div>

@@ -66,17 +66,7 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
     }
   }, [refreshTrigger]);
 
-  // Refresh when component becomes visible
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        fetchOrdersWithoutBom();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+  // Removed aggressive visibility refresh to prevent resetting user work
 
   const fetchOrdersWithoutBom = async () => {
     try {
@@ -115,8 +105,8 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
           orderReceiptTotals.set(receipt.reference_id, currentTotal + amount);
         }
         
-        // Add to total by order number
-        if (receipt.reference_number) {
+        // Add to total by order number (only if different from ID to avoid double counting)
+        if (receipt.reference_number && receipt.reference_number !== receipt.reference_id) {
           const currentTotal = orderReceiptTotals.get(receipt.reference_number) || 0;
           orderReceiptTotals.set(receipt.reference_number, currentTotal + amount);
         }
@@ -166,16 +156,15 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
         return hasReceipt && !hasBom;
       });
       
-      // Add receipt totals to each order for pending amount calculation
+      // Use the same simple approach as OrdersPage - just use balance_amount directly
       const ordersWithReceiptTotals = eligibleOrders.map((order: any) => {
-        const totalReceiptsById = orderReceiptTotals.get(order.id) || 0;
-        const totalReceiptsByNumber = orderReceiptTotals.get(order.order_number) || 0;
-        const totalReceipts = Math.max(totalReceiptsById, totalReceiptsByNumber); // Use the higher value
+        // Use the order's balance_amount directly from the database (same as OrdersPage)
+        const pendingAmount = order.balance_amount || 0;
         
         return {
           ...order,
-          total_receipts: totalReceipts,
-          pending_amount: (order.final_amount || order.total_amount) - totalReceipts
+          total_receipts: 0, // Not needed for display, just for consistency
+          pending_amount: Math.max(0, pendingAmount) // Ensure pending amount is never negative
         };
       });
       
@@ -216,10 +205,10 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
     }
   };
 
-  // Calculate totals
+  // Calculate totals using the same approach as OrdersPage
   const totals = filteredOrders.reduce((acc, order) => {
     const totalAmount = order.final_amount || order.total_amount;
-    const pendingAmount = order.pending_amount || (totalAmount - (order.advance_amount || 0));
+    const pendingAmount = order.balance_amount || 0; // Use balance_amount directly
     acc.totalAmount += totalAmount;
     acc.pendingAmount += pendingAmount;
     return acc;
@@ -433,7 +422,7 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="font-medium text-orange-600">
-                        {formatCurrency(order.pending_amount || ((order.final_amount || order.total_amount) - (order.advance_amount || 0)))}
+                        {formatCurrency(order.balance_amount || 0)}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -495,6 +484,11 @@ export function BomTabsPage() {
   const navigate = useNavigate();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
+  // Refresh when component mounts (user returns from BOM creation)
+  useEffect(() => {
+    setRefreshTrigger(prev => prev + 1);
+  }, []);
+
   const handleCreateBom = (orderId: string) => {
     navigate(`/bom/new?order=${orderId}`);
   };
@@ -546,7 +540,7 @@ export function BomTabsPage() {
           <TabsContent value="view-bom" className="space-y-4">
             <div className="p-4 border rounded-lg">
               <h3 className="text-lg font-semibold mb-4">Existing BOMs</h3>
-              <BomList />
+              <BomList refreshTrigger={refreshTrigger} />
             </div>
           </TabsContent>
         </Tabs>

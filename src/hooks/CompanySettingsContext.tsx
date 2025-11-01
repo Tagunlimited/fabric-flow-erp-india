@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { useAuth } from '@/components/auth/AuthProvider';
 
 export interface CompanyConfig {
   id?: string;
@@ -9,6 +10,7 @@ export interface CompanyConfig {
   sidebar_logo_url?: string;
   header_logo_url?: string;
   favicon_url?: string;
+  authorized_signatory_url?: string;
   logo_sizes?: {
     sidebar_logo_height: string;
     sidebar_logo_width: string;
@@ -41,6 +43,7 @@ const defaultConfig: CompanyConfig = {
   sidebar_logo_url: '/placeholder.svg',
   header_logo_url: '/placeholder.svg',
   favicon_url: undefined,
+  authorized_signatory_url: undefined,
   logo_sizes: {
     sidebar_logo_height: '32px',
     sidebar_logo_width: 'auto',
@@ -78,15 +81,30 @@ const CompanySettingsContext = createContext<CompanySettingsContextType | undefi
 export const CompanySettingsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [config, setConfig] = useState<CompanyConfig>(defaultConfig);
   const [loading, setLoading] = useState(true);
+  const { user, loading: authLoading } = useAuth();
 
-  // Load config from database on app startup
+  // Load config from database only when user is authenticated
   useEffect(() => {
-    loadCompanyConfig();
-  }, []);
+    if (!authLoading && user) {
+      loadCompanyConfig();
+    } else if (!authLoading && !user) {
+      // If not authenticated, just use default config
+      setLoading(false);
+    }
+  }, [user, authLoading]);
 
   const loadCompanyConfig = async () => {
     try {
       setLoading(true);
+      
+      // Check if user is authenticated before making any database calls
+      if (!user) {
+        console.log('User not authenticated, using default config');
+        setConfig(defaultConfig);
+        setLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase
         .from('company_settings')
         .select('*')
@@ -94,33 +112,45 @@ export const CompanySettingsProvider: React.FC<{ children: React.ReactNode }> = 
 
       if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
         console.error('Error loading company config:', error);
-        toast.error('Failed to load company configuration');
+        // Don't show toast error for RLS policy violations during initial load
+        if (error.code !== '42501') {
+          toast.error('Failed to load company configuration');
+        }
+        setConfig(defaultConfig);
         return;
       }
 
       if (data) {
         setConfig(data);
       } else {
-        // If no config exists, create a default one
-        const { data: newConfig, error: createError } = await supabase
-          .from('company_settings')
-          .insert([defaultConfig])
-          .select()
-          .single();
+        // If no config exists, create a default one only if user is authenticated
+        if (user) {
+          const { data: newConfig, error: createError } = await supabase
+            .from('company_settings')
+            .insert([defaultConfig])
+            .select()
+            .single();
 
-        if (createError) {
-          console.error('Error creating default company config:', createError);
-          toast.error('Failed to create default company configuration');
-          return;
-        }
+          if (createError) {
+            console.error('Error creating default company config:', createError);
+            // Don't show toast error for RLS policy violations during initial load
+            if (createError.code !== '42501') {
+              toast.error('Failed to create default company configuration');
+            }
+            setConfig(defaultConfig);
+            return;
+          }
 
-        if (newConfig) {
-          setConfig(newConfig);
+          if (newConfig) {
+            setConfig(newConfig);
+          }
+        } else {
+          setConfig(defaultConfig);
         }
       }
     } catch (error) {
       console.error('Error in loadCompanyConfig:', error);
-      toast.error('Failed to load company configuration');
+      setConfig(defaultConfig);
     } finally {
       setLoading(false);
     }

@@ -21,6 +21,7 @@ interface CompanyConfig {
   sidebar_logo_url?: string;
   header_logo_url?: string;
   favicon_url?: string;
+  authorized_signatory_url?: string;
   logo_sizes?: {
     sidebar_logo_height: string;
     sidebar_logo_width: string;
@@ -165,7 +166,7 @@ const CompanyConfigPage = () => {
     }
   };
 
-  const uploadCompanyAsset = async (file: File, type: 'logo' | 'sidebar_logo' | 'header_logo' | 'favicon') => {
+  const uploadCompanyAsset = async (file: File, type: 'logo' | 'sidebar_logo' | 'header_logo' | 'favicon' | 'authorized_signatory') => {
     try {
       setUploading(prev => ({ ...prev, [type]: true }));
       
@@ -480,6 +481,33 @@ const CompanyConfigPage = () => {
                       alt="Favicon" 
                       className="w-8 h-8 object-contain border rounded"
                     />
+                  )}
+                </div>
+              </div>
+
+              {/* Authorized Signatory */}
+              <div>
+                <Label>Authorized Signatory</Label>
+                <p className="text-sm text-muted-foreground mb-2">Upload signature image that will appear on all documents</p>
+                <div className="mt-2 flex items-center gap-4">
+                  <Input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) uploadCompanyAsset(file, 'authorized_signatory');
+                    }}
+                    disabled={uploading.authorized_signatory}
+                  />
+                  {config.authorized_signatory_url && (
+                    <div className="flex items-center gap-2">
+                      <img 
+                        src={config.authorized_signatory_url} 
+                        alt="Authorized Signatory" 
+                        className="w-16 h-8 object-contain border rounded bg-white"
+                      />
+                      <span className="text-xs text-muted-foreground">Signature Preview</span>
+                    </div>
                   )}
                 </div>
               </div>

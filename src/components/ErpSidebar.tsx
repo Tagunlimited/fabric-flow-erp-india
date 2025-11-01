@@ -22,7 +22,8 @@ import {
   ChevronRight,
   AlertTriangle,
   Scissors,
-  Shirt
+  Shirt,
+  FileText
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { supabase } from '@/integrations/supabase/client';
 import { getPendingOrdersCount } from '@/lib/database';
+import { useSidebarPermissions, SidebarItem as DynamicSidebarItem } from '@/hooks/useSidebarPermissions';
 
 interface SidebarItem {
   title: string;
@@ -92,8 +94,6 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
     {
       title: "Inventory",
       icon: Package,
-      badge: "500",
-      badgeColor: "bg-inventory",
       children: [
         { title: "Dashboard", url: "/warehouse/inventory", icon: Building },
         // { title: "Dashboard", url: "/inventory", icon: BarChart3 },
@@ -104,8 +104,6 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
     {
       title: "Production",
       icon: Factory,
-      badge: "300",
-      badgeColor: "bg-warning",
       children: [
         { title: "Production Dashboard", url: "/production", icon: Factory },
         { title: "Assign Orders", url: "/production/assign-orders", icon: Users },
@@ -113,7 +111,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Tailor Management", url: "/production/tailor-management", icon: Users }
       ]
     },
-    { title: "Quality Check", url: "/quality", icon: CheckCircle, badge: "150", badgeColor: "bg-quality",
+    { title: "Quality Check", url: "/quality", icon: CheckCircle,
       children: [
         { title: "Picker", url: "/production/picker", icon: Package },
         { title: "QC", url: "/quality/checks", icon: CheckCircle },
@@ -126,7 +124,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       children: [
         { title: "Dashboard", url: "/people", icon: BarChart3 },
         { title: "Our People", url: "/people/employees", icon: Users },
-        { title: "Production Team", url: "/people/production-team", icon: Scissors },
+        // { title: "Production Team", url: "/people/production-team", icon: Scissors },
         // { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
         // { title: "Incentive Programme", url: "/people/incentives", icon: Award },
         { title: "Departments", url: "/people/departments", icon: Building },
@@ -158,6 +156,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Customer Access", url: "/admin/customer-access", icon: Users }
       ]
     },
+    { title: "Reports", url: "/reports", icon: FileText },
     { title: "Configuration", url: "/configuration", icon: Settings }
   ];
 }
@@ -337,6 +336,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   const { profile, user } = useAuth();
   const location = useLocation();
   const { config } = useCompanySettings();
+  const { items: dynamicSidebarItems, loading: permissionsLoading, permissionsSetup } = useSidebarPermissions();
   const [portalSettings, setPortalSettings] = useState<null | {
     can_view_orders: boolean;
     can_view_invoices: boolean;
@@ -420,8 +420,42 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
     }
   }, [location.pathname]);
 
-  // Build items based on role
-  const sidebarItems = buildSidebarItems(location.pathname, pendingOrdersCount);
+  // Icon mapping for dynamic icons
+  const iconMap: { [key: string]: any } = {
+    Home, Users, ShoppingCart, Package, Factory, CheckCircle, Truck, BarChart3, 
+    Settings, UserCog, Calculator, Palette, Building, ShoppingBag, ClipboardList, 
+    Award, AlertTriangle, Scissors, Shirt
+  };
+
+  // Convert dynamic sidebar items to the old format
+  const convertDynamicSidebarItems = (items: DynamicSidebarItem[]): SidebarItem[] => {
+    return items.map(item => ({
+      title: item.title,
+      url: item.url,
+      icon: iconMap[item.icon] || Home,
+      adminOnly: false, // This will be handled by permissions
+      children: item.children ? convertDynamicSidebarItems(item.children) : undefined
+    }));
+  };
+
+  // Build items based on role and permissions
+  const staticSidebarItems = buildSidebarItems(location.pathname, pendingOrdersCount);
+  const dynamicItems = convertDynamicSidebarItems(dynamicSidebarItems);
+  
+  // Use dynamic items if permissions are loaded and properly set up
+  // For admin users, use static sidebar if permissions system is not set up
+  // For non-admin users, always use dynamic permissions (even if empty)
+  const shouldUseDynamicItems = !permissionsLoading && permissionsSetup && (userRole !== 'admin' || dynamicSidebarItems.length > 0);
+  
+  // For non-admin users, show loading state instead of static sidebar during loading
+  // For admin users, always show static sidebar if dynamic items are not available
+  const sidebarItems = shouldUseDynamicItems ? dynamicItems : 
+    (userRole !== 'admin' && permissionsLoading ? [] : staticSidebarItems);
+  
+  // Debug logging for sidebar decision (only log when there are issues)
+  // Debug logging removed for performance
+  
+  // Debug logging removed for performance
   let filteredItems = sidebarItems.filter(item => !item.adminOnly || userRole === 'admin');
 
   if (userRole === 'customer' && portalSettings !== null) {
@@ -558,14 +592,21 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
                  onMobileClose?.();
                }
              }}>
-          {filteredItems.map((item, index) => (
-            <SidebarItemComponent 
-              key={index} 
-              item={item} 
-              collapsed={collapsed}
-              onMobileClick={onMobileClose}
-            />
-          ))}
+          {userRole !== 'admin' && permissionsLoading ? (
+            <div className="flex items-center justify-center p-4">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+              <span className="ml-2 text-sm text-muted-foreground">Loading permissions...</span>
+            </div>
+          ) : (
+            filteredItems.map((item, index) => (
+              <SidebarItemComponent 
+                key={index} 
+                item={item} 
+                collapsed={collapsed}
+                onMobileClick={onMobileClose}
+              />
+            ))
+          )}
         </nav>
         {/* Footer */}
         <div className="p-3 sm:p-4 border-t border-primary-foreground/20">

@@ -6,8 +6,11 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelect';
+import { SizeTypeSelector } from './SizeTypeSelector';
+import { ProductCustomizationModal } from './ProductCustomizationModal';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -71,6 +74,15 @@ interface Employee {
   employee_code: string;
   full_name: string;
   department: string;
+  avatar_url?: string;
+}
+
+interface BrandingType {
+  id: string;
+  name: string;
+  scope: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface BrandingItem {
@@ -84,6 +96,19 @@ interface AdditionalCharge {
   rate: number;
   gst_percentage: number;
   amount_incl_gst: number;
+}
+
+interface Customization {
+  partId: string;
+  partName: string;
+  partType: 'dropdown' | 'number';
+  selectedAddonId?: string;
+  selectedAddonName?: string;
+  selectedAddonImageUrl?: string;
+  selectedAddonImageAltText?: string;
+  customValue?: string;
+  quantity?: number;
+  priceImpact?: number;
 }
 
 interface Product {
@@ -101,7 +126,8 @@ interface Product {
   size_type_id: string;
   sizes_quantities: { [size: string]: number };
   branding_items: BrandingItem[];
-  gst_rate: number; // <-- add this
+  gst_rate: number;
+  customizations: Customization[];
 }
 
 interface OrderFormData {
@@ -117,19 +143,35 @@ interface OrderFormData {
   additional_charges: AdditionalCharge[];
 }
 
-export function OrderForm() {
+interface OrderFormProps {
+  preSelectedCustomer?: {
+    id: string;
+    company_name: string;
+    email: string;
+    phone: string;
+    address: string;
+    city: string;
+    state: string;
+    pincode: string;
+    gstin: string;
+  } | null;
+  onOrderCreated?: () => void;
+}
+
+export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProps = {}) {
   const navigate = useNavigate();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [productCategories, setProductCategories] = useState<ProductCategory[]>([]);
   const [sizeTypes, setSizeTypes] = useState<SizeType[]>([]);
   const [fabrics, setFabrics] = useState<FabricMaster[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [brandingTypes, setBrandingTypes] = useState<BrandingType[]>([]);
   const [loading, setLoading] = useState(false);
 
   const [formData, setFormData] = useState<OrderFormData>({
     order_date: new Date(),
     expected_delivery_date: new Date(),
-    customer_id: '',
+    customer_id: preSelectedCustomer?.id || '',
     sales_manager: '',
     products: [createEmptyProduct()],
     gst_rate: 18,
@@ -139,16 +181,115 @@ export function OrderForm() {
     additional_charges: []
   });
 
+  const [isLoaded, setIsLoaded] = useState(true);
+  const [hasSavedData, setHasSavedData] = useState(false);
+  const [isFormLoading, setIsFormLoading] = useState(false);
+
+  // Simple form persistence using localStorage directly
+  useEffect(() => {
+    setIsFormLoading(true);
+    try {
+      const savedData = localStorage.getItem('orderFormData');
+      if (savedData && !preSelectedCustomer) {
+        console.log('OrderForm: Loading saved form data from localStorage');
+        const parsedData = JSON.parse(savedData);
+        
+        // Convert date strings back to Date objects
+        if (parsedData.order_date) {
+          parsedData.order_date = new Date(parsedData.order_date);
+        }
+        if (parsedData.expected_delivery_date) {
+          parsedData.expected_delivery_date = new Date(parsedData.expected_delivery_date);
+        }
+        
+        // Ensure all products have customizations array
+        if (parsedData.products) {
+          parsedData.products = parsedData.products.map((product: any) => ({
+            ...product,
+            customizations: product.customizations || []
+          }));
+        }
+        
+        setFormData(parsedData);
+        setHasSavedData(true);
+        console.log('OrderForm: Form data loaded successfully');
+      }
+    } catch (error) {
+      console.error('Error loading order form data:', error);
+    } finally {
+      setIsFormLoading(false);
+    }
+  }, [preSelectedCustomer]);
+
+  // Save form data to localStorage with debounce
+  useEffect(() => {
+    if (!preSelectedCustomer) {
+      const timeoutId = setTimeout(() => {
+        try {
+          console.log('OrderForm: Saving form data to localStorage');
+          localStorage.setItem('orderFormData', JSON.stringify(formData));
+        } catch (error) {
+          console.error('Error saving order form data:', error);
+        }
+      }, 2000); // 2 second debounce
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [formData, preSelectedCustomer]);
+
+  // Prevent navigation when tab regains focus
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log('OrderForm: Tab regained focus - preventing any navigation');
+        // Don't do anything that could trigger navigation
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  const resetData = () => {
+    setFormData({
+      order_date: new Date(),
+      expected_delivery_date: new Date(),
+      customer_id: preSelectedCustomer?.id || '',
+      sales_manager: '',
+      products: [createEmptyProduct()],
+      gst_rate: 18,
+      payment_channel: '',
+      reference_id: '',
+      advance_amount: 0,
+      additional_charges: []
+    });
+    setHasSavedData(false);
+    try {
+      localStorage.removeItem('orderFormData');
+    } catch (error) {
+      console.error('Error clearing order form data:', error);
+    }
+  };
+
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [selectedCategoryImage, setSelectedCategoryImage] = useState<string>('');
   const [isCategoryLocked, setIsCategoryLocked] = useState(false);
   const [mainImages, setMainImages] = useState<{ [productIndex: number]: { reference: string | null, mockup: string | null, category: string | null } }>({});
+  const [sizeTypeSelectorOpen, setSizeTypeSelectorOpen] = useState(false);
+  const [customizationModalOpen, setCustomizationModalOpen] = useState(false);
+  const [currentProductIndex, setCurrentProductIndex] = useState(0);
   const sliderRef = useRef<HTMLDivElement>(null);
   const autoScrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    if (preSelectedCustomer) {
+      setSelectedCustomer(preSelectedCustomer);
+    }
+  }, [preSelectedCustomer]);
 
   // Auto-scroll functionality - DISABLED as per user request
   // useEffect(() => {
@@ -320,18 +461,20 @@ export function OrderForm() {
         { branding_type: '', placement: '', measurement: '' },
         { branding_type: '', placement: '', measurement: '' }
       ],
-      gst_rate: 18 // default
+      gst_rate: 18, // default
+      customizations: []
     };
   }
 
   const fetchData = async () => {
     try {
-      const [customersRes, categoriesRes, sizeTypesRes, fabricsRes, employeesRes] = await Promise.all([
+      const [customersRes, categoriesRes, sizeTypesRes, fabricsRes, employeesRes, brandingTypesRes] = await Promise.all([
         supabase.from('customers').select('*').order('company_name'),
         supabase.from('product_categories').select('*').order('category_name'),
         supabase.from('size_types').select('*').order('size_name'),
         supabase.from('fabric_master').select('*').order('fabric_name'),
-        supabase.from('employees').select('*').order('full_name')
+        supabase.from('employees').select('*').order('full_name'),
+        supabase.from('branding_types').select('*').order('name')
       ]);
 
       if (customersRes.data) setCustomers(customersRes.data);
@@ -349,6 +492,7 @@ export function OrderForm() {
       } else {
         console.log('No employees found or error:', employeesRes.error);
       }
+      if (brandingTypesRes.data) setBrandingTypes(brandingTypesRes.data);
     } catch (error) {
       console.error('Error fetching data:', error);
       toast.error('Failed to fetch form data');
@@ -493,6 +637,27 @@ export function OrderForm() {
               size_type_id: sizeTypeId,
               sizes_quantities: newSizesQuantities
             }
+          : product
+      )
+    }));
+  };
+
+  const openSizeTypeSelector = (productIndex: number) => {
+    setCurrentProductIndex(productIndex);
+    setSizeTypeSelectorOpen(true);
+  };
+
+  const openCustomizationModal = (productIndex: number) => {
+    setCurrentProductIndex(productIndex);
+    setCustomizationModalOpen(true);
+  };
+
+  const removeCustomization = (productIndex: number, customizationIndex: number) => {
+    setFormData(prev => ({
+      ...prev,
+      products: prev.products.map((product, index) => 
+        index === productIndex 
+          ? { ...product, customizations: (product.customizations || []).filter((_, idx) => idx !== customizationIndex) }
           : product
       )
     }));
@@ -743,6 +908,14 @@ export function OrderForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('OrderForm: Form submission started');
+    
+    // Prevent submission if we're in the middle of a tab focus change or form loading
+    if (document.hidden || isFormLoading) {
+      console.log('OrderForm: Preventing submission during tab focus change or form loading');
+      return;
+    }
+    
     setLoading(true);
 
     try {
@@ -772,8 +945,8 @@ export function OrderForm() {
 
       const orderData = {
         order_number: orderNumber,
-        order_date: formData.order_date.toISOString(),
-        expected_delivery_date: formData.expected_delivery_date.toISOString(),
+        order_date: (formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)).toISOString(),
+        expected_delivery_date: (formData.expected_delivery_date instanceof Date ? formData.expected_delivery_date : new Date(formData.expected_delivery_date)).toISOString(),
         customer_id: formData.customer_id,
         sales_manager: formData.sales_manager,
         total_amount: Number(subtotal),
@@ -850,23 +1023,24 @@ export function OrderForm() {
           product_category_id: product.product_category_id,
           category_image_url: product.category_image_url || null,
           product_description: product.product_description || '',
-          fabric_id: product.fabric_id,
+          fabric_id: product.fabric_id || null, // Now references fabric_master table
           gsm: product.gsm || '',
           color: product.color || '',
           remarks: product.remarks || '',
           size_type_id: product.size_type_id,
           sizes_quantities: product.sizes_quantities || {},
-          // gst_rate: product.gst_rate, // Temporarily disabled - column may not exist yet
+          gst_rate: product.gst_rate,
           specifications: {
             branding_items: product.branding_items || [],
             reference_images: uploadedImages.reference_images || [],
             mockup_images: uploadedImages.mockup_images || [],
             attachments: uploadedImages.attachments || [],
-            gst_rate: product.gst_rate // Store GST rate in specifications as backup
+            customizations: product.customizations || []
           }
         };
 
         console.log('Inserting order item data:', orderItemData);
+        console.log('Customizations being saved:', product.customizations);
         
         const { error: itemError } = await supabase
           .from('order_items')
@@ -883,8 +1057,19 @@ export function OrderForm() {
 
       toast.success('Order created successfully!');
       
-      // Navigate directly to the order list page
-      navigate('/orders');
+      // Clear saved form data after successful order creation
+      resetData();
+      
+      console.log('OrderForm: Order created successfully, navigating...');
+      
+      // Call callback if provided (for dialog mode), otherwise navigate to orders page
+      if (onOrderCreated) {
+        console.log('OrderForm: Calling onOrderCreated callback');
+        onOrderCreated();
+      } else {
+        console.log('OrderForm: Navigating to /orders');
+        navigate('/orders');
+      }
     } catch (error) {
       console.error('Error creating order:', error);
       console.error('Error details:', JSON.stringify(error, null, 2));
@@ -896,11 +1081,50 @@ export function OrderForm() {
 
   const { subtotal, gstAmount, additionalChargesTotal, grandTotal, balance } = calculateTotals();
 
+  // Show loading state while form data is being loaded
+  if (!isLoaded) {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Create New Order</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-center py-8">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+                <p className="text-muted-foreground">Loading form data...</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Create New Order</CardTitle>
+          <div className="flex justify-between items-center">
+            <CardTitle>Create New Order</CardTitle>
+            {hasSavedData && (
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary" className="bg-green-100 text-green-800">
+                  Saved Progress
+                </Badge>
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  size="sm"
+                  onClick={resetData}
+                  className="text-red-600 hover:text-red-700"
+                >
+                  Clear Saved Data
+                </Button>
+              </div>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -957,26 +1181,65 @@ export function OrderForm() {
               <h3 className="text-lg font-semibold">Customer Information</h3>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Company Name</Label>
-                  <CustomerSearchSelect
-                    value={formData.customer_id}
-                    onValueChange={handleCustomerSelect}
-                    onCustomerSelect={(customer) => setSelectedCustomer(customer)}
-                    placeholder="Search by name, phone, contact person..."
-                  />
-                </div>
+                {!preSelectedCustomer && (
+                  <div className="space-y-2">
+                    <Label>Company Name</Label>
+                    <CustomerSearchSelect
+                      value={formData.customer_id}
+                      onValueChange={handleCustomerSelect}
+                      onCustomerSelect={(customer) => setSelectedCustomer(customer)}
+                      placeholder="Search by name, phone, contact person..."
+                    />
+                  </div>
+                )}
+                
+                {preSelectedCustomer && (
+                  <div className="space-y-2">
+                    <Label>Company Name</Label>
+                    <Input 
+                      value={preSelectedCustomer.company_name} 
+                      disabled 
+                      className="bg-gray-50"
+                    />
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <Label>Sales Manager</Label>
                   <Select value={formData.sales_manager} onValueChange={(value) => setFormData(prev => ({ ...prev, sales_manager: value }))}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select sales manager" />
+                      <SelectValue placeholder="Select sales manager">
+                        {formData.sales_manager && employees.find(emp => emp.id === formData.sales_manager) && (
+                          <div className="flex items-center gap-2">
+                            <Avatar className="w-6 h-6">
+                              <AvatarImage 
+                                src={employees.find(emp => emp.id === formData.sales_manager)?.avatar_url} 
+                                alt={employees.find(emp => emp.id === formData.sales_manager)?.full_name}
+                              />
+                              <AvatarFallback className="text-xs">
+                                {employees.find(emp => emp.id === formData.sales_manager)?.full_name?.split(' ').map(n => n[0]).join('').toUpperCase()}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span>{employees.find(emp => emp.id === formData.sales_manager)?.full_name}</span>
+                          </div>
+                        )}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {employees.map((employee) => (
                         <SelectItem key={employee.id} value={employee.id}>
-                          {employee.full_name} - {employee.department}
+                          <div className="flex items-center gap-2">
+                            <Avatar className="w-6 h-6">
+                              <AvatarImage src={employee.avatar_url} alt={employee.full_name} />
+                              <AvatarFallback className="text-xs">
+                                {employee.full_name.split(' ').map(n => n[0]).join('').toUpperCase()}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="flex flex-col">
+                              <span className="font-medium">{employee.full_name}</span>
+                              <span className="text-xs text-muted-foreground">{employee.department}</span>
+                            </div>
+                          </div>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -1150,8 +1413,8 @@ export function OrderForm() {
 
   {/* Right Column - 2 Rows × 2 Columns each */}
   <div className="lg:col-span-8 grid grid-cols-1 gap-6">
-    {/* Row 1 */}
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    {/* Row 1 - Fabric, Color, and GSM */}
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
       {/* Fabric - Only show when product category is selected */}
       {product.product_category_id && (
         <div>
@@ -1187,65 +1450,7 @@ export function OrderForm() {
         </div>
       )}
 
-      {/* Size Type */}
-      <div>
-        <Label className="text-base font-semibold text-gray-700 mb-2 block">Size Type</Label>
-        <Select
-          value={product.size_type_id}
-          onValueChange={(value) => handleSizeTypeSelect(productIndex, value)}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="Select size type" />
-          </SelectTrigger>
-          <SelectContent>
-            {sizeTypes.map((sizeType) => (
-              <SelectItem key={sizeType.id} value={sizeType.id}>
-                {sizeType.size_name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-    </div>
-{/* <div className="space-y-3">
-                        <Label>Color</Label>
-                        {product.fabric_id ? (
-                          <Select
-                            value={product.color}
-                            onValueChange={(value) => handleColorSelect(productIndex, value)}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Select color" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                                          {fabricVariants
-                              .filter(variant => variant.fabric_id === product.fabric_id)
-                              .map((variant) => (
-                                <SelectItem key={variant.id} value={variant.color}>
-                                  {variant.color}
-                                </SelectItem>
-                              ))
-                            }
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Input
-                            value={product.color}
-                            onChange={(e) => setFormData(prev => ({
-                              ...prev,
-                              products: prev.products.map((p, i) => 
-                                i === productIndex ? { ...p, color: e.target.value } : p
-                              )
-                            }))}
-                            placeholder={product.product_category_id ? "Select fabric first to see available colors" : "Select category and fabric first"}
-                            disabled
-                          />
-                        )}
-                      </div> */}
-                      
-    {/* Row 2 - Color and GSM (Auto-selected from fabric) */}
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      {/* COLOR */}
+      {/* Color */}
       <div>
         <Label className="text-base font-semibold text-gray-700 mb-2 block">Color</Label>
         {product.fabric_id ? (
@@ -1286,7 +1491,7 @@ export function OrderForm() {
           />
         )}
       </div>
-      
+
       {/* GSM */}
       <div>
         <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
@@ -1297,9 +1502,169 @@ export function OrderForm() {
           className="bg-gray-50"
         />
       </div>
-
-      
     </div>
+{/* <div className="space-y-3">
+                        <Label>Color</Label>
+                        {product.fabric_id ? (
+                          <Select
+                            value={product.color}
+                            onValueChange={(value) => handleColorSelect(productIndex, value)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select color" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                                          {fabricVariants
+                              .filter(variant => variant.fabric_id === product.fabric_id)
+                              .map((variant) => (
+                                <SelectItem key={variant.id} value={variant.color}>
+                                  {variant.color}
+                                </SelectItem>
+                              ))
+                            }
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input
+                            value={product.color}
+                            onChange={(e) => setFormData(prev => ({
+                              ...prev,
+                              products: prev.products.map((p, i) => 
+                                i === productIndex ? { ...p, color: e.target.value } : p
+                              )
+                            }))}
+                            placeholder={product.product_category_id ? "Select fabric first to see available colors" : "Select category and fabric first"}
+                            disabled
+                          />
+                        )}
+                      </div> */}
+                      
+    {/* Size Type */}
+    <div>
+      <Label className="text-base font-semibold text-gray-700 mb-2 block">Size Type</Label>
+      <Button
+        type="button"
+        variant="outline"
+        className="w-full justify-start"
+        onClick={() => openSizeTypeSelector(productIndex)}
+      >
+        {product.size_type_id ? (
+          sizeTypes.find(st => st.id === product.size_type_id)?.size_name || "Select size type"
+        ) : (
+          "Select size type"
+        )}
+      </Button>
+    </div>
+
+    {/* Customization Button */}
+    <div>
+      <Button
+        type="button"
+        variant="outline"
+        className="w-full"
+        onClick={() => openCustomizationModal(productIndex)}
+        disabled={!product.product_category_id}
+      >
+        <Plus className="w-4 h-4 mr-2" />
+        Add Customization
+      </Button>
+      {!product.product_category_id && (
+        <p className="text-xs text-muted-foreground mt-1">
+          Select a product category first to enable customizations
+        </p>
+      )}
+    </div>
+
+    {/* Display Added Customizations */}
+    {(product.customizations || []).length > 0 && (
+      <div className="space-y-2">
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">Customizations</Label>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+          {(product.customizations || []).map((customization, index) => (
+            <div key={`${customization.partId}-${index}`} className="relative p-3 border rounded-lg bg-white shadow-sm min-w-0">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => removeCustomization(productIndex, index)}
+                className="absolute top-2 right-2 h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+              <div className="pr-8 flex items-start gap-3">
+                {customization.selectedAddonImageUrl && (
+                  <img 
+                    src={customization.selectedAddonImageUrl} 
+                    alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
+                    className="w-12 h-12 object-cover rounded-lg border-2 border-gray-100 flex-shrink-0"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                    }}
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-900 truncate" title={customization.partName}>
+                    {customization.partName}
+                  </div>
+                  {customization.partType === 'dropdown' && (
+                    <div className="text-xs text-gray-600 truncate mt-1" title={customization.selectedAddonName}>
+                      {customization.selectedAddonName}
+                    </div>
+                  )}
+                  {customization.partType === 'number' && customization.quantity !== undefined && (
+                    <div className="text-xs text-gray-600 mt-1">
+                      Qty: {customization.quantity}
+                    </div>
+                  )}
+                  {customization.priceImpact && customization.priceImpact !== 0 && (
+                    <div className="text-xs font-medium text-green-600 mt-1">
+                      ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
+      {/* Size-wise Quantities */}
+      {product.size_type_id && (
+        <div className="space-y-2">
+          <Label className="text-base font-semibold text-gray-700 mb-2 block">Size-wise Quantities</Label>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {Object.entries(product.sizes_quantities || {}).map(([size, quantity]) => (
+              <div key={size} className="space-y-1">
+                <Label className="text-sm">{size}</Label>
+                <Input
+                  type="number"
+                  value={quantity}
+                  onChange={(e) => {
+                    const newQuantity = parseInt(e.target.value) || 0;
+                    setFormData(prev => ({
+                      ...prev,
+                      products: prev.products.map((p, i) => 
+                        i === productIndex 
+                          ? { 
+                              ...p, 
+                              sizes_quantities: { 
+                                ...p.sizes_quantities, 
+                                [size]: newQuantity 
+                              } 
+                            } 
+                          : p
+                      )
+                    }));
+                  }}
+                  placeholder="Qty"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Price */}
       <div>
         <Label className="text-base font-semibold text-gray-700 mb-2 block">Price (INR)</Label>
@@ -1317,21 +1682,40 @@ export function OrderForm() {
           placeholder="Enter price"
         />
       </div>
-                       <div className="space-y-2">
-                        <Label>Product Description</Label>
-                        <Textarea
-                          value={product.product_description}
-                          onChange={(e) => setFormData(prev => ({
-                            ...prev,
-                            products: prev.products.map((p, i) => 
-                              i === productIndex ? { ...p, product_description: e.target.value } : p
-                            )
-                          }))}
-                          placeholder="Enter product description"
-                          rows={2}
-                          className="resize-none"
-                        />
-                      </div>
+                       {/* Product Description and Remarks */}
+                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                         <div className="space-y-2">
+                           <Label>Product Description</Label>
+                           <Textarea
+                             value={product.product_description}
+                             onChange={(e) => setFormData(prev => ({
+                               ...prev,
+                               products: prev.products.map((p, i) => 
+                                 i === productIndex ? { ...p, product_description: e.target.value } : p
+                               )
+                             }))}
+                             placeholder="Enter product description"
+                             rows={2}
+                             className="resize-none"
+                           />
+                         </div>
+                         
+                         <div className="space-y-2">
+                           <Label>Remarks</Label>
+                           <Textarea
+                             value={product.remarks}
+                             onChange={(e) => setFormData(prev => ({
+                               ...prev,
+                               products: prev.products.map((p, i) => 
+                                 i === productIndex ? { ...p, remarks: e.target.value } : p
+                               )
+                             }))}
+                             placeholder="Enter any remarks"
+                             rows={2}
+                             className="resize-none"
+                           />
+                         </div>
+                       </div>
 
                       
   </div>
@@ -1570,41 +1954,6 @@ export function OrderForm() {
                       </div> */}
                     </div>
 
-                    {/* Size Quantities */}
-                    {product.size_type_id && (
-                      <div className="space-y-2">
-                        <Label>Size-wise Quantities</Label>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                          {Object.entries(product.sizes_quantities || {}).map(([size, quantity]) => (
-                            <div key={size} className="space-y-1">
-                              <Label className="text-sm">{size}</Label>
-                              <Input
-                                type="number"
-                                value={quantity}
-                                onChange={(e) => {
-                                  const newQuantity = parseInt(e.target.value) || 0;
-                                  setFormData(prev => ({
-                                    ...prev,
-                                    products: prev.products.map((p, i) => 
-                                      i === productIndex 
-                                        ? { 
-                                            ...p, 
-                                            sizes_quantities: { 
-                                              ...p.sizes_quantities, 
-                                              [size]: newQuantity 
-                                            } 
-                                          } 
-                                        : p
-                                    )
-                                  }));
-                                }}
-                                placeholder="Qty"
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
 
                     {/* Branding Section */}
                     <div className="space-y-4">
@@ -1644,11 +1993,26 @@ export function OrderForm() {
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div className="space-y-2">
                               <Label>Branding Type</Label>
-                              <Input
+                              <Select
                                 value={brandingItem.branding_type}
-                                onChange={(e) => updateBrandingItem(productIndex, brandingIndex, 'branding_type', e.target.value)}
-                                placeholder="e.g., Embroidery, Print, etc."
-                              />
+                                onValueChange={(value) => updateBrandingItem(productIndex, brandingIndex, 'branding_type', value)}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select branding type" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {brandingTypes.map((brandingType) => (
+                                    <SelectItem key={brandingType.id} value={brandingType.name}>
+                                      <div className="flex items-center gap-2">
+                                        <span>{brandingType.name}</span>
+                                        <Badge variant="outline" className="text-xs">
+                                          {brandingType.scope}
+                                        </Badge>
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             </div>
                             
                             <div className="space-y-2">
@@ -1673,20 +2037,6 @@ export function OrderForm() {
                       ))}
                     </div>
 
-                    <div className="space-y-2">
-                      <Label>Remarks</Label>
-                      <Textarea
-                        value={product.remarks}
-                        onChange={(e) => setFormData(prev => ({
-                          ...prev,
-                          products: prev.products.map((p, i) => 
-                            i === productIndex ? { ...p, remarks: e.target.value } : p
-                          )
-                        }))}
-                        placeholder="Enter any remarks"
-                        rows={2}
-                      />
-                    </div>
                   </CardContent>
                 </Card>
               ))}
@@ -1706,6 +2056,7 @@ export function OrderForm() {
                         <tr className="bg-gray-100">
                           <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Image</th>
                           <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Name</th>
+                          <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Remarks</th>
                           <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Total Qty</th>
                           <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Price</th>
                           <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Amount</th>
@@ -1724,23 +2075,36 @@ export function OrderForm() {
                           return (
                             <tr key={index} className="hover:bg-gray-50">
                               <td className="border border-gray-300 px-3 py-2">
-                                {product.category_image_url && (
-                                  <img 
-                                    src={product.category_image_url} 
-                                    alt="Product" 
-                                    className="w-20 h-20 object-cover rounded" // bigger image
-                                  />
-                                )}
+                                {(() => {
+                                  // In form context, use helper that handles File objects
+                                  const image = getOrderItemDisplayImageForForm(product);
+                                  const imageSrc = getImageSrcFromFileOrUrl(image);
+                                  
+                                  return imageSrc ? (
+                                    <img 
+                                      src={imageSrc} 
+                                      alt="Product" 
+                                      className="w-20 h-20 object-cover rounded" // bigger image
+                                    />
+                                  ) : null;
+                                })()}
                               </td>
                               <td className="border border-gray-300 px-3 py-2">
                                 <div className="text-sm">
+                                  <div className="text-gray-600 text-xs font-medium">
+                                    {fabrics.find(f => f.id === product.fabric_id)?.fabric_name} - {product.color}, {product.gsm} GSM
+                                  </div>
                                   <div className="font-medium">{product.product_description}</div>
                                   <div className="text-gray-600 text-xs">
                                     {productCategories.find(c => c.id === product.product_category_id)?.category_name}
                                   </div>
-                                  <div className="text-gray-600 text-xs">
-                                    {fabrics.find(f => f.id === product.fabric_id)?.fabric_name} - {product.color}, {product.gsm} GSM
-                                  </div>
+                                </div>
+                              </td>
+                              <td className="border border-gray-300 px-3 py-2 text-sm">
+                                <div className="max-w-xs">
+                                  <span className="text-sm text-gray-700 break-words">
+                                    {product.remarks || '-'}
+                                  </span>
                                 </div>
                               </td>
                               <td className="border border-gray-300 px-3 py-2 text-sm">
@@ -1892,6 +2256,34 @@ export function OrderForm() {
           </form>
         </CardContent>
       </Card>
+
+      {/* Size Type Selector Popup */}
+      <SizeTypeSelector
+        sizeTypes={sizeTypes}
+        selectedSizeTypeId={formData.products[currentProductIndex]?.size_type_id || ''}
+        onSelect={(sizeTypeId) => handleSizeTypeSelect(currentProductIndex, sizeTypeId)}
+        open={sizeTypeSelectorOpen}
+        onOpenChange={setSizeTypeSelectorOpen}
+      />
+
+      {/* Product Customization Modal */}
+      <ProductCustomizationModal
+        productIndex={currentProductIndex}
+        productCategoryId={formData.products[currentProductIndex]?.product_category_id || ''}
+        isOpen={customizationModalOpen}
+        onClose={() => setCustomizationModalOpen(false)}
+        onSave={(customizations) => {
+          setFormData(prev => ({
+            ...prev,
+            products: prev.products.map((product, index) => 
+              index === currentProductIndex 
+                ? { ...product, customizations: [...(product.customizations || []), ...customizations] }
+                : product
+            )
+          }));
+          toast.success(`${customizations.length} customization(s) added`);
+        }}
+      />
     </div>
   );
 }

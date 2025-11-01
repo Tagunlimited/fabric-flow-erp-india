@@ -6,9 +6,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, Save, X } from 'lucide-react';
+import { Loader2, Save, X, ArrowLeft } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { useFormData } from '@/contexts/FormPersistenceContext';
+import { useNavigate } from 'react-router-dom';
 
 interface CustomerFormProps {
   customer?: any;
@@ -28,7 +30,8 @@ interface State {
 }
 
 export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) {
-  const [formData, setFormData] = useState({
+  const navigate = useNavigate();
+  const { data: formData, updateData: setFormData, resetData, isLoaded, hasSavedData } = useFormData('customerForm', {
     company_name: '',
     contact_person: '',
     phone: '',
@@ -39,8 +42,7 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
     state: '',
     pincode: '',
     gstin: '',
-    pan: '',
-    credit_limit: 0
+    pan: ''
   });
   const [customerTypes, setCustomerTypes] = useState<CustomerType[]>([]);
   const [states, setStates] = useState<State[]>([]);
@@ -50,31 +52,48 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
   useEffect(() => {
     fetchCustomerTypes();
     fetchStates();
-    
-    if (customer) {
+  }, []);
+
+  useEffect(() => {
+    if (customer && customerTypes.length > 0) {
+      // Find the customer type name from the ID
+      const customerTypeName = customerTypes.find(type => type.id === customer.customer_type)?.name || 'Retail';
+      
       setFormData({
         company_name: customer.company_name || '',
         contact_person: customer.contact_person || '',
         phone: customer.phone || '',
         email: customer.email || '',
-        customer_types: customer.customer_type || 'Retail',
+        customer_types: customerTypeName,
         address: customer.address || '',
         city: customer.city || '',
         state: customer.state || '',
         pincode: customer.pincode || '',
         gstin: customer.gstin || '',
-        pan: customer.pan || '',
-        credit_limit: customer.credit_limit || 0
+        pan: customer.pan || ''
       });
     }
-  }, [customer]);
+  }, [customer, customerTypes]);
 
   const fetchCustomerTypes = async () => {
     try {
-      // Fallback customer types from enum
-      const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
-      setCustomerTypes(types.map((name, id) => ({ id, name })));
+      const { data, error } = await supabase
+        .from('customer_types')
+        .select('id, name')
+        .eq('is_active', true)
+        .order('name');
+
+      if (error) {
+        console.error('Error fetching customer types:', error);
+        // Fallback customer types
+        const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
+        setCustomerTypes(types.map((name, id) => ({ id, name })));
+        return;
+      }
+
+      setCustomerTypes(data || []);
     } catch (error) {
+      console.error('Error fetching customer types:', error);
       // Fallback customer types
       const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
       setCustomerTypes(types.map((name, id) => ({ id, name })));
@@ -138,10 +157,12 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
     try {
       setIsLoading(true);
       
+      // Find the customer type ID from the selected name
+      const selectedCustomerType = customerTypes.find(type => type.name === formData.customer_types);
+      
       const customerData = {
         ...formData,
-        credit_limit: parseFloat(formData.credit_limit.toString()) || 0,
-        customer_type: formData.customer_types as any
+        customer_type: selectedCustomerType?.id || null
       };
       delete customerData.customer_types;
 
@@ -166,6 +187,10 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
       if (result.error) throw result.error;
       
       toast.success(customer ? 'Customer updated successfully' : 'Customer created successfully');
+      
+      // Clear saved form data after successful save
+      resetData();
+      
       onSave(result.data);
     } catch (error: any) {
       setError(error.message || 'Failed to save customer');
@@ -175,12 +200,58 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
     }
   };
 
+  // Show loading state while form data is being loaded
+  if (!isLoaded) {
+    return (
+      <Card className="w-full max-w-2xl mx-auto">
+        <CardHeader>
+          <CardTitle>
+            {customer ? 'Edit Customer' : 'Create New Customer'}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-center py-8">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+              <p className="text-muted-foreground">Loading form data...</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card className="w-full max-w-2xl mx-auto">
       <CardHeader>
-        <CardTitle>
-          {customer ? 'Edit Customer' : 'Create New Customer'}
-        </CardTitle>
+        <div className="flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <Button 
+              type="button" 
+              variant="outline" 
+              size="sm"
+              onClick={() => navigate(-1)}
+              className="flex items-center gap-2"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back
+            </Button>
+            <CardTitle>
+              {customer ? 'Edit Customer' : 'Create New Customer'}
+            </CardTitle>
+          </div>
+          {hasSavedData && !customer && (
+            <Button 
+              type="button" 
+              variant="outline" 
+              size="sm"
+              onClick={resetData}
+              className="text-red-600 hover:text-red-700"
+            >
+              Clear Saved Data
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -259,17 +330,6 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
               </Select>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="credit_limit">Credit Limit</Label>
-              <Input
-                id="credit_limit"
-                type="number"
-                value={formData.credit_limit}
-                onChange={(e) => handleChange('credit_limit', parseFloat(e.target.value) || 0)}
-                placeholder="Enter credit limit"
-                disabled={isLoading}
-              />
-            </div>
           </div>
 
           <div className="space-y-2">

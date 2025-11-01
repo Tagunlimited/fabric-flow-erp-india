@@ -409,7 +409,20 @@ const DesignPage = () => {
                 </div>
                 <div className="text-right">
                   <div className="font-medium">For {company?.company_name || 'Our Company'}</div>
-                  <div className="mt-8 border-b w-40"></div>
+                  <div className="mt-4 mb-2">
+                    {company?.authorized_signatory_url ? (
+                      <img 
+                        src={company.authorized_signatory_url} 
+                        alt="Authorized Signatory" 
+                        className="w-16 h-12 object-contain mx-auto"
+                      />
+                    ) : (
+                      <div className="w-16 h-12 border border-gray-300 mx-auto flex items-center justify-center">
+                        <span className="text-[8px] text-gray-400">Signature</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-4 border-b w-40"></div>
                   <div className="text-muted-foreground">Authorized Signatory</div>
                 </div>
               </div>

@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -145,7 +146,7 @@ export default function InvoiceDetailPage() {
       // Fetch order items
       const { data: itemsData, error: itemsError } = await supabase
         .from('order_items')
-        .select('*')
+        .select('*, mockup_images, specifications, category_image_url')
         .eq('order_id', orderId as any);
 
       if (itemsError) throw itemsError;
@@ -307,6 +308,7 @@ export default function InvoiceDetailPage() {
       }
 
       // Refresh the page to show the invoice view
+      // This is necessary to reload the invoice data after creation
       window.location.reload();
     } catch (error) {
       console.error('Error creating invoice:', error);
@@ -463,7 +465,21 @@ export default function InvoiceDetailPage() {
                       {orderItems.map((item, index) => (
                         <tr key={index}>
                           <td className="border border-gray-300 px-4 py-2">
-                            {productCategories[item.product_category_id]?.category_name || 'N/A'}
+                            <div className="flex items-start gap-3">
+                              {(() => {
+                                const displayImage = getOrderItemDisplayImage(item);
+                                return displayImage ? (
+                                  <img
+                                    src={displayImage}
+                                    alt="Product"
+                                    className="w-16 h-16 object-cover rounded flex-shrink-0"
+                                  />
+                                ) : null;
+                              })()}
+                              <div className="flex-1">
+                                {productCategories[item.product_category_id]?.category_name || 'N/A'}
+                              </div>
+                            </div>
                           </td>
                           <td className="border border-gray-300 px-4 py-2">
                             {item.product_description}
@@ -506,10 +522,41 @@ export default function InvoiceDetailPage() {
                   </div>
                 </div>
 
+                {/* Authorized Signatory Section */}
+                <div className="mt-12 pt-6 border-t">
+                  <div className="flex justify-between items-end">
+                    {/* Customer Signature */}
+                    <div className="text-center">
+                      <div className="border-b border-gray-400 w-40 mb-2"></div>
+                      <div className="text-sm text-gray-600">Customer Signature</div>
+                    </div>
+                    
+                    {/* Company Authorized Signatory */}
+                    <div className="text-center">
+                      <div className="mb-3">
+                        {company?.authorized_signatory_url ? (
+                          <img 
+                            src={company.authorized_signatory_url} 
+                            alt="Authorized Signatory" 
+                            className="w-20 h-16 object-contain mx-auto"
+                          />
+                        ) : (
+                          <div className="w-20 h-16 border border-gray-300 mx-auto flex items-center justify-center">
+                            <span className="text-xs text-gray-400">Signature</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="border-b border-gray-400 w-40 mb-2"></div>
+                      <div className="text-sm text-gray-600">Authorized Signatory</div>
+                      <div className="text-xs text-gray-500 mt-1">{company?.company_name || 'Company Name'}</div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Footer */}
-                <div className="mt-12 text-center text-sm text-muted-foreground">
+                <div className="mt-8 text-center text-sm text-muted-foreground">
                   <p>Thank you for your business!</p>
-                  <p className="mt-4">Payment due within 30 days</p>
+                  <p className="mt-2">Payment due within 30 days</p>
                 </div>
               </div>
             </div>

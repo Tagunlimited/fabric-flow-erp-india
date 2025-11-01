@@ -27,15 +27,64 @@ export default function QCReviewDialog({ isOpen, onClose, orderId, orderNumber, 
         .from('order_batch_size_distributions')
         .select('size_name, picked_quantity')
         .eq('order_batch_assignment_id', assignmentId);
-      const base: SizeRow[] = (sizes || []).map((s: any) => ({ size_name: s.size_name, picked: Number(s.picked_quantity || 0), approved: 0, rejected: 0, remarks: '' }));
-      // Load existing QC rows
+      // Load existing QC rows to see what's already verified
       const { data: qc } = await (supabase as any)
         .from('qc_reviews')
-        .select('size_name, approved_quantity, rejected_quantity, remarks')
+        .select('size_name, approved_quantity, rejected_quantity, remarks, picked_quantity')
         .eq('order_batch_assignment_id', assignmentId);
-      const map = new Map<string, { a: number; r: number; m?: string }>();
-      (qc || []).forEach((q: any) => map.set(q.size_name, { a: Number(q.approved_quantity || 0), r: Number(q.rejected_quantity || 0), m: q.remarks }));
-      setRows(base.map(b => ({ ...b, approved: map.get(b.size_name)?.a || 0, rejected: map.get(b.size_name)?.r || 0, remarks: map.get(b.size_name)?.m || '' })));
+      
+      const qcMap = new Map<string, { a: number; r: number; m?: string; pq: number }>();
+      (qc || []).forEach((q: any) => qcMap.set(q.size_name, { 
+        a: Number(q.approved_quantity || 0), 
+        r: Number(q.rejected_quantity || 0), 
+        m: q.remarks,
+        pq: Number(q.picked_quantity || 0)
+      }));
+      
+      // For each size, calculate items needing verification
+      const base: SizeRow[] = (sizes || []).map((s: any) => {
+        const currentPicked = Number(s.picked_quantity || 0);
+        const qcData = qcMap.get(s.size_name);
+        const previousApproved = qcData?.a || 0;
+        const previousRejected = qcData?.r || 0;
+        const previousPicked = qcData?.pq || 0;
+        
+        // Items needing verification = current picked - (previous approved + previous rejected)
+        // This calculates how many NEW items need QC verification
+        // Example: picked=10, approved=9, rejected=1 → needsQC = 10 - (9+1) = 0
+        // But if picker picked 1 replacement after rejection:
+        // picked stays 10, but (approved=9 + rejected=1) = 10, so needsQC = 0
+        // However, we need to verify the 1 replacement!
+        
+        // Better approach: Items needing QC = currentPicked - (previousApproved + previousRejected)
+        // But if there are rejected items, replacements should be verified
+        // So: items needing QC = max(0, currentPicked - (previousApproved + previousRejected))
+        // If currentPicked > previousApproved + previousRejected, there are new items
+        
+        let itemsNeedingQC = Math.max(0, currentPicked - (previousApproved + previousRejected));
+        
+        // If currentPicked equals previousApproved + previousRejected but there are rejected items,
+        // it means replacements were picked (picked qty stayed same)
+        // In this case, we should show the rejected qty for re-verification
+        if (itemsNeedingQC === 0 && previousRejected > 0 && currentPicked === (previousApproved + previousRejected)) {
+          // This means replacements were picked - show rejected count for re-verification
+          itemsNeedingQC = previousRejected;
+        }
+        
+        // If there's no QC data yet, all picked items need QC
+        // If there's QC data, show items needing verification
+        const needsQC = qcData ? itemsNeedingQC : currentPicked;
+        
+        return {
+          size_name: s.size_name,
+          picked: needsQC, // Show only items needing QC verification
+          approved: 0, // Reset to 0 - will accumulate when saving
+          rejected: 0, // Reset to 0 - will accumulate when saving
+          remarks: qcData?.m || ''
+        };
+      });
+      
+      setRows(base);
     };
     if (isOpen) load();
   }, [isOpen, assignmentId]);
@@ -79,16 +128,55 @@ export default function QCReviewDialog({ isOpen, onClose, orderId, orderNumber, 
     }
     try {
       setSaving(true);
-      // Upsert one row per size
+      
+      // Get current picked quantities to calculate totals correctly
+      const { data: sizes } = await (supabase as any)
+        .from('order_batch_size_distributions')
+        .select('size_name, picked_quantity')
+        .eq('order_batch_assignment_id', assignmentId);
+      const pickedMap = new Map<string, number>();
+      (sizes || []).forEach((s: any) => {
+        pickedMap.set(s.size_name, Number(s.picked_quantity || 0));
+      });
+      
+      // Get existing QC data to accumulate
+      const { data: existingQC } = await (supabase as any)
+        .from('qc_reviews')
+        .select('size_name, approved_quantity, rejected_quantity')
+        .eq('order_batch_assignment_id', assignmentId);
+      const existingQCMap = new Map<string, { a: number; r: number }>();
+      (existingQC || []).forEach((q: any) => {
+        existingQCMap.set(q.size_name, { 
+          a: Number(q.approved_quantity || 0), 
+          r: Number(q.rejected_quantity || 0) 
+        });
+      });
+      
+      // Upsert one row per size - accumulate approved/rejected totals
       await Promise.all(rows.map(async (r) => {
+        const currentPicked = pickedMap.get(r.size_name) || 0;
+        const existing = existingQCMap.get(r.size_name);
+        const previousApproved = existing?.a || 0;
+        const previousRejected = existing?.r || 0;
+        
+        // r.approved and r.rejected are the NEW approvals/rejections for items being verified in this session
+        // The dialog shows only items needing verification, so r.approved/r.rejected are new values
+        // Accumulate: total approved/rejected = previous + new
+        const totalApproved = Math.max(0, previousApproved + r.approved);
+        const totalRejected = Math.max(0, previousRejected + r.rejected);
+        
+        // Ensure totals don't exceed current picked quantity
+        const finalApproved = Math.min(totalApproved, currentPicked);
+        const finalRejected = Math.min(totalRejected, currentPicked - finalApproved);
+        
         await (supabase as any)
           .from('qc_reviews')
           .upsert({
             order_batch_assignment_id: assignmentId,
             size_name: r.size_name,
-            picked_quantity: r.picked,
-            approved_quantity: r.approved,
-            rejected_quantity: r.rejected,
+            picked_quantity: currentPicked, // Current total picked quantity
+            approved_quantity: finalApproved,
+            rejected_quantity: finalRejected,
             remarks: r.remarks || null
           } as any, { onConflict: 'order_batch_assignment_id,size_name' } as any);
       }));

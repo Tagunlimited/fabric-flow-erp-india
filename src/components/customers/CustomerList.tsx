@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Search, Plus, Edit, Trash2, Download, Upload, X, FileText } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, Download, Upload, X, FileText, ShoppingCart } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
@@ -13,6 +13,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { CustomerForm } from './CustomerForm';
+import { OrderForm } from '../orders/OrderForm';
 import { calculateLifetimeValue, formatCurrency } from '@/lib/utils';
 import * as XLSX from 'xlsx';
 
@@ -50,6 +51,8 @@ export function CustomerList() {
   const [bulkFile, setBulkFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [showOrderDialog, setShowOrderDialog] = useState(false);
+  const [selectedCustomerForOrder, setSelectedCustomerForOrder] = useState<Customer | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -65,7 +68,7 @@ export function CustomerList() {
     try {
       setLoading(true);
       
-      // Fetch customers with joined data
+      // Fetch customers
       const { data, error } = await supabase
         .from('customers')
         .select('*')
@@ -73,10 +76,21 @@ export function CustomerList() {
 
       if (error) throw error;
       
-      // Transform the data to include the names (using enum values directly)
+      // Fetch customer types separately
+      const { data: customerTypes } = await supabase
+        .from('customer_types')
+        .select('id, name');
+      
+      // Create a map for quick lookup
+      const customerTypeMap = new Map();
+      (customerTypes || []).forEach(type => {
+        customerTypeMap.set(type.id, type.name);
+      });
+      
+      // Transform the data to include the names
       const transformedData = (data || []).map(customer => ({
         ...customer,
-        customer_type_name: customer.customer_type || 'Unknown',
+        customer_type_name: customerTypeMap.get(customer.customer_type) || 'Unknown',
         state_name: customer.state || 'Unknown'
       }));
       
@@ -182,6 +196,11 @@ export function CustomerList() {
         variant: "destructive",
       });
     }
+  };
+
+  const handlePlaceOrder = (customer: Customer) => {
+    setSelectedCustomerForOrder(customer);
+    setShowOrderDialog(true);
   };
 
   const handleFormSave = (customer: Customer) => {
@@ -573,8 +592,7 @@ export function CustomerList() {
                   pan: getStringValueOrNull(values[9]),
                   customer_type: customerTypeName,
                   customer_tier: customerTierName,
-                  credit_limit: parseFloat(getStringValue(values[12])) || 0,
-                  outstanding_amount: parseFloat(getStringValue(values[13])) || 0,
+                  outstanding_amount: parseFloat(getStringValue(values[12])) || 0,
                   total_orders: parseInt(getStringValue(values[14])) || 0,
                   last_order_date: getStringValueOrNull(values[15])
                 };
@@ -783,17 +801,28 @@ export function CustomerList() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleEdit(customer)}
+                            onClick={() => handlePlaceOrder(customer)}
+                            title="Place Order"
+                            className="text-green-600 hover:text-green-700"
                           >
-                            <Edit className="w-4 h-4" />
+                            <ShoppingCart className="w-5 h-5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleEdit(customer)}
+                            title="Edit Customer"
+                          >
+                            <Edit className="w-5 h-5" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="sm"
                             onClick={() => handleDelete(customer.id)}
                             className="text-error hover:text-error"
+                            title="Delete Customer"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-5 h-5" />
                           </Button>
                         </div>
                       </TableCell>
@@ -899,6 +928,49 @@ export function CustomerList() {
                 {isUploading ? 'Uploading...' : 'Upload Customers'}
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Place Order Dialog */}
+      <Dialog open={showOrderDialog} onOpenChange={setShowOrderDialog}>
+        <DialogContent className="max-w-7xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Place Order - {selectedCustomerForOrder?.company_name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {selectedCustomerForOrder && (
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <h3 className="font-medium text-sm text-gray-700 mb-2">Customer Details</h3>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="font-medium">Company:</span> {selectedCustomerForOrder.company_name}
+                  </div>
+                  <div>
+                    <span className="font-medium">Email:</span> {selectedCustomerForOrder.email}
+                  </div>
+                  <div>
+                    <span className="font-medium">Phone:</span> {selectedCustomerForOrder.phone}
+                  </div>
+                  <div>
+                    <span className="font-medium">City:</span> {selectedCustomerForOrder.city}
+                  </div>
+                </div>
+              </div>
+            )}
+            <OrderForm 
+              preSelectedCustomer={selectedCustomerForOrder}
+              onOrderCreated={() => {
+                setShowOrderDialog(false);
+                setSelectedCustomerForOrder(null);
+                toast({
+                  title: "Success",
+                  description: "Order created successfully",
+                });
+              }}
+            />
           </div>
         </DialogContent>
       </Dialog>

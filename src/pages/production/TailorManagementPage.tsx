@@ -57,6 +57,15 @@ interface Tailor {
   employment_type: string;
   salary: number;
   work_hours_per_day: number;
+  id_proof_type?: string;
+  id_proof_number?: string;
+  id_proof_image_url?: string;
+  id_proof_back_image_url?: string;
+  bank_name?: string;
+  account_holder_name?: string;
+  account_number?: string;
+  ifsc_code?: string;
+  passbook_image_url?: string;
 }
 
 interface Batch {

@@ -35,6 +35,10 @@ interface Employee {
   reports_to?: string;
   created_at: string;
   avatar_url?: string;
+  id_proof_type?: string;
+  id_proof_number?: string;
+  id_proof_image_url?: string;
+  id_proof_back_image_url?: string;
 }
 
 export function EmployeeCardList() {

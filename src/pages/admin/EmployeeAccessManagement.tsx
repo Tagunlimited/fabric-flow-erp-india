@@ -10,7 +10,7 @@ const EmployeeAccessManagementPage = () => {
             Employee Access Management
           </h1>
           <p className="text-muted-foreground mt-1">
-            Create user accounts with passwords for employees and manage their roles
+            Create user accounts for employees and manage their sidebar permissions
           </p>
         </div>
         <EmployeeAccessManagement />

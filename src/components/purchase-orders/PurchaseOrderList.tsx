@@ -27,13 +27,27 @@ type PurchaseOrder = {
 type Supplier = { id: string; supplier_name: string; supplier_code: string };
 
 type FirstItemImage = { po_id: string; item_image_url: string | null };
-type ItemRowLite = { po_id: string; item_image_url: string | null; line_total: number | null; total_price: number | null; gst_amount: number | null; gst_rate: number | null };
+type ItemRowLite = { 
+  po_id: string; 
+  item_image_url: string | null; 
+  remarks: string | null; 
+  quantity: number; 
+  unit_of_measure: string | null;
+  item_name: string | null;
+  item_type: string | null;
+  fabric_name: string | null;
+  fabric_color: string | null;
+  fabric_gsm: string | null;
+  notes: string | null;
+};
 
 // Memoized row component for better performance
 const PurchaseOrderRow = memo(function PurchaseOrderRow({ 
   po, 
   supplier, 
   imageUrl, 
+  totalQuantity,
+  items,
   onView, 
   onEdit, 
   onDelete 
@@ -41,6 +55,8 @@ const PurchaseOrderRow = memo(function PurchaseOrderRow({
   po: PurchaseOrder;
   supplier: Supplier | undefined;
   imageUrl: string | null;
+  totalQuantity: { total: number; uom: string } | undefined;
+  items: ItemRowLite[];
   onView: (id: string) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
@@ -74,7 +90,35 @@ const PurchaseOrderRow = memo(function PurchaseOrderRow({
           className="w-12 h-12 object-cover rounded"
         />
       </TableCell>
-      <TableCell>{po.total_amount != null ? po.total_amount.toFixed(2) : '-'}</TableCell>
+      <TableCell>
+        <div className="text-sm space-y-1">
+          {items.slice(0, 2).map((item, idx) => (
+            <div key={idx} className="border-b border-gray-100 pb-1 last:border-b-0">
+              <div className="font-medium">{item.item_name || 'N/A'}</div>
+              {item.item_type === 'fabric' && (
+                <div className="text-xs text-muted-foreground">
+                  {item.fabric_name && `${item.fabric_name} - `}
+                  {item.fabric_color && `${item.fabric_color}, `}
+                  {item.fabric_gsm && `${item.fabric_gsm} GSM`}
+                </div>
+              )}
+              {item.notes && (
+                <div className="text-xs text-muted-foreground truncate">
+                  {item.notes}
+                </div>
+              )}
+            </div>
+          ))}
+          {items.length > 2 && (
+            <div className="text-xs text-muted-foreground">
+              +{items.length - 2} more items
+            </div>
+          )}
+        </div>
+      </TableCell>
+      <TableCell>
+        {totalQuantity ? `${totalQuantity.total} ${totalQuantity.uom}` : '-'}
+      </TableCell>
       <TableCell>{statusBadge(po.status)}</TableCell>
       <TableCell>
         <div className="flex gap-2">
@@ -99,6 +143,8 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Record<string, Supplier>>({});
   const [firstItemImageByPoId, setFirstItemImageByPoId] = useState<Record<string, string | null>>({});
+  const [totalQuantityByPoId, setTotalQuantityByPoId] = useState<Record<string, { total: number; uom: string }>>({});
+  const [itemsByPoId, setItemsByPoId] = useState<Record<string, ItemRowLite[]>>({});
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | PurchaseOrder['status']>('all');
 
@@ -112,16 +158,50 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
         .select(`
           *,
           supplier:supplier_master(id, supplier_name, supplier_code),
-          items:purchase_order_items(po_id, item_image_url, line_total, total_price, gst_amount, gst_rate)
+          items:purchase_order_items(
+            po_id, 
+            item_image_url, 
+            remarks, 
+            quantity, 
+            unit_of_measure, 
+            item_name, 
+            item_type, 
+            fabric_name, 
+            fabric_color, 
+            fabric_gsm, 
+            notes,
+            item_id
+          )
         `)
         .order('created_at', { ascending: false });
       
       if (poErr) throw poErr;
 
+      console.log('Raw PO data from database:', poData);
+      console.log('Number of POs fetched:', poData?.length || 0);
+      
+      // Log detailed PO information for debugging
+      if (poData && poData.length > 0) {
+        console.log('Detailed PO data:');
+        poData.forEach((po: any, index: number) => {
+          console.log(`PO ${index + 1}:`, {
+            id: po.id,
+            po_number: po.po_number,
+            bom_id: po.bom_id,
+            supplier_id: po.supplier_id,
+            status: po.status,
+            created_at: po.created_at,
+            supplier: po.supplier,
+            items_count: po.items?.length || 0
+          });
+        });
+      }
+
       // Process the joined data
       const supplierMap: Record<string, Supplier> = {};
       const firstImageMap: Record<string, string | null> = {};
-      const totalsMap: Record<string, number> = {};
+      const totalQuantityMap: Record<string, { total: number; uom: string }> = {};
+      const itemsMap: Record<string, ItemRowLite[]> = {};
       const processedPOs: PurchaseOrder[] = [];
 
       (poData || []).forEach((po: any) => {
@@ -136,21 +216,32 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
 
         // Process items data
         if (po.items && Array.isArray(po.items)) {
+          let totalQty = 0;
+          let primaryUom = '';
+          
+          // Store all items for this PO
+          itemsMap[po.id] = po.items;
+          
           po.items.forEach((item: ItemRowLite) => {
             // Pick first non-null image only
             if (firstImageMap[item.po_id] == null && item.item_image_url) {
               firstImageMap[item.po_id] = item.item_image_url;
             }
-            // Compute line total fallback
-            const tp = item.total_price || 0;
-            const ga = item.gst_amount != null ? item.gst_amount : tp * ((item.gst_rate || 0) / 100);
-            const lt = item.line_total != null ? item.line_total : tp + ga;
-            totalsMap[item.po_id] = (totalsMap[item.po_id] || 0) + lt;
+            
+            // Calculate total quantity
+            totalQty += item.quantity || 0;
+            if (!primaryUom && item.unit_of_measure) {
+              primaryUom = item.unit_of_measure;
+            }
           });
+          
+          totalQuantityMap[po.id] = {
+            total: totalQty,
+            uom: primaryUom || 'pcs'
+          };
         }
 
-        // Process PO data
-        const computed = totalsMap[po.id];
+        // Process PO data - no pricing calculations needed
         const processedPO: PurchaseOrder = {
           id: po.id,
           po_number: po.po_number,
@@ -159,16 +250,23 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
           expected_delivery_date: po.expected_delivery_date,
           subtotal: po.subtotal,
           tax_amount: po.tax_amount,
-          total_amount: (po.total_amount == null || po.total_amount === 0) && computed > 0 ? computed : po.total_amount,
+          total_amount: po.total_amount, // Keep as is, no calculations
           status: po.status,
           created_at: po.created_at
         };
         processedPOs.push(processedPO);
       });
 
+      console.log('Processed POs:', processedPOs);
+      console.log('Supplier map:', supplierMap);
+      console.log('First image map:', firstImageMap);
+      console.log('Total quantity map:', totalQuantityMap);
+
       setPurchaseOrders(processedPOs);
       setSuppliers(supplierMap);
       setFirstItemImageByPoId(firstImageMap);
+      setTotalQuantityByPoId(totalQuantityMap);
+      setItemsByPoId(itemsMap);
     } catch (e) {
       console.error('Failed to fetch purchase orders', e);
     } finally {
@@ -266,7 +364,8 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
                     <TableHead>Supplier</TableHead>
                     <TableHead>Order Date</TableHead>
                     <TableHead>Image</TableHead>
-                    <TableHead>Total</TableHead>
+                    <TableHead>Item Details</TableHead>
+                    <TableHead>Total Qty</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
@@ -275,12 +374,16 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
                   {filteredPOs.map((po) => {
                     const sup = suppliers[po.supplier_id];
                     const img = firstItemImageByPoId[po.id];
+                    const totalQty = totalQuantityByPoId[po.id];
+                    const items = itemsByPoId[po.id] || [];
                     return (
                       <PurchaseOrderRow
                         key={po.id}
                         po={po}
                         supplier={sup}
                         imageUrl={img}
+                        totalQuantity={totalQty}
+                        items={items}
                         onView={handleView}
                         onEdit={handleEdit}
                         onDelete={handleDelete}

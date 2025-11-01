@@ -69,13 +69,20 @@ begin
     into v_has_bom;
 
   -- Determine highest attained target status (without downgrading advanced stages)
+  -- Priority order: under_procurement > confirmed > designing_done > pending
   v_target := 'pending';
-  if v_has_receipt then
-    v_target := 'confirmed';
-  end if;
+  
+  -- When mockup/reference images are uploaded, set to designing_done (if no receipt yet)
   if v_item_count > 0 and v_done_count = v_item_count then
     v_target := 'designing_done';
   end if;
+  
+  -- When receipt is generated, set to confirmed (this overrides designing_done)
+  if v_has_receipt then
+    v_target := 'confirmed';
+  end if;
+  
+  -- When BOM is created, set to under_procurement (this overrides confirmed)
   if v_has_bom then
     v_target := 'under_procurement';
   end if;

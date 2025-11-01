@@ -12,6 +12,8 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { ErpLayout } from '@/components/ErpLayout';
+import { useFormData } from '@/contexts/FormPersistenceContext';
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 
 type Customer = { 
   id: string; 
@@ -107,12 +109,28 @@ export function BomForm() {
   const [loading, setLoading] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
-  const [bom, setBom] = useState<BomRecord>({
+  const { data: bom, updateData: setBom, resetData: resetBomData, isLoaded: isBomLoaded, hasSavedData: hasBomData } = useFormData<BomRecord>('bomForm', {
     product_name: '',
     total_order_qty: 0,
     status: 'draft',
   });
   const [items, setItems] = useState<BomLineItem[]>([]);
+
+  // Clear BOM ID when creating a new BOM (not editing and not from order)
+  useEffect(() => {
+    if (!isEditMode && !isReadOnly && !orderParam && bom.id) {
+      console.log('Clearing BOM ID for new BOM creation (no order param)');
+      setBom(prev => ({ ...prev, id: undefined }));
+    }
+  }, [isEditMode, isReadOnly, orderParam, bom.id, setBom]);
+
+  // Clear all form data when creating a new BOM (not editing and not from order)
+  useEffect(() => {
+    if (!isEditMode && !isReadOnly && !id && !orderParam) {
+      console.log('Clearing all form data for new BOM creation (no order param)');
+      resetBomData();
+    }
+  }, [isEditMode, isReadOnly, id, orderParam, resetBomData]);
   
   // Option lists by type
   const [fabricOptions, setFabricOptions] = useState<{ id: string; label: string; image_url?: string | null; color?: string; gsm?: string; rate?: number }[]>([]);
@@ -277,12 +295,13 @@ export function BomForm() {
         
         // Pre-fill BOM data from order
         if (decodedOrderData.order_item) {
+          console.log('Setting BOM data from decoded order data:', decodedOrderData);
           setBom(prev => ({
             ...prev,
             order_id: decodedOrderData.order_id,
             order_item_id: decodedOrderData.order_item_id,
             product_name: decodedOrderData.order_item.product_description || '',
-            product_image_url: decodedOrderData.order_item.category_image_url || null,
+            product_image_url: getOrderItemDisplayImage(decodedOrderData.order_item) || null,
             total_order_qty: decodedOrderData.order_item.quantity || 0,
           }));
         }
@@ -424,11 +443,11 @@ export function BomForm() {
       let data = null;
       let error = null;
 
-      // First try product_master
+      // First try product_master with both possible column names
       const result1 = await supabase
         .from('product_master')
-        .select('id, product_name, image_url')
-        .order('product_name');
+        .select('id, name, product_name, image_url')
+        .order('name');
       
       if (result1.error) {
         console.log('product_master failed, trying products table...');
@@ -476,6 +495,8 @@ export function BomForm() {
             total_price,
             product_description,
             category_image_url,
+            mockup_images,
+            specifications,
             fabric_id,
             gsm,
             color,
@@ -519,12 +540,14 @@ export function BomForm() {
       // Pre-fill BOM data from order
       if ((order as any)?.order_items && (order as any).order_items.length > 0) {
         const firstItem = (order as any).order_items[0];
+        const totalQty = (order as any).order_items.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0);
+        console.log('Setting BOM data from fetched order:', { orderId: (order as any).id, totalQty, orderItems: (order as any).order_items });
         setBom(prev => ({
           ...prev,
           order_id: (order as any).id,
           product_name: firstItem.product_description || firstItem.product?.name || '',
-          product_image_url: firstItem.category_image_url || firstItem.product?.image_url || null,
-          total_order_qty: (order as any).order_items.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0),
+          product_image_url: getOrderItemDisplayImage(firstItem) || firstItem.product?.image_url || null,
+          total_order_qty: totalQty,
         }));
       }
     } catch (error) {
@@ -1015,11 +1038,34 @@ export function BomForm() {
     }
   };
 
+  // Helper function to calculate qty_total based on item type
+  const calculateQtyTotal = (item: BomLineItem, totalOrderQty: number): number => {
+    if (item.item_type === 'fabric') {
+      // For fabric: division calculation (total_order_qty ÷ pcs_in_1_unit)
+      if (!item.qty_per_product || item.qty_per_product <= 0) {
+        return 0;
+      }
+      return totalOrderQty / item.qty_per_product;
+    } else {
+      // For non-fabric: multiplication calculation (qty_per_product × total_order_qty)
+      return (item.qty_per_product || 0) * totalOrderQty;
+    }
+  };
+
+  // Helper function to get label text based on item type
+  const getQtyLabel = (item: BomLineItem): string => {
+    if (item.item_type === 'fabric') {
+      const uom = item.unit_of_measure?.toLowerCase() || 'kg';
+      return `Pcs in 1 ${uom}`;
+    }
+    return 'Qty/Pc';
+  };
+
   // Handle Qty/Pc change with auto-reset to 1 on focus
   const handleQtyPerProductChange = (index: number, value: string) => {
-    const qtyPerProduct = parseFloat(value) || 0; // Default to 1 instead of 0
+    const qtyPerProduct = parseFloat(value) || 0;
     const item = items[index];
-    const qtyTotal = qtyPerProduct * bom.total_order_qty;
+    const qtyTotal = calculateQtyTotal({ ...item, qty_per_product: qtyPerProduct }, bom.total_order_qty);
     const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
     
     updateItem(index, { 
@@ -1049,7 +1095,7 @@ export function BomForm() {
   useEffect(() => {
     items.forEach((item, index) => {
       if (item.qty_per_product && bom.total_order_qty > 0) {
-        const qtyTotal = item.qty_per_product * bom.total_order_qty;
+        const qtyTotal = calculateQtyTotal(item, bom.total_order_qty);
         const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
         
         updateItem(index, {
@@ -1096,6 +1142,16 @@ export function BomForm() {
       return;
     }
 
+    // Validate fabric items have qty_per_product > 0
+    const invalidFabricItems = items.filter(
+      item => item.item_type === 'fabric' && (!item.qty_per_product || item.qty_per_product <= 0)
+    );
+    if (invalidFabricItems.length > 0) {
+      const uom = invalidFabricItems[0].unit_of_measure?.toLowerCase() || 'kg';
+      toast.error(`Fabric items require "Pcs in 1 ${uom}" to be greater than 0`);
+      return;
+    }
+
     // Check for duplicate BOM for the same product (only for new BOMs)
     if (!bom.id) {
       try {
@@ -1131,6 +1187,12 @@ export function BomForm() {
        };
 
       let bomId = bom.id;
+
+      // Ensure we're not accidentally updating when we should be creating
+      if (bomId && !isEditMode) {
+        console.log('Warning: BOM ID exists but not in edit mode. Clearing ID for new BOM creation.');
+        bomId = undefined;
+      }
 
       if (bomId) {
         // Update existing BOM
@@ -1174,6 +1236,7 @@ export function BomForm() {
       } else {
         // Create new BOM
         console.log('Creating new BOM with data:', bomData);
+        console.log('BOM ID is undefined, proceeding with new BOM creation');
         
         // Create BOM record in bom_records table
         const result = await supabase
@@ -1327,6 +1390,11 @@ export function BomForm() {
       // Success - show success message and navigate
       toast.success(bomId ? 'BOM updated successfully' : 'BOM created successfully');
       
+      // Clear saved form data after successful save (only for new BOMs)
+      if (!isEditMode) {
+        resetBomData();
+      }
+      
       // Navigate after a short delay to ensure toast is visible
       setTimeout(() => {
         navigate(`/bom/${bomId}`);
@@ -1347,10 +1415,16 @@ export function BomForm() {
     }
   };
 
-  if (loading && !isEditMode) {
+  // Show loading state while form data is being loaded
+  if (!isBomLoaded || (loading && !isEditMode)) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">
+            {!isBomLoaded ? 'Loading form data...' : 'Loading...'}
+          </p>
+        </div>
       </div>
     );
   }
@@ -1375,6 +1449,15 @@ export function BomForm() {
           </div>
         </div>
                  <div className="flex gap-2">
+            {hasBomData && !isEditMode && (
+              <Button 
+                variant="outline"
+                onClick={resetBomData}
+                className="text-red-600 hover:text-red-700"
+              >
+                Clear Saved Data
+              </Button>
+            )}
             <Button variant="outline" onClick={() => navigate('/bom')}>
              Cancel
            </Button>
@@ -1573,15 +1656,15 @@ export function BomForm() {
                           )}
                           </div>
 
-                        {/* Qty/Pc */}
+                        {/* Qty/Pc or Pcs in 1 {uom} */}
                           <div>
-                          <Label className="text-sm font-medium">Qty/Pc</Label>
+                          <Label className="text-sm font-medium">{getQtyLabel(item)}</Label>
                             <Input
                             type="number"
                             value={item.qty_per_product}
                             onChange={(e) => {
                               const qtyPerProduct = parseFloat(e.target.value) || 0;
-                              const qtyTotal = qtyPerProduct * bom.total_order_qty;
+                              const qtyTotal = calculateQtyTotal({ ...item, qty_per_product: qtyPerProduct }, bom.total_order_qty);
                               const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
                               
                               updateItemById(item.id, { 
@@ -1727,15 +1810,15 @@ export function BomForm() {
                                  </Select>
                                </div>
 
-                        {/* Qty/Pc */}
+                        {/* Qty/Pc or Pcs in 1 {uom} */}
                           <div>
-                          <Label className="text-sm font-medium">Qty/Pc</Label>
+                          <Label className="text-sm font-medium">{getQtyLabel(item)}</Label>
                             <Input
                               type="number"
                             value={item.qty_per_product}
                               onChange={(e) => {
                               const qtyPerProduct = parseFloat(e.target.value) || 1; // Default to 1 instead of 0
-                              const qtyTotal = qtyPerProduct * bom.total_order_qty;
+                              const qtyTotal = calculateQtyTotal({ ...item, qty_per_product: qtyPerProduct }, bom.total_order_qty);
                               const toOrder = Math.max(qtyTotal - (item.stock || 0), 0);
                                 updateItem(index, { 
                                   qty_per_product: qtyPerProduct,

@@ -30,7 +30,8 @@ import {
   Plus,
   UserCheck,
   UserPlus,
-  RefreshCw
+  RefreshCw,
+  FileText
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useState, useEffect } from "react";
@@ -38,6 +39,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleBatchAssignmentDialog";
 import { UpdateCuttingQuantityDialog } from "@/components/production/UpdateCuttingQuantityDialog";
 import { FabricPickingDialog } from "@/components/production/FabricPickingDialog";
+import { generateBatchAssignmentPDF } from "@/utils/batchAssignmentPDF";
 
 interface CuttingJob {
   id: string;
@@ -50,7 +52,6 @@ interface CuttingJob {
   cutQuantity: number;
   cutQuantitiesBySize?: { [size: string]: number };
   assignedTo: string;
-  patternMasterName?: string;
   startDate: string;
   dueDate: string;
   status: 'pending' | 'in_progress' | 'completed' | 'on_hold' | 'quality_check';
@@ -129,6 +130,9 @@ const CuttingManagerPage = () => {
   // Fabric picking dialog state
   const [fabricPickingOpen, setFabricPickingOpen] = useState(false);
   const [selectedJobForFabricPicking, setSelectedJobForFabricPicking] = useState<CuttingJob | null>(null);
+  
+  // PDF generation state
+  const [generatingPDF, setGeneratingPDF] = useState<string | null>(null);
 
   // Use the centralized Indian date format function
   const formatDateDDMMYY = (value?: string) => {
@@ -152,6 +156,111 @@ const CuttingManagerPage = () => {
     refreshData();
   };
 
+  // PDF generation function for completed jobs
+  const handleGeneratePDF = async (job: CuttingJob) => {
+    setGeneratingPDF(job.id);
+    try {
+      console.log('🚀 Starting PDF generation for job:', job.jobNumber);
+      
+      // Fetch stitching prices from order_assignments
+      const { data: priceData, error: priceError } = await supabase
+        .from('order_assignments')
+        .select('cutting_price_single_needle, cutting_price_overlock_flatlock')
+        .eq('order_id', job.id)
+        .single();
+
+      if (priceError) {
+        console.error('❌ Error fetching pricing data:', priceError);
+        return;
+      }
+
+      // Fetch order details with customizations
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          order_items (
+            *,
+            product_categories (
+              category_name,
+              category_image_url
+            ),
+            fabrics (
+              name,
+              description,
+              image_url
+            )
+          )
+        `)
+        .eq('id', job.id)
+        .single();
+
+      if (orderError) {
+        console.error('❌ Error fetching order data:', orderError);
+        return;
+      }
+
+      // Fetch company settings
+      const { data: companySettings, error: settingsError } = await supabase
+        .from('company_settings')
+        .select('*')
+        .single();
+
+      if (settingsError) {
+        console.error('❌ Error fetching company settings:', settingsError);
+        return;
+      }
+
+      // Prepare batch assignment data from existing batch assignments
+      const batchAssignments = (job.batchAssignments || []).map(assignment => {
+        const sizeDistributions = Object.entries(assignment.size_distributions || {})
+          .filter(([_, qty]) => qty > 0)
+          .map(([size, qty]) => ({ size, quantity: qty }));
+
+        // Determine price per piece based on tailor type
+        const pricePerPiece = assignment.tailor_type === 'single_needle' 
+          ? (priceData?.cutting_price_single_needle || 0)
+          : (priceData?.cutting_price_overlock_flatlock || 0);
+
+        return {
+          batchName: assignment.batch_name || 'Unknown Batch',
+          batchLeaderName: assignment.batch_leader_name || 'Unknown Leader',
+          tailorType: assignment.tailor_type as 'single_needle' | 'overlock_flatlock' || 'single_needle',
+          sizeDistributions,
+          pricePerPiece
+        };
+      });
+
+      // Prepare customizations (simplified since branding_items and order_item_addons don't exist)
+      const customizations = {
+        branding: null, // These relationships don't exist in current schema
+        addons: null,   // These relationships don't exist in current schema
+        special_instructions: orderData.special_instructions || orderData.notes
+      };
+
+      // Generate PDF
+      await generateBatchAssignmentPDF({
+        orderNumber: job.orderNumber,
+        customerName: job.customerName,
+        orderItems: orderData.order_items || [],
+        batchAssignments,
+        companySettings,
+        stitchingPrices: {
+          single_needle: priceData?.cutting_price_single_needle || 0,
+          overlock_flatlock: priceData?.cutting_price_overlock_flatlock || 0
+        },
+        customizations,
+        dueDate: orderData.expected_delivery_date
+      });
+
+      console.log('✅ PDF generation completed successfully!');
+    } catch (error) {
+      console.error('❌ Error generating PDF:', error);
+    } finally {
+      setGeneratingPDF(null);
+    }
+  };
+
   // Load assigned cutting jobs from DB (order_assignments) and enrich with order/customer/BOM
     const loadCuttingJobs = async () => {
       try {
@@ -160,7 +269,6 @@ const CuttingManagerPage = () => {
           .select(`
             order_id, 
             cutting_master_name, 
-            pattern_master_name, 
             cutting_work_date, 
             cut_quantity,
             cut_quantities_by_size
@@ -309,7 +417,6 @@ const CuttingManagerPage = () => {
             cutQuantity: Number(p.cut_quantity || 0),
             cutQuantitiesBySize: p.cut_quantities_by_size || {},
             assignedTo: p.cutting_master_name || '',
-            patternMasterName: p.pattern_master_name || '',
             startDate: p.cutting_work_date || '',
             dueDate: o.expected_delivery_date || '',
             status: 'pending',
@@ -646,7 +753,6 @@ const CuttingManagerPage = () => {
                         <TableHead>Product</TableHead>
                         <TableHead>Progress</TableHead>
                         <TableHead>Cutting Master</TableHead>
-                        <TableHead>Pattern Master</TableHead>
                         <TableHead>Assigned Batch</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Due Date</TableHead>
@@ -684,16 +790,6 @@ const CuttingManagerPage = () => {
                               <div className="flex items-center">
                                 <Users className="w-4 h-4 mr-2 text-muted-foreground" />
                                 {job.assignedTo}
-                              </div>
-                            ) : (
-                              <span className="text-muted-foreground">Unassigned</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {job.patternMasterName ? (
-                              <div className="flex items-center">
-                                <Users className="w-4 h-4 mr-2 text-muted-foreground" />
-                                {job.patternMasterName}
                               </div>
                             ) : (
                               <span className="text-muted-foreground">Unassigned</span>
@@ -876,7 +972,6 @@ const CuttingManagerPage = () => {
                         <TableHead>Product</TableHead>
                         <TableHead>Progress</TableHead>
                         <TableHead>Cutting Master</TableHead>
-                        <TableHead>Pattern Master</TableHead>
                         <TableHead>Assigned Batches</TableHead>
                         <TableHead>Completion Date</TableHead>
                         <TableHead>Actions</TableHead>
@@ -912,12 +1007,6 @@ const CuttingManagerPage = () => {
                             <div className="flex items-center">
                               <Users className="w-4 h-4 mr-2 text-muted-foreground" />
                               {job.assignedTo}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center">
-                              <Users className="w-4 h-4 mr-2 text-muted-foreground" />
-                              {job.patternMasterName || 'Unassigned'}
                             </div>
                           </TableCell>
                           <TableCell>
@@ -958,6 +1047,19 @@ const CuttingManagerPage = () => {
                               <Button variant="outline" size="sm" onClick={() => navigate(`/orders/${job.id}?from=production`)}>
                                 <Eye className="w-4 h-4 mr-2" />
                                 View
+                              </Button>
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                onClick={() => handleGeneratePDF(job)}
+                                disabled={generatingPDF === job.id}
+                              >
+                                {generatingPDF === job.id ? (
+                                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                                ) : (
+                                  <FileText className="w-4 h-4 mr-2" />
+                                )}
+                                {generatingPDF === job.id ? 'Generating...' : 'PDF'}
                               </Button>
                             </div>
                           </TableCell>
