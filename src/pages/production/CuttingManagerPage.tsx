@@ -52,6 +52,17 @@ interface CuttingJob {
   cutQuantity: number;
   cutQuantitiesBySize?: { [size: string]: number };
   assignedTo: string;
+  // Multiple cutting masters support
+  cuttingMasters?: Array<{
+    id: string;
+    name: string;
+    avatarUrl?: string;
+    assignedDate: string;
+  }>;
+  // Legacy single cutting master fields (for backward compatibility)
+  cuttingMasterId?: string;
+  cuttingMasterName?: string;
+  cuttingMasterAvatarUrl?: string;
   startDate: string;
   dueDate: string;
   status: 'pending' | 'in_progress' | 'completed' | 'on_hold' | 'quality_check';
@@ -264,10 +275,12 @@ const CuttingManagerPage = () => {
   // Load assigned cutting jobs from DB (order_assignments) and enrich with order/customer/BOM
     const loadCuttingJobs = async () => {
       try {
+        // First, get order IDs that have cutting assignments from both tables
         const { data: rows } = await supabase
           .from('order_assignments' as any)
           .select(`
             order_id, 
+            cutting_master_id,
             cutting_master_name, 
             cutting_work_date, 
             cut_quantity,
@@ -277,16 +290,42 @@ const CuttingManagerPage = () => {
         const map: Record<string, any> = {};
         (rows || []).forEach((r: any) => { if (r?.order_id) map[r.order_id] = r; });
         const orderIds: string[] = Object.keys(map);
-        if (orderIds.length === 0) {
+        
+        // Also fetch order IDs from order_cutting_assignments for multiple cutting masters
+        const { data: cuttingAssignmentsRows } = await supabase
+          .from('order_cutting_assignments' as any)
+          .select('order_id')
+          .in('order_id', orderIds.length > 0 ? orderIds : ['00000000-0000-0000-0000-000000000000'] as any);
+        const cuttingAssignmentOrderIds = Array.from(new Set((cuttingAssignmentsRows || []).map((r: any) => r.order_id).filter(Boolean)));
+        const allOrderIds = Array.from(new Set([...orderIds, ...cuttingAssignmentOrderIds]));
+        
+        if (allOrderIds.length === 0) {
           setCuttingJobs([]);
           return;
+        }
+        
+        // Fetch multiple cutting masters from order_cutting_assignments
+        let cuttingMastersByOrder: Record<string, any[]> = {};
+        try {
+          const { data: cuttingMastersData } = await supabase
+            .from('order_cutting_assignments' as any)
+            .select('order_id, cutting_master_id, cutting_master_name, cutting_master_avatar_url, assigned_date')
+            .in('order_id', allOrderIds as any);
+          (cuttingMastersData || []).forEach((r: any) => { 
+            if (r?.order_id) {
+              if (!cuttingMastersByOrder[r.order_id]) cuttingMastersByOrder[r.order_id] = [];
+              cuttingMastersByOrder[r.order_id].push(r);
+            }
+          });
+        } catch (e) {
+          console.error('Failed to load cutting masters:', e);
         }
 
         // Fetch orders first (simplified query)
         const { data: orders, error: ordersError } = await supabase
           .from('orders' as any)
           .select('id, order_number, expected_delivery_date, customer_id')
-          .in('id', orderIds as any);
+          .in('id', allOrderIds as any);
 
         if (ordersError) {
           console.error('Error fetching orders:', ordersError);
@@ -299,7 +338,7 @@ const CuttingManagerPage = () => {
         const { data: orderItems, error: orderItemsError } = await supabase
           .from('order_items' as any)
           .select('*')
-          .in('order_id', orderIds as any);
+          .in('order_id', allOrderIds as any);
 
         if (orderItemsError) {
           console.error('Error fetching order items:', orderItemsError);
@@ -377,7 +416,7 @@ const CuttingManagerPage = () => {
         const { data: boms } = await supabase
           .from('bom_records' as any)
           .select('order_id, product_name, total_order_qty')
-          .in('order_id', orderIds as any);
+          .in('order_id', allOrderIds as any);
         const bomByOrder: Record<string, { product_name?: string; qty: number }> = {};
         (boms || []).forEach((b: any) => {
           const key = b.order_id as string;
@@ -404,7 +443,12 @@ const CuttingManagerPage = () => {
                                      firstOrderItem?.product_description || 
                                      (bom as any).product_name || 
                                      'Product';
-          return {
+          
+          // Get cutting masters for this order
+          const cuttingMasters = cuttingMastersByOrder[o.id] || [];
+          
+          // Build the job object with cutting master information
+          const job: CuttingJob = {
             id: o.id,
             jobNumber: o.order_number,
             orderNumber: o.order_number,
@@ -416,7 +460,6 @@ const CuttingManagerPage = () => {
             quantity: Number((bom as any).qty || 0),
             cutQuantity: Number(p.cut_quantity || 0),
             cutQuantitiesBySize: p.cut_quantities_by_size || {},
-            assignedTo: p.cutting_master_name || '',
             startDate: p.cutting_work_date || '',
             dueDate: o.expected_delivery_date || '',
             status: 'pending',
@@ -786,10 +829,29 @@ const CuttingManagerPage = () => {
                             </div>
                           </TableCell>
                           <TableCell>
-                            {job.assignedTo ? (
-                              <div className="flex items-center">
-                                <Users className="w-4 h-4 mr-2 text-muted-foreground" />
-                                {job.assignedTo}
+                            {job.cuttingMasters && job.cuttingMasters.length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {job.cuttingMasters.map((master, idx) => (
+                                  <div key={idx} className="flex items-center space-x-2">
+                                    <Avatar className="w-8 h-8">
+                                      <AvatarImage src={master.avatarUrl} alt={master.name} />
+                                      <AvatarFallback className="bg-blue-200 text-blue-700 text-xs">
+                                        {master.name?.charAt(0)?.toUpperCase() || 'CM'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <span className="text-sm">{master.name}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : job.assignedTo ? (
+                              <div className="flex items-center space-x-2">
+                                <Avatar className="w-8 h-8">
+                                  <AvatarImage src={job.cuttingMasterAvatarUrl} alt={job.assignedTo} />
+                                  <AvatarFallback className="bg-blue-200 text-blue-700 text-xs">
+                                    {job.assignedTo?.charAt(0)?.toUpperCase() || 'CM'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="text-sm">{job.assignedTo}</span>
                               </div>
                             ) : (
                               <span className="text-muted-foreground">Unassigned</span>
@@ -1004,10 +1066,33 @@ const CuttingManagerPage = () => {
                             </div>
                           </TableCell>
                           <TableCell>
-                            <div className="flex items-center">
-                              <Users className="w-4 h-4 mr-2 text-muted-foreground" />
-                              {job.assignedTo}
-                            </div>
+                            {job.cuttingMasters && job.cuttingMasters.length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {job.cuttingMasters.map((master, idx) => (
+                                  <div key={idx} className="flex items-center space-x-2">
+                                    <Avatar className="w-6 h-6">
+                                      <AvatarImage src={master.avatarUrl} alt={master.name} />
+                                      <AvatarFallback className="bg-green-200 text-green-700 text-xs">
+                                        {master.name?.charAt(0)?.toUpperCase() || 'CM'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <span className="text-xs">{master.name}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : job.assignedTo ? (
+                              <div className="flex items-center space-x-2">
+                                <Avatar className="w-6 h-6">
+                                  <AvatarImage src={job.cuttingMasterAvatarUrl} alt={job.assignedTo} />
+                                  <AvatarFallback className="bg-green-200 text-green-700 text-xs">
+                                    {job.assignedTo?.charAt(0)?.toUpperCase() || 'CM'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="text-xs">{job.assignedTo}</span>
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">Unassigned</span>
+                            )}
                           </TableCell>
                           <TableCell>
                             <div className="space-y-1">
