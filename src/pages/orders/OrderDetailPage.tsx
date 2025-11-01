@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import { ErpLayout } from "@/components/ErpLayout";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
+import { useAuth } from "@/components/auth/AuthProvider";
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Input } from "@/components/ui/input";
@@ -202,6 +203,30 @@ export default function OrderDetailPage() {
   const [searchParams] = useSearchParams();
   const printRef = useRef<HTMLDivElement>(null);
   const { config: company } = useCompanySettings();
+  const { profile } = useAuth();
+  
+  // Determine if we should hide pricing/order summary/lifecycle sections
+  // Hide if: user is NOT admin OR if coming from Accounts sidebar
+  const [fromAccounts, setFromAccounts] = useState(false);
+  
+  useEffect(() => {
+    // Check if user came from Accounts sidebar
+    const from = searchParams.get('from');
+    const referrer = document.referrer || '';
+    
+    // Check if referrer contains any Accounts route
+    const isFromAccounts = from === 'accounts' || 
+                           referrer.includes('/accounts/quotations') ||
+                           referrer.includes('/accounts/invoices') ||
+                           referrer.includes('/accounts/receipts') ||
+                           referrer.includes('/accounts/payments') ||
+                           referrer.includes('/accounts/');
+    
+    setFromAccounts(isFromAccounts);
+  }, [searchParams]);
+  
+  const isAdmin = profile?.role === 'admin';
+  const shouldHideSections = !isAdmin || fromAccounts;
   
   const [order, setOrder] = useState<Order | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -1458,14 +1483,18 @@ export default function OrderDetailPage() {
                                     <span className="text-xs text-muted-foreground block">Total Quantity</span>
                                     <span className="font-medium">{item.quantity} pcs</span>
                                   </div>
-                                  <div className="bg-muted/30 rounded-lg p-3">
-                                    <span className="text-xs text-muted-foreground block">Unit Price</span>
-                                    <span className="font-medium">{formatCurrency(item.unit_price)}</span>
-                                  </div>
-                                  <div className="bg-muted/30 rounded-lg p-3">
-                                    <span className="text-xs text-muted-foreground block">Total Price</span>
-                                    <span className="font-medium text-primary">{formatCurrency(item.total_price)}</span>
-                                  </div>
+                                  {!shouldHideSections && (
+                                    <>
+                                      <div className="bg-muted/30 rounded-lg p-3">
+                                        <span className="text-xs text-muted-foreground block">Unit Price</span>
+                                        <span className="font-medium">{formatCurrency(item.unit_price)}</span>
+                                      </div>
+                                      <div className="bg-muted/30 rounded-lg p-3">
+                                        <span className="text-xs text-muted-foreground block">Total Price</span>
+                                        <span className="font-medium text-primary">{formatCurrency(item.total_price)}</span>
+                                      </div>
+                                    </>
+                                  )}
                                 </div>
                                 
                                 {/* Size Breakdown with proper ordering */}
@@ -1592,7 +1621,7 @@ export default function OrderDetailPage() {
                                                       Qty: {customization.quantity}
                                                     </div>
                                                   )}
-                                                  {customization.priceImpact && customization.priceImpact !== 0 && (
+                                                  {!shouldHideSections && customization.priceImpact && customization.priceImpact !== 0 && (
                                                     <div className="text-xs font-medium text-green-600">
                                                       ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
                                                     </div>
@@ -1732,152 +1761,154 @@ export default function OrderDetailPage() {
                  </CardContent>
                </Card>
 
-               {/* Order Summary Table (Product-wise) */}
-               <Card className="border-2 border-primary/20 bg-gradient-to-br from-primary/5 to-background shadow-xl">
-                 <CardHeader className="bg-gradient-to-r from-primary/10 to-transparent">
-                   <CardTitle className="text-primary">ORDER SUMMARY</CardTitle>
-                 </CardHeader>
-                 <CardContent className="space-y-6">
-                   <div className="space-y-4">
-                     <div className="overflow-x-auto">
-                       <table className="w-full border-collapse border border-gray-300">
-                         <thead>
-                           <tr className="bg-gray-100">
-                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Image</th>
-                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Name</th>
-                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Customizations</th>
-                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Remarks</th>
-                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Total Qty</th>
-                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Price</th>
-                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Amount</th>
-                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">GST Rate</th>
-                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">GST Amt</th>
-                             <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Total</th>
-                           </tr>
-                         </thead>
-                         <tbody>
-                           {orderItems.map((item, index) => {
-                             const amount = item.quantity * item.unit_price;
-                             // Try to get GST rate from item.gst_rate first, then from specifications, then from order
-                             const gstRate = item.gst_rate ?? 
-                                           (item.specifications?.gst_rate) ?? 
-                                           (order?.gst_rate ?? 0);
-                             const gstAmt = (amount * gstRate) / 100;
-                             const total = amount + gstAmt;
-                             return (
-                               <tr key={index} className="hover:bg-gray-50">
-                                 <td className="border border-gray-300 px-3 py-2">
-                                   {(() => {
-                                     const displayImage = getOrderItemDisplayImage(item);
-                                     return displayImage ? (
-                                       <img
-                                         src={displayImage}
-                                         alt="Product"
-                                         className="w-20 h-20 object-cover rounded"
-                                       />
-                                     ) : null;
-                                   })()}
-                                 </td>
-                                 <td className="border border-gray-300 px-3 py-2">
-                                   <div className="text-sm">
-                                     <div className="text-gray-600 text-xs font-medium">
-                                       {fabrics[item.fabric_id]?.name} - {item.color}, {item.gsm} GSM
-                                     </div>
-                                     <div className="font-medium">{item.product_description}</div>
-                                     <div className="text-gray-600 text-xs">
-                                       {productCategories[item.product_category_id]?.category_name}
-                                     </div>
-                                   </div>
-                                 </td>
-                                 <td className="border border-gray-300 px-3 py-2 text-sm">
-                                   <div className="max-w-xs">
+               {/* Order Summary Table (Product-wise) - Hidden for non-admin or Accounts access */}
+               {!shouldHideSections && (
+                 <Card className="border-2 border-primary/20 bg-gradient-to-br from-primary/5 to-background shadow-xl">
+                   <CardHeader className="bg-gradient-to-r from-primary/10 to-transparent">
+                     <CardTitle className="text-primary">ORDER SUMMARY</CardTitle>
+                   </CardHeader>
+                   <CardContent className="space-y-6">
+                     <div className="space-y-4">
+                       <div className="overflow-x-auto">
+                         <table className="w-full border-collapse border border-gray-300">
+                           <thead>
+                             <tr className="bg-gray-100">
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Image</th>
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Name</th>
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Customizations</th>
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Remarks</th>
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Total Qty</th>
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Price</th>
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Amount</th>
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">GST Rate</th>
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">GST Amt</th>
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Total</th>
+                             </tr>
+                           </thead>
+                           <tbody>
+                             {orderItems.map((item, index) => {
+                               const amount = item.quantity * item.unit_price;
+                               // Try to get GST rate from item.gst_rate first, then from specifications, then from order
+                               const gstRate = item.gst_rate ?? 
+                                             (item.specifications?.gst_rate) ?? 
+                                             (order?.gst_rate ?? 0);
+                               const gstAmt = (amount * gstRate) / 100;
+                               const total = amount + gstAmt;
+                               return (
+                                 <tr key={index} className="hover:bg-gray-50">
+                                   <td className="border border-gray-300 px-3 py-2">
                                      {(() => {
-                                       try {
-                                         const parsed = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
-                                         const customizations = parsed.customizations || [];
-                                         
-                                         if (customizations.length === 0) {
+                                       const displayImage = getOrderItemDisplayImage(item);
+                                       return displayImage ? (
+                                         <img
+                                           src={displayImage}
+                                           alt="Product"
+                                           className="w-20 h-20 object-cover rounded"
+                                         />
+                                       ) : null;
+                                     })()}
+                                   </td>
+                                   <td className="border border-gray-300 px-3 py-2">
+                                     <div className="text-sm">
+                                       <div className="text-gray-600 text-xs font-medium">
+                                         {fabrics[item.fabric_id]?.name} - {item.color}, {item.gsm} GSM
+                                       </div>
+                                       <div className="font-medium">{item.product_description}</div>
+                                       <div className="text-gray-600 text-xs">
+                                         {productCategories[item.product_category_id]?.category_name}
+                                       </div>
+                                     </div>
+                                   </td>
+                                   <td className="border border-gray-300 px-3 py-2 text-sm">
+                                     <div className="max-w-xs">
+                                       {(() => {
+                                         try {
+                                           const parsed = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
+                                           const customizations = parsed.customizations || [];
+                                           
+                                           if (customizations.length === 0) {
+                                             return <span className="text-gray-500">-</span>;
+                                           }
+                                           
+                                           return (
+                                             <div className="space-y-1">
+                                               {customizations.slice(0, 3).map((customization: any, idx: number) => (
+                                                 <div key={idx} className="text-xs bg-gray-100 rounded px-2 py-1 flex items-start gap-2">
+                                                   {customization.selectedAddonImageUrl && (
+                                                     <img 
+                                                       src={customization.selectedAddonImageUrl} 
+                                                       alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
+                                                       className="w-6 h-6 object-cover rounded border flex-shrink-0"
+                                                       onError={(e) => {
+                                                         e.currentTarget.style.display = 'none';
+                                                       }}
+                                                     />
+                                                   )}
+                                                   <div className="flex-1 min-w-0">
+                                                     <div className="font-medium truncate">{customization.partName}</div>
+                                                     {customization.partType === 'dropdown' && (
+                                                       <div className="text-gray-600 truncate">{customization.selectedAddonName}</div>
+                                                     )}
+                                                     {customization.partType === 'number' && (
+                                                       <div className="text-gray-600">Qty: {customization.quantity}</div>
+                                                     )}
+                                                   </div>
+                                                 </div>
+                                               ))}
+                                               {customizations.length > 3 && (
+                                                 <div className="text-xs text-gray-500">+{customizations.length - 3} more</div>
+                                               )}
+                                             </div>
+                                           );
+                                         } catch (error) {
                                            return <span className="text-gray-500">-</span>;
                                          }
-                                         
-                                         return (
-                                           <div className="space-y-1">
-                                             {customizations.slice(0, 3).map((customization: any, idx: number) => (
-                                               <div key={idx} className="text-xs bg-gray-100 rounded px-2 py-1 flex items-start gap-2">
-                                                 {customization.selectedAddonImageUrl && (
-                                                   <img 
-                                                     src={customization.selectedAddonImageUrl} 
-                                                     alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
-                                                     className="w-6 h-6 object-cover rounded border flex-shrink-0"
-                                                     onError={(e) => {
-                                                       e.currentTarget.style.display = 'none';
-                                                     }}
-                                                   />
-                                                 )}
-                                                 <div className="flex-1 min-w-0">
-                                                   <div className="font-medium truncate">{customization.partName}</div>
-                                                   {customization.partType === 'dropdown' && (
-                                                     <div className="text-gray-600 truncate">{customization.selectedAddonName}</div>
-                                                   )}
-                                                   {customization.partType === 'number' && (
-                                                     <div className="text-gray-600">Qty: {customization.quantity}</div>
-                                                   )}
-                                                 </div>
-                                               </div>
-                                             ))}
-                                             {customizations.length > 3 && (
-                                               <div className="text-xs text-gray-500">+{customizations.length - 3} more</div>
-                                             )}
-                                           </div>
-                                         );
-                                       } catch (error) {
-                                         return <span className="text-gray-500">-</span>;
-                                       }
-                                     })()}
-                                   </div>
-                                 </td>
-                                 <td className="border border-gray-300 px-3 py-2 text-sm">
-                                   <div className="max-w-xs">
-                                     <span className="text-sm text-gray-700 break-words">
-                                       {item.remarks || '-'}
-                                     </span>
-                                   </div>
-                                 </td>
-                                 <td className="border border-gray-300 px-3 py-2 text-sm">
-                                   <div>{item.quantity} Pcs</div>
-                                   <div className="text-xs text-gray-600">
-                                     {item.sizes_quantities && typeof item.sizes_quantities === 'object' &&
-                                       Object.entries(item.sizes_quantities)
-                                         .filter(([_, qty]) => (qty as number) > 0)
-                                         .map(([size, qty]) => `${size}-${qty}`)
-                                         .join(', ')}
-                                   </div>
-                                 </td>
-                                  <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(item.unit_price)}</td>
-                                  <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(amount)}</td>
-                                 <td className="border border-gray-300 px-3 py-2 text-sm">{gstRate}%</td>
-                                  <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(gstAmt)}</td>
-                                  <td className="border border-gray-300 px-3 py-2 text-sm font-medium">{formatCurrency(total)}</td>
-                               </tr>
-                             );
-                           })}
-                         </tbody>
-                       </table>
+                                       })()}
+                                     </div>
+                                   </td>
+                                   <td className="border border-gray-300 px-3 py-2 text-sm">
+                                     <div className="max-w-xs">
+                                       <span className="text-sm text-gray-700 break-words">
+                                         {item.remarks || '-'}
+                                       </span>
+                                     </div>
+                                   </td>
+                                   <td className="border border-gray-300 px-3 py-2 text-sm">
+                                     <div>{item.quantity} Pcs</div>
+                                     <div className="text-xs text-gray-600">
+                                       {item.sizes_quantities && typeof item.sizes_quantities === 'object' &&
+                                         Object.entries(item.sizes_quantities)
+                                           .filter(([_, qty]) => (qty as number) > 0)
+                                           .map(([size, qty]) => `${size}-${qty}`)
+                                           .join(', ')}
+                                     </div>
+                                   </td>
+                                    <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(item.unit_price)}</td>
+                                    <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(amount)}</td>
+                                   <td className="border border-gray-300 px-3 py-2 text-sm">{gstRate}%</td>
+                                    <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(gstAmt)}</td>
+                                    <td className="border border-gray-300 px-3 py-2 text-sm font-medium">{formatCurrency(total)}</td>
+                                 </tr>
+                               );
+                             })}
+                           </tbody>
+                         </table>
+                       </div>
+                       {/* Subtotal, GST, Grand Total */}
+                       {(() => {
+                         const { subtotal, gstAmount, grandTotal } = calculateOrderSummary(orderItems, order);
+                         return (
+                           <div className="text-right space-y-1">
+                             <div className="text-lg font-semibold">Subtotal: {formatCurrency(subtotal)}</div>
+                             <div className="text-lg font-semibold">GST Total: {formatCurrency(gstAmount)}</div>
+                             <div className="text-2xl font-bold text-primary">Grand Total: {formatCurrency(grandTotal)}</div>
+                           </div>
+                         );
+                       })()}
                      </div>
-                     {/* Subtotal, GST, Grand Total */}
-                     {(() => {
-                       const { subtotal, gstAmount, grandTotal } = calculateOrderSummary(orderItems, order);
-                       return (
-                         <div className="text-right space-y-1">
-                           <div className="text-lg font-semibold">Subtotal: {formatCurrency(subtotal)}</div>
-                           <div className="text-lg font-semibold">GST Total: {formatCurrency(gstAmount)}</div>
-                           <div className="text-2xl font-bold text-primary">Grand Total: {formatCurrency(grandTotal)}</div>
-                         </div>
-                       );
-                     })()}
-                   </div>
-                 </CardContent>
-               </Card>
+                   </CardContent>
+                 </Card>
+               )}
 
                {/* Order Lifecycle */}
                
@@ -1946,74 +1977,77 @@ export default function OrderDetailPage() {
                 </CardContent>
               </Card>
 
-              {/* Customer Information */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center">
-                    <User className="w-5 h-5 mr-2" />
-                    Customer Information
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <p className="font-semibold text-lg">{customer.company_name}</p>
-                    <p className="text-muted-foreground">{customer.contact_person}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Email</p>
-                    <p className="font-medium">{customer.email}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Phone</p>
-                    <p className="font-medium">{customer.phone}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Address</p>
-                    <p className="font-medium">
-                      {customer.address}, {customer.city}, {customer.state} - {customer.pincode}
-                    </p>
-                  </div>
-                  {customer.gstin && (
+              {/* Customer Information - Hidden for non-admin or Accounts access */}
+              {!shouldHideSections && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center">
+                      <User className="w-5 h-5 mr-2" />
+                      Customer Information
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
                     <div>
-                      <p className="text-sm text-muted-foreground">GSTIN</p>
-                      <p className="font-medium">{customer.gstin}</p>
+                      <p className="font-semibold text-lg">{customer.company_name}</p>
+                      <p className="text-muted-foreground">{customer.contact_person}</p>
                     </div>
-                  )}
-                </CardContent>
-              </Card>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Email</p>
+                      <p className="font-medium">{customer.email}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Phone</p>
+                      <p className="font-medium">{customer.phone}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Address</p>
+                      <p className="font-medium">
+                        {customer.address}, {customer.city}, {customer.state} - {customer.pincode}
+                      </p>
+                    </div>
+                    {customer.gstin && (
+                      <div>
+                        <p className="text-sm text-muted-foreground">GSTIN</p>
+                        <p className="font-medium">{customer.gstin}</p>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
 
-              {/* Order Summary */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center">
-                    <DollarSign className="w-5 h-5 mr-2" />
-                    Order Summary
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex justify-between">
-                    <span>Subtotal</span>
-                    <span>{formatCurrency(order.total_amount)}</span>
-                  </div>
-                  {(() => {
-                    const gstBreakdown = calculateGSTRatesBreakdown(orderItems, order);
-                    if (gstBreakdown.length === 0) {
-                      return (
-                        <div className="flex justify-between">
-                          <span>GST (0%)</span>
-                          <span>{formatCurrency(0)}</span>
-                        </div>
-                      );
-                    } else if (gstBreakdown.length === 1) {
-                      return (
-                        <div className="flex justify-between">
-                          <span>GST ({gstBreakdown[0].rate}%)</span>
-                          <span>{formatCurrency(gstBreakdown[0].amount)}</span>
-                        </div>
-                      );
-                    } else {
-                      return (
-                        <div className="space-y-1">
+              {/* Order Summary - Hidden for non-admin or Accounts access */}
+              {!shouldHideSections && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center">
+                      <DollarSign className="w-5 h-5 mr-2" />
+                      Order Summary
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex justify-between">
+                      <span>Subtotal</span>
+                      <span>{formatCurrency(order.total_amount)}</span>
+                    </div>
+                    {(() => {
+                      const gstBreakdown = calculateGSTRatesBreakdown(orderItems, order);
+                      if (gstBreakdown.length === 0) {
+                        return (
+                          <div className="flex justify-between">
+                            <span>GST (0%)</span>
+                            <span>{formatCurrency(0)}</span>
+                          </div>
+                        );
+                      } else if (gstBreakdown.length === 1) {
+                        return (
+                          <div className="flex justify-between">
+                            <span>GST ({gstBreakdown[0].rate}%)</span>
+                            <span>{formatCurrency(gstBreakdown[0].amount)}</span>
+                          </div>
+                        );
+                      } else {
+                        return (
+                          <div className="space-y-1">
                           {gstBreakdown.map((gst, index) => (
                             <div key={index} className="flex justify-between text-sm">
                               <span>GST ({gst.rate}%)</span>
@@ -2028,71 +2062,74 @@ export default function OrderDetailPage() {
                       );
                     }
                   })()}
-                  <div className="flex justify-between">
-                    <span>Amount Paid</span>
-                    <span className="text-green-600">{formatCurrency(totalReceipts)}</span>
-                  </div>
-                  <hr />
-                  <div className="flex justify-between font-bold text-lg">
-                    <span>Total Amount</span>
-                    <span>{formatCurrency(calculateOrderSummary(orderItems, order).grandTotal)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Balance Due</span>
-                    <span className={(() => {
+                    <div className="flex justify-between">
+                      <span>Amount Paid</span>
+                      <span className="text-green-600">{formatCurrency(totalReceipts)}</span>
+                    </div>
+                    <hr />
+                    <div className="flex justify-between font-bold text-lg">
+                      <span>Total Amount</span>
+                      <span>{formatCurrency(calculateOrderSummary(orderItems, order).grandTotal)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Balance Due</span>
+                      <span className={(() => {
+                        const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
+                        const balance = calculatedTotal - totalReceipts;
+                        return balance > 0 ? "text-orange-600" : "text-green-600";
+                      })()}>
+                        {formatCurrency(calculateOrderSummary(orderItems, order).grandTotal - totalReceipts)}
+                      </span>
+                    </div>
+                    
+                    {(() => {
                       const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
                       const balance = calculatedTotal - totalReceipts;
-                      return balance > 0 ? "text-orange-600" : "text-green-600";
-                    })()}>
-                      {formatCurrency(calculateOrderSummary(orderItems, order).grandTotal - totalReceipts)}
-                    </span>
-                  </div>
-                  
-                  {(() => {
-                    const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
-                    const balance = calculatedTotal - totalReceipts;
-                    return balance > 0;
-                  })() && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="w-full mt-2"
-                      onClick={() => navigate('/accounts/receipts', { 
-                        state: { 
-                          prefill: { 
-                            type: 'order', 
-                            id: order.id, 
-                            number: order.order_number, 
-                            date: order.order_date, 
-                            customer_id: order.customer_id, 
-                            amount: calculateOrderSummary(orderItems, order).grandTotal - totalReceipts 
-                          }, 
-                          tab: 'create' 
-                        } 
-                      })}
-                    >
-                      💳 Create Receipt
-                    </Button>
-                  )}
-                  
-                  {order.payment_channel && (
-                    <div className="pt-2 border-t">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Payment Method</span>
-                        <span>{order.payment_channel}</span>
+                      return balance > 0;
+                    })() && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="w-full mt-2"
+                        onClick={() => navigate('/accounts/receipts', { 
+                          state: { 
+                            prefill: { 
+                              type: 'order', 
+                              id: order.id, 
+                              number: order.order_number, 
+                              date: order.order_date, 
+                              customer_id: order.customer_id, 
+                              amount: calculateOrderSummary(orderItems, order).grandTotal - totalReceipts 
+                            }, 
+                            tab: 'create' 
+                          } 
+                        })}
+                      >
+                        💳 Create Receipt
+                      </Button>
+                    )}
+                    
+                    {order.payment_channel && (
+                      <div className="pt-2 border-t">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">Payment Method</span>
+                          <span>{order.payment_channel}</span>
+                        </div>
                       </div>
-                    </div>
-                  )}
-                  
-                  {order.reference_id && (
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Reference ID</span>
-                      <span>{order.reference_id}</span>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                    )}
+                    
+                    {order.reference_id && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Reference ID</span>
+                        <span>{order.reference_id}</span>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+{/* Order Lifecycle - Hidden for non-admin or Accounts access */}
+{!shouldHideSections && (
 <Card>
   <CardHeader>
     <CardTitle className="flex items-center justify-between text-base sm:text-lg">
@@ -2365,6 +2402,7 @@ export default function OrderDetailPage() {
     )}
   </CardContent>
 </Card>
+)}
 
             </div>
           </div>
