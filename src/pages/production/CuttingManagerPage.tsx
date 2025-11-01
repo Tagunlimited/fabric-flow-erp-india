@@ -166,9 +166,9 @@ const CuttingManagerPage = () => {
       
       // Fetch stitching prices from order_assignments
       const { data: priceData, error: priceError } = await supabase
-        .from('order_assignments')
+        .from('order_assignments' as any)
         .select('cutting_price_single_needle, cutting_price_overlock_flatlock')
-        .eq('order_id', job.id)
+        .eq('order_id', job.id as any)
         .single();
 
       if (priceError) {
@@ -178,9 +178,9 @@ const CuttingManagerPage = () => {
 
       // Fetch order details - fetch order_items separately to avoid relationship issues
       const { data: orderData, error: orderError } = await supabase
-        .from('orders')
+        .from('orders' as any)
         .select('*')
-        .eq('id', job.id)
+        .eq('id', job.id as any)
         .single();
 
       if (orderError) {
@@ -190,9 +190,9 @@ const CuttingManagerPage = () => {
 
       // Fetch order items separately
       const { data: orderItemsData, error: itemsError } = await supabase
-        .from('order_items')
+        .from('order_items' as any)
         .select('*')
-        .eq('order_id', job.id);
+        .eq('order_id', job.id as any);
 
       if (itemsError) {
         console.error('❌ Error fetching order items:', itemsError);
@@ -248,17 +248,17 @@ const CuttingManagerPage = () => {
 
       // Fetch sales manager information
       let salesManager: { name: string; avatarUrl?: string } | undefined;
-      if (orderData.sales_manager) {
+      if (orderData && !orderError && (orderData as any).sales_manager) {
         try {
           const { data: salesManagerData } = await supabase
-            .from('employees')
+            .from('employees' as any)
             .select('id, full_name, avatar_url')
-            .eq('id', orderData.sales_manager)
+            .eq('id', (orderData as any).sales_manager as any)
             .single();
-          if (salesManagerData) {
+          if (salesManagerData && !('error' in salesManagerData)) {
             salesManager = {
-              name: salesManagerData.full_name,
-              avatarUrl: salesManagerData.avatar_url || undefined
+              name: (salesManagerData as any).full_name,
+              avatarUrl: (salesManagerData as any).avatar_url || undefined
             };
           }
         } catch (e) {
@@ -279,13 +279,29 @@ const CuttingManagerPage = () => {
 
       // Prepare batch assignment data from existing batch assignments
       const batchAssignments = (job.batchAssignments || []).map(assignment => {
-        const sizeDistributions = Object.entries(assignment.size_distributions || {})
-          .filter(([_, qty]) => qty > 0)
-          .map(([size, qty]) => ({ size, quantity: qty }));
+        // Handle size_distributions - can be array or object
+        let sizeDistributions: Array<{ size: string; quantity: number }> = [];
+        
+        if (Array.isArray(assignment.size_distributions)) {
+          // If it's already an array, use it directly
+          sizeDistributions = assignment.size_distributions.map((sd: any) => ({
+            size: sd.size_name || sd.size || '',
+            quantity: typeof sd.quantity === 'number' ? sd.quantity : 0
+          }));
+        } else if (assignment.size_distributions && typeof assignment.size_distributions === 'object') {
+          // If it's an object, convert to array
+          sizeDistributions = Object.entries(assignment.size_distributions)
+            .filter(([_, qty]) => typeof qty === 'number' && qty > 0)
+            .map(([size, qty]) => ({ size, quantity: qty as number }));
+        }
 
         const assignedQuantity = sizeDistributions.reduce((sum, sd) => sum + sd.quantity, 0);
-        const snRate = priceData?.cutting_price_single_needle || 0;
-        const ofRate = priceData?.cutting_price_overlock_flatlock || 0;
+        const snRate = (priceData && !priceError && !('error' in (priceData as any))) 
+          ? ((priceData as any).cutting_price_single_needle || 0)
+          : 0;
+        const ofRate = (priceData && !priceError && !('error' in (priceData as any)))
+          ? ((priceData as any).cutting_price_overlock_flatlock || 0)
+          : 0;
         // Total earning = (SN + OF) × assigned quantity
         const totalEarning = (snRate + ofRate) * assignedQuantity;
 
@@ -313,15 +329,25 @@ const CuttingManagerPage = () => {
       });
 
       // Generate PDF
+      if (!companySettings || settingsError || 'error' in (companySettings as any)) {
+        console.error('❌ Invalid company settings');
+        return;
+      }
+
+      if (!orderData || orderError || 'error' in (orderData as any)) {
+        console.error('❌ Invalid order data');
+        return;
+      }
+
       await generateBatchAssignmentPDF({
         orderNumber: job.orderNumber,
         customerName: job.customerName,
         orderItems: enrichedOrderItems,
         batchAssignments,
-        companySettings,
+        companySettings: companySettings as any,
         salesManager,
         customizations: allCustomizations,
-        dueDate: orderData.expected_delivery_date
+        dueDate: (orderData as any).expected_delivery_date
       });
 
       console.log('✅ PDF generation completed successfully!');
@@ -552,6 +578,7 @@ const CuttingManagerPage = () => {
             quantity: Number((bom as any).qty || 0),
             cutQuantity: Number(p.cut_quantity || 0),
             cutQuantitiesBySize: p.cut_quantities_by_size || {},
+            assignedTo: '', // Will be set below based on cutting masters
             startDate: p.cutting_work_date || '',
             dueDate: o.expected_delivery_date || '',
             status: 'pending',
@@ -562,13 +589,6 @@ const CuttingManagerPage = () => {
             notes: '',
             defects: 0,
             reworkRequired: false,
-            // Batch assignment fields (legacy - will be replaced with batchAssignments)
-            assignedBatchId: p.assigned_batch_id,
-            assignedBatchName: p.assigned_batch_name,
-            assignedBatchCode: p.assigned_batch_code,
-            batchAssignmentDate: p.batch_assignment_date,
-            assignedBy: p.assigned_by_name,
-            batchAssignmentNotes: p.batch_assignment_notes,
             // Add order items with product and fabric details
             orderItems: orderItemsByOrderId[o.id] || [],
             customer: customersMap[o.customer_id] ? { 
@@ -605,29 +625,29 @@ const CuttingManagerPage = () => {
         }).filter((job): job is CuttingJob => job !== undefined);
 
         // Fetch batch assignments for each order
-        const jobsWithBatchAssignments = await Promise.all(jobs.map(async (job) => {
+        const jobsWithBatchAssignments: CuttingJob[] = (await Promise.all(jobs.map(async (job) => {
           if (!job || !job.id) {
             console.error('Invalid job found, skipping:', job);
             return null;
           }
           try {
             const { data: batchAssignments } = await supabase
-              .from('order_batch_assignments_with_details')
+              .from('order_batch_assignments_with_details' as any)
               .select('*')
               .eq('order_id', job.id as any);
 
             return {
               ...job,
               batchAssignments: (batchAssignments as any) || []
-            };
+            } as CuttingJob;
           } catch (error) {
             console.error(`Error fetching batch assignments for order ${job.id}:`, error);
             return {
               ...job,
               batchAssignments: []
-            };
+            } as CuttingJob;
           }
-        })).then(results => results.filter((job): job is CuttingJob => job !== null));
+        }))).filter((job): job is CuttingJob => job !== null && job !== undefined);
 
         setCuttingJobs(jobsWithBatchAssignments as CuttingJob[]);
       } catch (err) {
