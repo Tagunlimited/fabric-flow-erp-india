@@ -19,6 +19,8 @@ interface OrderCard {
   picked_quantity: number;
   dispatched_quantity?: number;
   image_url?: string;
+  is_readymade?: boolean;
+  hasPendingChallan?: boolean; // Flag to track if order has a pending challan that needs to be marked as shipped
 }
 
 export default function DispatchQCPage() {
@@ -104,22 +106,71 @@ export default function DispatchQCPage() {
         } catch {}
       }
 
-      // order details and images
+      // order details and images (exclude readymade orders - they have separate dispatch flow)
       let ordersMap: Record<string, { order_number?: string; customer_id?: string }> = {};
       if (orderIds.length > 0) {
         const { data: ords } = await (supabase as any)
           .from('orders')
-          .select('id, order_number, customer_id')
-          .in('id', orderIds as any);
+          .select('id, order_number, customer_id, order_type')
+          .in('id', orderIds as any)
+          .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
         (ords || []).forEach((o: any) => { ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id }; });
       }
-      const customerIds = Array.from(new Set(Object.values(ordersMap).map(o => o.customer_id).filter(Boolean)));
+
+      // Fetch confirmed readymade orders for dispatch separately
+      // Include orders that have challans (dispatch_orders) but are not yet shipped
+      // We need to fetch orders with these statuses OR orders that have pending dispatch_orders
+      const { data: readymadeOrdersData } = await (supabase as any)
+        .from('orders')
+        .select('id, order_number, customer_id, status, order_date, expected_delivery_date, customers:customers(company_name)')
+        .eq('order_type', 'readymade')
+        .in('status', ['confirmed', 'ready_for_dispatch', 'dispatched', 'partial_dispatched'] as any)
+        .order('order_date', { ascending: false });
+      
+      let readymadeOrders: any[] = readymadeOrdersData || [];
+      
+      // Also fetch any readymade orders that have pending dispatch_orders (even if status doesn't match)
+      // This ensures we catch orders that just had challans generated
+      try {
+        const { data: pendingDispatchOrders } = await (supabase as any)
+          .from('dispatch_orders')
+          .select('order_id')
+          .in('status', ['pending', 'packed'] as any);
+        if (pendingDispatchOrders && pendingDispatchOrders.length > 0) {
+          const pendingOrderIds = (pendingDispatchOrders || [])
+            .map((d: any) => d.order_id)
+            .filter((id: any) => id);
+          if (pendingOrderIds.length > 0) {
+            const { data: additionalOrders } = await (supabase as any)
+              .from('orders')
+              .select('id, order_number, customer_id, status, order_date, expected_delivery_date, customers:customers(company_name)')
+              .eq('order_type', 'readymade')
+              .in('id', pendingOrderIds as any);
+            if (additionalOrders && additionalOrders.length > 0) {
+              // Merge with existing readymadeOrders, avoiding duplicates
+              const existingIds = new Set(readymadeOrders.map((o: any) => o.id));
+              const newOrders = (additionalOrders || []).filter((o: any) => !existingIds.has(o.id));
+              if (newOrders.length > 0) {
+                readymadeOrders.push(...newOrders);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching orders with pending challans:', error);
+      }
+      
+      // Build customers map including readymade order customers
+      const allCustomerIds = Array.from(new Set([
+        ...Object.values(ordersMap).map(o => o.customer_id).filter(Boolean),
+        ...(readymadeOrders || []).map((o: any) => o.customer_id).filter(Boolean)
+      ]));
       let customersMap: Record<string, string> = {};
-      if (customerIds.length > 0) {
+      if (allCustomerIds.length > 0) {
         const { data: customers } = await (supabase as any)
           .from('customers')
           .select('id, company_name')
-          .in('id', customerIds as any);
+          .in('id', allCustomerIds as any);
         (customers || []).forEach((c: any) => { customersMap[c.id] = c.company_name; });
       }
       let imageByOrder: Record<string, string | undefined> = {};
@@ -159,7 +210,7 @@ export default function DispatchQCPage() {
         } catch {}
       }
 
-      // Aggregate per order: only show with approved > 0
+      // Aggregate per order: only show with approved > 0 (for custom orders)
       const byOrder: Record<string, OrderCard & { dispatched_quantity: number }> = {};
       rows.forEach((r: any) => {
         const aid = r.assignment_id as string;
@@ -183,6 +234,87 @@ export default function DispatchQCPage() {
         byOrder[oid].picked_quantity += Number(pickedByAssignment[aid] || 0);
       });
 
+      // Add readymade orders to the list (they don't have batches/QC, so approved = total quantity)
+      if (readymadeOrders && readymadeOrders.length > 0) {
+        // Get dispatched quantities for readymade orders
+        const readymadeIds = readymadeOrders.map((o: any) => o.id);
+        let readymadeDispatched: Record<string, number> = {};
+        if (readymadeIds.length > 0) {
+          try {
+            const { data: disp } = await (supabase as any)
+              .from('dispatch_order_items')
+              .select('order_id, quantity')
+              .in('order_id', readymadeIds as any);
+            (disp || []).forEach((r: any) => {
+              const oid = r.order_id as string;
+              readymadeDispatched[oid] = (readymadeDispatched[oid] || 0) + Number(r.quantity || 0);
+            });
+          } catch {}
+        }
+
+        // Get total quantities for readymade orders from order_items
+        let readymadeQuantities: Record<string, number> = {};
+        try {
+          const { data: items } = await (supabase as any)
+            .from('order_items')
+            .select('order_id, quantity')
+            .in('order_id', readymadeIds as any);
+          (items || []).forEach((it: any) => {
+            const oid = it.order_id as string;
+            readymadeQuantities[oid] = (readymadeQuantities[oid] || 0) + Number(it.quantity || 0);
+          });
+        } catch {}
+
+        // Check for pending dispatch_orders (challans) for readymade orders
+        // This is critical: orders with pending challans must be shown so they can be marked as shipped
+        let pendingChallans: Record<string, boolean> = {};
+        if (readymadeIds.length > 0) {
+          try {
+            const { data: pendingDispatch } = await (supabase as any)
+              .from('dispatch_orders')
+              .select('order_id')
+              .in('order_id', readymadeIds as any)
+              .in('status', ['pending', 'packed'] as any);
+            (pendingDispatch || []).forEach((d: any) => {
+              if (d.order_id) pendingChallans[d.order_id] = true;
+            });
+          } catch (error) {
+            console.error('Error checking for pending challans:', error);
+          }
+        }
+
+        // Add readymade orders to byOrder
+        // Include orders that have remaining quantity OR have a pending challan (not yet shipped)
+        readymadeOrders.forEach((o: any) => {
+          const totalQty = readymadeQuantities[o.id] || 0;
+          const dispatchedQty = readymadeDispatched[o.id] || 0;
+          const hasPendingChallan = pendingChallans[o.id] || false;
+          
+          // Show order if:
+          // 1. Has total quantity > 0 AND
+          // 2. Either has remaining quantity to dispatch OR has a pending challan that needs to be marked as shipped
+          // IMPORTANT: Orders with pending challans MUST be shown even if dispatchedQty = totalQty
+          // because the challan needs to be marked as "shipped"
+          const hasRemaining = dispatchedQty < totalQty;
+          const shouldShow = totalQty > 0 && (hasRemaining || hasPendingChallan);
+          
+          if (shouldShow) {
+            byOrder[o.id] = {
+              order_id: o.id,
+              order_number: o.order_number,
+              customer_name: o.customers?.company_name || customersMap[o.customer_id] || '',
+              approved_quantity: totalQty, // For readymade, approved = total (no QC needed)
+              total_quantity: totalQty,
+              picked_quantity: totalQty, // For readymade, picked = total (no picking needed)
+              dispatched_quantity: dispatchedQty,
+              image_url: undefined, // Readymade orders don't have images from production
+              is_readymade: true, // Flag to identify readymade orders
+              hasPendingChallan: hasPendingChallan // Store flag for tab filtering
+            } as any;
+          }
+        });
+      }
+
       setOrders(Object.values(byOrder));
     } finally {
       setLoading(false);
@@ -200,7 +332,10 @@ export default function DispatchQCPage() {
     return filtered.filter(o => {
       // Check if there's any remaining quantity to dispatch
       const remainingQuantity = o.approved_quantity - (o.dispatched_quantity || 0);
-      return remainingQuantity > 0;
+      // Also include orders with pending challans (they need to be marked as shipped)
+      // IMPORTANT: Orders with pending challans should stay in pending tab until marked as shipped
+      const hasPendingChallan = (o as any).hasPendingChallan || false;
+      return remainingQuantity > 0 || hasPendingChallan;
     });
   }, [filtered]);
 
@@ -208,7 +343,9 @@ export default function DispatchQCPage() {
     return filtered.filter(o => {
       // Check if there's no remaining quantity to dispatch
       const remainingQuantity = o.approved_quantity - (o.dispatched_quantity || 0);
-      return remainingQuantity <= 0;
+      // Exclude orders with pending challans (they should be in pending tab)
+      const hasPendingChallan = (o as any).hasPendingChallan || false;
+      return remainingQuantity <= 0 && !hasPendingChallan;
     });
   }, [filtered]);
 
@@ -248,51 +385,123 @@ export default function DispatchQCPage() {
   }, []);
 
   const [sizeRows, setSizeRows] = useState<Array<{ size_name: string; approved: number; dispatched: number; to_dispatch: number }>>([]);
-  const openDispatchDialog = async (o: OrderCard) => {
+  const [isReadymadeOrder, setIsReadymadeOrder] = useState(false);
+  const openDispatchDialog = async (o: OrderCard & { is_readymade?: boolean }) => {
     setDispatchTarget({ order_id: o.order_id, order_number: o.order_number, customer_name: o.customer_name });
     setCourierName("");
     setTrackingNumber("");
     setDispatchNote("");
     setDispatchOrderId(null);
-    // Load per-size approved and already dispatched
+    
+    // Check if this is a readymade order
+    const isReadymade = (o as any).is_readymade || false;
+    setIsReadymadeOrder(isReadymade);
+    
+    // Check for existing dispatch_order (challan) that hasn't been shipped yet
     try {
-      // Approved by size from qc_reviews
-      const { data: qc } = await (supabase as any)
-        .from('qc_reviews')
-        .select('size_name, approved_quantity, order_batch_assignment_id')
-        .in('order_batch_assignment_id', (
-          await (supabase as any)
-            .from('order_batch_assignments')
-            .select('id')
-            .eq('order_id', o.order_id)
-        ).data?.map((r: any) => r.id) || []);
-      const approvedMap: Record<string, number> = {};
-      (qc || []).forEach((r: any) => {
-        const k = r.size_name as string; approvedMap[k] = (approvedMap[k] || 0) + Number(r.approved_quantity || 0);
-      });
-      // Dispatched by size
-      const { data: disp } = await (supabase as any)
-        .from('dispatch_order_items')
-        .select('size_name, quantity')
-        .eq('order_id', o.order_id);
-      const dispatchedMap: Record<string, number> = {};
-      (disp || []).forEach((r: any) => {
-        const k = r.size_name as string; dispatchedMap[k] = (dispatchedMap[k] || 0) + Number(r.quantity || 0);
-      });
-      const sizes = Array.from(new Set([...Object.keys(approvedMap), ...Object.keys(dispatchedMap)])).sort();
-      const rows = sizes.map(size => {
-        const approved = Number(approvedMap[size] || 0);
-        const dispatched = Number(dispatchedMap[size] || 0);
-        const to_dispatch = Math.max(0, approved - dispatched);
-        return { size_name: size, approved, dispatched, to_dispatch };
-      }).filter(r => r.to_dispatch > 0);
-      setSizeRows(rows);
-      // Pre-fill dispatch quantities with remaining to dispatch so Generate Challan works immediately
-      const prefill: Record<string, number> = {};
-      rows.forEach(r => { prefill[r.size_name] = Number(r.to_dispatch || 0); });
-      setDispatchQtyBySize(prefill);
-    } catch {
-      setSizeRows([]);
+      const { data: existingDispatch } = await (supabase as any)
+        .from('dispatch_orders')
+        .select('id, courier_name, tracking_number, status')
+        .eq('order_id', o.order_id)
+        .in('status', ['pending', 'packed'] as any)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (existingDispatch) {
+        setDispatchOrderId(existingDispatch.id);
+        setCourierName(existingDispatch.courier_name || '');
+        setTrackingNumber(existingDispatch.tracking_number || '');
+      }
+    } catch (error) {
+      console.error('Error checking for existing dispatch order:', error);
+    }
+    
+    if (isReadymade) {
+      // For readymade orders, get total quantity from order_items (no sizes/QC)
+      try {
+        const { data: orderItems } = await (supabase as any)
+          .from('order_items')
+          .select('quantity')
+          .eq('order_id', o.order_id);
+        
+        const totalQuantity = (orderItems || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
+        
+        // Get already dispatched quantity
+        const { data: disp } = await (supabase as any)
+          .from('dispatch_order_items')
+          .select('quantity')
+          .eq('order_id', o.order_id);
+        const dispatchedTotal = (disp || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
+        const toDispatch = Math.max(0, totalQuantity - dispatchedTotal);
+        
+        // For readymade orders, use "Total" as the size name
+        // Show even if toDispatch is 0 (so user can see challan and mark as dispatched)
+        if (totalQuantity > 0) {
+          setSizeRows([{
+            size_name: 'Total',
+            approved: totalQuantity,
+            dispatched: dispatchedTotal,
+            to_dispatch: toDispatch
+          }]);
+          // Only set dispatch quantity if there's something to dispatch
+          // If challan already exists, don't pre-fill (user already generated it)
+          if (toDispatch > 0 && !dispatchOrderId) {
+            setDispatchQtyBySize({ 'Total': toDispatch });
+          } else {
+            setDispatchQtyBySize({});
+          }
+        } else {
+          setSizeRows([]);
+          setDispatchQtyBySize({});
+        }
+      } catch (error) {
+        console.error('Error loading readymade order data:', error);
+        setSizeRows([]);
+        setDispatchQtyBySize({});
+      }
+    } else {
+      // Load per-size approved and already dispatched (for custom orders)
+      try {
+        // Approved by size from qc_reviews
+        const { data: qc } = await (supabase as any)
+          .from('qc_reviews')
+          .select('size_name, approved_quantity, order_batch_assignment_id')
+          .in('order_batch_assignment_id', (
+            await (supabase as any)
+              .from('order_batch_assignments')
+              .select('id')
+              .eq('order_id', o.order_id)
+          ).data?.map((r: any) => r.id) || []);
+        const approvedMap: Record<string, number> = {};
+        (qc || []).forEach((r: any) => {
+          const k = r.size_name as string; approvedMap[k] = (approvedMap[k] || 0) + Number(r.approved_quantity || 0);
+        });
+        // Dispatched by size
+        const { data: disp } = await (supabase as any)
+          .from('dispatch_order_items')
+          .select('size_name, quantity')
+          .eq('order_id', o.order_id);
+        const dispatchedMap: Record<string, number> = {};
+        (disp || []).forEach((r: any) => {
+          const k = r.size_name as string; dispatchedMap[k] = (dispatchedMap[k] || 0) + Number(r.quantity || 0);
+        });
+        const sizes = Array.from(new Set([...Object.keys(approvedMap), ...Object.keys(dispatchedMap)])).sort();
+        const rows = sizes.map(size => {
+          const approved = Number(approvedMap[size] || 0);
+          const dispatched = Number(dispatchedMap[size] || 0);
+          const to_dispatch = Math.max(0, approved - dispatched);
+          return { size_name: size, approved, dispatched, to_dispatch };
+        }).filter(r => r.to_dispatch > 0);
+        setSizeRows(rows);
+        // Pre-fill dispatch quantities with remaining to dispatch so Generate Challan works immediately
+        const prefill: Record<string, number> = {};
+        rows.forEach(r => { prefill[r.size_name] = Number(r.to_dispatch || 0); });
+        setDispatchQtyBySize(prefill);
+      } catch {
+        setSizeRows([]);
+        setDispatchQtyBySize({});
+      }
     }
     setDispatchOpen(true);
   };
@@ -342,16 +551,27 @@ export default function DispatchQCPage() {
         .map(([sizeName, qty]) => ({
           dispatch_order_id: newId,
           order_id: dispatchTarget.order_id,
-          size_name: sizeName,
+          size_name: sizeName || 'Total', // Default to 'Total' if size_name is empty (for readymade orders)
           quantity: Number(qty || 0)
         }));
       if (lines.length > 0) {
-        await (supabase as any).from('dispatch_order_items').insert(lines as any);
+        const { error: itemsError } = await (supabase as any).from('dispatch_order_items').insert(lines as any);
+        if (itemsError) {
+          console.error('Error inserting dispatch items:', itemsError);
+          throw new Error(`Failed to save dispatch items: ${itemsError.message}`);
+        }
       }
       setDispatchOrderId(newId);
+      
+      // Refresh orders list to update dispatched quantities
+      await loadApprovedOrders();
+      
       // Open challan for printing
       try { window.open(`/dispatch/challan/${newId}`, '_blank'); } catch {}
       // keep dialog open; user can print challan and then dispatch
+    } catch (error: any) {
+      console.error('Error generating challan:', error);
+      alert(`Failed to generate challan: ${error.message || 'Unknown error'}`);
     } finally {
       setSavingDispatch(false);
     }
@@ -370,20 +590,37 @@ export default function DispatchQCPage() {
 
       // Update order status to 'dispatched' (enum value must exist)
       try {
-        // Compute newly dispatched total vs approved to decide partial/full
-        const { data: totals } = await (supabase as any)
-          .from('qc_reviews')
-          .select('approved_quantity, order_batch_assignment_id')
-          .in('order_batch_assignment_id', (
-            await (supabase as any).from('order_batch_assignments').select('id').eq('order_id', dispatchTarget.order_id)
-          ).data?.map((r: any) => r.id) || []);
-        const approvedTotal = (totals || []).reduce((acc: number, r: any) => acc + Number(r.approved_quantity || 0), 0);
+        let approvedTotal = 0;
+        let dispatchedTotal = 0;
+        
+        if (isReadymadeOrder) {
+          // For readymade orders, get total from order_items
+          const { data: items } = await (supabase as any)
+            .from('order_items')
+            .select('quantity')
+            .eq('order_id', dispatchTarget.order_id);
+          approvedTotal = (items || []).reduce((acc: number, r: any) => acc + Number(r.quantity || 0), 0);
+        } else {
+          // For custom orders, compute from QC reviews
+          const { data: totals } = await (supabase as any)
+            .from('qc_reviews')
+            .select('approved_quantity, order_batch_assignment_id')
+            .in('order_batch_assignment_id', (
+              await (supabase as any).from('order_batch_assignments').select('id').eq('order_id', dispatchTarget.order_id)
+            ).data?.map((r: any) => r.id) || []);
+          approvedTotal = (totals || []).reduce((acc: number, r: any) => acc + Number(r.approved_quantity || 0), 0);
+        }
+        
         const { data: dispAgg } = await (supabase as any)
           .from('dispatch_order_items')
           .select('quantity')
           .eq('order_id', dispatchTarget.order_id);
-        const dispatchedTotal = (dispAgg || []).reduce((acc: number, r: any) => acc + Number(r.quantity || 0), 0);
+        dispatchedTotal = (dispAgg || []).reduce((acc: number, r: any) => acc + Number(r.quantity || 0), 0);
+        
+        // Determine status: if all items dispatched, mark as 'dispatched', otherwise 'partial_dispatched'
         const newStatus = dispatchedTotal >= Math.max(1, approvedTotal) ? 'dispatched' : 'partial_dispatched';
+        
+        // Update order status - for both custom and readymade orders
         await (supabase as any)
           .from('orders')
           .update({ status: newStatus } as any)
@@ -650,8 +887,8 @@ export default function DispatchQCPage() {
                   return (
                     <div key={idx} className="border rounded p-3">
                       <div className="flex items-center justify-between mb-2">
-                        <div className="text-sm font-medium">Size {r.size_name}</div>
-                        <div className="text-xs text-muted-foreground">Approved {r.approved} • Dispatched {r.dispatched}</div>
+                        <div className="text-sm font-medium">{isReadymadeOrder && r.size_name === 'Total' ? 'Total Quantity' : `Size ${r.size_name}`}</div>
+                        <div className="text-xs text-muted-foreground">{isReadymadeOrder ? `Total: ${r.approved} • Dispatched: ${r.dispatched}` : `Approved ${r.approved} • Dispatched ${r.dispatched}`}</div>
                       </div>
                       <div className="flex items-center gap-2">
                         <Button type="button" variant="outline" size="sm" onClick={() => incDispatch(r.size_name, -1, maxAllowed)}>-</Button>

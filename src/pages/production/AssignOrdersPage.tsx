@@ -272,11 +272,12 @@ const AssignOrdersPage = () => {
         });
         const orderIds = Object.keys(bomsByOrder);
 
-        // 2) Fetch orders for those ids (optionally exclude cancelled)
+        // 2) Fetch orders for those ids (exclude cancelled and readymade orders)
         const { data: orders, error: ordersErr } = await supabase
           .from('orders')
           .select('id, order_number, status, expected_delivery_date, customer_id')
-          .in('id', orderIds as any);
+          .in('id', orderIds as any)
+          .or('order_type.is.null,order_type.eq.custom');
         if (ordersErr) throw ordersErr;
 
         const validOrders = (orders || []).filter((o: any) => o.status !== 'cancelled');

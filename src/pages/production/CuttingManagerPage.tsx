@@ -311,11 +311,12 @@ const CuttingManagerPage = () => {
           console.error('Failed to load cutting masters:', e);
         }
 
-        // Fetch orders first (simplified query)
+        // Fetch orders first (simplified query) - exclude readymade orders (they don't need cutting)
         const { data: orders, error: ordersError } = await supabase
           .from('orders' as any)
           .select('id, order_number, expected_delivery_date, customer_id')
-          .in('id', allOrderIds as any);
+          .in('id', allOrderIds as any)
+          .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
 
         if (ordersError) {
           console.error('Error fetching orders:', ordersError);

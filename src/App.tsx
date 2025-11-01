@@ -34,6 +34,7 @@ import ProductPartsManager from "./pages/masters/ProductPartsManager";
 import NotFound from "./pages/NotFound";
 import CrmPage from "./pages/CrmPage";
 import OrdersPage from "./pages/OrdersPage";
+import ReadymadeOrdersPage from "./pages/orders/ReadymadeOrdersPage";
 import InventoryPage from "./pages/InventoryPage";
 import ProductionPage from "./pages/ProductionPage";
 import AssignOrdersPage from "./pages/production/AssignOrdersPage";
@@ -257,6 +258,11 @@ const App = () => {
                 <Route path="/orders" element={
                   <ProtectedRouteWithCompanySettings>
                     <OrdersPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/orders/readymade" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ReadymadeOrdersPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/stock-orders" element={

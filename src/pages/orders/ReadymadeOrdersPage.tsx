@@ -6,27 +6,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ShoppingCart, Plus, Eye, Edit, Package, Truck, Clock, CheckCircle, Search, Filter, Trash2, RefreshCw } from "lucide-react";
+import { ShoppingCart, Plus, Eye, Package, Clock, CheckCircle, Search, Filter, RefreshCw } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { OrderForm } from "@/components/orders/OrderForm";
+import { ReadymadeOrderForm } from "@/components/orders/ReadymadeOrderForm";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 
 interface Order {
   id: string;
@@ -49,7 +37,7 @@ interface Order {
   balance_amount: number;
 }
 
-const OrdersPage = () => {
+const ReadymadeOrdersPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [orders, setOrders] = useState<Order[]>([]);
@@ -61,53 +49,48 @@ const OrdersPage = () => {
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<string>("date_desc");
 
-  // Only refresh on tab change, not on visibility changes or focus
   useEffect(() => {
     if (activeTab === "list") {
       fetchOrders();
     }
   }, [activeTab]);
 
-  // Handle navigation state to refresh orders when returning from order detail
   useEffect(() => {
     if (location.state?.refreshOrders && activeTab === "list") {
-      console.log('OrdersPage: Navigation state indicates refresh needed');
-      fetchOrders(true); // Force refresh when returning from order detail
-      // Clear the state to prevent unnecessary refreshes
+      console.log('ReadymadeOrdersPage: Navigation state indicates refresh needed');
+      fetchOrders(true);
       navigate(location.pathname, { replace: true, state: {} });
     }
   }, [location.state, activeTab, navigate, location.pathname]);
 
   const fetchOrders = async (forceRefresh = false) => {
     try {
-      console.log('OrdersPage: fetchOrders called', forceRefresh ? '(force refresh)' : '');
+      console.log('ReadymadeOrdersPage: fetchOrders called', forceRefresh ? '(force refresh)' : '');
       setLoading(true);
       
-      // Clear orders state first if force refresh
       if (forceRefresh) {
         setOrders([]);
         setSalesManagers({});
       }
       
-      // Fetch only custom orders (exclude readymade orders)
+      // Fetch only readymade orders
       const { data, error } = await supabase
         .from('orders')
         .select(`
           *,
           customer:customers(company_name)
         `)
-        .or('order_type.is.null,order_type.eq.custom')
+        .eq('order_type', 'readymade' as any)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      console.log('OrdersPage: Orders fetched:', data?.length || 0, 'orders');
+      console.log('ReadymadeOrdersPage: Orders fetched:', data?.length || 0, 'orders');
       
-      // Fetch sales managers if there are orders with sales_manager field
       if (data && data.length > 0) {
-        const salesManagerIds = data
-          .map(order => order.sales_manager)
+        const salesManagerIds = (data as any[])
+          .map((order: any) => order.sales_manager)
           .filter(Boolean)
-          .filter((value, index, self) => self.indexOf(value) === index); // Remove duplicates
+          .filter((value: any, index: number, self: any[]) => self.indexOf(value) === index);
 
         if (salesManagerIds.length > 0) {
           const { data: employeesData, error: employeesError } = await supabase
@@ -116,7 +99,7 @@ const OrdersPage = () => {
             .in('id', salesManagerIds);
 
           if (!employeesError && employeesData) {
-            const managersMap = employeesData.reduce((acc, emp) => {
+            const managersMap = (employeesData as any[]).reduce((acc: any, emp: any) => {
               acc[emp.id] = emp;
               return acc;
             }, {} as { [key: string]: { id: string; full_name: string; avatar_url?: string } });
@@ -125,58 +108,12 @@ const OrdersPage = () => {
         }
       }
       
-      setOrders(data || []);
+      setOrders((data as any[]) || []);
     } catch (error) {
-      console.error('Error fetching orders:', error);
+      console.error('Error fetching readymade orders:', error);
       toast.error('Failed to fetch orders');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleDeleteOrder = async (orderId: string, orderNumber: string) => {
-    try {
-      // Use a safer approach by calling a database function that handles the deletion properly
-      const { data, error } = await supabase
-        .rpc('safe_delete_order', { order_uuid: orderId });
-      
-      if (error) {
-        console.error('Error calling safe_delete_order:', error);
-        
-        // Fallback to manual deletion if the function doesn't exist
-        console.log('Falling back to manual deletion...');
-        
-        // Try manual deletion with better error handling
-        const { error: manualError } = await supabase
-          .from('orders')
-          .delete()
-          .eq('id', orderId);
-        
-        if (manualError) {
-          console.error('Manual deletion also failed:', manualError);
-          
-          if (manualError.code === '409') {
-            toast.error('Cannot delete order: It may be referenced by other records. Please contact support.');
-          } else if (manualError.code === '23503') {
-            toast.error('Cannot delete order: Related records still exist. Please try again.');
-          } else {
-            toast.error(`Failed to delete order: ${manualError.message}`);
-          }
-          return;
-        }
-      } else if (data === false) {
-        toast.error('Order not found or already deleted');
-        await fetchOrders(); // Refresh the list
-        return;
-      }
-
-      toast.success(`Order ${orderNumber} deleted successfully`);
-      
-      // Refresh the orders list
-      await fetchOrders();
-    } catch (error) {
-      console.error('Error deleting order:', error);
-      toast.error('An unexpected error occurred while deleting the order');
     }
   };
 
@@ -184,8 +121,8 @@ const OrdersPage = () => {
     try {
       const { error } = await supabase
         .from('orders')
-        .update({ status: newStatus as any })
-        .eq('id', orderId);
+        .update({ status: newStatus as any } as any)
+        .eq('id', orderId as any);
 
       if (error) throw error;
 
@@ -201,21 +138,14 @@ const OrdersPage = () => {
     switch (status) {
       case 'pending': return 'bg-yellow-100 text-yellow-800';
       case 'confirmed': return 'bg-blue-100 text-blue-800';
-      case 'in_production': return 'bg-purple-100 text-purple-800';
-      case 'designing_done': return 'bg-teal-100 text-teal-800';
-      case 'under_procurement': return 'bg-amber-100 text-amber-800';
-      case 'under_cutting': return 'bg-orange-100 text-orange-800';
-      case 'under_stitching': return 'bg-indigo-100 text-indigo-800';
-      case 'under_qc': return 'bg-pink-100 text-pink-800';
       case 'ready_for_dispatch': return 'bg-green-100 text-green-800';
-      case 'rework': return 'bg-red-100 text-red-800';
+      case 'dispatched': return 'bg-purple-100 text-purple-800';
       case 'completed': return 'bg-green-100 text-green-800';
       case 'cancelled': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-800';
     }
   };
 
-  // Derived filtered, searched, and sorted orders
   const filteredOrders = orders
     .filter(order => !filterStatus || order.status === filterStatus)
     .filter(order => {
@@ -248,10 +178,10 @@ const OrdersPage = () => {
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-            Orders Management
+            Readymade Orders Management
           </h1>
           <p className="text-muted-foreground mt-1">
-            Manage customer orders from creation to fulfillment
+            Manage readymade product orders from creation to dispatch
           </p>
         </div>
 
@@ -286,18 +216,18 @@ const OrdersPage = () => {
             </CardContent>
           </Card>
 
-          <Card className="shadow-erp-md bg-purple-100 text-purple-900">
+          <Card className="shadow-erp-md bg-blue-100 text-blue-900">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium opacity-90">
-                In Production
+                Confirmed
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold">
-                  {orders.filter(o => o.status === 'in_production').length}
+                  {orders.filter(o => o.status === 'confirmed').length}
                 </span>
-                <Package className="w-5 h-5 text-purple-700" />
+                <Package className="w-5 h-5 text-blue-700" />
               </div>
             </CardContent>
           </Card>
@@ -305,13 +235,13 @@ const OrdersPage = () => {
           <Card className="shadow-erp-md bg-green-100 text-green-900">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium opacity-90">
-                Completed
+                Ready to Dispatch
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold">
-                  {orders.filter(o => o.status === 'completed').length}
+                  {orders.filter(o => o.status === 'ready_for_dispatch').length}
                 </span>
                 <CheckCircle className="w-5 h-5 text-green-700" />
               </div>
@@ -331,7 +261,7 @@ const OrdersPage = () => {
             <Card>
               <CardHeader>
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
-                  <CardTitle>All Orders</CardTitle>
+                  <CardTitle>All Readymade Orders</CardTitle>
                   <div className="flex flex-wrap items-center gap-2">
                     <Button variant="outline" size="sm" onClick={() => setShowSearch(v => !v)}>
                       <Search className="w-4 h-4 mr-2" />
@@ -348,9 +278,8 @@ const OrdersPage = () => {
                         <DropdownMenuItem onClick={() => setFilterStatus(null)} className={!filterStatus ? 'bg-accent/20 font-semibold' : ''}>All Statuses</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setFilterStatus("pending")} className={filterStatus === "pending" ? 'bg-accent/20 font-semibold' : ''}>Pending</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setFilterStatus("confirmed")} className={filterStatus === "confirmed" ? 'bg-accent/20 font-semibold' : ''}>Confirmed</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("designing_done")} className={filterStatus === "designing_done" ? 'bg-accent/20 font-semibold' : ''}>Designing Done</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("under_procurement")} className={filterStatus === "under_procurement" ? 'bg-accent/20 font-semibold' : ''}>Under Procurement</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("in_production")} className={filterStatus === "in_production" ? 'bg-accent/20 font-semibold' : ''}>In Production</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setFilterStatus("ready_for_dispatch")} className={filterStatus === "ready_for_dispatch" ? 'bg-accent/20 font-semibold' : ''}>Ready for Dispatch</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setFilterStatus("dispatched")} className={filterStatus === "dispatched" ? 'bg-accent/20 font-semibold' : ''}>Dispatched</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setFilterStatus("completed")} className={filterStatus === "completed" ? 'bg-accent/20 font-semibold' : ''}>Completed</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setFilterStatus("cancelled")} className={filterStatus === "cancelled" ? 'bg-accent/20 font-semibold' : ''}>Cancelled</DropdownMenuItem>
                       </DropdownMenuContent>
@@ -454,16 +383,7 @@ const OrdersPage = () => {
                                   <SelectContent>
                                     <SelectItem value="pending">Pending</SelectItem>
                                     <SelectItem value="confirmed">Confirmed</SelectItem>
-                                    <SelectItem value="designing_done">Designing Done</SelectItem>
-                                    <SelectItem value="under_procurement">Under Procurement</SelectItem>
-                                    <SelectItem value="in_production">In Production</SelectItem>
-                                    <SelectItem value="under_cutting">Under Cutting</SelectItem>
-                                    <SelectItem value="under_stitching">Under Stitching</SelectItem>
-                                    <SelectItem value="under_qc">Under QC</SelectItem>
-                                    <SelectItem value="quality_check">Quality Check</SelectItem>
                                     <SelectItem value="ready_for_dispatch">Ready for Dispatch</SelectItem>
-                                    <SelectItem value="rework">Rework</SelectItem>
-                                    <SelectItem value="partial_dispatched">Partial Dispatched</SelectItem>
                                     <SelectItem value="dispatched">Dispatched</SelectItem>
                                     <SelectItem value="completed" className="text-green-600 font-semibold">✅ Completed</SelectItem>
                                     <SelectItem value="cancelled" className="text-red-600">Cancelled</SelectItem>
@@ -478,20 +398,6 @@ const OrdersPage = () => {
                             <TableCell>₹{order.balance_amount?.toFixed(2) || '0.00'}</TableCell>
                             <TableCell>
                               <div className="flex space-x-2">
-                                {order.status !== 'completed' && order.status !== 'cancelled' && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleStatusChange(order.id, 'completed');
-                                    }}
-                                  >
-                                    ✅ Complete
-                                  </Button>
-                                )}
-                                
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -502,51 +408,17 @@ const OrdersPage = () => {
                                 >
                                   <Eye className="w-4 h-4" />
                                 </Button>
-                                
-                                <AlertDialog>
-                                  <AlertDialogTrigger asChild>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <Trash2 className="w-4 h-4" />
-                                    </Button>
-                                  </AlertDialogTrigger>
-                                  <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                      <AlertDialogTitle>Delete Order</AlertDialogTitle>
-                                      <AlertDialogDescription>
-                                        Are you sure you want to delete order #{order.order_number}? This action cannot be undone.
-                                      </AlertDialogDescription>
-                                      <div className="mt-3">
-                                        <p className="text-sm font-medium mb-2">This will permanently delete:</p>
-                                        <ul className="list-disc list-inside space-y-1 text-sm">
-                                          <li>The order and all its details</li>
-                                          <li>All order items and their specifications</li>
-                                          <li>Order activities and history</li>
-                                          <li>Any customizations associated with this order</li>
-                                        </ul>
-                                      </div>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                      <AlertDialogAction 
-                                        onClick={() => handleDeleteOrder(order.id, order.order_number)}
-                                        className="bg-red-600 hover:bg-red-700"
-                                      >
-                                        Delete Order
-                                      </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                  </AlertDialogContent>
-                                </AlertDialog>
                               </div>
                             </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
                     </Table>
+                    {filteredOrders.length === 0 && !loading && (
+                      <div className="text-center py-8 text-muted-foreground">
+                        No readymade orders found
+                      </div>
+                    )}
                   </div>
                 )}
               </CardContent>
@@ -554,17 +426,15 @@ const OrdersPage = () => {
           </TabsContent>
 
           <TabsContent value="create" className="space-y-6">
-            <OrderForm 
+            <ReadymadeOrderForm 
               onOrderCreated={async () => {
-                console.log('OrdersPage: onOrderCreated callback triggered');
+                console.log('ReadymadeOrdersPage: onOrderCreated callback triggered');
                 setActiveTab("list");
-                console.log('OrdersPage: Switching to list tab');
-                // Add a small delay to ensure the tab switch completes
                 setTimeout(async () => {
-                  console.log('OrdersPage: Fetching orders after delay');
+                  console.log('ReadymadeOrdersPage: Fetching orders after delay');
                   await fetchOrders();
                 }, 100);
-                toast.success("Order created successfully!");
+                toast.success("Readymade order created successfully!");
               }}
             />
           </TabsContent>
@@ -574,4 +444,5 @@ const OrdersPage = () => {
   );
 };
 
-export default OrdersPage;
+export default ReadymadeOrdersPage;
+

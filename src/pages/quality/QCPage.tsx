@@ -116,13 +116,14 @@ export default function QCPage() {
         } catch {}
       }
 
-      // Fetch order and customer, and images
+      // Fetch order and customer, and images (exclude readymade orders - they don't go through QC)
       let ordersMap: Record<string, { order_number?: string; customer_id?: string }> = {};
       if (orderIds.length > 0) {
         const { data: orderRows } = await (supabase as any)
           .from('orders')
           .select('id, order_number, customer_id')
-          .in('id', orderIds as any);
+          .in('id', orderIds as any)
+          .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
         (orderRows || []).forEach((o: any) => { ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id }; });
       }
       const customerIds = Array.from(new Set(Object.values(ordersMap).map(o => o.customer_id).filter(Boolean)));

@@ -44,7 +44,7 @@ export default function InvoicePage() {
     try {
       setLoading(true);
       
-      // Get all dispatched and completed orders
+      // Get all dispatched and completed orders (include readymade orders that have been dispatched)
       const { data: ordersData, error: ordersError } = await supabase
         .from('orders')
         .select(`*, customer:customers(company_name)`)
@@ -81,19 +81,28 @@ export default function InvoicePage() {
             
             const dispatchedQuantity = dispatchItems?.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0) || 0;
             
-            // Get approved quantity for comparison
-            const { data: qcReviews } = await supabase
-              .from('qc_reviews')
-              .select('approved_quantity, order_batch_assignment_id')
-              .in('order_batch_assignment_id', 
-                (await supabase
-                  .from('order_batch_assignments')
-                  .select('id')
-                  .eq('order_id', order.id as any)
-                ).data?.map((a: any) => a.id) || []
-              );
-            
-            const approvedQuantity = qcReviews?.reduce((sum: number, qc: any) => sum + (qc.approved_quantity || 0), 0) || 0;
+            // Get approved/total quantity for comparison
+            // For readymade orders, get from order_items; for custom orders, get from QC reviews
+            let approvedQuantity = 0;
+            if (order.order_type === 'readymade') {
+              const { data: orderItems } = await supabase
+                .from('order_items')
+                .select('quantity')
+                .eq('order_id', order.id as any);
+              approvedQuantity = orderItems?.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0) || 0;
+            } else {
+              const { data: qcReviews } = await supabase
+                .from('qc_reviews')
+                .select('approved_quantity, order_batch_assignment_id')
+                .in('order_batch_assignment_id', 
+                  (await supabase
+                    .from('order_batch_assignments')
+                    .select('id')
+                    .eq('order_id', order.id as any)
+                  ).data?.map((a: any) => a.id) || []
+                );
+              approvedQuantity = qcReviews?.reduce((sum: number, qc: any) => sum + (qc.approved_quantity || 0), 0) || 0;
+            }
             
             const invoice = invoiceMap[order.id];
             
@@ -222,7 +231,14 @@ export default function InvoicePage() {
 
   const renderOrderRow = (order: Order) => (
     <TableRow key={order.id}>
-      <TableCell>{order.order_number}</TableCell>
+      <TableCell>
+        <div className="flex items-center gap-2">
+          <span>{order.order_number}</span>
+          {order.order_type === 'readymade' && (
+            <Badge variant="outline" className="text-xs">Readymade</Badge>
+          )}
+        </div>
+      </TableCell>
       <TableCell>{order.customer?.company_name}</TableCell>
       <TableCell>{new Date(order.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}</TableCell>
       <TableCell>
