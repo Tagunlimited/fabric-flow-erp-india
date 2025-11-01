@@ -478,6 +478,35 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                 console.error('Error updating warehouse_inventory:', warehouseUpdateError);
               } else {
                 console.log(`Updated warehouse_inventory: ${bestMatch.id} - ${currentQty} - ${fabricUsage.used_quantity} = ${newQty}`);
+                
+                // Log the inventory removal for cutting
+                try {
+                  const { logInventoryRemoval } = await import('@/utils/inventoryLogging');
+                  await logInventoryRemoval(
+                    bestMatch.id,
+                    {
+                      item_type: bestMatch.item_type || 'FABRIC',
+                      item_id: bestMatch.item_id || undefined,
+                      item_name: bestMatch.item_name || fabricUsage.fabric_name || 'Unknown',
+                      item_code: bestMatch.item_code || bestMatch.item_name || 'Unknown',
+                      unit: bestMatch.unit || 'meters',
+                    },
+                    fabricUsage.used_quantity,
+                    currentQty,
+                    newQty,
+                    {
+                      bin_id: bestMatch.bin_id || undefined,
+                      status: bestMatch.status || 'RECEIVED',
+                      color: bestMatch.fabric_color || bestMatch.item_color || undefined,
+                      reference_type: 'CUTTING',
+                      reference_id: jobId || undefined,
+                      reference_number: orderNumber || undefined,
+                      notes: `Fabric used in cutting - Job: ${jobId || 'N/A'}, Order: ${orderNumber || 'N/A'}`
+                    }
+                  );
+                } catch (logError) {
+                  console.error('Error logging inventory removal:', logError);
+                }
               }
             }
           }

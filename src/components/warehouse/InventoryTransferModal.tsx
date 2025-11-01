@@ -117,6 +117,8 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
       if (transferError) throw transferError;
 
       const remainingQty = Number(inventory.quantity) - Number(transferQuantity);
+      const oldQuantity = Number(inventory.quantity);
+      const fromBinId = inventory.bin_id;
 
       if (remainingQty > 0) {
         // Partial transfer: split into two rows
@@ -132,7 +134,7 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
         if (reduceError) throw reduceError;
 
         // 2) Insert a new row for the moved quantity in storage
-        const { error: insertError } = await supabase
+        const { data: newInventoryRow, error: insertError } = await supabase
           .from('warehouse_inventory' as any)
           .insert({
             grn_id: inventory.grn_id,
@@ -147,8 +149,35 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
             status: 'IN_STORAGE',
             moved_to_storage_date: new Date().toISOString(),
             notes: notes || `Split from ${inventory.bin?.bin_code}`
-          } as any);
+          } as any)
+          .select()
+          .single();
         if (insertError) throw insertError;
+
+        // Log the transfer for the new row
+        try {
+          const { logInventoryTransfer } = await import('@/utils/inventoryLogging');
+          await logInventoryTransfer(
+            newInventoryRow.id,
+            {
+              item_type: inventory.item_type,
+              item_id: inventory.item_id || undefined,
+              item_name: inventory.item_name,
+              item_code: inventory.item_code,
+              unit: inventory.unit,
+            },
+            transferQuantity,
+            fromBinId,
+            selectedBinId,
+            'RECEIVED',
+            'IN_STORAGE',
+            {
+              notes: notes || `Transferred ${transferQuantity} ${inventory.unit} from ${inventory.bin?.bin_code} to storage`
+            }
+          );
+        } catch (logError) {
+          console.error('Error logging inventory transfer:', logError);
+        }
       } else {
         // Full transfer: move the existing row to storage
         const { error: updateError } = await supabase
@@ -161,6 +190,31 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
           } as any)
           .eq('id', inventory.id as any);
         if (updateError) throw updateError;
+
+        // Log the transfer
+        try {
+          const { logInventoryTransfer } = await import('@/utils/inventoryLogging');
+          await logInventoryTransfer(
+            inventory.id,
+            {
+              item_type: inventory.item_type,
+              item_id: inventory.item_id || undefined,
+              item_name: inventory.item_name,
+              item_code: inventory.item_code,
+              unit: inventory.unit,
+            },
+            transferQuantity,
+            fromBinId,
+            selectedBinId,
+            inventory.status,
+            'IN_STORAGE',
+            {
+              notes: notes || `Transferred ${transferQuantity} ${inventory.unit} from ${inventory.bin?.bin_code} to storage`
+            }
+          );
+        } catch (logError) {
+          console.error('Error logging inventory transfer:', logError);
+        }
       }
 
       toast.success('Item transferred to storage successfully');

@@ -5,10 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Archive, Package, Search, Eye, Filter } from 'lucide-react';
+import { Archive, Package, Search, Eye, Filter, History } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS, ITEM_TYPE_CONFIGS } from '@/types/warehouse-inventory';
 import { toast } from 'sonner';
+import { InventoryLogsModal } from './InventoryLogsModal';
 
 interface StorageZoneInventoryProps {
   onViewDetails?: (inventory: WarehouseInventory) => void;
@@ -21,6 +22,8 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [itemTypeFilter, setItemTypeFilter] = useState<string>('all');
+  const [logsModalOpen, setLogsModalOpen] = useState(false);
+  const [selectedInventoryForLogs, setSelectedInventoryForLogs] = useState<WarehouseInventory | null>(null);
 
   const loadInventory = async () => {
     try {
@@ -72,9 +75,12 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
 
       if (error) throw error;
       const filtered = ((data as any) || []).filter((i: any) => i?.bin?.location_type === 'STORAGE');
-      setInventory(filtered);
+      
+      // Consolidate duplicate items before displaying
+      const consolidated = consolidateInventory(filtered as WarehouseInventory[]);
+      setInventory(consolidated);
 
-      const summaries = createBinSummaries(filtered);
+      const summaries = createBinSummaries(consolidated);
       setBinSummaries(summaries);
     } catch (error) {
       console.error('Error loading storage inventory:', error);
@@ -82,6 +88,47 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     } finally {
       setLoading(false);
     }
+  };
+
+  // Consolidate duplicate items (same item_id/code+name, bin, status, unit, color)
+  const consolidateInventory = (inventoryData: WarehouseInventory[]): (WarehouseInventory & { consolidatedIds?: string[] })[] => {
+    const consolidatedMap = new Map<string, WarehouseInventory & { consolidatedIds: string[] }>();
+
+    inventoryData.forEach(item => {
+      // Create a unique key for matching items
+      const itemColor = item.grn_item?.item_color || item.grn_item?.fabric_color || '';
+      const key = item.item_id 
+        ? `${item.item_id}|${item.bin_id}|${item.status}|${item.unit}|${itemColor}`
+        : `${item.item_code}|${item.item_name}|${item.bin_id}|${item.status}|${item.unit}|${itemColor}`;
+
+      const existing = consolidatedMap.get(key);
+      
+      if (existing) {
+        // Consolidate: sum quantities and keep most recent entry's metadata
+        existing.quantity = existing.quantity + item.quantity;
+        existing.consolidatedIds.push(item.id);
+        
+        // Keep the most recent moved_to_storage_date
+        if (item.moved_to_storage_date && existing.moved_to_storage_date) {
+          const existingDate = new Date(existing.moved_to_storage_date);
+          const newDate = new Date(item.moved_to_storage_date);
+          if (newDate > existingDate) {
+            existing.moved_to_storage_date = item.moved_to_storage_date;
+          }
+        } else if (item.moved_to_storage_date) {
+          existing.moved_to_storage_date = item.moved_to_storage_date;
+        }
+      } else {
+        // First occurrence of this item
+        consolidatedMap.set(key, {
+          ...item,
+          consolidatedIds: [item.id]
+        });
+      }
+    });
+
+    // Return consolidated items (keep consolidatedIds for logs modal)
+    return Array.from(consolidatedMap.values());
   };
 
   const createBinSummaries = (inventoryData: WarehouseInventory[]): BinInventorySummary[] => {
@@ -353,6 +400,20 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                             <Eye className="h-3 w-3" />
                             View
                           </Button>
+                          
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setSelectedInventoryForLogs(item);
+                              setLogsModalOpen(true);
+                            }}
+                            className="flex items-center gap-1"
+                            title="View item addition logs"
+                          >
+                            <History className="h-3 w-3" />
+                            Logs {(item as any).consolidatedIds?.length > 1 && `(${(item as any).consolidatedIds.length})`}
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -360,6 +421,17 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 })}
               </TableBody>
             </Table>
+            
+            {/* Inventory Logs Modal */}
+            {selectedInventoryForLogs && (
+              <InventoryLogsModal
+                open={logsModalOpen}
+                onOpenChange={setLogsModalOpen}
+                inventoryId={selectedInventoryForLogs.id}
+                itemName={selectedInventoryForLogs.item_name}
+                consolidatedIds={(selectedInventoryForLogs as any).consolidatedIds}
+              />
+            )}
             {filteredInventory.length === 0 && (
               <div className="text-center py-8">
                 <Archive className="h-12 w-12 text-muted-foreground mx-auto mb-4" />

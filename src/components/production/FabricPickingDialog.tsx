@@ -631,6 +631,36 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
               });
             } else {
               console.log(`✅ Successfully updated warehouse inventory: ${fabric.fabric_name} in bin ${binId}, reduced by ${pickedQty} (${currentQuantity} -> ${newQuantity})`);
+              
+              // Log the inventory removal
+              try {
+                const { logInventoryRemoval } = await import('@/utils/inventoryLogging');
+                await logInventoryRemoval(
+                  bestMatch.id,
+                  {
+                    item_type: bestMatch.item_type || 'FABRIC',
+                    item_id: bestMatch.item_id || undefined,
+                    item_name: bestMatch.item_name || fabric.fabric_name,
+                    item_code: bestMatch.item_code || fabric.fabric_name,
+                    unit: bestMatch.unit || 'meters',
+                  },
+                  pickedQty,
+                  currentQuantity,
+                  newQuantity,
+                  {
+                    bin_id: binId,
+                    status: bestMatch.status || 'RECEIVED',
+                    color: bestMatch.fabric_color || bestMatch.item_color || undefined,
+                    reference_type: 'PICKING',
+                    reference_id: orderId || undefined,
+                    reference_number: orderNumber || undefined,
+                    notes: `Fabric picked for production - Order: ${orderNumber || 'N/A'}`
+                  }
+                );
+              } catch (logError) {
+                console.error('Error logging inventory removal:', logError);
+              }
+              
               inventoryUpdates.push({
                 fabric: fabric.fabric_name,
                 status: 'success',
