@@ -88,7 +88,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Bills of Materials", url: "/bom", icon: ClipboardList },
         { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingBag },
         { title: "Goods Receipt Note", url: "/procurement/grn", icon: ClipboardList },
-        { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
+        // { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
         { title: "Material Shortfall Alerts", url: "/procurement/alerts", icon: AlertTriangle }
       ]
     },

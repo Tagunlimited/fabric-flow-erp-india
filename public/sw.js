@@ -125,7 +125,11 @@ async function networkFirst(request, cacheName) {
     }
     return networkResponse;
   } catch (error) {
-    console.log('Network failed, trying cache:', error);
+    // Only log if it's not a typical network error (aborted, failed fetch)
+    // Suppress common development-time errors
+    if (error.message && !error.message.includes('Failed to fetch') && !error.message.includes('Load failed')) {
+      console.log('Network failed, trying cache:', error);
+    }
     const cachedResponse = await caches.match(request);
     if (cachedResponse) {
       return cachedResponse;
@@ -139,9 +143,13 @@ async function networkFirst(request, cacheName) {
       });
     }
     
-    return new Response('Offline - Resource not available', {
-      status: 503,
-      statusText: 'Service Unavailable'
+    // For development, just pass through the original request instead of returning 503
+    // This prevents service worker from blocking dev server requests
+    return fetch(request).catch(() => {
+      return new Response('Offline - Resource not available', {
+        status: 503,
+        statusText: 'Service Unavailable'
+      });
     });
   }
 }
