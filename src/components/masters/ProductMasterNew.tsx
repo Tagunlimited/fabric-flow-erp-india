@@ -813,108 +813,25 @@ export function ProductMasterNew() {
         }
       }).filter(p => p !== null && p.sku); // Filter out invalid rows and rows without SKU
 
-      // Download and upload images for all products (skip Dropbox URLs)
-      setUploadProgress(55);
+      // Use image URLs directly from the file (do not download)
+      setUploadProgress(70);
       console.log(`📥 Processing images for ${formattedProducts.length} products...`);
       
-      let dropboxUrlCount = 0;
-      let downloadedCount = 0;
-      let skippedCount = 0;
-      
-      // Process images in parallel batches - skip Dropbox immediately, download others
-      const imageBatchSize = 20; // Increased batch size since Dropbox URLs are skipped instantly
-      
-      // Quick pass: identify and skip Dropbox URLs immediately (no download attempt)
+      // Simply use the original URLs from the file - no download/upload
       for (const product of formattedProducts) {
-        if (product._original_main_image?.includes('dropbox.com')) {
-          dropboxUrlCount++;
+        // Use original URLs directly
+        if (product._original_main_image) {
           product.main_image = product._original_main_image;
         }
-        if (product._original_image1?.includes('dropbox.com')) {
-          dropboxUrlCount++;
+        if (product._original_image1) {
           product.image1 = product._original_image1;
         }
-        if (product._original_image2?.includes('dropbox.com')) {
-          dropboxUrlCount++;
+        if (product._original_image2) {
           product.image2 = product._original_image2;
         }
       }
       
-      // Now download only non-Dropbox images
-      for (let i = 0; i < formattedProducts.length; i += imageBatchSize) {
-        const batch = formattedProducts.slice(i, i + imageBatchSize);
-        
-        await Promise.all(batch.map(async (product) => {
-          try {
-            // Download only non-Dropbox images
-            const imagePromises = [];
-            
-            if (product._original_main_image && !product._original_main_image.includes('dropbox.com')) {
-              imagePromises.push(
-                downloadAndUploadImage(product._original_main_image, product.sku, 'main')
-                  .then(url => { 
-                    if (url && url !== product._original_main_image) {
-                      product.main_image = url;
-                      downloadedCount++;
-                    } else if (url) {
-                      product.main_image = url;
-                      skippedCount++;
-                    }
-                  })
-              );
-            }
-            
-            if (product._original_image1 && !product._original_image1.includes('dropbox.com')) {
-              imagePromises.push(
-                downloadAndUploadImage(product._original_image1, product.sku, 'image1')
-                  .then(url => { 
-                    if (url && url !== product._original_image1) {
-                      product.image1 = url;
-                      downloadedCount++;
-                    } else if (url) {
-                      product.image1 = url;
-                      skippedCount++;
-                    }
-                  })
-              );
-            }
-            
-            if (product._original_image2 && !product._original_image2.includes('dropbox.com')) {
-              imagePromises.push(
-                downloadAndUploadImage(product._original_image2, product.sku, 'image2')
-                  .then(url => { 
-                    if (url && url !== product._original_image2) {
-                      product.image2 = url;
-                      downloadedCount++;
-                    } else if (url) {
-                      product.image2 = url;
-                      skippedCount++;
-                    }
-                  })
-              );
-            }
-            
-            await Promise.allSettled(imagePromises);
-          } catch (error) {
-            console.error(`Error processing images for SKU ${product.sku}:`, error);
-            // Continue with other products even if image download fails
-          }
-        }));
-        
-        // Update progress more frequently
-        const progress = 55 + Math.floor((i / formattedProducts.length) * 25);
-        setUploadProgress(progress);
-      }
-      
-      // Log summary
-      if (dropboxUrlCount > 0) {
-        console.warn(`⚠️ ${dropboxUrlCount} Dropbox URLs detected and skipped (cannot be downloaded via browser due to CORS).`);
-        console.warn(`💡 Tip: For Dropbox images, you'll need to download them manually and upload to Supabase Storage, or use direct image URLs.`);
-      }
-      if (downloadedCount > 0) {
-        console.log(`✅ Successfully downloaded and uploaded ${downloadedCount} images.`);
-      }
-      console.log('✅ Image processing completed');
+      console.log('✅ Image URLs processed (using URLs directly from file)');
 
       // Remove temporary properties
       formattedProducts.forEach(p => {
@@ -922,6 +839,8 @@ export function ProductMasterNew() {
         delete (p as any)._original_image1;
         delete (p as any)._original_image2;
       });
+      
+      setUploadProgress(75);
 
       if (formattedProducts.length === 0) {
         throw new Error("No valid products after processing. Please check your file format.");
