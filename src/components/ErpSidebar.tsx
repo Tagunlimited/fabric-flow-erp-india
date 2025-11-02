@@ -23,7 +23,8 @@ import {
   AlertTriangle,
   Scissors,
   Shirt,
-  FileText
+  FileText,
+  Image
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -144,7 +145,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Size Master", url: "/inventory/size-types", icon: ClipboardList },
         { title: "Warehouse Master", url: "/masters/warehouses", icon: Building },
         { title: "Customer Type Master", url: "/masters/customer-types", icon: Users },
-        { title: "Supplier Master", url: "/masters/suppliers", icon: Truck }
+        { title: "Supplier Master", url: "/masters/suppliers", icon: Truck },
+        { title: "Image Master", url: "/masters/images", icon: Image }
       ]
     },
     {
