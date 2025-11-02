@@ -160,6 +160,28 @@ export function ProductMasterNew() {
     }
   }, [user]);
 
+  // Size order for sorting
+  const getSizeOrder = (size: string | undefined | null): number => {
+    if (!size) return 999; // Put empty/null sizes at the end
+    
+    const sizeUpper = size.toUpperCase().trim();
+    const sizeMap: { [key: string]: number } = {
+      'S': 1,
+      'M': 2,
+      'L': 3,
+      'XL': 4,
+      'X-L': 4,
+      '2XL': 5,
+      '2-XL': 5,
+      'XXL': 5,
+      '3XL': 6,
+      '3-XL': 6,
+      'XXXL': 6
+    };
+    
+    return sizeMap[sizeUpper] || 999; // Unknown sizes go to the end
+  };
+
   // Filter and sort products
   useEffect(() => {
     let filtered = products;
@@ -181,8 +203,32 @@ export function ProductMasterNew() {
       );
     }
 
-    // Apply sorting
-    if (sortField) {
+    // Apply automatic sorting: First by class, then by size
+    filtered.sort((a, b) => {
+      // Primary sort: Class
+      const aClass = (a.class || '').toLowerCase();
+      const bClass = (b.class || '').toLowerCase();
+      
+      if (aClass !== bClass) {
+        return aClass.localeCompare(bClass);
+      }
+      
+      // Secondary sort: Size (S, M, L, XL, 2XL, 3XL order)
+      const aSizeOrder = getSizeOrder(a.size);
+      const bSizeOrder = getSizeOrder(b.size);
+      
+      if (aSizeOrder !== bSizeOrder) {
+        return aSizeOrder - bSizeOrder;
+      }
+      
+      // Tertiary sort: If sizes are same, sort by SKU for consistency
+      const aSku = (a.sku || '').toLowerCase();
+      const bSku = (b.sku || '').toLowerCase();
+      return aSku.localeCompare(bSku);
+    });
+
+    // Apply manual sorting if user has selected a specific field
+    if (sortField && sortField !== 'class' && sortField !== 'size') {
       filtered.sort((a, b) => {
         const aVal = a[sortField as keyof Product];
         const bVal = b[sortField as keyof Product];
