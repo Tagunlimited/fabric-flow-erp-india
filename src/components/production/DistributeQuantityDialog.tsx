@@ -22,6 +22,7 @@ interface Batch {
   status: string;
   batch_leader_name: string;
   batch_leader_avatar?: string;
+  batch_leader_avatar_url?: string;
   available_capacity: number;
 }
 
@@ -166,9 +167,9 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
       // Fetch stitching prices from order_assignments
       console.log('📊 Fetching stitching prices...');
       const { data: priceData, error: priceError } = await supabase
-        .from('order_assignments')
+        .from('order_assignments' as any)
         .select('cutting_price_single_needle, cutting_price_overlock_flatlock')
-        .eq('order_id', orderId)
+        .eq('order_id', orderId as any)
         .single();
 
       if (priceError) {
@@ -177,29 +178,12 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
       }
       console.log('✅ Pricing data fetched:', priceData);
 
-      // Fetch order details with customizations
+      // Fetch order details - fetch order_items separately to avoid relationship issues
       console.log('📋 Fetching order details...');
       const { data: orderData, error: orderError } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          order_items (
-            *,
-            mockup_images,
-            specifications,
-            category_image_url,
-            product_categories (
-              category_name,
-              category_image_url
-            ),
-            fabrics (
-              name,
-              description,
-              image_url
-            )
-          )
-        `)
-        .eq('id', orderId)
+        .from('orders' as any)
+        .select('*')
+        .eq('id', orderId as any)
         .single();
 
       if (orderError) {
@@ -208,65 +192,160 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
       }
       console.log('✅ Order data fetched:', orderData);
 
+      // Fetch order items separately
+      const { data: orderItemsData, error: itemsError } = await supabase
+        .from('order_items' as any)
+        .select('*')
+        .eq('order_id', orderId as any);
+
+      if (itemsError) {
+        console.error('❌ Error fetching order items:', itemsError);
+        return;
+      }
+
+      // Fetch product categories and fabric details separately
+      const categoryIds = Array.from(new Set((orderItemsData || []).map((item: any) => item.product_category_id).filter(Boolean)));
+      const fabricIds = Array.from(new Set((orderItemsData || []).map((item: any) => item.fabric_id).filter(Boolean)));
+
+      let categoriesMap: Record<string, any> = {};
+      if (categoryIds.length > 0) {
+        const { data: categories } = await supabase
+          .from('product_categories' as any)
+          .select('id, category_name, category_image_url')
+          .in('id', categoryIds);
+        (categories || []).forEach((cat: any) => {
+          categoriesMap[cat.id] = cat;
+        });
+      }
+
+      let fabricMap: Record<string, any> = {};
+      if (fabricIds.length > 0) {
+        const { data: fabrics } = await supabase
+          .from('fabric_master' as any)
+          .select('id, fabric_name, color, gsm, image')
+          .in('id', fabricIds);
+        (fabrics || []).forEach((fabric: any) => {
+          fabricMap[fabric.id] = fabric;
+        });
+      }
+
+      // Enrich order items with related data
+      const enrichedOrderItems = (orderItemsData || []).map((item: any) => {
+        // Parse customizations from specifications
+        let customizations: any[] = [];
+        try {
+          const specs = typeof item.specifications === 'string' 
+            ? JSON.parse(item.specifications || '{}') 
+            : (item.specifications || {});
+          customizations = specs.customizations || [];
+        } catch (e) {
+          console.error('Error parsing customizations:', e);
+        }
+
+        return {
+          ...item,
+          product_categories: categoriesMap[item.product_category_id],
+          fabric: fabricMap[item.fabric_id],
+          customizations: customizations
+        };
+      });
+
+      // Fetch sales manager information
+      let salesManager: { name: string; avatarUrl?: string } | undefined;
+      if (orderData && !orderError && (orderData as any).sales_manager) {
+        try {
+          const { data: salesManagerData } = await supabase
+            .from('employees' as any)
+            .select('id, full_name, avatar_url')
+            .eq('id', (orderData as any).sales_manager as any)
+            .single();
+          if (salesManagerData && !('error' in salesManagerData)) {
+            salesManager = {
+              name: (salesManagerData as any).full_name,
+              avatarUrl: (salesManagerData as any).avatar_url || undefined
+            };
+          }
+        } catch (e) {
+          console.error('Error fetching sales manager:', e);
+        }
+      }
+
       // Fetch company settings
       console.log('🏢 Fetching company settings...');
       const { data: companySettings, error: settingsError } = await supabase
-        .from('company_settings')
+        .from('company_settings' as any)
         .select('*')
         .single();
 
-      if (settingsError) {
+      if (settingsError || !companySettings || 'error' in (companySettings as any)) {
         console.error('❌ Error fetching company settings:', settingsError);
         return;
       }
       console.log('✅ Company settings fetched:', companySettings);
 
-      // Prepare batch assignment data
+      // Prepare batch assignment data with proper structure
       console.log('🔧 Preparing batch assignment data...');
       const batchAssignments = selectedBatchIds.map(batchId => {
         const batch = batches.find(b => b.id === batchId);
         const batchQty = batchQuantities[batchId];
         const sizeDistributions = Object.entries(batchQty)
-          .filter(([_, qty]) => qty > 0)
-          .map(([size, qty]) => ({ size, quantity: qty }));
+          .filter(([_, qty]) => typeof qty === 'number' && qty > 0)
+          .map(([size, qty]) => ({ size, quantity: qty as number }));
 
-        // Determine price per piece based on tailor type
-        const pricePerPiece = batch?.tailor_type === 'single_needle' 
-          ? (priceData?.cutting_price_single_needle || 0)
-          : (priceData?.cutting_price_overlock_flatlock || 0);
+        const assignedQuantity = sizeDistributions.reduce((sum, sd) => sum + sd.quantity, 0);
+        const snRate = (priceData && !priceError && !('error' in (priceData as any))) 
+          ? ((priceData as any).cutting_price_single_needle || 0)
+          : 0;
+        const ofRate = (priceData && !priceError && !('error' in (priceData as any)))
+          ? ((priceData as any).cutting_price_overlock_flatlock || 0)
+          : 0;
+        // Total earning = (SN + OF) × assigned quantity
+        const totalEarning = (snRate + ofRate) * assignedQuantity;
+
+        // Fetch batch leader avatar if available
+        let batchLeaderAvatarUrl: string | undefined = undefined;
+        if (batch?.batch_leader_avatar_url) {
+          batchLeaderAvatarUrl = batch.batch_leader_avatar_url;
+        } else if (batch?.batch_leader_avatar) {
+          batchLeaderAvatarUrl = batch.batch_leader_avatar;
+        }
 
         return {
           batchName: batch?.batch_name || '',
           batchLeaderName: batch?.batch_leader_name || '',
+          batchLeaderAvatarUrl: batchLeaderAvatarUrl,
           tailorType: batch?.tailor_type as 'single_needle' | 'overlock_flatlock' || 'single_needle',
           sizeDistributions,
-          pricePerPiece
+          snRate,
+          ofRate,
+          totalEarning,
+          assignedQuantity
         };
       });
       console.log('✅ Batch assignments prepared:', batchAssignments);
 
-      // Prepare customizations (simplified since branding_items and order_item_addons don't exist)
-      const customizations = {
-        branding: null, // These relationships don't exist in current schema
-        addons: null,   // These relationships don't exist in current schema
-        special_instructions: orderData.special_instructions || orderData.notes
-      };
-      console.log('✅ Customizations prepared:', customizations);
+      // Collect all customizations from all order items
+      const allCustomizations: any[] = [];
+      enrichedOrderItems.forEach((item: any) => {
+        if (item.customizations && Array.isArray(item.customizations)) {
+          item.customizations.forEach((cust: any) => {
+            allCustomizations.push(cust);
+          });
+        }
+      });
+      console.log('✅ Customizations prepared:', allCustomizations);
 
       // Generate PDF
       console.log('📄 Calling PDF generation function...');
       await generateBatchAssignmentPDF({
         orderNumber,
         customerName,
-        orderItems: orderData.order_items || [],
+        orderItems: enrichedOrderItems,
         batchAssignments,
-        companySettings,
-        stitchingPrices: {
-          single_needle: priceData?.cutting_price_single_needle || 0,
-          overlock_flatlock: priceData?.cutting_price_overlock_flatlock || 0
-        },
-        customizations,
-        dueDate: orderData.expected_delivery_date
+        companySettings: companySettings as any,
+        salesManager,
+        customizations: allCustomizations,
+        dueDate: (orderData as any).expected_delivery_date
       });
       console.log('🎉 PDF generation completed successfully!');
 
