@@ -55,14 +55,15 @@ const ProductionPage = () => {
         )
       );
 
-      // 2) Fetch orders first (simplified query)
+      // 2) Fetch orders first (simplified query) - exclude readymade orders
       let ordersQuery = supabase
         .from("orders")
         .select(`
           *,
           customer:customers(company_name)
         `)
-        .neq('status', 'cancelled' as any); // Exclude cancelled orders
+        .neq('status', 'cancelled' as any) // Exclude cancelled orders
+        .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
 
       if (orderIds.length && orderNumbers.length) {
         const idsList = orderIds.join(",");

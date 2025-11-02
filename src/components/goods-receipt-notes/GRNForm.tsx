@@ -793,33 +793,174 @@ const GRNForm = () => {
             console.log(`Skipping master table inventory update for ${item.item_name} - no item_id or custom item`);
           }
 
-          // Add item to warehouse inventory tracking
+          // Add item to warehouse inventory tracking with consolidation
           try {
-            const { error: warehouseError } = await supabase
-              .from('warehouse_inventory')
-              .insert({
+            const itemType = (item.item_type === 'fabric' ? 'FABRIC' : 
+                            item.item_type === 'product' ? 'PRODUCT' : 'ITEM') as any;
+            const itemCode = item.item_code || item.item_name;
+            const itemColor = item.item_color || item.fabric_color || null;
+
+            // Check if the same item already exists in the same bin with same status
+            // Items are considered the same if they have:
+            // - Same item_id (if available) OR same item_code + item_name + color
+            // - Same bin_id
+            // - Same status
+            // - Same unit
+            let existingInventory: any = null;
+            
+            if (item.item_id) {
+              // First try to find by item_id
+              const { data: existingByItemId, error: findError1 } = await supabase
+                .from('warehouse_inventory')
+                .select('*')
+                .eq('item_id', item.item_id)
+                .eq('bin_id', defaultBin?.id)
+                .eq('status', 'RECEIVED')
+                .eq('item_type', itemType)
+                .eq('unit', item.unit_of_measure || 'pcs')
+                .limit(1)
+                .single();
+              
+              if (!findError1 && existingByItemId) {
+                existingInventory = existingByItemId;
+              }
+            }
+
+            // If not found by item_id, try by item_code + item_name
+            // Note: We'll match items with same code/name even if color differs slightly
+            // since they represent the same base item
+            if (!existingInventory) {
+              const { data: existingByCodeData, error: findError2 } = await supabase
+                .from('warehouse_inventory')
+                .select(`
+                  *,
+                  grn_item:grn_item_id (
+                    item_color,
+                    fabric_color
+                  )
+                `)
+                .eq('item_code', itemCode)
+                .eq('item_name', item.item_name)
+                .eq('bin_id', defaultBin?.id)
+                .eq('status', 'RECEIVED')
+                .eq('item_type', itemType)
+                .eq('unit', item.unit_of_measure || 'pcs')
+                .limit(1);
+              
+              const existingByCode = existingByCodeData && existingByCodeData.length > 0 ? existingByCodeData[0] : null;
+              
+              if (!findError2 && existingByCode) {
+                // For items with colors, also check color match
+                if (itemColor) {
+                  const existingColor = (existingByCode as any).grn_item?.item_color || 
+                                       (existingByCode as any).grn_item?.fabric_color ||
+                                       (existingByCode as any).item_color ||
+                                       (existingByCode as any).fabric_color ||
+                                       null;
+                  if (itemColor === existingColor || !existingColor) {
+                    existingInventory = existingByCode;
+                  }
+                } else {
+                  // No color specified, match anyway
+                  existingInventory = existingByCode;
+                }
+              }
+            }
+
+            let warehouseInventoryId: string;
+
+            if (existingInventory) {
+              // Update existing inventory quantity
+              const newQuantity = Number(existingInventory.quantity) + Number(item.approved_quantity);
+              
+              const { data: updatedInventory, error: updateError } = await supabase
+                .from('warehouse_inventory')
+                .update({
+                  quantity: newQuantity,
+                  updated_at: new Date().toISOString()
+                } as any)
+                .eq('id', existingInventory.id)
+                .select()
+                .single();
+
+              if (updateError) {
+                console.error('Error updating warehouse inventory:', updateError);
+                throw updateError;
+              }
+
+              warehouseInventoryId = updatedInventory.id;
+              console.log(`Updated existing inventory for ${item.item_name}: ${existingInventory.quantity} + ${item.approved_quantity} = ${newQuantity}`);
+            } else {
+              // Insert new inventory entry
+              const insertData: any = {
                 grn_id: grn.id,
                 grn_item_id: item.id,
-                item_type: (item.item_type === 'fabric' ? 'FABRIC' : 
-                          item.item_type === 'product' ? 'PRODUCT' : 'ITEM') as any,
-                item_id: item.item_id || null, // Allow null for custom items
+                item_type: itemType,
+                item_id: item.item_id || null,
                 item_name: item.item_name,
-                item_code: item.item_code || item.item_name,
+                item_code: itemCode,
                 quantity: item.approved_quantity,
                 unit: item.unit_of_measure || 'pcs',
                 bin_id: defaultBin?.id,
                 status: 'RECEIVED' as any,
                 notes: `Auto-placed from GRN ${grn.grn_number}`
-              } as any);
+              };
+              
+              // Add color fields if they exist in the table schema
+              if (itemColor) {
+                if (item.item_type === 'fabric') {
+                  insertData.fabric_color = itemColor;
+                } else {
+                  insertData.item_color = itemColor;
+                }
+              }
+              
+              const { data: newInventory, error: insertError } = await supabase
+                .from('warehouse_inventory')
+                .insert(insertData)
+                .select()
+                .single();
 
-            if (warehouseError) {
-              console.error('Error adding to warehouse inventory:', warehouseError);
-              // Don't throw error here, just log it as inventory is already updated
-            } else {
-              console.log(`Added ${item.item_name} to warehouse inventory in bin ${defaultBin?.bin_code}`);
+              if (insertError) {
+                console.error('Error adding to warehouse inventory:', insertError);
+                throw insertError;
+              }
+
+              warehouseInventoryId = newInventory.id;
+              console.log(`Added new inventory entry for ${item.item_name} to warehouse inventory in bin ${defaultBin?.bin_code}`);
             }
+
+            // Always create a log entry for this addition
+            const { logInventoryAddition } = await import('@/utils/inventoryLogging');
+            await logInventoryAddition(
+              warehouseInventoryId,
+              {
+                item_type: itemType,
+                item_id: item.item_id || undefined,
+                item_name: item.item_name,
+                item_code: itemCode,
+                unit: item.unit_of_measure || 'pcs',
+              },
+              item.approved_quantity,
+              {
+                bin_id: defaultBin?.id,
+                status: 'RECEIVED',
+                color: itemColor || undefined,
+                action: existingInventory ? 'CONSOLIDATED' : 'ADDED',
+                grn_id: grn.id,
+                grn_item_id: item.id,
+                old_quantity: existingInventory ? Number(existingInventory.quantity) : undefined,
+                new_quantity: existingInventory 
+                  ? Number(existingInventory.quantity) + Number(item.approved_quantity)
+                  : Number(item.approved_quantity),
+                notes: existingInventory 
+                  ? `Added ${item.approved_quantity} ${item.unit_of_measure || 'pcs'} from GRN ${grn.grn_number} - Consolidated with existing inventory`
+                  : `Added ${item.approved_quantity} ${item.unit_of_measure || 'pcs'} from GRN ${grn.grn_number}`
+              }
+            );
+
           } catch (warehouseError) {
-            console.error('Error adding to warehouse inventory:', warehouseError);
+            console.error('Error updating warehouse inventory:', warehouseError);
             // Don't throw error here, just log it as inventory is already updated
           }
         }

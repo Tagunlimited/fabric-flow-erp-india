@@ -12,7 +12,8 @@ import {
   Ruler,
   Settings,
   Tag,
-  Wrench
+  Wrench,
+  Image
 } from "lucide-react";
 
 const masters = [
@@ -69,6 +70,12 @@ const masters = [
     description: "Create and manage product customization parts",
     icon: Wrench,
     path: "/masters/product-parts"
+  },
+  {
+    title: "Image Master",
+    description: "Upload and manage images. Get accessible links for your database",
+    icon: Image,
+    path: "/masters/images"
   }
 ];
 

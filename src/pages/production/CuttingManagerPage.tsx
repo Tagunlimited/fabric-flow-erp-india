@@ -34,11 +34,11 @@ import {
   FileText
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleBatchAssignmentDialog";
 import { UpdateCuttingQuantityDialog } from "@/components/production/UpdateCuttingQuantityDialog";
-import { FabricPickingDialog } from "@/components/production/FabricPickingDialog";
 import { generateBatchAssignmentPDF } from "@/utils/batchAssignmentPDF";
 
 interface CuttingJob {
@@ -137,10 +137,6 @@ const CuttingManagerPage = () => {
   // Batch assignment dialog state
   const [batchAssignmentOpen, setBatchAssignmentOpen] = useState(false);
   const [selectedJobForBatch, setSelectedJobForBatch] = useState<CuttingJob | null>(null);
-
-  // Fabric picking dialog state
-  const [fabricPickingOpen, setFabricPickingOpen] = useState(false);
-  const [selectedJobForFabricPicking, setSelectedJobForFabricPicking] = useState<CuttingJob | null>(null);
   
   // PDF generation state
   const [generatingPDF, setGeneratingPDF] = useState<string | null>(null);
@@ -157,11 +153,6 @@ const CuttingManagerPage = () => {
     setBatchAssignmentOpen(true);
   };
 
-  const handlePickFabric = (job: CuttingJob) => {
-    setSelectedJobForFabricPicking(job);
-    setFabricPickingOpen(true);
-  };
-
   const handleBatchAssignmentSuccess = () => {
     // Reload cutting jobs to get updated batch assignments
     refreshData();
@@ -175,9 +166,9 @@ const CuttingManagerPage = () => {
       
       // Fetch stitching prices from order_assignments
       const { data: priceData, error: priceError } = await supabase
-        .from('order_assignments')
+        .from('order_assignments' as any)
         .select('cutting_price_single_needle, cutting_price_overlock_flatlock')
-        .eq('order_id', job.id)
+        .eq('order_id', job.id as any)
         .single();
 
       if (priceError) {
@@ -185,30 +176,94 @@ const CuttingManagerPage = () => {
         return;
       }
 
-      // Fetch order details with customizations
+      // Fetch order details - fetch order_items separately to avoid relationship issues
       const { data: orderData, error: orderError } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          order_items (
-            *,
-            product_categories (
-              category_name,
-              category_image_url
-            ),
-            fabrics (
-              name,
-              description,
-              image_url
-            )
-          )
-        `)
-        .eq('id', job.id)
+        .from('orders' as any)
+        .select('*')
+        .eq('id', job.id as any)
         .single();
 
       if (orderError) {
         console.error('❌ Error fetching order data:', orderError);
         return;
+      }
+
+      // Fetch order items separately
+      const { data: orderItemsData, error: itemsError } = await supabase
+        .from('order_items' as any)
+        .select('*')
+        .eq('order_id', job.id as any);
+
+      if (itemsError) {
+        console.error('❌ Error fetching order items:', itemsError);
+        return;
+      }
+
+      // Fetch product categories and fabric details separately
+      const categoryIds = Array.from(new Set((orderItemsData || []).map((item: any) => item.product_category_id).filter(Boolean)));
+      const fabricIds = Array.from(new Set((orderItemsData || []).map((item: any) => item.fabric_id).filter(Boolean)));
+
+      let categoriesMap: Record<string, any> = {};
+      if (categoryIds.length > 0) {
+        const { data: categories } = await supabase
+          .from('product_categories')
+          .select('id, category_name, category_image_url')
+          .in('id', categoryIds);
+        (categories || []).forEach((cat: any) => {
+          categoriesMap[cat.id] = cat;
+        });
+      }
+
+      let fabricMap: Record<string, any> = {};
+      if (fabricIds.length > 0) {
+        const { data: fabrics } = await supabase
+          .from('fabric_master')
+          .select('id, fabric_name, color, gsm, image')
+          .in('id', fabricIds);
+        (fabrics || []).forEach((fabric: any) => {
+          fabricMap[fabric.id] = fabric;
+        });
+      }
+
+      // Enrich order items with related data
+      const enrichedOrderItems = (orderItemsData || []).map((item: any) => {
+        // Parse customizations from specifications
+        let customizations: any[] = [];
+        try {
+          const specs = typeof item.specifications === 'string' 
+            ? JSON.parse(item.specifications || '{}') 
+            : (item.specifications || {});
+          customizations = specs.customizations || [];
+        } catch (e) {
+          console.error('Error parsing customizations:', e);
+        }
+
+        return {
+          ...item,
+          product_categories: categoriesMap[item.product_category_id],
+          fabric: fabricMap[item.fabric_id],
+          customizations: customizations
+        };
+      });
+
+      // Fetch sales manager information
+      let salesManager: { name: string; avatarUrl?: string } | undefined;
+      if (orderData && !orderError && (orderData as any).sales_manager) {
+        try {
+          const { data: salesManagerData } = await supabase
+            .from('employees' as any)
+            .select('id, full_name, avatar_url')
+            .eq('id', (orderData as any).sales_manager as any)
+            .single();
+          if (salesManagerData && !('error' in salesManagerData)) {
+            salesManager = {
+              name: (salesManagerData as any).full_name,
+              avatarUrl: (salesManagerData as any).avatar_url || undefined
+            };
+          }
+        } catch (e) {
+          console.error('Error fetching sales manager:', e);
+        }
       }
 
       // Fetch company settings
@@ -224,44 +279,75 @@ const CuttingManagerPage = () => {
 
       // Prepare batch assignment data from existing batch assignments
       const batchAssignments = (job.batchAssignments || []).map(assignment => {
-        const sizeDistributions = Object.entries(assignment.size_distributions || {})
-          .filter(([_, qty]) => qty > 0)
-          .map(([size, qty]) => ({ size, quantity: qty }));
+        // Handle size_distributions - can be array or object
+        let sizeDistributions: Array<{ size: string; quantity: number }> = [];
+        
+        if (Array.isArray(assignment.size_distributions)) {
+          // If it's already an array, use it directly
+          sizeDistributions = assignment.size_distributions.map((sd: any) => ({
+            size: sd.size_name || sd.size || '',
+            quantity: typeof sd.quantity === 'number' ? sd.quantity : 0
+          }));
+        } else if (assignment.size_distributions && typeof assignment.size_distributions === 'object') {
+          // If it's an object, convert to array
+          sizeDistributions = Object.entries(assignment.size_distributions)
+            .filter(([_, qty]) => typeof qty === 'number' && qty > 0)
+            .map(([size, qty]) => ({ size, quantity: qty as number }));
+        }
 
-        // Determine price per piece based on tailor type
-        const pricePerPiece = assignment.tailor_type === 'single_needle' 
-          ? (priceData?.cutting_price_single_needle || 0)
-          : (priceData?.cutting_price_overlock_flatlock || 0);
+        const assignedQuantity = sizeDistributions.reduce((sum, sd) => sum + sd.quantity, 0);
+        const snRate = (priceData && !priceError && !('error' in (priceData as any))) 
+          ? ((priceData as any).cutting_price_single_needle || 0)
+          : 0;
+        const ofRate = (priceData && !priceError && !('error' in (priceData as any)))
+          ? ((priceData as any).cutting_price_overlock_flatlock || 0)
+          : 0;
+        // Total earning = (SN + OF) × assigned quantity
+        const totalEarning = (snRate + ofRate) * assignedQuantity;
 
         return {
           batchName: assignment.batch_name || 'Unknown Batch',
           batchLeaderName: assignment.batch_leader_name || 'Unknown Leader',
+          batchLeaderAvatarUrl: assignment.batch_leader_avatar_url || undefined,
           tailorType: assignment.tailor_type as 'single_needle' | 'overlock_flatlock' || 'single_needle',
           sizeDistributions,
-          pricePerPiece
+          snRate,
+          ofRate,
+          totalEarning,
+          assignedQuantity
         };
       });
 
-      // Prepare customizations (simplified since branding_items and order_item_addons don't exist)
-      const customizations = {
-        branding: null, // These relationships don't exist in current schema
-        addons: null,   // These relationships don't exist in current schema
-        special_instructions: orderData.special_instructions || orderData.notes
-      };
+      // Collect all customizations from all order items
+      const allCustomizations: any[] = [];
+      enrichedOrderItems.forEach((item: any) => {
+        if (item.customizations && Array.isArray(item.customizations)) {
+          item.customizations.forEach((cust: any) => {
+            allCustomizations.push(cust);
+          });
+        }
+      });
 
       // Generate PDF
+      if (!companySettings || settingsError || 'error' in (companySettings as any)) {
+        console.error('❌ Invalid company settings');
+        return;
+      }
+
+      if (!orderData || orderError || 'error' in (orderData as any)) {
+        console.error('❌ Invalid order data');
+        return;
+      }
+
       await generateBatchAssignmentPDF({
         orderNumber: job.orderNumber,
         customerName: job.customerName,
-        orderItems: orderData.order_items || [],
+        orderItems: enrichedOrderItems,
         batchAssignments,
-        companySettings,
-        stitchingPrices: {
-          single_needle: priceData?.cutting_price_single_needle || 0,
-          overlock_flatlock: priceData?.cutting_price_overlock_flatlock || 0
-        },
-        customizations,
-        dueDate: orderData.expected_delivery_date
+        companySettings: companySettings as any,
+        salesManager,
+        customizations: allCustomizations,
+        dueDate: (orderData as any).expected_delivery_date
       });
 
       console.log('✅ PDF generation completed successfully!');
@@ -470,13 +556,6 @@ const CuttingManagerPage = () => {
             notes: '',
             defects: 0,
             reworkRequired: false,
-            // Batch assignment fields (legacy - will be replaced with batchAssignments)
-            assignedBatchId: p.assigned_batch_id,
-            assignedBatchName: p.assigned_batch_name,
-            assignedBatchCode: p.assigned_batch_code,
-            batchAssignmentDate: p.batch_assignment_date,
-            assignedBy: p.assigned_by_name,
-            batchAssignmentNotes: p.batch_assignment_notes,
             // Add order items with product and fabric details
             orderItems: orderItemsByOrderId[o.id] || [],
             customer: customersMap[o.customer_id] ? { 
@@ -484,28 +563,58 @@ const CuttingManagerPage = () => {
               contact_person: (customersMap[o.customer_id] as any).contact_person || ''
             } : undefined,
           };
-        });
+          
+          // Add cutting masters if available
+          if (cuttingMasters.length > 0) {
+            job.cuttingMasters = cuttingMasters.map((cm: any) => ({
+              id: cm.cutting_master_id,
+              name: cm.cutting_master_name,
+              // Use avatar from order_cutting_assignments if available, otherwise fetch from employees
+              avatarUrl: cm.cutting_master_avatar_url || employeeAvatars[cm.cutting_master_id],
+              assignedDate: cm.assigned_date || p.cutting_work_date || new Date().toISOString().split('T')[0]
+            }));
+            // Set legacy fields for backward compatibility (use first cutting master)
+            job.cuttingMasterId = cuttingMasters[0].cutting_master_id;
+            job.cuttingMasterName = cuttingMasters[0].cutting_master_name;
+            job.cuttingMasterAvatarUrl = cuttingMasters[0].cutting_master_avatar_url || employeeAvatars[cuttingMasters[0].cutting_master_id];
+            job.assignedTo = cuttingMasters[0].cutting_master_name || '';
+          } else if (p.cutting_master_id || p.cutting_master_name) {
+            // Legacy single cutting master from order_assignments
+            job.cuttingMasterId = p.cutting_master_id;
+            job.cuttingMasterName = p.cutting_master_name;
+            job.cuttingMasterAvatarUrl = employeeAvatars[p.cutting_master_id];
+            job.assignedTo = p.cutting_master_name || '';
+          } else {
+            job.assignedTo = '';
+          }
+          
+          return job;
+        }).filter((job): job is CuttingJob => job !== undefined);
 
         // Fetch batch assignments for each order
-        const jobsWithBatchAssignments = await Promise.all(jobs.map(async (job) => {
+        const jobsWithBatchAssignments: CuttingJob[] = (await Promise.all(jobs.map(async (job) => {
+          if (!job || !job.id) {
+            console.error('Invalid job found, skipping:', job);
+            return null;
+          }
           try {
             const { data: batchAssignments } = await supabase
-              .from('order_batch_assignments_with_details')
+              .from('order_batch_assignments_with_details' as any)
               .select('*')
               .eq('order_id', job.id as any);
 
             return {
               ...job,
               batchAssignments: (batchAssignments as any) || []
-            };
+            } as CuttingJob;
           } catch (error) {
             console.error(`Error fetching batch assignments for order ${job.id}:`, error);
             return {
               ...job,
               batchAssignments: []
-            };
+            } as CuttingJob;
           }
-        }));
+        }))).filter((job): job is CuttingJob => job !== null && job !== undefined);
 
         setCuttingJobs(jobsWithBatchAssignments as CuttingJob[]);
       } catch (err) {
@@ -853,6 +962,22 @@ const CuttingManagerPage = () => {
                                 </Avatar>
                                 <span className="text-sm">{job.assignedTo}</span>
                               </div>
+                            ) : job.assignedTo ? (
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Avatar className="w-12 h-12 cursor-pointer">
+                                      <AvatarImage src={job.cuttingMasterAvatarUrl} alt={job.assignedTo} />
+                                      <AvatarFallback className="bg-blue-200 text-blue-700 text-sm">
+                                        {job.assignedTo?.charAt(0)?.toUpperCase() || 'CM'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>{job.assignedTo}</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
                             ) : (
                               <span className="text-muted-foreground">Unassigned</span>
                             )}
@@ -865,7 +990,7 @@ const CuttingManagerPage = () => {
                                     <div className="flex items-center justify-between">
                                       <div className="flex items-center space-x-3">
                                         <Avatar className="w-8 h-8">
-                                          <AvatarImage src={assignment.batch_leader_avatar} alt={assignment.batch_leader_name} />
+                                          <AvatarImage src={assignment.batch_leader_avatar_url} alt={assignment.batch_leader_name} />
                                           <AvatarFallback className="bg-gray-200 text-gray-700 text-xs">
                                             {assignment.batch_leader_name?.charAt(0) || assignment.batch_name.charAt(0)}
                                           </AvatarFallback>
@@ -936,10 +1061,6 @@ const CuttingManagerPage = () => {
                                 <Edit className="w-4 h-4 mr-2" />
                             Add Cut Qty
                           </Button>
-                          <Button variant="outline" size="sm" onClick={() => handlePickFabric(job)}>
-                            <Package className="w-4 h-4 mr-2" />
-                            Pick Fabric
-                              </Button>
                             </div>
                           </TableCell>
                         </TableRow>
@@ -1208,21 +1329,6 @@ const CuttingManagerPage = () => {
           notes: ba.notes
         })) || []}
         orderItems={selectedJobForBatch?.orderItems || []}
-        />
-
-        {/* Fabric Picking Dialog */}
-        <FabricPickingDialog
-          isOpen={fabricPickingOpen}
-          onClose={() => {
-            setFabricPickingOpen(false);
-            setSelectedJobForFabricPicking(null);
-          }}
-          onSuccess={() => {
-            refreshData();
-          }}
-          orderId={selectedJobForFabricPicking?.id || ''}
-          orderNumber={selectedJobForFabricPicking?.orderNumber || ''}
-          customerName={selectedJobForFabricPicking?.customerName || ''}
         />
       </div>
     </ErpLayout>

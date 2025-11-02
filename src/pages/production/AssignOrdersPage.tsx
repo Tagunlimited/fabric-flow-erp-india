@@ -272,11 +272,12 @@ const AssignOrdersPage = () => {
         });
         const orderIds = Object.keys(bomsByOrder);
 
-        // 2) Fetch orders for those ids (optionally exclude cancelled)
+        // 2) Fetch orders for those ids (exclude cancelled and readymade orders)
         const { data: orders, error: ordersErr } = await supabase
           .from('orders')
           .select('id, order_number, status, expected_delivery_date, customer_id')
-          .in('id', orderIds as any);
+          .in('id', orderIds as any)
+          .or('order_type.is.null,order_type.eq.custom');
         if (ordersErr) throw ordersErr;
 
         const validOrders = (orders || []).filter((o: any) => o.status !== 'cancelled');
@@ -375,6 +376,29 @@ const AssignOrdersPage = () => {
           console.error('Failed to load order assignments:', e);
         }
 
+        // Fetch employee avatar URLs for legacy single cutting masters
+        const cuttingMasterIds = Array.from(new Set(
+          Object.values(assignmentsByOrder)
+            .map((a: any) => a.cutting_master_id)
+            .filter(Boolean)
+        ));
+        let employeeAvatars: Record<string, string> = {};
+        if (cuttingMasterIds.length > 0) {
+          try {
+            const { data: employees } = await supabase
+              .from('employees' as any)
+              .select('id, avatar_url')
+              .in('id', cuttingMasterIds as any);
+            (employees || []).forEach((emp: any) => {
+              if (emp?.id && emp?.avatar_url) {
+                employeeAvatars[emp.id] = emp.avatar_url;
+              }
+            });
+          } catch (e) {
+            console.error('Failed to load employee avatars:', e);
+          }
+        }
+
         // Load multiple cutting masters from order_cutting_assignments
         let cuttingMastersByOrder: Record<string, any[]> = {};
         try {
@@ -453,6 +477,7 @@ const AssignOrdersPage = () => {
             // Legacy single cutting master
             base.cuttingMasterId = a.cutting_master_id || undefined;
             base.cuttingMasterName = a.cutting_master_name || undefined;
+            base.cuttingMasterAvatarUrl = employeeAvatars[a.cutting_master_id] || undefined;
             base.cuttingWorkDate = a.cutting_work_date || undefined;
             base.assignedTo = a.cutting_master_name || base.assignedTo;
             if (base.status === 'pending') base.status = 'assigned';
@@ -953,25 +978,25 @@ const AssignOrdersPage = () => {
                           <TableCell>{assignment.quantity}</TableCell>
                           <TableCell>
                             {assignment.cuttingMasters && assignment.cuttingMasters.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
+                              <div className="flex flex-wrap gap-2">
                                 {assignment.cuttingMasters.map((master, index) => (
                                   <div key={master.id} className="flex items-center">
-                                    <Avatar className="w-6 h-6">
+                                    <Avatar className="w-12 h-12">
                                       <AvatarImage src={master.avatarUrl} />
-                                      <AvatarFallback>{master.name.charAt(0)}</AvatarFallback>
+                                      <AvatarFallback className="text-sm">{master.name.charAt(0)}</AvatarFallback>
                                     </Avatar>
-                                    <span className="ml-1 text-xs">{master.name}</span>
+                                    <span className="ml-2 text-sm">{master.name}</span>
                                     {index < assignment.cuttingMasters.length - 1 && <span className="mx-1">,</span>}
                                   </div>
                                 ))}
                               </div>
                             ) : assignment.cuttingMasterName ? (
                               <div className="flex items-center">
-                                <Avatar className="w-6 h-6">
+                                <Avatar className="w-12 h-12">
                                   <AvatarImage src={assignment.cuttingMasterAvatarUrl} />
-                                  <AvatarFallback>{assignment.cuttingMasterName.charAt(0)}</AvatarFallback>
+                                  <AvatarFallback className="text-sm">{assignment.cuttingMasterName.charAt(0)}</AvatarFallback>
                                 </Avatar>
-                                <span className="ml-2">{assignment.cuttingMasterName}</span>
+                                <span className="ml-2 text-sm">{assignment.cuttingMasterName}</span>
                               </div>
                             ) : (
                               <span className="text-muted-foreground">Unassigned</span>
@@ -1147,25 +1172,25 @@ const AssignOrdersPage = () => {
                           <TableCell>{assignment.quantity}</TableCell>
                           <TableCell>
                             {assignment.cuttingMasters && assignment.cuttingMasters.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
+                              <div className="flex flex-wrap gap-2">
                                 {assignment.cuttingMasters.map((master, index) => (
                                   <div key={master.id} className="flex items-center">
-                                    <Avatar className="w-6 h-6">
+                                    <Avatar className="w-12 h-12">
                                       <AvatarImage src={master.avatarUrl} />
-                                      <AvatarFallback>{master.name.charAt(0)}</AvatarFallback>
+                                      <AvatarFallback className="text-sm">{master.name.charAt(0)}</AvatarFallback>
                                     </Avatar>
-                                    <span className="ml-1 text-xs">{master.name}</span>
+                                    <span className="ml-2 text-sm">{master.name}</span>
                                     {index < assignment.cuttingMasters.length - 1 && <span className="mx-1">,</span>}
                                   </div>
                                 ))}
                               </div>
                             ) : assignment.cuttingMasterName ? (
                               <div className="flex items-center">
-                                <Avatar className="w-6 h-6">
+                                <Avatar className="w-12 h-12">
                                   <AvatarImage src={assignment.cuttingMasterAvatarUrl} />
-                                  <AvatarFallback>{assignment.cuttingMasterName.charAt(0)}</AvatarFallback>
+                                  <AvatarFallback className="text-sm">{assignment.cuttingMasterName.charAt(0)}</AvatarFallback>
                                 </Avatar>
-                                <span className="ml-2">{assignment.cuttingMasterName}</span>
+                                <span className="ml-2 text-sm">{assignment.cuttingMasterName}</span>
                               </div>
                             ) : (
                               <span className="text-muted-foreground">Unassigned</span>
@@ -1374,9 +1399,9 @@ const AssignOrdersPage = () => {
                   .filter(w => ['Cutting Manager', 'Cutting Master'].includes((w as any).designation))
                   .map(worker => (
                     <div key={worker.id} className="flex items-center space-x-3 p-3 border rounded-lg">
-                      <Avatar className="w-8 h-8">
+                      <Avatar className="w-12 h-12">
                         <AvatarImage src={(worker as any)?.avatar_url} />
-                        <AvatarFallback>{(worker as any)?.name?.charAt(0)}</AvatarFallback>
+                        <AvatarFallback className="text-sm">{(worker as any)?.name?.charAt(0)}</AvatarFallback>
                       </Avatar>
                       <div className="flex-1">
                         <p className="font-medium">{(worker as any)?.name}</p>
@@ -1405,9 +1430,9 @@ const AssignOrdersPage = () => {
                       const worker = (workers as any[]).find(w => w.id === masterId);
                       return (
                         <div key={masterId} className="flex items-center space-x-2 bg-background px-2 py-1 rounded border">
-                          <Avatar className="w-5 h-5">
+                          <Avatar className="w-12 h-12">
                             <AvatarImage src={(worker as any)?.avatar_url} />
-                            <AvatarFallback>{(worker as any)?.name?.charAt(0)}</AvatarFallback>
+                            <AvatarFallback className="text-sm">{(worker as any)?.name?.charAt(0)}</AvatarFallback>
                           </Avatar>
                           <span className="text-xs">{(worker as any)?.name}</span>
                         </div>

@@ -31,9 +31,11 @@ import CustomerTypeMasterPage from "./pages/masters/CustomerTypeMasterPage";
 import SupplierMasterPage from "./pages/masters/SupplierMasterPage";
 import BrandingTypePage from "./pages/masters/BrandingTypePage";
 import ProductPartsManager from "./pages/masters/ProductPartsManager";
+import ImageMasterPage from "./pages/masters/ImageMasterPage";
 import NotFound from "./pages/NotFound";
 import CrmPage from "./pages/CrmPage";
 import OrdersPage from "./pages/OrdersPage";
+import ReadymadeOrdersPage from "./pages/orders/ReadymadeOrdersPage";
 import InventoryPage from "./pages/InventoryPage";
 import ProductionPage from "./pages/ProductionPage";
 import AssignOrdersPage from "./pages/production/AssignOrdersPage";
@@ -259,6 +261,11 @@ const App = () => {
                     <OrdersPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
+                <Route path="/orders/readymade" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ReadymadeOrdersPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
                 <Route path="/stock-orders" element={
                   <ProtectedRouteWithCompanySettings>
                     <StockOrdersPage />
@@ -341,6 +348,11 @@ const App = () => {
                 <Route path="/masters/product-parts" element={
                   <ProtectedRouteWithCompanySettings>
                     <ProductPartsManager />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/masters/images" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ImageMasterPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 

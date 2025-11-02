@@ -23,7 +23,8 @@ import {
   AlertTriangle,
   Scissors,
   Shirt,
-  FileText
+  FileText,
+  Image
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -64,7 +65,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       badge: currentPath === "/orders" ? "..." : pendingOrdersCount.toString(),
       badgeColor: "bg-manufacturing",
       children: [
-        { title: "Custom Orders", url: "/orders", icon: ShoppingCart }
+        { title: "Custom Orders", url: "/orders", icon: ShoppingCart },
+        { title: "Readymade Orders", url: "/orders/readymade", icon: ShoppingCart }
         // { title: "Stock Orders", url: "/stock-orders", icon: Shirt }
         
       ]
@@ -87,7 +89,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Bills of Materials", url: "/bom", icon: ClipboardList },
         { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingBag },
         { title: "Goods Receipt Note", url: "/procurement/grn", icon: ClipboardList },
-        { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
+        // { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
         { title: "Material Shortfall Alerts", url: "/procurement/alerts", icon: AlertTriangle }
       ]
     },
@@ -143,7 +145,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Size Master", url: "/inventory/size-types", icon: ClipboardList },
         { title: "Warehouse Master", url: "/masters/warehouses", icon: Building },
         { title: "Customer Type Master", url: "/masters/customer-types", icon: Users },
-        { title: "Supplier Master", url: "/masters/suppliers", icon: Truck }
+        { title: "Supplier Master", url: "/masters/suppliers", icon: Truck },
+        { title: "Image Master", url: "/masters/images", icon: Image }
       ]
     },
     {

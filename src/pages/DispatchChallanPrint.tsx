@@ -84,10 +84,15 @@ export default function DispatchChallanPrint() {
                   <tbody>
                     {(data.lines || []).map((l: any, idx: number) => (
                       <tr key={idx}>
-                        <td className="p-2 border">{l.size_name || '-'}</td>
+                        <td className="p-2 border">{l.size_name === 'Total' ? 'Total Quantity' : (l.size_name || '-')}</td>
                         <td className="p-2 border text-right">{l.quantity}</td>
                       </tr>
                     ))}
+                    {data.lines?.length === 0 && (
+                      <tr>
+                        <td colSpan={2} className="p-2 border text-center text-muted-foreground">No items</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

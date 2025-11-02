@@ -39,16 +39,24 @@ export function ProductMaster() {
 
   const [formData, setFormData] = useState({
     sku: "",
+    class: "",
+    color: "",
+    size_type: "",
+    size: "",
     name: "",
-    description: "",
+    material: "",
+    brand: "",
     category: "",
-    images: "",
-    hsn: "",
-    gst_rate: "18",
+    gender: "",
     mrp: "",
-    cost_price: "",
+    cost: "",
     selling_price: "",
-    fabric: "",
+    gst_rate: "18",
+    hsn: "",
+    main_image: "",
+    image1: "",
+    image2: "",
+    description: "",
     gsm: "",
     min_stock: "",
     maximum_stock: "",
@@ -97,20 +105,34 @@ export function ProductMaster() {
 
       const productData = {
         sku: formData.sku.trim() || null,
+        class: formData.class.trim() || null,
+        color: formData.color.trim() || null,
+        size_type: formData.size_type.trim() || null,
+        size: formData.size.trim() || null,
         name: formData.name.trim(),
-        description: formData.description.trim() || null,
+        material: formData.material.trim() || null,
+        brand: formData.brand.trim() || null,
         category: formData.category.trim(),
-        images: formData.images.trim() ? formData.images.split(',').map(img => img.trim()) : null,
-        hsn: formData.hsn.trim() || null,
-        gst_rate: formData.gst_rate ? parseFloat(formData.gst_rate) : null,
+        gender: formData.gender.trim() || null,
         mrp: formData.mrp ? parseFloat(formData.mrp) : null,
-        cost_price: formData.cost_price ? parseFloat(formData.cost_price) : null,
+        cost: formData.cost ? parseFloat(formData.cost) : null,
         selling_price: formData.selling_price ? parseFloat(formData.selling_price) : null,
-        fabric: formData.fabric.trim() || null,
+        gst_rate: formData.gst_rate ? parseFloat(formData.gst_rate) : null,
+        hsn: formData.hsn.trim() || null,
+        main_image: formData.main_image.trim() || null,
+        image1: formData.image1.trim() || null,
+        image2: formData.image2.trim() || null,
+        description: formData.description.trim() || null,
         gsm: formData.gsm ? parseFloat(formData.gsm) : null,
         min_stock: formData.min_stock ? parseFloat(formData.min_stock) : null,
         maximum_stock: formData.maximum_stock ? parseFloat(formData.maximum_stock) : null,
-        sku_hierarchy: formData.sku_hierarchy ? parseFloat(formData.sku_hierarchy) : null
+        sku_hierarchy: formData.sku_hierarchy ? parseFloat(formData.sku_hierarchy) : null,
+        // Backward compatibility: also save to cost_price if it exists
+        cost_price: formData.cost ? parseFloat(formData.cost) : null,
+        // Backward compatibility: also save to fabric if material is set
+        fabric: formData.material.trim() || null,
+        // Backward compatibility: also save to image_url if main_image is set
+        image_url: formData.main_image.trim() || null
       };
 
       if (editingProduct) {
@@ -155,16 +177,24 @@ export function ProductMaster() {
   const resetForm = () => {
     setFormData({
       sku: "",
+      class: "",
+      color: "",
+      size_type: "",
+      size: "",
       name: "",
-      description: "",
+      material: "",
+      brand: "",
       category: "",
-      images: "",
-      hsn: "",
-      gst_rate: "18",
+      gender: "",
       mrp: "",
-      cost_price: "",
+      cost: "",
       selling_price: "",
-      fabric: "",
+      gst_rate: "18",
+      hsn: "",
+      main_image: "",
+      image1: "",
+      image2: "",
+      description: "",
       gsm: "",
       min_stock: "",
       maximum_stock: "",
@@ -176,16 +206,24 @@ export function ProductMaster() {
     setEditingProduct(product);
     setFormData({
       sku: product.sku || "",
+      class: product.class || "",
+      color: product.color || "",
+      size_type: product.size_type || "",
+      size: product.size || "",
       name: product.name || "",
-      description: product.description || "",
+      material: product.material || product.fabric || "",
+      brand: product.brand || "",
       category: product.category || "",
-      images: product.images ? product.images.join(',') : "",
-      hsn: product.hsn || "",
-      gst_rate: product.gst_rate?.toString() || "18",
+      gender: product.gender || "",
       mrp: product.mrp?.toString() || "",
-      cost_price: product.cost_price?.toString() || "",
+      cost: product.cost?.toString() || product.cost_price?.toString() || "",
       selling_price: product.selling_price?.toString() || "",
-      fabric: product.fabric || "",
+      gst_rate: product.gst_rate?.toString() || "18",
+      hsn: product.hsn || "",
+      main_image: product.main_image || product.image_url || "",
+      image1: product.image1 || "",
+      image2: product.image2 || "",
+      description: product.description || "",
       gsm: product.gsm?.toString() || "",
       min_stock: product.min_stock?.toString() || "",
       maximum_stock: product.maximum_stock?.toString() || "",
@@ -397,20 +435,29 @@ export function ProductMaster() {
           headers.forEach((header, idx) => {
             let normalized = header.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
             // Map known header variants to expected keys
-            if (normalized.includes('name')) normalized = 'name';
-            if (normalized.includes('category')) normalized = 'category';
             if (normalized.includes('sku')) normalized = 'sku';
-            if (normalized.includes('description')) normalized = 'description';
-            if (normalized.includes('images')) normalized = 'images';
-            if (normalized.includes('hsn')) normalized = 'hsn';
-            if (normalized.includes('gst_rate')) normalized = 'gst_rate';
+            if (normalized.includes('class')) normalized = 'class';
+            if (normalized.includes('color')) normalized = 'color';
+            if (normalized.includes('size_type') || normalized.includes('sizetype')) normalized = 'size_type';
+            if (normalized.includes('size') && !normalized.includes('type')) normalized = 'size';
+            if (normalized.includes('product') || normalized.includes('name')) normalized = 'name';
+            if (normalized.includes('material')) normalized = 'material';
+            if (normalized.includes('brand')) normalized = 'brand';
+            if (normalized.includes('category')) normalized = 'category';
+            if (normalized.includes('gender')) normalized = 'gender';
             if (normalized.includes('mrp')) normalized = 'mrp';
-            if (normalized.includes('cost_price')) normalized = 'cost_price';
+            if (normalized.includes('cost') && !normalized.includes('price')) normalized = 'cost';
             if (normalized.includes('selling_price')) normalized = 'selling_price';
-            if (normalized.includes('fabric')) normalized = 'fabric';
+            if (normalized.includes('gst_rate') || normalized.includes('gstrate')) normalized = 'gst_rate';
+            if (normalized.includes('hsn')) normalized = 'hsn';
+            if (normalized.includes('main_image') || normalized.includes('mainimage')) normalized = 'main_image';
+            if (normalized.includes('image1') || normalized.includes('image_1')) normalized = 'image1';
+            if (normalized.includes('image2') || normalized.includes('image_2')) normalized = 'image2';
+            if (normalized.includes('description')) normalized = 'description';
+            if (normalized.includes('fabric')) normalized = 'material'; // Map fabric to material
             if (normalized.includes('gsm')) normalized = 'gsm';
             if (normalized.includes('min_stock')) normalized = 'min_stock';
-            if (normalized.includes('maximum_stock')) normalized = 'maximum_stock';
+            if (normalized.includes('maximum_stock') || normalized.includes('max_stock')) normalized = 'maximum_stock';
             if (normalized.includes('sku_hierarchy')) normalized = 'sku_hierarchy';
             headerMap[idx] = normalized;
           });
@@ -446,27 +493,42 @@ export function ProductMaster() {
       const row = data[i];
       try {
         // Map Excel columns to actual database columns
-        const productData = {
-          sku: row.sku?.toString().trim(),
+        const productData: any = {
+          sku: row.sku?.toString().trim() || null,
+          class: row.class?.toString().trim() || null,
+          color: row.color?.toString().trim() || null,
+          size_type: row.size_type?.toString().trim() || null,
+          size: row.size?.toString().trim() || null,
           name: row.name?.toString().trim(),
-          description: row.description?.toString().trim() || null,
+          material: row.material?.toString().trim() || row.fabric?.toString().trim() || null,
+          brand: row.brand?.toString().trim() || null,
           category: row.category?.toString().trim(),
-          images: row.images?.toString().trim() ? row.images.toString().split(',').map((img: string) => img.trim()) : null,
-          hsn: row.hsn?.toString().trim() || null,
-          gst_rate: row.gst_rate ? parseFloat(row.gst_rate) : null,
+          gender: row.gender?.toString().trim() || null,
           mrp: row.mrp ? parseFloat(row.mrp) : null,
-          cost_price: row.cost_price ? parseFloat(row.cost_price) : null,
+          cost: row.cost ? parseFloat(row.cost) : (row.cost_price ? parseFloat(row.cost_price) : null),
           selling_price: row.selling_price ? parseFloat(row.selling_price) : null,
-          fabric: row.fabric?.toString().trim() || null,
+          gst_rate: row.gst_rate ? parseFloat(row.gst_rate) : null,
+          hsn: row.hsn?.toString().trim() || null,
+          main_image: row.main_image?.toString().trim() || row.image_url?.toString().trim() || null,
+          image1: row.image1?.toString().trim() || null,
+          image2: row.image2?.toString().trim() || null,
+          description: row.description?.toString().trim() || null,
           gsm: row.gsm ? parseFloat(row.gsm) : null,
           min_stock: row.min_stock ? parseFloat(row.min_stock) : null,
           maximum_stock: row.maximum_stock ? parseFloat(row.maximum_stock) : null,
-          sku_hierarchy: row.sku_hierarchy ? parseFloat(row.sku_hierarchy) : null
+          sku_hierarchy: row.sku_hierarchy ? parseFloat(row.sku_hierarchy) : null,
+          // Backward compatibility
+          cost_price: row.cost ? parseFloat(row.cost) : (row.cost_price ? parseFloat(row.cost_price) : null),
+          fabric: row.material?.toString().trim() || row.fabric?.toString().trim() || null,
+          image_url: row.main_image?.toString().trim() || row.image_url?.toString().trim() || null
         };
 
         // Validation for required fields
+        if (!productData.sku) {
+          throw new Error('SKU is required');
+        }
         if (!productData.name) {
-          throw new Error('Name is required');
+          throw new Error('Product Name is required');
         }
         if (!productData.category) {
           throw new Error('Category is required');
@@ -642,43 +704,228 @@ export function ProductMaster() {
                 Add Product
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl">
+            <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
               <DialogHeader>
                 <DialogTitle>
                   {editingProduct ? 'Edit Product' : 'Add New Product'}
                 </DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="sku">SKU</Label>
-                    <Input
-                      id="sku"
-                      value={formData.sku}
-                      onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="name">Name *</Label>
-                    <Input
-                      id="name"
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      required
-                    />
+              <form onSubmit={handleSubmit} className="space-y-4 overflow-y-auto pr-2 flex-1 pb-4">
+                {/* Basic Information */}
+                <div className="border-b pb-4">
+                  <h3 className="text-sm font-semibold mb-3 text-gray-700">Basic Information</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="sku">SKU *</Label>
+                      <Input
+                        id="sku"
+                        value={formData.sku}
+                        onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
+                        required
+                        placeholder="e.g., NC-DOT-WH-S"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="name">Product Name *</Label>
+                      <Input
+                        id="name"
+                        value={formData.name}
+                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                        required
+                        placeholder="e.g., DOTT FORWARD R/N"
+                      />
+                    </div>
                   </div>
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="category">Category *</Label>
-                    <Input
-                      id="category"
-                      value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                      required
-                    />
+
+                <div className="border-b pb-4">
+                  <h3 className="text-sm font-semibold mb-3 text-gray-700">Product Attributes</h3>
+                  <div className="grid grid-cols-3 gap-4 mb-4">
+                    <div>
+                      <Label htmlFor="class">Class</Label>
+                      <Input
+                        id="class"
+                        value={formData.class}
+                        onChange={(e) => setFormData({ ...formData, class: e.target.value })}
+                        placeholder="e.g., NC-DOT-WH"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="color">Color</Label>
+                      <Input
+                        id="color"
+                        value={formData.color}
+                        onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+                        placeholder="e.g., WHITE"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="size_type">Size Type</Label>
+                      <Input
+                        id="size_type"
+                        value={formData.size_type}
+                        onChange={(e) => setFormData({ ...formData, size_type: e.target.value })}
+                        placeholder="e.g., MEN-ALPHA"
+                      />
+                    </div>
                   </div>
+
+                  <div className="grid grid-cols-3 gap-4 mb-4">
+                    <div>
+                      <Label htmlFor="size">Size</Label>
+                      <Input
+                        id="size"
+                        value={formData.size}
+                        onChange={(e) => setFormData({ ...formData, size: e.target.value })}
+                        placeholder="S, M, L, XL, 2XL"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="category">Category *</Label>
+                      <Input
+                        id="category"
+                        value={formData.category}
+                        onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                        required
+                        placeholder="e.g., Dryfit Round"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="gender">Gender</Label>
+                      <Select
+                        value={formData.gender}
+                        onValueChange={(value) => setFormData({ ...formData, gender: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select gender" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Men">Men</SelectItem>
+                          <SelectItem value="Women">Women</SelectItem>
+                          <SelectItem value="Unisex">Unisex</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="brand">Brand</Label>
+                      <Input
+                        id="brand"
+                        value={formData.brand}
+                        onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
+                        placeholder="e.g., Navycut USA"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="material">Material</Label>
+                      <Input
+                        id="material"
+                        value={formData.material}
+                        onChange={(e) => setFormData({ ...formData, material: e.target.value })}
+                        placeholder="e.g., polyester"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Pricing */}
+                <div className="border-b pb-4">
+                  <h3 className="text-sm font-semibold mb-3 text-gray-700">Pricing Information</h3>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <Label htmlFor="mrp">MRP</Label>
+                      <Input
+                        id="mrp"
+                        type="number"
+                        step="0.01"
+                        value={formData.mrp}
+                        onChange={(e) => setFormData({ ...formData, mrp: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="cost">Cost</Label>
+                      <Input
+                        id="cost"
+                        type="number"
+                        step="0.01"
+                        value={formData.cost}
+                        onChange={(e) => setFormData({ ...formData, cost: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="selling_price">Selling Price</Label>
+                      <Input
+                        id="selling_price"
+                        type="number"
+                        step="0.01"
+                        value={formData.selling_price}
+                        onChange={(e) => setFormData({ ...formData, selling_price: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 mt-4">
+                    <div>
+                      <Label htmlFor="gst_rate">GST Rate (%)</Label>
+                      <Input
+                        id="gst_rate"
+                        type="number"
+                        step="0.01"
+                        value={formData.gst_rate}
+                        onChange={(e) => setFormData({ ...formData, gst_rate: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="hsn">HSN Code</Label>
+                      <Input
+                        id="hsn"
+                        value={formData.hsn}
+                        onChange={(e) => setFormData({ ...formData, hsn: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Images */}
+                <div className="border-b pb-4">
+                  <h3 className="text-sm font-semibold mb-3 text-gray-700">Product Images</h3>
+                  <div className="grid grid-cols-1 gap-4">
+                    <div>
+                      <Label htmlFor="main_image">Main Image URL</Label>
+                      <Input
+                        id="main_image"
+                        value={formData.main_image}
+                        onChange={(e) => setFormData({ ...formData, main_image: e.target.value })}
+                        placeholder="https://example.com/image.jpg"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <Label htmlFor="image1">Image 1 URL</Label>
+                        <Input
+                          id="image1"
+                          value={formData.image1}
+                          onChange={(e) => setFormData({ ...formData, image1: e.target.value })}
+                          placeholder="https://example.com/image1.jpg"
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="image2">Image 2 URL</Label>
+                        <Input
+                          id="image2"
+                          value={formData.image2}
+                          onChange={(e) => setFormData({ ...formData, image2: e.target.value })}
+                          placeholder="https://example.com/image2.jpg"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Additional Information */}
+                <div className="border-b pb-4">
+                  <h3 className="text-sm font-semibold mb-3 text-gray-700">Additional Information</h3>
                   <div>
                     <Label htmlFor="description">Description</Label>
                     <Textarea
@@ -688,105 +935,39 @@ export function ProductMaster() {
                       rows={3}
                     />
                   </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <Label htmlFor="hsn">HSN Code</Label>
-                    <Input
-                      id="hsn"
-                      value={formData.hsn}
-                      onChange={(e) => setFormData({ ...formData, hsn: e.target.value })}
-                    />
+                  <div className="grid grid-cols-3 gap-4 mt-4">
+                    <div>
+                      <Label htmlFor="gsm">GSM</Label>
+                      <Input
+                        id="gsm"
+                        type="number"
+                        step="0.01"
+                        value={formData.gsm}
+                        onChange={(e) => setFormData({ ...formData, gsm: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="min_stock">Min Stock</Label>
+                      <Input
+                        id="min_stock"
+                        type="number"
+                        step="1"
+                        value={formData.min_stock}
+                        onChange={(e) => setFormData({ ...formData, min_stock: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="maximum_stock">Maximum Stock</Label>
+                      <Input
+                        id="maximum_stock"
+                        type="number"
+                        step="1"
+                        value={formData.maximum_stock}
+                        onChange={(e) => setFormData({ ...formData, maximum_stock: e.target.value })}
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <Label htmlFor="gst_rate">GST Rate (%)</Label>
-                    <Input
-                      id="gst_rate"
-                      type="number"
-                      step="0.01"
-                      value={formData.gst_rate}
-                      onChange={(e) => setFormData({ ...formData, gst_rate: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="mrp">MRP</Label>
-                    <Input
-                      id="mrp"
-                      type="number"
-                      step="0.01"
-                      value={formData.mrp}
-                      onChange={(e) => setFormData({ ...formData, mrp: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <Label htmlFor="cost_price">Cost Price</Label>
-                    <Input
-                      id="cost_price"
-                      type="number"
-                      step="0.01"
-                      value={formData.cost_price}
-                      onChange={(e) => setFormData({ ...formData, cost_price: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="selling_price">Selling Price</Label>
-                    <Input
-                      id="selling_price"
-                      type="number"
-                      step="0.01"
-                      value={formData.selling_price}
-                      onChange={(e) => setFormData({ ...formData, selling_price: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="fabric">Fabric</Label>
-                    <Input
-                      id="fabric"
-                      value={formData.fabric}
-                      onChange={(e) => setFormData({ ...formData, fabric: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <Label htmlFor="gsm">GSM</Label>
-                    <Input
-                      id="gsm"
-                      type="number"
-                      step="0.01"
-                      value={formData.gsm}
-                      onChange={(e) => setFormData({ ...formData, gsm: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="min_stock">Min Stock</Label>
-                    <Input
-                      id="min_stock"
-                      type="number"
-                      step="1"
-                      value={formData.min_stock}
-                      onChange={(e) => setFormData({ ...formData, min_stock: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="maximum_stock">Maximum Stock</Label>
-                    <Input
-                      id="maximum_stock"
-                      type="number"
-                      step="1"
-                      value={formData.maximum_stock}
-                      onChange={(e) => setFormData({ ...formData, maximum_stock: e.target.value })}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
+                  <div className="mt-4">
                     <Label htmlFor="sku_hierarchy">SKU Hierarchy</Label>
                     <Input
                       id="sku_hierarchy"
@@ -798,20 +979,7 @@ export function ProductMaster() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <Label htmlFor="images">Images</Label>
-                    <Input
-                      id="images"
-                      value={formData.images}
-                      onChange={(e) => setFormData({ ...formData, images: e.target.value })}
-                      placeholder="Paste multiple image URLs separated by commas"
-                    />
-                    <span className="text-xs text-muted-foreground mt-1 block">You can enter multiple image URLs separated by commas. Example: https://img1.jpg, https://img2.png</span>
-                  </div>
-                </div>
-
-                <div className="flex justify-end space-x-2">
+                <div className="flex justify-end space-x-2 pt-4 border-t sticky bottom-0 bg-white">
                   <Button type="button" variant="outline" onClick={() => setShowDialog(false)}>
                     Cancel
                   </Button>
@@ -882,49 +1050,125 @@ export function ProductMaster() {
                       className="hover:bg-primary/10 cursor-pointer"
                       onClick={() => setDetailProduct(product)}
                     >
-                      {/* Product Name and SKU */}
+                      {/* SKU */}
                       <TableCell>
-                        <div>
-                          <div className="font-semibold text-gray-900">
-                            {product.name || 'Unnamed Product'}
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            SKU: {product.sku || 'N/A'}
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            Desc.: {product.description || 'N/A'}
-                          </div>
+                        <div className="font-medium">{product.sku || 'N/A'}</div>
+                      </TableCell>
+                      {/* Product Name */}
+                      <TableCell>
+                        <div className="font-semibold text-gray-900">
+                          {product.name || 'Unnamed Product'}
                         </div>
+                      </TableCell>
+                      {/* Class */}
+                      <TableCell>
+                        {product.class || <span className="text-muted-foreground">-</span>}
+                      </TableCell>
+                      {/* Color */}
+                      <TableCell>
+                        {product.color || <span className="text-muted-foreground">-</span>}
+                      </TableCell>
+                      {/* Size */}
+                      <TableCell>
+                        {product.size || <span className="text-muted-foreground">-</span>}
+                      </TableCell>
+                      {/* Size Type */}
+                      <TableCell>
+                        {product.size_type || <span className="text-muted-foreground">-</span>}
+                      </TableCell>
+                      {/* Brand */}
+                      <TableCell>
+                        {product.brand || <span className="text-muted-foreground">-</span>}
+                      </TableCell>
+                      {/* Category */}
+                      <TableCell>
+                        {product.category || <span className="text-muted-foreground">-</span>}
+                      </TableCell>
+                      {/* Gender */}
+                      <TableCell>
+                        {product.gender || <span className="text-muted-foreground">-</span>}
+                      </TableCell>
+                      {/* Material */}
+                      <TableCell>
+                        {product.material || product.fabric || <span className="text-muted-foreground">-</span>}
+                      </TableCell>
+                      {/* MRP */}
+                      <TableCell>
+                        {product.mrp !== undefined && product.mrp !== null ? `₹${product.mrp}` : '-'}
+                      </TableCell>
+                      {/* Cost */}
+                      <TableCell>
+                        {product.cost !== undefined && product.cost !== null 
+                          ? `₹${product.cost}` 
+                          : (product.cost_price !== undefined && product.cost_price !== null 
+                            ? `₹${product.cost_price}` 
+                            : '-')}
+                      </TableCell>
+                      {/* Selling Price */}
+                      <TableCell>
+                        {product.selling_price !== undefined && product.selling_price !== null 
+                          ? `₹${product.selling_price}` 
+                          : '-'}
+                      </TableCell>
+                      {/* GST Rate */}
+                      <TableCell>
+                        {product.gst_rate !== undefined && product.gst_rate !== null 
+                          ? `${product.gst_rate}%` 
+                          : '-'}
+                      </TableCell>
+                      {/* HSN */}
+                      <TableCell>
+                        {product.hsn || <span className="text-muted-foreground">-</span>}
                       </TableCell>
                       {/* Images */}
                       <TableCell>
                         {(() => {
-                          const isValidUrl = (url: string) => {
-                            return /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|svg)$/i.test(url.trim());
+                          const isValidUrl = (url: string | null | undefined) => {
+                            if (!url || typeof url !== 'string') return false;
+                            return /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|svg)/i.test(url.trim());
                           };
                           let imagesArr: string[] = [];
-                          if (Array.isArray(product.images)) {
-                            imagesArr = product.images;
-                          } else if (typeof product.images === 'string' && product.images.trim()) {
-                            imagesArr = product.images.split(',').map((img: string) => img.trim());
+                          
+                          // Check main_image first
+                          if (isValidUrl(product.main_image)) {
+                            imagesArr.push(product.main_image);
+                          } else if (isValidUrl(product.image_url)) {
+                            imagesArr.push(product.image_url);
                           }
-                          const validImages = imagesArr.filter(isValidUrl);
-                          if (validImages.length > 0) {
+                          
+                          // Add image1 and image2
+                          if (isValidUrl(product.image1)) {
+                            imagesArr.push(product.image1);
+                          }
+                          if (isValidUrl(product.image2)) {
+                            imagesArr.push(product.image2);
+                          }
+                          
+                          // Fallback to images array if no main_image/image1/image2
+                          if (imagesArr.length === 0) {
+                            if (Array.isArray(product.images)) {
+                              imagesArr = product.images.filter((img: any) => isValidUrl(img));
+                            } else if (typeof product.images === 'string' && product.images.trim()) {
+                              imagesArr = product.images.split(',').map((img: string) => img.trim()).filter(isValidUrl);
+                            }
+                          }
+                          
+                          if (imagesArr.length > 0) {
                             return (
                               <div className="flex items-center">
                                 <img
-                                  src={validImages[0]}
+                                  src={imagesArr[0]}
                                   alt="Product"
                                   className="w-10 h-10 object-cover rounded mr-1 inline-block cursor-pointer"
-                                  onClick={() => { setPopupImages(validImages); setPopupIndex(0); }}
+                                  onClick={(e) => { e.stopPropagation(); setPopupImages(imagesArr); setPopupIndex(0); }}
                                   onError={e => { e.currentTarget.src = '/placeholder.svg'; }}
                                 />
-                                {validImages.length > 1 && (
+                                {imagesArr.length > 1 && (
                                   <span
                                     className="ml-2 px-2 py-1 text-xs bg-gray-200 rounded cursor-pointer"
-                                    onClick={() => { setPopupImages(validImages); setPopupIndex(0); }}
+                                    onClick={(e) => { e.stopPropagation(); setPopupImages(imagesArr); setPopupIndex(0); }}
                                   >
-                                    +{validImages.length - 1} more
+                                    +{imagesArr.length - 1} more
                                   </span>
                                 )}
                               </div>
@@ -934,27 +1178,9 @@ export function ProductMaster() {
                           }
                         })()}
                       </TableCell>
-                      {/* HSN Code */}
-                      <TableCell>
-                        {product.hsn || <span className="text-muted-foreground">N/A</span>}
-                      </TableCell>
-                      {/* Pricing */}
-                      <TableCell>
-                        <div className="space-y-1">
-                          <div>
-                            <span className="font-semibold">MRP:</span> {product.mrp !== undefined && product.mrp !== null ? product.mrp : 'N/A'}
-                          </div>
-                          <div>
-                            <span className="font-semibold">Selling Price:</span> {product.selling_price !== undefined && product.selling_price !== null ? product.selling_price : 'N/A'}
-                          </div>
-                          <div>
-                            <span className="font-semibold">Tax:</span> {product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 'N/A'}%
-                          </div>
-                        </div>
-                      </TableCell>
                       {/* Actions */}
                       <TableCell>
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-2" onClick={(e) => e.stopPropagation()}>
                           <Button
                             variant="ghost"
                             size="sm"

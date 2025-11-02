@@ -13,11 +13,13 @@ import {
   Filter,
   ArrowRight,
   Eye,
-  Move
+  Move,
+  History
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS, ITEM_TYPE_CONFIGS } from '@/types/warehouse-inventory';
 import { toast } from 'sonner';
+import { InventoryLogsModal } from './InventoryLogsModal';
 
 interface ReceivingZoneInventoryProps {
   onTransferItem?: (inventory: WarehouseInventory) => void;
@@ -34,6 +36,8 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [itemTypeFilter, setItemTypeFilter] = useState<string>('all');
+  const [logsModalOpen, setLogsModalOpen] = useState(false);
+  const [selectedInventoryForLogs, setSelectedInventoryForLogs] = useState<WarehouseInventory | null>(null);
 
   // Load receiving zone inventory
   const loadInventory = async () => {
@@ -91,18 +95,12 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
       // Filter client-side for receiving zone bins to avoid join filter issues
       const filtered = ((data as any) || []).filter((i: any) => i?.bin?.location_type === 'RECEIVING_ZONE');
       
-      // Debug logging for image URLs
-      console.log('Receiving zone inventory data:', filtered.map((item: any) => ({
-        item_name: item.item_name,
-        item_type: item.item_type,
-        grn_item_image_url: item.grn_item?.item_image_url,
-        grn_item_data: item.grn_item
-      })));
-      
-      setInventory(filtered);
+      // Consolidate duplicate items before displaying
+      const consolidated = consolidateInventory(filtered as WarehouseInventory[]);
+      setInventory(consolidated);
       
       // Create bin summaries
-      const summaries = createBinSummaries(filtered);
+      const summaries = createBinSummaries(consolidated);
       setBinSummaries(summaries);
       
     } catch (error) {
@@ -111,6 +109,47 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
     } finally {
       setLoading(false);
     }
+  };
+
+  // Consolidate duplicate items (same item_id/code+name, bin, status, unit, color)
+  const consolidateInventory = (inventoryData: WarehouseInventory[]): (WarehouseInventory & { consolidatedIds?: string[] })[] => {
+    const consolidatedMap = new Map<string, WarehouseInventory & { consolidatedIds: string[] }>();
+
+    inventoryData.forEach(item => {
+      // Create a unique key for matching items
+      const itemColor = item.grn_item?.item_color || item.grn_item?.fabric_color || '';
+      const key = item.item_id 
+        ? `${item.item_id}|${item.bin_id}|${item.status}|${item.unit}|${itemColor}`
+        : `${item.item_code}|${item.item_name}|${item.bin_id}|${item.status}|${item.unit}|${itemColor}`;
+
+      const existing = consolidatedMap.get(key);
+      
+      if (existing) {
+        // Consolidate: sum quantities and keep most recent entry's metadata
+        existing.quantity = existing.quantity + item.quantity;
+        existing.consolidatedIds.push(item.id);
+        
+        // Keep the most recent received_date
+        if (item.received_date && existing.received_date) {
+          const existingDate = new Date(existing.received_date);
+          const newDate = new Date(item.received_date);
+          if (newDate > existingDate) {
+            existing.received_date = item.received_date;
+          }
+        } else if (item.received_date) {
+          existing.received_date = item.received_date;
+        }
+      } else {
+        // First occurrence of this item
+        consolidatedMap.set(key, {
+          ...item,
+          consolidatedIds: [item.id]
+        });
+      }
+    });
+
+    // Return consolidated items (keep consolidatedIds for logs modal)
+    return Array.from(consolidatedMap.values());
   };
 
   // Create bin summaries from inventory data
@@ -436,6 +475,20 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                             <Eye className="h-3 w-3" />
                             View
                           </Button>
+                          
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setSelectedInventoryForLogs(item);
+                              setLogsModalOpen(true);
+                            }}
+                            className="flex items-center gap-1"
+                            title="View item addition logs"
+                          >
+                            <History className="h-3 w-3" />
+                            Logs {(item as any).consolidatedIds?.length > 1 && `(${(item as any).consolidatedIds.length})`}
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -443,6 +496,17 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                 })}
               </TableBody>
             </Table>
+            
+            {/* Inventory Logs Modal */}
+            {selectedInventoryForLogs && (
+              <InventoryLogsModal
+                open={logsModalOpen}
+                onOpenChange={setLogsModalOpen}
+                inventoryId={selectedInventoryForLogs.id}
+                itemName={selectedInventoryForLogs.item_name}
+                consolidatedIds={(selectedInventoryForLogs as any).consolidatedIds}
+              />
+            )}
             
             {filteredInventory.length === 0 && (
               <div className="text-center py-8">

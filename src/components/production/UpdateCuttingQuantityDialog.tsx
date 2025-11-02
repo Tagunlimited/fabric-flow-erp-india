@@ -15,15 +15,14 @@ interface OrderSize {
   cut_quantity?: number;
 }
 
-interface PickedFabric {
+interface AvailableFabric {
   fabric_id: string;
   fabric_name: string;
   color: string;
   gsm: number;
   image?: string;
-  total_picked_quantity: number;
+  available_quantity: number;
   unit: string;
-  storage_zone_name: string;
 }
 
 interface FabricUsage {
@@ -58,7 +57,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
   const [additionalCutQuantities, setAdditionalCutQuantities] = useState<{ [size: string]: number }>({});
   const [existingCutQuantities, setExistingCutQuantities] = useState<{ [size: string]: number }>({});
   const [orderSizes, setOrderSizes] = useState<OrderSize[]>([]);
-  const [pickedFabrics, setPickedFabrics] = useState<PickedFabric[]>([]);
+  const [availableFabrics, setAvailableFabrics] = useState<AvailableFabric[]>([]);
   const [fabricUsage, setFabricUsage] = useState<FabricUsage>({
     fabric_id: '',
     used_quantity: 0,
@@ -82,21 +81,91 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
         const existingCutQty = existingData?.cut_quantities_by_size || {};
         setExistingCutQuantities(existingCutQty);
 
-        // Fetch picked fabrics for this order
-        const { data: pickedFabricsData, error: pickedFabricsError } = await supabase
-          .from('fabric_picking_summary')
-          .select('*')
-          .eq('order_id', jobId);
+        // Fetch available fabrics from order items and get their inventory
+        if (orderItems && orderItems.length > 0) {
+          const fabricIds = Array.from(new Set(
+            orderItems.map((item: any) => item.fabric_id).filter(Boolean)
+          ));
 
-        if (!pickedFabricsError && pickedFabricsData) {
-          setPickedFabrics(pickedFabricsData);
-          
-          // Set default fabric selection if only one fabric is picked
-          if (pickedFabricsData.length === 1) {
-            setFabricUsage(prev => ({
-              ...prev,
-              fabric_id: pickedFabricsData[0].fabric_id
-            }));
+          if (fabricIds.length > 0) {
+            // Fetch fabric details from fabric_master
+            const { data: fabricData, error: fabricError } = await supabase
+              .from('fabric_master')
+              .select('id, fabric_name, color, gsm, image, inventory, uom')
+              .in('id', fabricIds);
+
+            if (!fabricError && fabricData) {
+              // Also fetch from warehouse_inventory for more accurate inventory
+              const { data: warehouseInventory, error: warehouseError } = await supabase
+                .from('warehouse_inventory')
+                .select('item_id, item_name, quantity, unit')
+                .eq('item_type', 'FABRIC')
+                .in('status', ['IN_STORAGE', 'RECEIVED']);
+
+              // Create a map of fabric inventory from warehouse_inventory
+              const warehouseInventoryMap: Record<string, { quantity: number; unit: string }> = {};
+              if (!warehouseError && warehouseInventory) {
+                warehouseInventory.forEach((item: any) => {
+                  const fabricId = item.item_id;
+                  const fabricName = item.item_name;
+                  
+                  // Match by item_id first, then by item_name
+                  let matchKey: string | null = null;
+                  if (fabricId && fabricIds.includes(fabricId)) {
+                    matchKey = fabricId;
+                  } else if (fabricName) {
+                    // Try to match by fabric name
+                    const matchingFabric = fabricData.find((f: any) => 
+                      f.fabric_name === fabricName || 
+                      fabricName.includes(f.fabric_name) ||
+                      f.fabric_name.includes(fabricName.split(' - ')[0])
+                    );
+                    if (matchingFabric) {
+                      matchKey = matchingFabric.id;
+                    }
+                  }
+
+                  if (matchKey) {
+                    const current = warehouseInventoryMap[matchKey] || { quantity: 0, unit: item.unit || 'meters' };
+                    warehouseInventoryMap[matchKey] = {
+                      quantity: current.quantity + Number(item.quantity || 0),
+                      unit: item.unit || current.unit || 'meters'
+                    };
+                  }
+                });
+              }
+
+              const fabrics: AvailableFabric[] = fabricData.map((fabric: any) => {
+                // Prioritize warehouse_inventory if available, otherwise use fabric_master.inventory
+                const warehouseInv = warehouseInventoryMap[fabric.id];
+                const inventoryQty = warehouseInv 
+                  ? warehouseInv.quantity 
+                  : Number(fabric.inventory || 0);
+                const inventoryUnit = warehouseInv 
+                  ? warehouseInv.unit 
+                  : (fabric.uom || 'meters');
+
+                return {
+                  fabric_id: fabric.id,
+                  fabric_name: fabric.fabric_name,
+                  color: fabric.color || '',
+                  gsm: fabric.gsm || 0,
+                  image: fabric.image,
+                  available_quantity: inventoryQty,
+                  unit: inventoryUnit
+                };
+              });
+
+              setAvailableFabrics(fabrics);
+              
+              // Set default fabric selection if only one fabric is available
+              if (fabrics.length === 1) {
+                setFabricUsage(prev => ({
+                  ...prev,
+                  fabric_id: fabrics[0].fabric_id
+                }));
+              }
+            }
           }
         }
 
@@ -225,11 +294,28 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
   const handleSave = async () => {
     setLoading(true);
     try {
-      // Validate fabric usage
-      if (pickedFabrics.length > 0 && (!fabricUsage.fabric_id || fabricUsage.used_quantity <= 0)) {
-        toast.error('Please select fabric and enter used quantity for this cutting operation');
-        setLoading(false);
-        return;
+      // Validate fabric usage - now mandatory when adding cut quantities
+      const totalAdditionalCutQty = getTotalAdditionalCutQuantity();
+      if (totalAdditionalCutQty > 0) {
+        if (!fabricUsage.fabric_id || fabricUsage.used_quantity <= 0) {
+          toast.error('Please select fabric and enter used quantity for this cutting operation');
+          setLoading(false);
+          return;
+        }
+
+        // Validate fabric availability
+        const selectedFabric = availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id);
+        if (!selectedFabric) {
+          toast.error('Selected fabric not found');
+          setLoading(false);
+          return;
+        }
+
+        if (fabricUsage.used_quantity > selectedFabric.available_quantity) {
+          toast.error(`Insufficient fabric inventory. Available: ${selectedFabric.available_quantity.toFixed(2)} ${selectedFabric.unit}`);
+          setLoading(false);
+          return;
+        }
       }
 
       // Calculate new total cut quantities by adding additional to existing
@@ -266,27 +352,167 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
         throw error;
       }
 
-      // Record fabric usage if fabric is selected
+      // Record fabric usage and deduct from inventory if fabric is selected
       if (fabricUsage.fabric_id && fabricUsage.used_quantity > 0) {
         const { data: { user } } = await supabase.auth.getUser();
+        const selectedFabric = availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id);
+        const fabricUnit = selectedFabric?.unit || 'meters';
         
-        const { error: fabricUsageError } = await supabase
-          .from('fabric_usage_records')
-          .insert({
+        // Verify fabric exists in fabric_master before inserting
+        const { data: fabricCheck, error: fabricCheckError } = await supabase
+          .from('fabric_master')
+          .select('id')
+          .eq('id', fabricUsage.fabric_id)
+          .single();
+
+        if (fabricCheckError || !fabricCheck) {
+          console.warn('Fabric not found in fabric_master, skipping fabric_usage_records insert:', fabricUsage.fabric_id);
+          toast.error('Fabric validation failed. Cutting quantities saved but fabric usage not recorded.');
+        } else {
+          // Record fabric usage - try different column names based on schema variations
+          const usageRecord: any = {
             order_id: jobId,
             fabric_id: fabricUsage.fabric_id,
             used_quantity: fabricUsage.used_quantity,
-            unit: pickedFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'meters',
+            unit: fabricUnit,
             used_for_cutting_date: new Date().toISOString(),
             used_by_id: user?.id || null,
             used_by_name: user?.user_metadata?.full_name || user?.email || 'System',
             cutting_quantity: getTotalAdditionalCutQuantity(),
             notes: `Cutting operation for ${getTotalAdditionalCutQuantity()} pieces`
-          });
+          };
 
-        if (fabricUsageError) {
-          console.error('Fabric usage error:', fabricUsageError);
-          throw fabricUsageError;
+          // Try insert with used_quantity first
+          let { error: fabricUsageError } = await supabase
+            .from('fabric_usage_records')
+            .insert(usageRecord);
+
+          // If that fails, try with actual_quantity instead (some schemas use different column names)
+          if (fabricUsageError && fabricUsageError.message?.includes('column')) {
+            const altUsageRecord = {
+              order_id: jobId,
+              fabric_id: fabricUsage.fabric_id,
+              actual_quantity: fabricUsage.used_quantity,
+              unit: fabricUnit,
+              used_at: new Date().toISOString(),
+              used_by: user?.id || null,
+              notes: `Cutting operation for ${getTotalAdditionalCutQuantity()} pieces`
+            };
+
+            const { error: altError } = await supabase
+              .from('fabric_usage_records')
+              .insert(altUsageRecord);
+
+            if (altError) {
+              console.error('Fabric usage error (both attempts failed):', fabricUsageError, altError);
+              // Don't throw - just log and continue, since cutting quantities are saved
+              toast.error('Cutting quantities saved, but fabric usage record failed. Check console for details.');
+            }
+          } else if (fabricUsageError) {
+            console.error('Fabric usage error:', fabricUsageError);
+            // Check if it's a foreign key constraint error
+            if (fabricUsageError.message?.includes('foreign key') || fabricUsageError.message?.includes('fkey')) {
+              console.error('Foreign key constraint violation. fabric_id might not exist in referenced table.');
+              toast.error('Fabric ID validation failed. Cutting quantities saved but fabric usage not recorded.');
+            } else {
+              // For other errors, still log but don't block the save
+              toast.error('Cutting quantities saved, but fabric usage record had an error.');
+            }
+          }
+        }
+
+        // Deduct from fabric_master inventory
+        const { data: currentFabricData, error: fetchError } = await supabase
+          .from('fabric_master')
+          .select('inventory')
+          .eq('id', fabricUsage.fabric_id)
+          .single();
+
+        if (!fetchError && currentFabricData) {
+          const currentInventory = Number((currentFabricData as any).inventory || 0);
+          const newInventory = Math.max(0, currentInventory - fabricUsage.used_quantity);
+
+          const { error: inventoryUpdateError } = await supabase
+            .from('fabric_master')
+            .update({
+              inventory: newInventory
+            } as any)
+            .eq('id', fabricUsage.fabric_id);
+
+          if (inventoryUpdateError) {
+            console.error('Error updating fabric_master inventory:', inventoryUpdateError);
+            // Don't throw - just log the error
+          } else {
+            console.log(`Updated fabric_master inventory: ${fabricUsage.fabric_id} - ${currentInventory} - ${fabricUsage.used_quantity} = ${newInventory}`);
+          }
+        }
+
+        // Also deduct from warehouse_inventory if records exist
+        try {
+          const { data: warehouseInventory, error: warehouseError } = await supabase
+            .from('warehouse_inventory')
+            .select('id, quantity, item_id, item_name')
+            .eq('item_type', 'FABRIC')
+            .or(`item_id.eq.${fabricUsage.fabric_id},item_name.eq.${selectedFabric?.fabric_name || ''}`);
+
+          if (!warehouseError && warehouseInventory && warehouseInventory.length > 0) {
+            // Update the first matching record (or you could update all matching records)
+            const bestMatch = warehouseInventory
+              .filter(r => Number(r.quantity || 0) > 0)
+              .sort((a: any, b: any) => Number(b.quantity || 0) - Number(a.quantity || 0))[0] 
+              || warehouseInventory[0];
+
+            if (bestMatch) {
+              const currentQty = Number(bestMatch.quantity || 0);
+              const newQty = Math.max(0, currentQty - fabricUsage.used_quantity);
+
+              const { error: warehouseUpdateError } = await supabase
+                .from('warehouse_inventory')
+                .update({
+                  quantity: newQty,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', bestMatch.id);
+
+              if (warehouseUpdateError) {
+                console.error('Error updating warehouse_inventory:', warehouseUpdateError);
+              } else {
+                console.log(`Updated warehouse_inventory: ${bestMatch.id} - ${currentQty} - ${fabricUsage.used_quantity} = ${newQty}`);
+                
+                // Log the inventory removal for cutting
+                try {
+                  const { logInventoryRemoval } = await import('@/utils/inventoryLogging');
+                  await logInventoryRemoval(
+                    bestMatch.id,
+                    {
+                      item_type: bestMatch.item_type || 'FABRIC',
+                      item_id: bestMatch.item_id || undefined,
+                      item_name: bestMatch.item_name || fabricUsage.fabric_name || 'Unknown',
+                      item_code: bestMatch.item_code || bestMatch.item_name || 'Unknown',
+                      unit: bestMatch.unit || 'meters',
+                    },
+                    fabricUsage.used_quantity,
+                    currentQty,
+                    newQty,
+                    {
+                      bin_id: bestMatch.bin_id || undefined,
+                      status: bestMatch.status || 'RECEIVED',
+                      color: bestMatch.fabric_color || bestMatch.item_color || undefined,
+                      reference_type: 'CUTTING',
+                      reference_id: jobId || undefined,
+                      reference_number: orderNumber || undefined,
+                      notes: `Fabric used in cutting - Job: ${jobId || 'N/A'}, Order: ${orderNumber || 'N/A'}`
+                    }
+                  );
+                } catch (logError) {
+                  console.error('Error logging inventory removal:', logError);
+                }
+              }
+            }
+          }
+        } catch (warehouseError) {
+          console.error('Error processing warehouse inventory update:', warehouseError);
+          // Don't throw - just log the error
         }
       }
 
@@ -386,19 +612,21 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
             </Card>
           </div>
 
-          {/* Fabric Usage Tracking */}
-          {pickedFabrics.length > 0 && (
+          {/* Fabric Usage Tracking - Now mandatory when adding cut quantities */}
+          {availableFabrics.length > 0 && (
             <div>
               <h4 className="font-medium mb-4 flex items-center">
                 <Droplets className="w-5 h-5 mr-2 text-blue-600" />
-                Fabric Usage for This Cutting
+                Fabric Usage for This Cutting {getTotalAdditionalCutQuantity() > 0 && <span className="text-red-500 ml-2">*</span>}
               </h4>
               <Card className="border-blue-200 bg-blue-50/30">
                 <CardContent className="p-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {/* Fabric Selection */}
                     <div className="space-y-2">
-                      <Label htmlFor="fabric-select">Select Fabric Used:</Label>
+                      <Label htmlFor="fabric-select">
+                        Select Fabric Used: {getTotalAdditionalCutQuantity() > 0 && <span className="text-red-500">*</span>}
+                      </Label>
                       <Select 
                         value={fabricUsage.fabric_id} 
                         onValueChange={(value) => setFabricUsage(prev => ({
@@ -410,7 +638,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                           <SelectValue placeholder="Choose fabric used for cutting" />
                         </SelectTrigger>
                         <SelectContent>
-                          {pickedFabrics.map((fabric) => (
+                          {availableFabrics.map((fabric) => (
                             <SelectItem key={fabric.fabric_id} value={fabric.fabric_id}>
                               <div className="flex items-center space-x-3">
                                 {fabric.image && (
@@ -423,7 +651,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                                 <div>
                                   <div className="font-medium">{fabric.fabric_name}</div>
                                   <div className="text-xs text-gray-500">
-                                    {fabric.color} • {fabric.gsm} GSM • Available: {typeof fabric.total_picked_quantity === 'number' ? fabric.total_picked_quantity.toFixed(2) : fabric.total_picked_quantity} {fabric.unit}
+                                    {fabric.color} • {fabric.gsm} GSM • Available: {fabric.available_quantity.toFixed(2)} {fabric.unit}
                                   </div>
                                 </div>
                               </div>
@@ -435,7 +663,9 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
 
                     {/* Fabric Quantity Used */}
                     <div className="space-y-2">
-                      <Label htmlFor="fabric-quantity">Fabric Quantity Used:</Label>
+                      <Label htmlFor="fabric-quantity">
+                        Fabric Quantity Used: {getTotalAdditionalCutQuantity() > 0 && <span className="text-red-500">*</span>}
+                      </Label>
                       <div className="flex items-center space-x-2">
                         <Input
                           id="fabric-quantity"
@@ -451,15 +681,15 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                           placeholder="Enter fabric quantity used"
                         />
                         <span className="text-sm text-gray-500">
-                          {pickedFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'meters'}
+                          {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'meters'}
                         </span>
                       </div>
                       {fabricUsage.fabric_id && (
                         <div className="text-xs text-gray-600">
                           Available: {(() => {
-                            const fabric = pickedFabrics.find(f => f.fabric_id === fabricUsage.fabric_id);
-                            return fabric ? (typeof fabric.total_picked_quantity === 'number' ? fabric.total_picked_quantity.toFixed(2) : fabric.total_picked_quantity) : '0';
-                          })()} {pickedFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit}
+                            const fabric = availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id);
+                            return fabric ? fabric.available_quantity.toFixed(2) : '0';
+                          })()} {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'meters'}
                         </div>
                       )}
                     </div>
@@ -468,9 +698,16 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                   {fabricUsage.fabric_id && fabricUsage.used_quantity > 0 && (
                     <div className="mt-3 p-3 bg-green-100 border border-green-200 rounded">
                       <div className="text-sm text-green-800">
-                        ✓ Will record usage of {typeof fabricUsage.used_quantity === 'number' ? fabricUsage.used_quantity.toFixed(2) : fabricUsage.used_quantity} {pickedFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit} 
-                        of {pickedFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.fabric_name} 
-                        for {getTotalAdditionalCutQuantity()} pieces
+                        ✓ Will record usage of {fabricUsage.used_quantity.toFixed(2)} {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'meters'} 
+                        of {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.fabric_name || 'fabric'} 
+                        for {getTotalAdditionalCutQuantity()} pieces and deduct from inventory
+                      </div>
+                    </div>
+                  )}
+                  {getTotalAdditionalCutQuantity() > 0 && (!fabricUsage.fabric_id || fabricUsage.used_quantity <= 0) && (
+                    <div className="mt-3 p-3 bg-yellow-100 border border-yellow-200 rounded">
+                      <div className="text-sm text-yellow-800">
+                        ⚠️ Fabric usage is required when adding cut quantities
                       </div>
                     </div>
                   )}

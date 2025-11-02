@@ -121,7 +121,7 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
       console.log('Orders with receipts (by ID):', Array.from(ordersWithReceiptsById));
       console.log('Orders with receipts (by Number):', Array.from(ordersWithReceiptsByNumber));
       
-      // Get all orders that are not cancelled (including pending orders)
+      // Get all orders that are not cancelled (including pending orders) - exclude readymade orders (they don't need BOMs)
       const { data: allOrders, error: ordersError } = await supabase
         .from('orders')
         .select(`
@@ -137,6 +137,7 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
           )
         `)
         .not('status', 'eq', 'cancelled')
+        .or('order_type.is.null,order_type.eq.custom') // Exclude readymade orders
         .order('order_date', { ascending: false });
       
       if (ordersError) throw ordersError;
