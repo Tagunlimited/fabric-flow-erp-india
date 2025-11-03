@@ -361,13 +361,7 @@ const CuttingManagerPage = () => {
   // Load assigned cutting jobs from DB (order_assignments) and enrich with order/customer/BOM
     const loadCuttingJobs = async () => {
       try {
-        // First, fetch ALL order IDs that have cutting assignments from order_cutting_assignments (new table)
-        const { data: cuttingAssignmentsRows } = await supabase
-          .from('order_cutting_assignments' as any)
-          .select('order_id');
-        const cuttingAssignmentOrderIds = Array.from(new Set((cuttingAssignmentsRows || []).map((r: any) => r.order_id).filter(Boolean)));
-        
-        // Also fetch order IDs from order_assignments (legacy table)
+        // First, get order IDs that have cutting assignments from both tables
         const { data: rows } = await supabase
           .from('order_assignments' as any)
           .select(`
@@ -381,10 +375,15 @@ const CuttingManagerPage = () => {
           .not('cutting_master_id', 'is', null);
         const map: Record<string, any> = {};
         (rows || []).forEach((r: any) => { if (r?.order_id) map[r.order_id] = r; });
-        const legacyOrderIds: string[] = Object.keys(map);
+        const orderIds: string[] = Object.keys(map);
         
-        // Merge both sets of order IDs
-        const allOrderIds = Array.from(new Set([...cuttingAssignmentOrderIds, ...legacyOrderIds]));
+        // Also fetch order IDs from order_cutting_assignments for multiple cutting masters
+        const { data: cuttingAssignmentsRows } = await supabase
+          .from('order_cutting_assignments' as any)
+          .select('order_id')
+          .in('order_id', orderIds.length > 0 ? orderIds : ['00000000-0000-0000-0000-000000000000'] as any);
+        const cuttingAssignmentOrderIds = Array.from(new Set((cuttingAssignmentsRows || []).map((r: any) => r.order_id).filter(Boolean)));
+        const allOrderIds = Array.from(new Set([...orderIds, ...cuttingAssignmentOrderIds]));
         
         if (allOrderIds.length === 0) {
           setCuttingJobs([]);
@@ -408,42 +407,11 @@ const CuttingManagerPage = () => {
           console.error('Failed to load cutting masters:', e);
         }
 
-        // Fetch employee avatar URLs for all cutting masters (both from order_cutting_assignments and order_assignments)
-        const allCuttingMasterIds = new Set<string>();
-        // Collect IDs from order_cutting_assignments
-        Object.values(cuttingMastersByOrder).forEach((masters: any[]) => {
-          masters.forEach((m: any) => {
-            if (m?.cutting_master_id) allCuttingMasterIds.add(m.cutting_master_id);
-          });
-        });
-        // Collect IDs from order_assignments (legacy)
-        Object.values(map).forEach((p: any) => {
-          if (p?.cutting_master_id) allCuttingMasterIds.add(p.cutting_master_id);
-        });
-        
-        let employeeAvatars: Record<string, string> = {};
-        if (allCuttingMasterIds.size > 0) {
-          try {
-            const { data: employees } = await supabase
-              .from('employees' as any)
-              .select('id, avatar_url')
-              .in('id', Array.from(allCuttingMasterIds) as any);
-            (employees || []).forEach((emp: any) => {
-              if (emp?.id && emp?.avatar_url) {
-                employeeAvatars[emp.id] = emp.avatar_url;
-              }
-            });
-          } catch (e) {
-            console.error('Failed to load employee avatars:', e);
-          }
-        }
-
         // Fetch orders first (simplified query)
         const { data: orders, error: ordersError } = await supabase
           .from('orders' as any)
           .select('id, order_number, expected_delivery_date, customer_id')
-          .in('id', allOrderIds as any)
-          .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
+          .in('id', allOrderIds as any);
 
         if (ordersError) {
           console.error('Error fetching orders:', ordersError);
@@ -578,7 +546,6 @@ const CuttingManagerPage = () => {
             quantity: Number((bom as any).qty || 0),
             cutQuantity: Number(p.cut_quantity || 0),
             cutQuantitiesBySize: p.cut_quantities_by_size || {},
-            assignedTo: '', // Will be set below based on cutting masters
             startDate: p.cutting_work_date || '',
             dueDate: o.expected_delivery_date || '',
             status: 'pending',
@@ -973,23 +940,27 @@ const CuttingManagerPage = () => {
                           <TableCell>
                             {job.cuttingMasters && job.cuttingMasters.length > 0 ? (
                               <div className="flex flex-wrap gap-2">
-                                <TooltipProvider>
-                                  {job.cuttingMasters.map((master, idx) => (
-                                    <Tooltip key={idx}>
-                                      <TooltipTrigger asChild>
-                                        <Avatar className="w-12 h-12 cursor-pointer">
-                                          <AvatarImage src={master.avatarUrl} alt={master.name} />
-                                          <AvatarFallback className="bg-blue-200 text-blue-700 text-sm">
-                                            {master.name?.charAt(0)?.toUpperCase() || 'CM'}
-                                          </AvatarFallback>
-                                        </Avatar>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        <p>{master.name}</p>
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  ))}
-                                </TooltipProvider>
+                                {job.cuttingMasters.map((master, idx) => (
+                                  <div key={idx} className="flex items-center space-x-2">
+                                    <Avatar className="w-8 h-8">
+                                      <AvatarImage src={master.avatarUrl} alt={master.name} />
+                                      <AvatarFallback className="bg-blue-200 text-blue-700 text-xs">
+                                        {master.name?.charAt(0)?.toUpperCase() || 'CM'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <span className="text-sm">{master.name}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : job.assignedTo ? (
+                              <div className="flex items-center space-x-2">
+                                <Avatar className="w-8 h-8">
+                                  <AvatarImage src={job.cuttingMasterAvatarUrl} alt={job.assignedTo} />
+                                  <AvatarFallback className="bg-blue-200 text-blue-700 text-xs">
+                                    {job.assignedTo?.charAt(0)?.toUpperCase() || 'CM'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="text-sm">{job.assignedTo}</span>
                               </div>
                             ) : job.assignedTo ? (
                               <TooltipProvider>
@@ -1218,40 +1189,28 @@ const CuttingManagerPage = () => {
                           <TableCell>
                             {job.cuttingMasters && job.cuttingMasters.length > 0 ? (
                               <div className="flex flex-wrap gap-2">
-                                <TooltipProvider>
-                                  {job.cuttingMasters.map((master, idx) => (
-                                    <Tooltip key={idx}>
-                                      <TooltipTrigger asChild>
-                                        <Avatar className="w-12 h-12 cursor-pointer">
-                                          <AvatarImage src={master.avatarUrl} alt={master.name} />
-                                          <AvatarFallback className="bg-green-200 text-green-700 text-sm">
-                                            {master.name?.charAt(0)?.toUpperCase() || 'CM'}
-                                          </AvatarFallback>
-                                        </Avatar>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        <p>{master.name}</p>
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  ))}
-                                </TooltipProvider>
-                              </div>
-                            ) : job.assignedTo ? (
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Avatar className="w-12 h-12 cursor-pointer">
-                                      <AvatarImage src={job.cuttingMasterAvatarUrl} alt={job.assignedTo} />
-                                      <AvatarFallback className="bg-green-200 text-green-700 text-sm">
-                                        {job.assignedTo?.charAt(0)?.toUpperCase() || 'CM'}
+                                {job.cuttingMasters.map((master, idx) => (
+                                  <div key={idx} className="flex items-center space-x-2">
+                                    <Avatar className="w-6 h-6">
+                                      <AvatarImage src={master.avatarUrl} alt={master.name} />
+                                      <AvatarFallback className="bg-green-200 text-green-700 text-xs">
+                                        {master.name?.charAt(0)?.toUpperCase() || 'CM'}
                                       </AvatarFallback>
                                     </Avatar>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>{job.assignedTo}</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
+                                    <span className="text-xs">{master.name}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : job.assignedTo ? (
+                              <div className="flex items-center space-x-2">
+                                <Avatar className="w-6 h-6">
+                                  <AvatarImage src={job.cuttingMasterAvatarUrl} alt={job.assignedTo} />
+                                  <AvatarFallback className="bg-green-200 text-green-700 text-xs">
+                                    {job.assignedTo?.charAt(0)?.toUpperCase() || 'CM'}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="text-xs">{job.assignedTo}</span>
+                              </div>
                             ) : (
                               <span className="text-muted-foreground text-xs">Unassigned</span>
                             )}
