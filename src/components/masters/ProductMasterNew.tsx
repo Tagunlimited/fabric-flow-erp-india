@@ -12,7 +12,12 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { BarcodeTab } from "./BarcodeTab";
+import { InventoryAdjustment } from "./InventoryAdjustment";
+import { createInventoryAdjustment, getProductBySKU, getProductStock, getBinsForProduct } from "@/utils/inventoryAdjustmentAPI";
+import type { AdjustmentItem } from "@/utils/inventoryAdjustmentAPI";
 import { 
   Plus, 
   Edit, 
@@ -851,7 +856,11 @@ export function ProductMasterNew() {
             // Keep original URLs for downloading
             _original_main_image: product.main_image?.toString().trim() || null,
             _original_image1: product.image1?.toString().trim() || null,
-            _original_image2: product.image2?.toString().trim() || null
+            _original_image2: product.image2?.toString().trim() || null,
+            // Store current_stock if provided for inventory adjustment
+            current_stock: product.current_stock !== undefined && product.current_stock !== null 
+              ? parseFloat(product.current_stock.toString().replace(/[^0-9.]/g, '')) 
+              : undefined
           };
         } catch (error) {
           console.error(`Error processing row ${index + 1}:`, error);
@@ -915,49 +924,177 @@ export function ProductMasterNew() {
         
         // Insert new products
         if (toInsert.length > 0) {
-          const { error: insertError } = await supabase
+          // Remove current_stock from insert data (it's handled separately)
+          const insertData = toInsert.map(p => {
+            const { current_stock, ...rest } = p as any;
+            return rest;
+          });
+          
+          const { data: insertedProducts, error: insertError } = await supabase
             .from('product_master')
-            .insert(toInsert as any);
+            .insert(insertData as any)
+            .select('id, sku');
           
           if (insertError) {
             console.error('Insert error:', insertError);
             throw insertError;
           }
+          
           insertedCount += toInsert.length;
+          
+          // Auto-adjust inventory for newly inserted products if current_stock is provided
+          if (insertedProducts && Array.isArray(insertedProducts) && user) {
+            for (let i = 0; i < toInsert.length && i < insertedProducts.length; i++) {
+              const product = toInsert[i];
+              const insertedProduct = insertedProducts[i] as any;
+              
+              if (product.current_stock !== undefined && product.current_stock !== null && insertedProduct?.id && product.current_stock > 0) {
+                try {
+                  const bins = await getBinsForProduct(insertedProduct.id, product.sku);
+                  const selectedBinIds = new Set<string>();
+                  if (bins.length > 0) {
+                    bins.forEach(bin => selectedBinIds.add(bin.bin_id));
+                  }
+                  
+                  const adjustmentItem: AdjustmentItem = {
+                    product_id: insertedProduct.id,
+                    sku: product.sku,
+                    product_name: product.name || product.sku,
+                    product_class: product.class,
+                    product_color: product.color,
+                    product_size: product.size,
+                    product_category: product.category,
+                    product_brand: product.brand,
+                    quantity_before: 0,
+                    adjustment_quantity: product.current_stock,
+                    quantity_after: product.current_stock,
+                    unit: 'pcs',
+                    bins: bins,
+                    selected_bin_ids: selectedBinIds
+                  };
+                  
+                  await createInventoryAdjustment(
+                    'ADD',
+                    [adjustmentItem],
+                    undefined,
+                    'Bulk Upload - Auto Adjustment',
+                    `Initial inventory set during bulk upload for SKU ${product.sku}`,
+                    user.id,
+                    user.email
+                  );
+                } catch (adjustError) {
+                  console.error(`Error auto-adjusting inventory for new SKU ${product.sku}:`, adjustError);
+                  // Don't fail the upload if inventory adjustment fails
+                }
+              }
+            }
+          }
         }
         
-        // Update existing products by SKU
+        // Update existing products by SKU - get product IDs first
         if (toUpdate.length > 0) {
+          const updateSkus = toUpdate.map(p => p.sku).filter(Boolean);
+          const { data: existingProductsData } = await supabase
+            .from('product_master')
+            .select('id, sku, current_stock')
+            .in('sku', updateSkus);
+          
+          const skuToIdMap = new Map<string, string>();
+          const skuToCurrentStockMap = new Map<string, number>();
+          (existingProductsData || []).forEach((p: any) => {
+            skuToIdMap.set(p.sku, p.id);
+            skuToCurrentStockMap.set(p.sku, p.current_stock || 0);
+          });
+          
           for (const product of toUpdate) {
+            const productId = skuToIdMap.get(product.sku);
+            if (!productId) {
+              console.warn(`Product ID not found for SKU ${product.sku}, skipping update`);
+              continue;
+            }
+            
+            const updateData: any = {
+              class: product.class,
+              color: product.color,
+              size_type: product.size_type,
+              size: product.size,
+              name: product.name,
+              material: product.material,
+              brand: product.brand,
+              category: product.category,
+              gender: product.gender,
+              mrp: product.mrp,
+              cost: product.cost,
+              selling_price: product.selling_price,
+              gst_rate: product.gst_rate,
+              hsn: product.hsn,
+              main_image: product.main_image,
+              image1: product.image1,
+              image2: product.image2,
+              updated_at: new Date().toISOString()
+            };
+            
             const { error: updateError } = await supabase
               .from('product_master')
-              .update({
-                class: product.class,
-                color: product.color,
-                size_type: product.size_type,
-                size: product.size,
-                name: product.name,
-                material: product.material,
-                brand: product.brand,
-                category: product.category,
-                gender: product.gender,
-                mrp: product.mrp,
-                cost: product.cost,
-                selling_price: product.selling_price,
-                gst_rate: product.gst_rate,
-                hsn: product.hsn,
-                main_image: product.main_image,
-                image1: product.image1,
-                image2: product.image2,
-                updated_at: new Date().toISOString()
-              } as any)
-              .eq('sku', product.sku);
+              .update(updateData)
+              .eq('id', productId as any);
             
             if (updateError) {
               console.error(`Update error for SKU ${product.sku}:`, updateError);
               // Continue with other updates even if one fails
             } else {
               updatedCount++;
+              
+              // Auto-adjust inventory if current_stock is provided
+              if (product.current_stock !== undefined && product.current_stock !== null && user) {
+                try {
+                  const currentStock = skuToCurrentStockMap.get(product.sku) || 0;
+                  const targetStock = product.current_stock;
+                  
+                  if (Math.abs(currentStock - targetStock) > 0.01) {
+                    // Get full product details
+                    const fullProduct = await getProductBySKU(product.sku);
+                    if (fullProduct) {
+                      const bins = await getBinsForProduct(fullProduct.id, product.sku);
+                      const selectedBinIds = new Set<string>();
+                      if (bins.length > 0) {
+                        bins.forEach(bin => selectedBinIds.add(bin.bin_id));
+                      }
+                      
+                      const adjustmentItem: AdjustmentItem = {
+                        product_id: fullProduct.id,
+                        sku: product.sku,
+                        product_name: fullProduct.name || product.name || product.sku,
+                        product_class: fullProduct.class || product.class,
+                        product_color: fullProduct.color || product.color,
+                        product_size: fullProduct.size || product.size,
+                        product_category: fullProduct.category || product.category,
+                        product_brand: fullProduct.brand || product.brand,
+                        quantity_before: currentStock,
+                        adjustment_quantity: Math.abs(targetStock - currentStock),
+                        quantity_after: targetStock,
+                        replace_quantity: targetStock,
+                        unit: 'pcs',
+                        bins: bins,
+                        selected_bin_ids: selectedBinIds
+                      };
+                      
+                      await createInventoryAdjustment(
+                        'REPLACE',
+                        [adjustmentItem],
+                        undefined,
+                        'Bulk Upload - Auto Adjustment',
+                        `Inventory adjusted during bulk upload for SKU ${product.sku}`,
+                        user.id,
+                        user.email
+                      );
+                    }
+                  }
+                } catch (adjustError) {
+                  console.error(`Error auto-adjusting inventory for SKU ${product.sku}:`, adjustError);
+                  // Don't fail the upload if inventory adjustment fails
+                }
+              }
             }
           }
         }
@@ -1205,21 +1342,17 @@ export function ProductMasterNew() {
 
   return (
     <div className="w-full px-4 py-8 space-y-6">
-      {/* Navigation Tabs */}
-      <div className="flex space-x-8 border-b">
-        <div className="pb-2 border-b-2 border-blue-600 text-blue-600 font-medium">
-          Product Master
-        </div>
-        <div className="pb-2 text-gray-500 hover:text-gray-700 cursor-pointer">
-          Inventory Approvals
-        </div>
-        <div className="pb-2 text-gray-500 hover:text-gray-700 cursor-pointer">
-          Stock Movement
-        </div>
-        <div className="pb-2 text-gray-500 hover:text-gray-700 cursor-pointer">
-          Barcode
-        </div>
-      </div>
+      <Tabs defaultValue="product-master" className="w-full">
+        {/* Navigation Tabs */}
+        <TabsList className="grid w-full max-w-2xl grid-cols-4">
+          <TabsTrigger value="product-master">Product Master</TabsTrigger>
+          <TabsTrigger value="inventory-approvals">Inventory Adjustment</TabsTrigger>
+          <TabsTrigger value="stock-movement">Stock Movement</TabsTrigger>
+          <TabsTrigger value="barcode">Barcode</TabsTrigger>
+        </TabsList>
+
+        {/* Product Master Tab Content */}
+        <TabsContent value="product-master" className="space-y-6 mt-6">
 
       {/* Header and Actions */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -2183,6 +2316,30 @@ export function ProductMasterNew() {
           </div>
         </div>
       </div>
+        </TabsContent>
+
+        {/* Inventory Adjustment Tab Content */}
+        <TabsContent value="inventory-approvals" className="space-y-6 mt-6">
+          <InventoryAdjustment />
+        </TabsContent>
+
+        {/* Stock Movement Tab Content */}
+        <TabsContent value="stock-movement" className="space-y-6 mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Stock Movement</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-muted-foreground">Stock movement functionality coming soon.</p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Barcode Tab Content */}
+        <TabsContent value="barcode" className="space-y-6 mt-6">
+          <BarcodeTab products={products} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

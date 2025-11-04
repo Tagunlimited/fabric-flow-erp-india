@@ -86,7 +86,7 @@ export function Dashboard() {
       title: "Total Revenue",
       value: `₹${(data.summary.totalRevenue / 100000).toFixed(1)}L`,
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: DollarSign,
       color: "text-success"
     },
@@ -94,7 +94,7 @@ export function Dashboard() {
       title: "Active Orders",
       value: (data.summary.pendingOrders + data.summary.inProductionOrders).toString(),
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: ShoppingCart,
       color: "text-manufacturing"
     },
@@ -102,15 +102,30 @@ export function Dashboard() {
       title: "Production Efficiency",
       value: `${Math.round(data.productionOrders.reduce((sum, order) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%`,
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: Factory,
       color: "text-warning"
     },
     {
-      title: "Quality Pass Rate",
-      value: `${Math.round((data.qualityChecks.filter((qc) => qc.status === 'passed').length / Math.max(data.qualityChecks.length, 1)) * 100)}%`,
+      title: "Quality Pass",
+      value: (() => {
+        const qualityChecks = data.qualityChecks || [];
+        const totalApproved = qualityChecks.reduce((sum: number, qc: any) => {
+          if (qc.approved_quantity != null && qc.approved_quantity > 0) {
+            return sum + Number(qc.approved_quantity);
+          }
+          if (qc.total_quantity && qc.pass_percentage != null && qc.pass_percentage > 0) {
+            return sum + Math.round((Number(qc.total_quantity) * Number(qc.pass_percentage)) / 100);
+          }
+          if ((qc.status === 'passed' || qc.status === 'approved') && qc.total_quantity) {
+            return sum + Number(qc.total_quantity);
+          }
+          return sum;
+        }, 0);
+        return totalApproved > 0 ? totalApproved.toLocaleString() : '0';
+      })(),
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: CheckCircle,
       color: "text-quality"
     }

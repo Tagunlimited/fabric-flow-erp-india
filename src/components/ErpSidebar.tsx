@@ -24,7 +24,8 @@ import {
   Scissors,
   Shirt,
   FileText,
-  Image
+  Image,
+  Warehouse
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -97,10 +98,9 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       title: "Inventory",
       icon: Package,
       children: [
-        { title: "Dashboard", url: "/warehouse/inventory", icon: Building },
-        // { title: "Dashboard", url: "/inventory", icon: BarChart3 },
-        // { title: "Material Planning", url: "/inventory/planning", icon: ClipboardList }
-        
+        { title: "Raw Material", url: "/warehouse/inventory", icon: Warehouse },
+        { title: "Product Inventory", url: "/inventory/products", icon: Package },
+        { title: "Inventory Adjustment", url: "/inventory/adjustment", icon: Package },
       ]
     },
     {
@@ -621,7 +621,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
               <p className="mt-2">
                 Powered by <br />
                 <a
-                  href="https://sellerskacentral.in/"
+                  href="https://blackmattertech.com/"
                   className="animated-sellers"
                   style={{
                     fontSize: '20px',
@@ -635,8 +635,8 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
                   rel="noopener noreferrer"
                 >
                   <span className="flex items-center gap-2">
-                    {/* <img src="/Users//public/1.png" alt="Tech Panda" className="w-10 h-10" /> */}
-                    Tech Panda
+                    {/* <img src="/Users//public/1.png" alt="BlackMatter Technologies" className="w-10 h-10" /> */}
+                    BlackMatter <br></br> Technologies
                   </span>
                 </a>
               </p>

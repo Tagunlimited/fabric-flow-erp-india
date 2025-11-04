@@ -259,7 +259,9 @@ export function EmployeeAccessManagement() {
           { title: 'Material Shortfall Alerts', url: '/procurement/alerts', icon: 'AlertTriangle', sort_order: 5, is_active: true }
         ]},
         { title: 'Inventory', url: null, icon: 'Package', sort_order: 7, is_active: true, children: [
-          { title: 'Dashboard', url: '/warehouse/inventory', icon: 'Building', sort_order: 1, is_active: true }
+          { title: 'Raw Material', url: '/warehouse/inventory', icon: 'Warehouse', sort_order: 1, is_active: true },
+          { title: 'Product Inventory', url: '/inventory/products', icon: 'Package', sort_order: 2, is_active: true },
+          { title: 'Inventory Adjustment', url: '/inventory/adjustment', icon: 'Package', sort_order: 3, is_active: true }
         ]},
         { title: 'Production', url: null, icon: 'Factory', sort_order: 8, is_active: true, children: [
           { title: 'Production Dashboard', url: '/production', icon: 'Factory', sort_order: 1, is_active: true },

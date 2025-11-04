@@ -340,87 +340,96 @@ export default function PickerPage() {
 
   return (
     <ErpLayout>
-      <div className="space-y-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-4 sm:space-y-6">
         <div>
-          <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+          <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
             Picker
           </h1>
-          <p className="text-muted-foreground mt-1">
+          <p className="text-sm sm:text-base text-muted-foreground mt-1">
             Assignments overview by tailor and by order
           </p>
         </div>
 
-        <Tabs defaultValue="tailors" className="space-y-6">
+        <Tabs defaultValue="tailors" className="space-y-4 sm:space-y-6">
           <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="tailors" className="flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              Batch view
+            <TabsTrigger value="tailors" className="flex items-center gap-2 text-xs sm:text-sm">
+              <Users className="h-3 w-3 sm:h-4 sm:w-4" />
+              <span className="hidden sm:inline">Batch view</span>
+              <span className="sm:hidden">Batches</span>
             </TabsTrigger>
              
           </TabsList>
 
-          <TabsContent value="tailors" className="space-y-6">
+          <TabsContent value="tailors" className="space-y-4 sm:space-y-6">
             <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="h-5 w-5" />
+              <CardHeader className="pb-3 sm:pb-6">
+                <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                  <Users className="h-4 w-4 sm:h-5 sm:w-5" />
                   Tailors
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="mb-4">
-                  <div className="relative max-w-sm">
-                    <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <div className="relative w-full max-w-sm">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                       placeholder="Search tailors..."
                       value={tailorSearch}
                       onChange={(e) => setTailorSearch(e.target.value)}
-                      className="pl-10"
+                      className="pl-10 w-full"
                     />
                   </div>
                 </div>
 
                 {loadingTailors ? (
-                  <p className="text-muted-foreground">Loading tailors...</p>
+                  <p className="text-sm sm:text-base text-muted-foreground">Loading tailors...</p>
                 ) : filteredTailors.length === 0 ? (
-                  <p className="text-muted-foreground">No tailors found.</p>
+                  <p className="text-sm sm:text-base text-muted-foreground">No tailors found.</p>
                 ) : (
                   <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 sm:gap-4">
                     {filteredTailors.map((t) => (
                       <Card key={t.id} className="border shadow-erp-md cursor-pointer hover:shadow-lg transition" onClick={() => openBatchOrders(t.id)}>
-                        <CardContent className="pt-6">
-                          <div className="flex items-center gap-4">
-                            <Avatar className="h-12 w-12">
+                        <CardContent className="pt-4 sm:pt-6 p-4 sm:p-6">
+                          <div className="flex items-center gap-3 sm:gap-4">
+                            <Avatar className="h-10 w-10 sm:h-12 sm:w-12 flex-shrink-0">
                               <AvatarImage src={t.avatar_url || undefined} alt={t.full_name} />
-                              <AvatarFallback>{t.full_name.charAt(0)}</AvatarFallback>
+                              <AvatarFallback className="text-xs sm:text-sm">{t.full_name.charAt(0)}</AvatarFallback>
                             </Avatar>
-                            <div className="space-y-1">
-                              <div className="font-semibold">{t.full_name}</div>
+                            <div className="space-y-1 min-w-0 flex-1">
+                              <div className="font-semibold text-sm sm:text-base truncate">{t.full_name}</div>
                               <div className="text-xs text-muted-foreground flex items-center gap-1">
-                                <Scissors className="w-3.5 h-3.5" />
-                                {t.tailor_type ? String(t.tailor_type).replace(/_/g, ' ') : 'Tailor'}
+                                <Scissors className="w-3 h-3 sm:w-3.5 sm:h-3.5 flex-shrink-0" />
+                                <span className="truncate">{t.tailor_type ? String(t.tailor_type).replace(/_/g, ' ') : 'Tailor'}</span>
                               </div>
                             </div>
                           </div>
-                          <div className="mt-4">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <Badge className="bg-blue-100 text-blue-800">
-                                Assigned Orders: {t.assigned_orders}
+                          <div className="mt-3 sm:mt-4">
+                            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                              <Badge className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5">
+                                <span className="hidden sm:inline">Assigned Orders: </span>
+                                <span className="sm:hidden">Orders: </span>
+                                {t.assigned_orders}
                               </Badge>
                               {t.assigned_quantity > 0 && (
-                                <Badge className="bg-purple-100 text-purple-800">
-                                  Assigned Qty: {t.assigned_quantity}
+                                <Badge className="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">
+                                  <span className="hidden sm:inline">Assigned Qty: </span>
+                                  <span className="sm:hidden">Qty: </span>
+                                  {t.assigned_quantity}
                                 </Badge>
                               )}
                               {t.picked_quantity > 0 && (
-                                <Badge className="bg-green-100 text-green-800">
-                                  Picked Qty: {t.picked_quantity}
+                                <Badge className="bg-green-100 text-green-800 text-xs px-2 py-0.5">
+                                  <span className="hidden sm:inline">Picked Qty: </span>
+                                  <span className="sm:hidden">Picked: </span>
+                                  {t.picked_quantity}
                                 </Badge>
                               )}
                               {t.rejected_quantity && t.rejected_quantity > 0 && (
-                                <Badge className="bg-red-100 text-red-800" onClick={(e) => { e.stopPropagation(); openBatchRejectedDetails(t.id, t.full_name); }}>
-                                  Rejected Qty: {t.rejected_quantity}
+                                <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 cursor-pointer" onClick={(e) => { e.stopPropagation(); openBatchRejectedDetails(t.id, t.full_name); }}>
+                                  <span className="hidden sm:inline">Rejected Qty: </span>
+                                  <span className="sm:hidden">Rej: </span>
+                                  {t.rejected_quantity}
                                 </Badge>
                               )}
                             </div>
@@ -431,31 +440,31 @@ export default function PickerPage() {
                   </div>
 
                   {activeBatchId && (
-                    <div className="mt-6 space-y-3">
-                      <div className="text-sm font-medium">Orders for selected batch</div>
+                    <div className="mt-4 sm:mt-6 space-y-3">
+                      <div className="text-sm sm:text-base font-medium">Orders for selected batch</div>
                       {loadingBatchOrders ? (
-                        <p className="text-muted-foreground">Loading...</p>
+                        <p className="text-sm sm:text-base text-muted-foreground">Loading...</p>
                       ) : batchOrders.length === 0 ? (
-                        <p className="text-muted-foreground">No pending orders for this batch.</p>
+                        <p className="text-sm sm:text-base text-muted-foreground">No pending orders for this batch.</p>
                       ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
                           {batchOrders.map((o) => (
                             <Card key={o.assignment_id} className="border hover:shadow-md transition cursor-pointer" onClick={() => openPickerForAssignment(o)}>
-                              <CardContent className="pt-5">
-                                <div className="flex items-center justify-between">
-                                  <div>
-                                    <div className="font-semibold">Order #{o.order_number}</div>
-                                    <div className="text-xs text-muted-foreground">{o.customer_name}</div>
+                              <CardContent className="pt-4 sm:pt-5 p-4 sm:p-6">
+                                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-semibold text-sm sm:text-base truncate">Order #{o.order_number}</div>
+                                    <div className="text-xs text-muted-foreground truncate">{o.customer_name}</div>
                                   </div>
-                                  <div className="flex items-center gap-2">
-                                    <Badge className="bg-purple-100 text-purple-800">Qty: {o.total_quantity}</Badge>
-                                    <Badge className="bg-green-100 text-green-800">Picked: {o.picked_quantity}</Badge>
+                                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                                    <Badge className="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">Qty: {o.total_quantity}</Badge>
+                                    <Badge className="bg-green-100 text-green-800 text-xs px-2 py-0.5">Picked: {o.picked_quantity}</Badge>
                                     {o.rejected_quantity > 0 && (
-                                      <Badge className="bg-red-100 text-red-800" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rejected: {o.rejected_quantity}</Badge>
+                                      <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 cursor-pointer" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rej: {o.rejected_quantity}</Badge>
                                     )}
                                   </div>
                                 </div>
-                                <div className="mt-2 text-xs text-muted-foreground">
+                                <div className="mt-2 text-xs text-muted-foreground line-clamp-2">
                                   {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 ? (
                                     <span>Sizes: {o.size_distributions.map((sd: any) => `${sd.size_name}:${sd.quantity}`).join(', ')}</span>
                                   ) : (
@@ -478,33 +487,33 @@ export default function PickerPage() {
         </Tabs>
         {/* Orders list dialog per batch */}
         <Dialog open={ordersDialogOpen} onOpenChange={(v) => { if (!v) { setOrdersDialogOpen(false); fetchTailorsWithAssignedCounts(); } }}>
-          <DialogContent className="max-w-6xl">
+          <DialogContent className="max-w-[95vw] sm:max-w-2xl lg:max-w-4xl xl:max-w-6xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Orders for selected batch</DialogTitle>
+              <DialogTitle className="text-lg sm:text-xl">Orders for selected batch</DialogTitle>
             </DialogHeader>
             {loadingBatchOrders ? (
-              <p className="text-muted-foreground">Loading...</p>
+              <p className="text-sm sm:text-base text-muted-foreground">Loading...</p>
             ) : batchOrders.length === 0 ? (
-              <p className="text-muted-foreground">No pending orders for this batch.</p>
+              <p className="text-sm sm:text-base text-muted-foreground">No pending orders for this batch.</p>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                 {batchOrders.map((o) => (
                   <Card key={o.assignment_id} className="border hover:shadow-md transition cursor-pointer" onClick={() => { setOrdersDialogOpen(false); openPickerForAssignment(o); }}>
-                    <CardContent className="pt-5">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-semibold">Order #{o.order_number}</div>
-                          <div className="text-xs text-muted-foreground">{o.customer_name}</div>
+                    <CardContent className="pt-4 sm:pt-5 p-4 sm:p-6">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-sm sm:text-base truncate">Order #{o.order_number}</div>
+                          <div className="text-xs text-muted-foreground truncate">{o.customer_name}</div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <Badge className="bg-purple-100 text-purple-800">Qty: {o.total_quantity}</Badge>
-                          <Badge className="bg-green-100 text-green-800">Picked: {o.picked_quantity}</Badge>
+                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                          <Badge className="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">Qty: {o.total_quantity}</Badge>
+                          <Badge className="bg-green-100 text-green-800 text-xs px-2 py-0.5">Picked: {o.picked_quantity}</Badge>
                           {o.rejected_quantity > 0 && (
-                            <Badge className="bg-red-100 text-red-800" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rejected: {o.rejected_quantity}</Badge>
+                            <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 cursor-pointer" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rej: {o.rejected_quantity}</Badge>
                           )}
                         </div>
                       </div>
-                      <div className="mt-2 text-xs text-muted-foreground">
+                      <div className="mt-2 text-xs text-muted-foreground line-clamp-2">
                         {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 ? (
                           <span>Sizes: {o.size_distributions.map((sd: any) => `${sd.size_name}:${sd.quantity}`).join(', ')}</span>
                         ) : (
@@ -521,21 +530,21 @@ export default function PickerPage() {
 
         {/* Rejected sizes dialog */}
         <Dialog open={rejectedOpen} onOpenChange={(v) => { if (!v) setRejectedOpen(false); }}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-[95vw] sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>Rejected sizes for order {rejectedOrderNumber}</DialogTitle>
+              <DialogTitle className="text-base sm:text-lg">Rejected sizes for order {rejectedOrderNumber}</DialogTitle>
             </DialogHeader>
             {rejectedItems.length === 0 ? (
-              <p className="text-muted-foreground">No rejections recorded.</p>
+              <p className="text-sm sm:text-base text-muted-foreground">No rejections recorded.</p>
             ) : (
               <div className="space-y-2">
                 {rejectedItems.map((it, idx) => (
-                  <div key={idx} className="flex items-center justify-between border rounded p-2">
-                    <div>
+                  <div key={idx} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border rounded p-2 sm:p-3">
+                    <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium">{it.size_name}</div>
-                      {it.remarks && <div className="text-xs text-muted-foreground">{it.remarks}</div>}
+                      {it.remarks && <div className="text-xs text-muted-foreground mt-1">{it.remarks}</div>}
                     </div>
-                    <Badge className="bg-red-100 text-red-800">{it.rejected_quantity}</Badge>
+                    <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 self-start sm:self-auto">{it.rejected_quantity}</Badge>
                   </div>
                 ))}
               </div>
@@ -545,22 +554,22 @@ export default function PickerPage() {
 
         {/* Batch-level rejected details dialog */}
         <Dialog open={batchRejectedOpen} onOpenChange={(v) => { if (!v) setBatchRejectedOpen(false); }}>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-[95vw] sm:max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Rejected details for {batchRejectedTitle}</DialogTitle>
+              <DialogTitle className="text-base sm:text-lg">Rejected details for {batchRejectedTitle}</DialogTitle>
             </DialogHeader>
             {batchRejectedDetails.length === 0 ? (
-              <p className="text-muted-foreground">No rejections recorded.</p>
+              <p className="text-sm sm:text-base text-muted-foreground">No rejections recorded.</p>
             ) : (
               <div className="space-y-3">
                 {batchRejectedDetails.map((od, i) => (
-                  <div key={i} className="border rounded p-2">
-                    <div className="text-sm font-medium mb-1">Order #{od.order_number}</div>
-                    <div className="space-y-1">
+                  <div key={i} className="border rounded p-3 sm:p-4">
+                    <div className="text-sm font-medium mb-2">Order #{od.order_number}</div>
+                    <div className="space-y-2">
                       {od.sizes.map((s, j) => (
-                        <div key={j} className="flex items-center justify-between">
-                          <div className="text-xs text-muted-foreground">{s.size_name}{s.remarks ? ` • ${s.remarks}` : ''}</div>
-                          <Badge className="bg-red-100 text-red-800">{s.rejected_quantity}</Badge>
+                        <div key={j} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                          <div className="text-xs sm:text-sm text-muted-foreground min-w-0 flex-1">{s.size_name}{s.remarks ? ` • ${s.remarks}` : ''}</div>
+                          <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 self-start sm:self-auto">{s.rejected_quantity}</Badge>
                         </div>
                       ))}
                     </div>
