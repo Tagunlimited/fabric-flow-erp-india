@@ -42,17 +42,17 @@ export function DashboardChartsView({ data, chartTypes }: DashboardChartsViewPro
   const keyMetricsData = [
     {
       name: "Revenue",
-      value: Math.round(data.orders.reduce((sum: number, order: any) => sum + order.totalAmount, 0) / 100000),
-      fullValue: `₹${(data.orders.reduce((sum: number, order: any) => sum + order.totalAmount, 0) / 100000).toFixed(1)}L`,
+      value: Math.round((data.orders || []).reduce((sum: number, order: any) => sum + (order.total_amount || 0), 0) / 100000),
+      fullValue: `₹${((data.orders || []).reduce((sum: number, order: any) => sum + (order.total_amount || 0), 0) / 100000).toFixed(1)}L`,
       change: "N/A",
       color: "#10B981"
     },
     {
       name: "Active Orders",
-      value: data.orders.filter((order: any) => 
+      value: (data.orders || []).filter((order: any) => 
         ['pending', 'confirmed', 'in_production', 'quality_check'].includes(order.status)
       ).length,
-      fullValue: data.orders.filter((order: any) => 
+      fullValue: (data.orders || []).filter((order: any) => 
         ['pending', 'confirmed', 'in_production', 'quality_check'].includes(order.status)
       ).length.toString(),
       change: "N/A",
@@ -60,15 +60,45 @@ export function DashboardChartsView({ data, chartTypes }: DashboardChartsViewPro
     },
     {
       name: "Production Efficiency",
-      value: Math.round(data.productionOrders.reduce((sum: number, order: any) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1)),
-      fullValue: `${Math.round(data.productionOrders.reduce((sum: number, order: any) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%`,
+      value: Math.round((data.productionOrders || []).reduce((sum: number, order: any) => sum + (order.efficiency_percentage || 0), 0) / Math.max((data.productionOrders || []).length, 1)),
+      fullValue: `${Math.round((data.productionOrders || []).reduce((sum: number, order: any) => sum + (order.efficiency_percentage || 0), 0) / Math.max((data.productionOrders || []).length, 1))}%`,
       change: "N/A",
       color: "#F59E0B"
     },
     {
-      name: "Quality Pass Rate",
-      value: Math.round(((data.qualityChecks || []).filter((qc: any) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100),
-      fullValue: `${Math.round(((data.qualityChecks || []).filter((qc: any) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100)}%`,
+      name: "Quality Pass",
+      value: (() => {
+        const qualityChecks = data.qualityChecks || [];
+        const totalApproved = qualityChecks.reduce((sum: number, qc: any) => {
+          if (qc.approved_quantity != null && qc.approved_quantity > 0) {
+            return sum + Number(qc.approved_quantity);
+          }
+          if (qc.total_quantity && qc.pass_percentage != null && qc.pass_percentage > 0) {
+            return sum + Math.round((Number(qc.total_quantity) * Number(qc.pass_percentage)) / 100);
+          }
+          if ((qc.status === 'passed' || qc.status === 'approved') && qc.total_quantity) {
+            return sum + Number(qc.total_quantity);
+          }
+          return sum;
+        }, 0);
+        return totalApproved;
+      })(),
+      fullValue: (() => {
+        const qualityChecks = data.qualityChecks || [];
+        const totalApproved = qualityChecks.reduce((sum: number, qc: any) => {
+          if (qc.approved_quantity != null && qc.approved_quantity > 0) {
+            return sum + Number(qc.approved_quantity);
+          }
+          if (qc.total_quantity && qc.pass_percentage != null && qc.pass_percentage > 0) {
+            return sum + Math.round((Number(qc.total_quantity) * Number(qc.pass_percentage)) / 100);
+          }
+          if ((qc.status === 'passed' || qc.status === 'approved') && qc.total_quantity) {
+            return sum + Number(qc.total_quantity);
+          }
+          return sum;
+        }, 0);
+        return totalApproved > 0 ? totalApproved.toLocaleString() : '0';
+      })(),
       change: "N/A",
       color: "#8B5CF6"
     }
@@ -271,9 +301,11 @@ export function DashboardChartsView({ data, chartTypes }: DashboardChartsViewPro
                   {metric.fullValue}
                 </p>
                 <p className="text-sm text-muted-foreground">{metric.name}</p>
-                <Badge variant={metric.change.startsWith('+') ? 'default' : 'destructive'} className="mt-1">
-                  {metric.change}
-                </Badge>
+                {metric.change && metric.change !== 'N/A' && (
+                  <Badge variant={metric.change.startsWith('+') ? 'default' : 'destructive'} className="mt-1">
+                    {metric.change}
+                  </Badge>
+                )}
               </div>
             ))}
           </div>
