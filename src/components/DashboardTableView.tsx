@@ -30,7 +30,7 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
       metric: "Total Revenue",
       value: `₹${(data.summary.totalRevenue / 100000).toFixed(1)}L`,
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: DollarSign,
       color: "text-success"
     },
@@ -38,23 +38,38 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
       metric: "Active Orders",
       value: (data.summary.pendingOrders + data.summary.inProductionOrders).toString(),
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: ShoppingCart,
       color: "text-manufacturing"
     },
     {
       metric: "Production Efficiency",
-      value: `${Math.round(data.productionOrders.reduce((sum, order) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%`,
+      value: `${Math.round((data.productionOrders || []).reduce((sum: number, order: any) => sum + (order.efficiency_percentage || 0), 0) / Math.max((data.productionOrders || []).length, 1))}%`,
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: Factory,
       color: "text-warning"
     },
     {
-      metric: "Quality Pass Rate",
-      value: `${Math.round(((data.qualityChecks || []).filter((qc) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100)}%`,
+      metric: "Quality Pass",
+      value: (() => {
+        const qualityChecks = data.qualityChecks || [];
+        const totalApproved = qualityChecks.reduce((sum: number, qc: any) => {
+          if (qc.approved_quantity != null && qc.approved_quantity > 0) {
+            return sum + Number(qc.approved_quantity);
+          }
+          if (qc.total_quantity && qc.pass_percentage != null && qc.pass_percentage > 0) {
+            return sum + Math.round((Number(qc.total_quantity) * Number(qc.pass_percentage)) / 100);
+          }
+          if ((qc.status === 'passed' || qc.status === 'approved') && qc.total_quantity) {
+            return sum + Number(qc.total_quantity);
+          }
+          return sum;
+        }, 0);
+        return totalApproved > 0 ? totalApproved.toLocaleString() : '0';
+      })(),
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: CheckCircle,
       color: "text-quality"
     }
@@ -142,19 +157,23 @@ export function DashboardTableView({ data }: DashboardTableViewProps) {
                   </TableCell>
                   <TableCell className="font-bold text-lg">{metric.value}</TableCell>
                   <TableCell>
-                    <div className="flex items-center">
-                      {metric.trend === 'up' ? (
-                        <TrendingUp className="w-4 h-4 text-success mr-1" />
-                      ) : (
-                        <TrendingDown className="w-4 h-4 text-error mr-1" />
-                      )}
-                      <span className={cn(
-                        "font-medium",
-                        metric.trend === 'up' ? 'text-success' : 'text-error'
-                      )}>
-                        {metric.change}
-                      </span>
-                    </div>
+                    {metric.change && metric.change !== 'N/A' ? (
+                      <div className="flex items-center">
+                        {metric.trend === 'up' ? (
+                          <TrendingUp className="w-4 h-4 text-success mr-1" />
+                        ) : (
+                          <TrendingDown className="w-4 h-4 text-error mr-1" />
+                        )}
+                        <span className={cn(
+                          "font-medium",
+                          metric.trend === 'up' ? 'text-success' : 'text-error'
+                        )}>
+                          {metric.change}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">N/A</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Badge variant={metric.trend === 'up' ? 'default' : 'destructive'}>

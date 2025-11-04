@@ -30,7 +30,7 @@ import {
   ToggleLeft,
   ToggleRight
 } from "lucide-react";
-import { getDashboardData, getDepartmentCount, getRecentActivities, type DashboardData } from "@/lib/database";
+import { getDashboardData, getDepartmentCount, getRecentActivities, getQcStatusSummary, getCuttingPendingQuantities, getStitchingAssignedQuantities, type DashboardData } from "@/lib/database";
 import { cn } from "@/lib/utils";
 import { Link, useNavigate } from "react-router-dom";
 import { CalendarView } from "@/components/CalendarView";
@@ -70,7 +70,11 @@ export function EnhancedDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [departmentCount, setDepartmentCount] = useState<number>(0);
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
+  const [qcStatusSummary, setQcStatusSummary] = useState<{ totalApproved: number; totalPicked: number; totalRejected: number; passRate: number } | null>(null);
+  const [cuttingPendingQuantity, setCuttingPendingQuantity] = useState<number>(0);
+  const [stitchingAssignedQuantity, setStitchingAssignedQuantity] = useState<number>(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'dashboard' | 'calendar'>('dashboard');
   const [dashboardSettings, setDashboardSettings] = useState<DashboardSettingsType>({
     viewMode: 'cards',
@@ -121,19 +125,29 @@ export function EnhancedDashboard() {
       try {
         setLoading(true);
         console.log('Fetching dashboard data...');
-        const [dashboardData, deptCount, activities] = await Promise.all([
+        const [dashboardData, deptCount, activities, qcSummary, cuttingQty, stitchingQty] = await Promise.all([
           getDashboardData(),
           getDepartmentCount(),
-          getRecentActivities(10)
+          getRecentActivities(10),
+          getQcStatusSummary(),
+          getCuttingPendingQuantities(),
+          getStitchingAssignedQuantities()
         ]);
         console.log('Dashboard data received:', dashboardData);
         console.log('Department count received:', deptCount);
         console.log('Recent activities received:', activities);
+        console.log('QC Status Summary received:', qcSummary);
+        console.log('Cutting Pending Quantity:', cuttingQty);
+        console.log('Stitching Assigned Quantity:', stitchingQty);
         setData(dashboardData);
         setDepartmentCount(deptCount);
         setRecentActivities(activities);
-      } catch (error) {
+        setQcStatusSummary(qcSummary);
+        setCuttingPendingQuantity(cuttingQty);
+        setStitchingAssignedQuantity(stitchingQty);
+      } catch (error: any) {
         console.error('Error fetching dashboard data:', error);
+        setError(error?.message || 'Failed to load dashboard data');
       } finally {
         setLoading(false);
       }
@@ -142,7 +156,7 @@ export function EnhancedDashboard() {
     fetchDashboardData();
   }, []);
 
-  if (loading || !data) {
+  if (loading) {
     return (
       <div className="space-y-6 animate-pulse">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -158,12 +172,68 @@ export function EnhancedDashboard() {
     );
   }
 
+  if (error || !data) {
+    return (
+      <div className="space-y-6">
+        <Card className="p-8">
+          <div className="text-center">
+            <AlertTriangle className="w-12 h-12 mx-auto mb-4 text-error" />
+            <h2 className="text-2xl font-bold mb-2">Error Loading Dashboard</h2>
+            <p className="text-muted-foreground mb-4">
+              {error || 'Failed to load dashboard data. Please try refreshing the page.'}
+            </p>
+            <Button onClick={() => window.location.reload()} variant="outline">
+              Refresh Page
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  // Calculate production metrics
+  const productionOrders = data.productionOrders || [];
+  const orders = data.orders || [];
+  const qualityChecks = data.qualityChecks || [];
+  
+  // Count orders in production statuses (even if no production_order record exists)
+  const ordersInProductionStatuses = orders.filter((o: any) => 
+    ['in_production', 'under_cutting', 'under_stitching', 'under_qc'].includes(o.status)
+  );
+  
+  // Production Jobs: Count unique production orders + orders in production statuses
+  const productionOrderIds = new Set(productionOrders.map((po: any) => po.order_id).filter(Boolean));
+  const productionStatusOrderIds = new Set(ordersInProductionStatuses.map((o: any) => o.id).filter(Boolean));
+  // Combine both sets for unique count
+  const allProductionOrderIds = new Set([...productionOrderIds, ...productionStatusOrderIds]);
+  const totalProductionJobs = allProductionOrderIds.size;
+  
+  // Production Efficiency: Only calculate from production_orders that have efficiency_percentage set
+  const productionOrdersWithEfficiency = productionOrders.filter((po: any) => 
+    po.efficiency_percentage != null && po.efficiency_percentage > 0
+  );
+  const avgProductionEfficiency = productionOrdersWithEfficiency.length > 0
+    ? Math.round(productionOrdersWithEfficiency.reduce((sum: number, po: any) => 
+        sum + (po.efficiency_percentage || 0), 0) / productionOrdersWithEfficiency.length)
+    : 0;
+  
+  // Get QC data from qc_status_summary view
+  // Use totalApproved from qc_status_summary for total passed quantities
+  const totalApprovedQuantity = qcStatusSummary?.totalApproved || 0;
+  const qcPassRate = qcStatusSummary?.passRate || 0;
+  
+  // Total QC Checks count
+  const totalQcChecks = qualityChecks.length;
+  
+  // Quality Pass value: Show total approved quantity from qc_status_summary
+  const qualityPassValue = totalApprovedQuantity > 0 ? totalApprovedQuantity : (qualityChecks.length > 0 ? 0 : null);
+
   const keyMetrics: DashboardMetric[] = [
     {
       title: "Total Revenue",
       value: `₹${(data.summary.totalRevenue / 100000).toFixed(1)}L`,
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: DollarSign,
       color: "text-success"
     },
@@ -171,26 +241,34 @@ export function EnhancedDashboard() {
       title: "Active Orders",
       value: (data.summary.pendingOrders + data.summary.inProductionOrders).toString(),
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: ShoppingCart,
       color: "text-manufacturing"
     },
     {
       title: "Production Efficiency",
-      value: `${Math.round((data.productionOrders || []).reduce((sum, order) => sum + (order.efficiency_percentage || 0), 0) / Math.max((data.productionOrders || []).length, 1))}%`,
+      value: avgProductionEfficiency > 0 ? `${avgProductionEfficiency}%` : "N/A",
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: Factory,
       color: "text-warning"
     },
     {
-      title: "Quality Pass Rate",
-      value: `${Math.round(((data.qualityChecks || []).filter((qc) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100)}%`,
+      title: "QC Efficiency",
+      value: qcPassRate > 0 ? `${qcPassRate}%` : (totalQcChecks > 0 ? "0%" : "N/A"),
       change: "N/A",
-      trend: "neutral",
+      trend: "stable",
       icon: CheckCircle,
       color: "text-quality"
-    }
+    },
+    // {
+    //   title: "QC Pass Rate",
+    //   value: qcPassRate > 0 ? `${qcPassRate}%` : (totalQcChecks > 0 ? "0%" : "N/A"),
+    //   change: "N/A",
+    //   trend: "stable",
+    //   icon: Target,
+    //   color: "text-quality"
+    // }
   ];
 
   const quickStats: QuickStat[] = [
@@ -258,8 +336,8 @@ export function EnhancedDashboard() {
       color: "bg-warning",
       link: "/production",
       stats: [
-        { label: "In Production", value: data.productionOrders.length.toString() },
-        { label: "Avg Efficiency", value: `${Math.round(data.productionOrders.reduce((sum, order) => sum + (order.efficiency_percentage || 0), 0) / Math.max(data.productionOrders.length, 1))}%` }
+        { label: "In Production", value: totalProductionJobs.toString() },
+        { label: "Avg Efficiency", value: avgProductionEfficiency > 0 ? `${avgProductionEfficiency}%` : "N/A" }
       ]
     },
     {
@@ -269,8 +347,9 @@ export function EnhancedDashboard() {
       color: "bg-quality",
       link: "/quality",
       stats: [
-        { label: "QC Checks", value: (data.qualityChecks || []).length.toString() },
-        { label: "Pass Rate", value: `${Math.round(((data.qualityChecks || []).filter((qc) => qc.status === 'passed').length / Math.max((data.qualityChecks || []).length, 1)) * 100)}%` }
+        { label: "QC Checks", value: qualityPassValue != null ? qualityPassValue.toLocaleString() : "N/A"},
+        // { label: "Total Passed",  },
+        { label: "Pass Rate", value: qcPassRate > 0 ? `${qcPassRate}%` : (totalQcChecks > 0 ? "0%" : "N/A") }
       ]
     },
     {
@@ -291,8 +370,8 @@ export function EnhancedDashboard() {
       color: "bg-primary",
       link: "/dispatch",
       stats: [
-        { label: "Ready to Ship", value: data.orders.filter((o) => o.status === 'completed').length.toString() },
-        { label: "In Transit", value: data.dispatchOrders.length.toString() }
+        { label: "Ready to Ship", value: (data.orders || []).filter((o: any) => o.status === 'completed').length.toString() },
+        { label: "In Transit", value: (data.dispatchOrders || []).length.toString() }
       ]
     },
     {
@@ -320,7 +399,7 @@ export function EnhancedDashboard() {
   ];
 
   const recentOrders = (data.orders || [])
-    .sort((a, b) => new Date(b.order_date).getTime() - new Date(a.order_date).getTime())
+    .sort((a: any, b: any) => new Date(b.order_date || b.created_at).getTime() - new Date(a.order_date || a.created_at).getTime())
     .slice(0, 5);
 
   const getStatusColor = (status: string) => {
@@ -576,9 +655,9 @@ export function EnhancedDashboard() {
                           onClick={() => navigate(`/orders/${order.id}`)}
                         >
                           <div className="min-w-0 flex-1">
-                            <p className="font-semibold text-sm truncate">{order.orderNumber}</p>
+                            <p className="font-semibold text-sm truncate">{order.order_number || 'N/A'}</p>
                             <p className="text-xs text-muted-foreground truncate">
-                              {data.customers.find((c: any) => c.id === order.customerId)?.companyName}
+                              {order.customer?.company_name || data.customers.find((c: any) => c.id === order.customer_id)?.company_name || 'Unknown Customer'}
                             </p>
                           </div>
                           <div className="text-right ml-2">
@@ -611,19 +690,44 @@ export function EnhancedDashboard() {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {['cutting', 'stitching', 'quality_check'].map((stage) => {
-                        const stageOrders = (data.productionOrders || []).filter((order: any) => order.stage === stage);
-                        const percentage = Math.round((stageOrders.length / Math.max((data.productionOrders || []).length, 1)) * 100);
+                      {[
+                        { key: 'cutting', label: 'Cutting', status: 'under_cutting', quantity: cuttingPendingQuantity },
+                        { key: 'stitching', label: 'Stitching', status: 'under_stitching', quantity: stitchingAssignedQuantity },
+                        { key: 'quality_check', label: 'Quality Check', status: 'under_qc', quantity: qcStatusSummary?.totalApproved || 0 }
+                      ].map(({ key, label, status, quantity }) => {
+                        // Count orders by status AND production orders by stage (for percentage calculation)
+                        const stageOrdersByStatus = orders.filter((order: any) => order.status === status);
+                        const stageOrdersByProduction = productionOrders.filter((po: any) => po.stage === key);
+                        // Combine both - unique by order_id
+                        const stageOrderIds = new Set(stageOrdersByStatus.map((o: any) => o.id));
+                        stageOrdersByProduction.forEach((po: any) => {
+                          if (po.order_id) stageOrderIds.add(po.order_id);
+                        });
+                        const allStageOrdersCount = stageOrderIds.size;
+                        
+                        // Calculate percentage based on quantity (for display purposes)
+                        // Use a reasonable max value for percentage calculation (e.g., max of all quantities)
+                        const maxQuantity = Math.max(
+                          cuttingPendingQuantity,
+                          stitchingAssignedQuantity,
+                          qcStatusSummary?.totalApproved || 0,
+                          1 // Avoid division by zero
+                        );
+                        const percentage = maxQuantity > 0 
+                          ? Math.round((quantity / maxQuantity) * 100)
+                          : 0;
                         
                         return (
                           <div 
-                            key={stage} 
+                            key={key} 
                             className="cursor-pointer hover:bg-muted/50 p-2 rounded-lg transition-colors"
-                            onClick={() => navigate(`/production?stage=${stage}`)}
+                            onClick={() => navigate(`/production?stage=${key}`)}
                           >
                             <div className="flex justify-between items-center mb-1">
-                              <span className="text-sm font-medium capitalize">{stage.replace('_', ' ')}</span>
-                              <span className="text-xs text-muted-foreground">{stageOrders.length}</span>
+                              <span className="text-sm font-medium capitalize">{label}</span>
+                              <span className="text-xs text-muted-foreground font-medium">
+                                {quantity > 0 ? quantity.toLocaleString() : '0'}
+                              </span>
                             </div>
                             <Progress value={percentage} className="h-2" />
                           </div>
@@ -688,62 +792,7 @@ export function EnhancedDashboard() {
           )}
 
           {/* System Overview */}
-          {dashboardSettings.visibleWidgets.systemOverview && (
-            <Card className="shadow-erp-lg bg-gradient-to-r from-card to-card/80">
-              <CardHeader>
-                <CardTitle className="flex items-center justify-between">
-                  <div className="flex items-center">
-                    <Target className="w-6 h-6 mr-2" />
-                    System Overview
-                    <Badge className="ml-3 bg-success text-success-foreground text-lg px-3 py-1">
-                      {(data.summary.totalCustomers + data.summary.totalOrders + data.summary.totalProducts + data.summary.totalEmployees).toLocaleString()} Total Records
-                    </Badge>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Calendar className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">
-                      {new Date().toLocaleDateString()}
-                    </span>
-                  </div>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className={cn(
-                  "grid gap-4 text-center",
-                  dashboardSettings.compactMode ? "grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3" : "grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4"
-                )}>
-                  <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-accent", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalEmployees}</p>
-                    <p className="text-sm text-muted-foreground font-medium">System Users</p>
-                  </div>
-                  <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-manufacturing", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalCustomers}</p>
-                    <p className="text-sm text-muted-foreground font-medium">Customers</p>
-                  </div>
-                  <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-inventory", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalProducts}</p>
-                    <p className="text-sm text-muted-foreground font-medium">Products</p>
-                  </div>
-                  <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-primary", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalOrders}</p>
-                    <p className="text-sm text-muted-foreground font-medium">Total Orders</p>
-                  </div>
-                  <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-warning", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{(data.productionOrders || []).length}</p>
-                    <p className="text-sm text-muted-foreground font-medium">Production Jobs</p>
-                  </div>
-                  <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-quality", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{(data.qualityChecks || []).length}</p>
-                    <p className="text-sm text-muted-foreground font-medium">QC Checks</p>
-                  </div>
-                  <div className={cn("bg-gradient-subtle rounded-xl shadow-md hover:shadow-lg transition-shadow", dashboardSettings.compactMode ? "p-4" : "p-6")}>
-                    <p className={cn("font-bold text-success", dashboardSettings.compactMode ? "text-2xl" : "text-3xl")}>{data.summary.totalInventory}</p>
-                    <p className="text-sm text-muted-foreground font-medium">Inventory Items</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
+          
         </>
       )}
     </div>
