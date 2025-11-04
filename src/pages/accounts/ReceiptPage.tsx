@@ -52,6 +52,7 @@ export default function ReceiptPage() {
   const location = useLocation();
   const navState: any = location.state as any;
   const prefill: any = navState?.prefill;
+  const receiptId: string | undefined = navState?.receiptId;
   const initialTab: 'view' | 'create' = navState?.tab === 'create' ? 'create' : 'view';
 
   // Customer selection
@@ -764,6 +765,41 @@ export default function ReceiptPage() {
       console.error('Error refreshing order data:', error);
     }
   };
+
+  // Auto-open receipt if receiptId is provided in navigation state
+  // This runs after handleOpenReceipt is defined
+  useEffect(() => {
+    const openReceiptById = async () => {
+      if (!receiptId) return;
+      
+      try {
+        // Fetch the receipt by ID with all necessary fields
+        const { data: receipt, error } = await supabase
+          .from('receipts')
+          .select('*')
+          .eq('id', receiptId)
+          .single();
+        
+        if (error || !receipt) {
+          console.error('Error fetching receipt:', error);
+          toast.error('Receipt not found');
+          return;
+        }
+        
+        // Open the receipt using handleOpenReceipt
+        await handleOpenReceipt(receipt);
+      } catch (error) {
+        console.error('Error opening receipt:', error);
+        toast.error('Failed to open receipt');
+      }
+    };
+    
+    // Only run once when component mounts with receiptId
+    if (receiptId) {
+      openReceiptById();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <ErpLayout>
