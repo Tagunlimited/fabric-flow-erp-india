@@ -297,8 +297,8 @@ export function EnhancedDashboard() {
       link: "/inventory"
     },
     {
-      label: "Low Stock Alerts",
-      value: data.summary.lowStockItems,
+      label: "Out of Stock",
+      value: data.summary.outOfStockItems || 0,
       total: data.summary.totalInventory,
       color: "bg-error",
       icon: AlertTriangle,
@@ -360,7 +360,7 @@ export function EnhancedDashboard() {
       link: "/inventory",
       stats: [
         { label: "Items", value: data.summary.totalInventory.toString() },
-        { label: "Low Stock", value: data.summary.lowStockItems.toString() }
+        { label: "Out of Stock", value: (data.summary.outOfStockItems || 0).toString() }
       ]
     },
     {
@@ -370,8 +370,8 @@ export function EnhancedDashboard() {
       color: "bg-primary",
       link: "/dispatch",
       stats: [
-        { label: "Ready to Ship", value: (data.orders || []).filter((o: any) => o.status === 'completed').length.toString() },
-        { label: "In Transit", value: (data.dispatchOrders || []).length.toString() }
+        { label: "Ready to Ship", value: (data.summary.pendingDispatchOrders || 0).toString() },
+        { label: "Completed", value: (data.summary.completedDispatchOrders || 0).toString() }
       ]
     },
     {

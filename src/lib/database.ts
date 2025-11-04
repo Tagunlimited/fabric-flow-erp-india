@@ -40,8 +40,11 @@ export interface DashboardData {
     pendingOrders: number;
     inProductionOrders: number;
     completedOrders: number;
-    lowStockItems: number;
+    lowStockItems: number; // Deprecated: use outOfStockItems
+    outOfStockItems: number;
     totalInventory: number;
+    pendingDispatchOrders: number;
+    completedDispatchOrders: number;
   };
 }
 
@@ -834,8 +837,114 @@ export async function getDashboardData(): Promise<DashboardData> {
       order.status === 'under_qc'
     ).length;
     const completedOrders = orders.filter(order => order.status === 'completed').length;
-    // warehouse_inventory uses 'quantity' field, check if quantity is low (less than 100)
-    const lowStockItems = inventory.filter((item: any) => (item.quantity || 0) < 100).length; // Assuming 100 is low stock threshold
+    
+    // Calculate SKU-based inventory metrics using only product_master SKUs
+    // Step 1: Create a map of product_id -> SKU from product_master
+    const productIdToSkuMap = new Map<string, string>();
+    const allProductSkus = new Set<string>();
+    
+    products.forEach((product: any) => {
+      if (product.id && product.sku) {
+        productIdToSkuMap.set(product.id, product.sku);
+        allProductSkus.add(product.sku);
+      }
+    });
+    
+    // Step 2: Group inventory quantities by product SKU (only for PRODUCT type items)
+    const skuQuantities = new Map<string, number>();
+    
+    inventory.forEach((item: any) => {
+      // Only process PRODUCT type items
+      if (item.item_type === 'PRODUCT' && item.item_id) {
+        const productSku = productIdToSkuMap.get(item.item_id);
+        
+        if (productSku) {
+          const quantity = parseFloat(item.quantity || 0);
+          if (quantity > 0) {
+            const currentQty = skuQuantities.get(productSku) || 0;
+            skuQuantities.set(productSku, currentQty + quantity);
+          }
+        }
+      }
+    });
+    
+    // Step 3: Initialize all product SKUs with 0 quantity if they don't have inventory
+    allProductSkus.forEach((sku) => {
+      if (!skuQuantities.has(sku)) {
+        skuQuantities.set(sku, 0);
+      }
+    });
+    
+    // Total number of unique SKUs from product_master
+    const totalSKUs = allProductSkus.size;
+    
+    // Count SKUs with total quantity less than 10 (out of stock)
+    // Only count SKUs from product_master
+    const outOfStockSKUs = Array.from(skuQuantities.entries())
+      .filter(([sku, qty]) => allProductSkus.has(sku) && qty < 10).length;
+    
+    // Keep lowStockItems for backward compatibility (using old threshold < 100)
+    const lowStockItems = inventory.filter((item: any) => (item.quantity || 0) < 100).length;
+    
+    // Calculate dispatch order statistics
+    // Fetch readymade orders for dispatch calculations
+    let readymadeOrders: any[] = [];
+    try {
+      const { data: readymadeOrdersData, error: readymadeError } = await supabase
+        .from('orders')
+        .select(`
+          id,
+          status,
+          dispatch_orders (
+            id,
+            status
+          )
+        `)
+        .eq('order_type', 'readymade' as any)
+        .in('status', ['confirmed', 'ready_for_dispatch', 'dispatched', 'completed'] as any);
+      
+      if (readymadeError) {
+        console.error('Error fetching readymade orders for dispatch stats:', readymadeError);
+      } else {
+        readymadeOrders = readymadeOrdersData || [];
+      }
+    } catch (error) {
+      console.error('Error fetching readymade orders:', error);
+    }
+    
+    // Pending dispatch orders:
+    // 1. dispatch_orders with status 'pending' or 'packed'
+    // 2. Readymade orders that are confirmed/ready_for_dispatch and don't have a dispatch_order yet
+    const dispatchPending = dispatchOrders.filter((o: any) => 
+      ['pending', 'packed'].includes(o.status)
+    ).length;
+    
+    const readymadePending = readymadeOrders.filter((o: any) => {
+      const isConfirmed = ['confirmed', 'ready_for_dispatch'].includes(o.status);
+      const hasDispatchOrder = o.dispatch_orders && o.dispatch_orders.length > 0;
+      return isConfirmed && !hasDispatchOrder;
+    }).length;
+    
+    const pendingDispatchOrders = dispatchPending + readymadePending;
+    
+    // Completed dispatch orders:
+    // 1. dispatch_orders with status 'shipped' or 'delivered'
+    // 2. Readymade orders that have dispatch_orders with status 'shipped' or 'delivered'
+    const dispatchCompleted = dispatchOrders.filter((o: any) => 
+      ['shipped', 'delivered'].includes(o.status)
+    ).length;
+    
+    const readymadeCompleted = readymadeOrders.filter((o: any) => {
+      if (!o.dispatch_orders || o.dispatch_orders.length === 0) {
+        return false;
+      }
+      // Check if any dispatch_order has status 'shipped' or 'delivered'
+      return o.dispatch_orders.some((do_: any) => 
+        ['shipped', 'delivered'].includes(do_.status)
+      );
+    }).length;
+    
+    const completedDispatchOrders = dispatchCompleted + readymadeCompleted;
     
     // Debug logging
     console.log('Dashboard data counts:', {
@@ -858,7 +967,10 @@ export async function getDashboardData(): Promise<DashboardData> {
       inProductionOrders,
       completedOrders,
       lowStockItems,
-      totalInventory: inventory.length
+      outOfStockItems: outOfStockSKUs,
+      totalInventory: totalSKUs,
+      pendingDispatchOrders,
+      completedDispatchOrders
     };
 
     return {
@@ -903,7 +1015,10 @@ export async function getDashboardData(): Promise<DashboardData> {
         inProductionOrders: 0,
         completedOrders: 0,
         lowStockItems: 0,
-        totalInventory: 0
+        outOfStockItems: 0,
+        totalInventory: 0,
+        pendingDispatchOrders: 0,
+        completedDispatchOrders: 0
       }
     };
   }
