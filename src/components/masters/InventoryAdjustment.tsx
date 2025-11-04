@@ -21,8 +21,13 @@ import {
   History,
   Barcode,
   AlertCircle,
-  Package
+  Package,
+  Upload,
+  Download,
+  FileSpreadsheet
 } from 'lucide-react';
+import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 import {
   getAdjustmentReasons,
   createAdjustmentReason,
@@ -81,6 +86,13 @@ export function InventoryAdjustment() {
 
   // Save
   const [saving, setSaving] = useState(false);
+
+  // Bulk Upload
+  const [showBulkUpload, setShowBulkUpload] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkSuccess, setBulkSuccess] = useState<string | null>(null);
 
   // Load reasons on mount
   useEffect(() => {
@@ -488,6 +500,421 @@ export function InventoryAdjustment() {
     }
   };
 
+  // Download template for bulk upload
+  const handleDownloadTemplate = () => {
+    // Create Excel workbook with multiple sheets
+    const workbook = XLSX.utils.book_new();
+
+    // Sheet 1: Data Entry Template
+    const dataHeaders = ['SKU', 'Quantity', 'Adjustment Type', 'Reason Name', 'Bin IDs', 'Notes'];
+    const sampleRows = [
+      ['NC-APEX-L', '10', 'ADD', 'Sold on Amazon', 'BIN1,BIN2', 'First adjustment'],
+      ['NC-APEX-L', '5', 'REMOVE', 'Damaged Goods', 'BIN1', 'Damaged items removed'],
+      ['NC-DOT-WH-S', '20', 'REPLACE', 'Stock Correction', 'BIN2', 'Corrected stock count']
+    ];
+    
+    const dataSheet = [dataHeaders, ...sampleRows];
+    const wsData = XLSX.utils.aoa_to_sheet(dataSheet);
+    
+    // Style the header row
+    wsData['!cols'] = [
+      { wch: 15 }, // SKU
+      { wch: 10 }, // Quantity
+      { wch: 18 }, // Adjustment Type
+      { wch: 20 }, // Reason Name
+      { wch: 25 }, // Bin IDs
+      { wch: 30 }  // Notes
+    ];
+    
+    XLSX.utils.book_append_sheet(workbook, wsData, 'Data Entry');
+
+    // Sheet 2: Instructions
+    const instructions = [
+      ['INVENTORY ADJUSTMENT BULK UPLOAD - INSTRUCTIONS'],
+      [''],
+      ['GENERAL INFORMATION'],
+      ['This template allows you to adjust inventory for multiple products at once.'],
+      ['You can include the same SKU multiple times if adjusting different bins.'],
+      [''],
+      ['REQUIRED FIELDS'],
+      ['SKU', 'Product SKU code (must exist in product master)'],
+      ['Quantity', 'Adjustment quantity (must be greater than 0)'],
+      [''],
+      ['OPTIONAL FIELDS'],
+      ['Adjustment Type', 'ADD, REMOVE, or REPLACE (defaults to selected type in UI)'],
+      ['Reason Name', 'Reason for adjustment (will create custom reason if not found)'],
+      ['Bin IDs', 'Comma-separated bin IDs or codes (e.g., BIN1,BIN2)'],
+      ['Notes', 'Additional notes for this adjustment'],
+      [''],
+      ['ADJUSTMENT TYPES'],
+      ['ADD', 'Increases inventory by the specified quantity'],
+      ['REMOVE', 'Decreases inventory by the specified quantity (validates available stock)'],
+      ['REPLACE', 'Sets inventory to the specified quantity'],
+      [''],
+      ['BIN IDS'],
+      ['- If left empty, all available bins for the product will be selected'],
+      ['- You can specify multiple bins separated by commas'],
+      ['- Use bin codes (e.g., BIN1) or bin IDs'],
+      ['- Same SKU can appear in multiple rows with different bin combinations'],
+      [''],
+      ['VALIDATION RULES'],
+      ['- SKU must exist in product master'],
+      ['- Quantity must be greater than 0'],
+      ['- For REMOVE: Quantity cannot exceed available stock'],
+      ['- Bin IDs must be valid for the product'],
+      ['- Duplicate rows (same SKU + same bins) are not allowed'],
+      [''],
+      ['EXAMPLES'],
+      ['Row 1:', 'NC-APEX-L, 10, ADD, Sold on Amazon, BIN1, First sale'],
+      ['Row 2:', 'NC-APEX-L, 5, REMOVE, Damaged, BIN2, Damaged items'],
+      ['Row 3:', 'NC-DOT-WH-S, 20, REPLACE, Stock Correction, BIN1,BIN2, Corrected count']
+    ];
+    
+    const wsInstructions = XLSX.utils.aoa_to_sheet(instructions);
+    wsInstructions['!cols'] = [{ wch: 80 }];
+    XLSX.utils.book_append_sheet(workbook, wsInstructions, 'Instructions');
+
+    // Sheet 3: Allowed Values
+    const allowedValues = [
+      ['ALLOWED VALUES AND ENUMS'],
+      [''],
+      ['ADJUSTMENT TYPE'],
+      ['Value', 'Description'],
+      ['ADD', 'Add inventory - increases stock'],
+      ['REMOVE', 'Remove inventory - decreases stock'],
+      ['REPLACE', 'Replace inventory - sets to specific quantity'],
+      [''],
+      ['COMMON REASON NAMES'],
+      ['Sold on Amazon', 'Items sold through Amazon'],
+      ['Sold on Website', 'Items sold through company website'],
+      ['Damaged Goods', 'Items damaged and removed'],
+      ['Expired', 'Items expired and removed'],
+      ['Stock Correction', 'Correction to inventory count'],
+      ['Returned', 'Items returned by customers'],
+      ['Lost', 'Items lost in warehouse'],
+      ['Found', 'Items found in warehouse'],
+      ['Theft', 'Items stolen'],
+      ['Internal Use', 'Items used internally'],
+      [''],
+      ['BIN ID FORMAT'],
+      ['Format', 'Example', 'Description'],
+      ['Single Bin', 'BIN1', 'Adjust one specific bin'],
+      ['Multiple Bins', 'BIN1,BIN2,BIN3', 'Comma-separated list of bins'],
+      ['Bin Code', 'BIN1', 'Use bin code (recommended)'],
+      ['Bin UUID', 'uuid-here', 'Use bin UUID if known'],
+      [''],
+      ['QUANTITY FORMAT'],
+      ['Type', 'Example', 'Description'],
+      ['Integer', '10', 'Whole numbers (recommended)'],
+      ['Decimal', '10.5', 'Decimal values allowed'],
+      ['Positive Only', '10', 'Must be greater than 0'],
+      [''],
+      ['NOTES'],
+      ['- Maximum 1000 characters recommended'],
+      ['- Multiple notes from different rows will be combined'],
+      ['- Special characters are allowed']
+    ];
+    
+    const wsValues = XLSX.utils.aoa_to_sheet(allowedValues);
+    wsValues['!cols'] = [
+      { wch: 25 }, // Column 1
+      { wch: 30 }, // Column 2
+      { wch: 50 }  // Column 3
+    ];
+    XLSX.utils.book_append_sheet(workbook, wsValues, 'Allowed Values');
+
+    // Download as Excel file
+    XLSX.writeFile(workbook, 'inventory_adjustment_template.xlsx');
+    
+    // Also create a CSV version for users who prefer CSV
+    const csvHeaders = ['SKU', 'Quantity', 'Adjustment Type', 'Reason Name', 'Bin IDs', 'Notes'];
+    const csvSampleRows = [
+      ['NC-APEX-L', '10', 'ADD', 'Sold on Amazon', 'BIN1,BIN2', 'First adjustment'],
+      ['NC-APEX-L', '5', 'REMOVE', 'Damaged Goods', 'BIN1', 'Damaged items removed'],
+      ['NC-DOT-WH-S', '20', 'REPLACE', 'Stock Correction', 'BIN2', 'Corrected stock count']
+    ];
+    
+    const csvContent = [
+      csvHeaders.join(','),
+      ...csvSampleRows.map(row => row.join(',')),
+      '',
+      '=== INSTRUCTIONS ===',
+      '',
+      'REQUIRED FIELDS:',
+      'SKU - Product SKU code (must exist in product master)',
+      'Quantity - Adjustment quantity (must be greater than 0)',
+      '',
+      'OPTIONAL FIELDS:',
+      'Adjustment Type - ADD, REMOVE, or REPLACE (defaults to selected type in UI)',
+      'Reason Name - Reason for adjustment',
+      'Bin IDs - Comma-separated bin IDs or codes (e.g., BIN1,BIN2)',
+      'Notes - Additional notes',
+      '',
+      'IMPORTANT:',
+      '- Same SKU can appear in multiple rows with different bins',
+      '- Duplicate rows (same SKU + same bins) are not allowed',
+      '- For REMOVE: Quantity cannot exceed available stock',
+      '- If Bin IDs is empty, all available bins will be selected',
+      '',
+      'ALLOWED VALUES:',
+      'Adjustment Type: ADD, REMOVE, REPLACE',
+      'Common Reasons: Sold on Amazon, Damaged Goods, Stock Correction, etc.',
+      'Bin IDs: Use bin codes (BIN1, BIN2) or comma-separated for multiple bins'
+    ].join('\n');
+
+    // Create a download link for CSV as well
+    const csvBlob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const csvLink = document.createElement('a');
+    const csvUrl = URL.createObjectURL(csvBlob);
+    csvLink.setAttribute('href', csvUrl);
+    csvLink.setAttribute('download', 'inventory_adjustment_template.csv');
+    csvLink.style.visibility = 'hidden';
+    document.body.appendChild(csvLink);
+    csvLink.click();
+    document.body.removeChild(csvLink);
+  };
+
+  // Handle bulk upload
+  const handleBulkUpload = async () => {
+    if (!bulkFile) {
+      setBulkError('Please select a file');
+      return;
+    }
+
+    setBulkLoading(true);
+    setBulkError(null);
+    setBulkSuccess(null);
+
+    try {
+      const fileExtension = bulkFile.name.split('.').pop()?.toLowerCase();
+      let rows: any[] = [];
+
+      if (fileExtension === 'csv') {
+        const text = await bulkFile.text();
+        const result = Papa.parse(text, {
+          header: true,
+          skipEmptyLines: true,
+          transformHeader: (header) => header.trim()
+        });
+        rows = result.data.filter((row: any) =>
+          Object.values(row).some(v => v !== undefined && v !== null && String(v).trim() !== "")
+        );
+      } else if (fileExtension === 'xlsx' || fileExtension === 'xls') {
+        const arrayBuffer = await bulkFile.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        rows = XLSX.utils.sheet_to_json(worksheet, { raw: false });
+      } else {
+        throw new Error('Unsupported file format. Please upload a CSV or Excel file (.csv, .xlsx, .xls)');
+      }
+
+      if (!rows.length) {
+        throw new Error('No valid rows found in file');
+      }
+
+      // Process each row and add products to items
+      const processedItems: AdjustmentItem[] = [];
+      const errors: string[] = [];
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const sku = row.SKU?.toString().trim();
+        const quantity = parseFloat(row.Quantity?.toString().replace(/[^0-9.-]/g, '') || '0');
+        const rowAdjustmentType = (row['Adjustment Type']?.toString().trim().toUpperCase() || adjustmentType) as 'ADD' | 'REMOVE' | 'REPLACE';
+        const reasonName = row['Reason Name']?.toString().trim();
+        const binIdsStr = row['Bin IDs']?.toString().trim();
+        const rowNotes = row.Notes?.toString().trim();
+
+        if (!sku) {
+          errors.push(`Row ${i + 2}: SKU is required`);
+          continue;
+        }
+
+        if (!quantity || quantity <= 0) {
+          errors.push(`Row ${i + 2}: Quantity must be greater than 0`);
+          continue;
+        }
+
+        try {
+          // Get product by SKU
+          const product = await getProductBySKU(sku);
+          if (!product) {
+            errors.push(`Row ${i + 2}: Product with SKU "${sku}" not found`);
+            continue;
+          }
+
+          // Get current stock
+          let currentStock = product.current_stock || 0;
+          try {
+            currentStock = await getProductStock(product.id);
+          } catch (error) {
+            console.error('Error fetching stock:', error);
+          }
+
+          // Fetch bins for this product FIRST (before we try to use them)
+          let bins: BinInfo[] = [];
+          try {
+            bins = await getBinsForProduct(product.id, product.sku || '');
+          } catch (error) {
+            console.error('Error fetching bins:', error);
+          }
+
+          // Allow same SKU in multiple rows if bins are different
+          // Check if this exact combination (product + bins) already exists
+          const selectedBinIdsSet = new Set<string>();
+          if (binIdsStr) {
+            const binIdList = binIdsStr.split(',').map(id => id.trim()).filter(Boolean);
+            for (const binId of binIdList) {
+              const bin = bins.find(b => b.bin_id === binId || b.bin_code === binId);
+              if (bin) {
+                selectedBinIdsSet.add(bin.bin_id);
+              }
+            }
+          } else {
+            // If no bin IDs specified, select all bins
+            if (bins.length > 0) {
+              bins.forEach(bin => selectedBinIdsSet.add(bin.bin_id));
+            }
+          }
+
+          // Check if this exact product + bin combination already exists in processed items
+          const binIdsArray = Array.from(selectedBinIdsSet).sort().join(',');
+          const existingIndex = processedItems.findIndex(item => {
+            if (item.product_id !== product.id) return false;
+            const itemBinIdsArray = Array.from(item.selected_bin_ids || new Set()).sort().join(',');
+            return itemBinIdsArray === binIdsArray;
+          });
+          
+          if (existingIndex >= 0) {
+            errors.push(`Row ${i + 2}: Product "${sku}" with the same bin combination already added`);
+            continue;
+          }
+
+          // Calculate quantities based on adjustment type
+          let adjustmentQty = quantity;
+          let afterQty = currentStock;
+          let replaceQty: number | undefined;
+
+          if (rowAdjustmentType === 'ADD') {
+            afterQty = currentStock + adjustmentQty;
+          } else if (rowAdjustmentType === 'REMOVE') {
+            if (currentStock < adjustmentQty) {
+              errors.push(`Row ${i + 2}: Insufficient stock for "${sku}". Available: ${currentStock}`);
+              continue;
+            }
+            afterQty = currentStock - adjustmentQty;
+          } else if (rowAdjustmentType === 'REPLACE') {
+            replaceQty = adjustmentQty;
+            afterQty = adjustmentQty;
+            adjustmentQty = Math.abs(adjustmentQty - currentStock);
+          }
+
+          // Set reason if provided
+          if (reasonName) {
+            const matchingReason = reasons.find(r => r.reason_name.toLowerCase() === reasonName.toLowerCase());
+            if (matchingReason) {
+              setReasonId(matchingReason.id);
+            } else {
+              setCustomReason(reasonName);
+              setReasonId('');
+            }
+          }
+
+          // Set notes if provided
+          if (rowNotes) {
+            setNotes(prev => prev ? `${prev}\n${rowNotes}` : rowNotes);
+          }
+
+          // Use the bin IDs we already parsed above
+          const selectedBinIds = selectedBinIdsSet;
+          
+          // Validate bin IDs if explicitly provided
+          if (binIdsStr) {
+            const binIdList = binIdsStr.split(',').map(id => id.trim()).filter(Boolean);
+            const invalidBins: string[] = [];
+            for (const binId of binIdList) {
+              const bin = bins.find(b => b.bin_id === binId || b.bin_code === binId);
+              if (!bin) {
+                invalidBins.push(binId);
+              }
+            }
+            if (invalidBins.length > 0) {
+              errors.push(`Row ${i + 2}: Invalid bin IDs for "${sku}": ${invalidBins.join(', ')}`);
+              continue;
+            }
+          } else {
+            // If no bin IDs specified, select all bins
+            if (bins.length > 0) {
+              bins.forEach(bin => selectedBinIds.add(bin.bin_id));
+            } else {
+              errors.push(`Row ${i + 2}: No bins found for product "${sku}". Please specify bin IDs.`);
+              continue;
+            }
+          }
+
+          const newItem: AdjustmentItem = {
+            product_id: product.id,
+            sku: product.sku || sku,
+            product_name: product.name || product.sku || sku,
+            product_class: product.class,
+            product_color: product.color,
+            product_size: product.size,
+            product_category: product.category,
+            product_brand: product.brand,
+            quantity_before: currentStock,
+            adjustment_quantity: adjustmentQty,
+            quantity_after: afterQty,
+            replace_quantity: replaceQty,
+            unit: 'pcs',
+            bins: bins,
+            bin_adjustments: [],
+            selected_bin_ids: selectedBinIds
+          };
+
+          processedItems.push(newItem);
+        } catch (error: any) {
+          errors.push(`Row ${i + 2}: ${error.message || 'Error processing row'}`);
+        }
+      }
+
+      if (errors.length > 0 && processedItems.length === 0) {
+        throw new Error(`All rows failed:\n${errors.join('\n')}`);
+      }
+
+      if (processedItems.length === 0) {
+        throw new Error('No valid items to process');
+      }
+
+      // Add processed items to the items list
+      setItems(prev => [...prev, ...processedItems]);
+
+      // Set adjustment type if all rows use the same type
+      const uniqueTypes = new Set(rows.map(r => r['Adjustment Type']?.toString().trim().toUpperCase() || adjustmentType));
+      if (uniqueTypes.size === 1) {
+        setAdjustmentType(Array.from(uniqueTypes)[0] as 'ADD' | 'REMOVE' | 'REPLACE');
+      }
+
+      setBulkSuccess(`Successfully processed ${processedItems.length} item(s)${errors.length > 0 ? `. ${errors.length} error(s) occurred.` : ''}`);
+      if (errors.length > 0) {
+        setBulkError(errors.slice(0, 10).join('\n') + (errors.length > 10 ? `\n... and ${errors.length - 10} more errors` : ''));
+      }
+
+      // Close dialog after a delay
+      setTimeout(() => {
+        setShowBulkUpload(false);
+        setBulkFile(null);
+        setBulkError(null);
+        setBulkSuccess(null);
+      }, errors.length > 0 ? 5000 : 2000);
+    } catch (error: any) {
+      console.error('Bulk upload error:', error);
+      setBulkError(error.message || 'Failed to process bulk upload');
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -496,16 +923,25 @@ export function InventoryAdjustment() {
           <h2 className="text-2xl font-bold">Inventory Adjustment</h2>
           <p className="text-muted-foreground">Adjust product inventory quantities with full audit trail</p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => {
-            setShowHistory(true);
-            loadHistory();
-          }}
-        >
-          <History className="w-4 h-4 mr-2" />
-          View History
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setShowBulkUpload(true)}
+          >
+            <Upload className="w-4 h-4 mr-2" />
+            Bulk Upload
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setShowHistory(true);
+              loadHistory();
+            }}
+          >
+            <History className="w-4 h-4 mr-2" />
+            View History
+          </Button>
+        </div>
       </div>
 
       {/* Adjustment Type */}
@@ -940,6 +1376,109 @@ export function InventoryAdjustment() {
               </Button>
               <Button onClick={handleCreateReason} disabled={reasonLoading || !newReasonName.trim()}>
                 {reasonLoading ? 'Creating...' : 'Create Reason'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Upload Dialog */}
+      <Dialog open={showBulkUpload} onOpenChange={setShowBulkUpload}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Bulk Upload Inventory Adjustment</DialogTitle>
+            <DialogDescription>
+              Upload a CSV or Excel file to adjust multiple products at once
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="bulk-file">Select File (CSV or Excel)</Label>
+              <div className="flex gap-2 mt-2">
+                <Input
+                  id="bulk-file"
+                  type="file"
+                  accept=".csv,.xlsx,.xls"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setBulkFile(file);
+                      setBulkError(null);
+                      setBulkSuccess(null);
+                    }
+                  }}
+                  className="flex-1"
+                />
+                <Button
+                  variant="outline"
+                  onClick={handleDownloadTemplate}
+                  type="button"
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Template
+                </Button>
+              </div>
+              {bulkFile && (
+                <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>{bulkFile.name}</span>
+                  <span className="text-xs">({(bulkFile.size / 1024).toFixed(2)} KB)</span>
+                </div>
+              )}
+            </div>
+
+            {bulkSuccess && (
+              <div className="p-3 bg-green-50 border border-green-200 rounded-md text-sm text-green-800">
+                {bulkSuccess}
+              </div>
+            )}
+
+            {bulkError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-800 whitespace-pre-wrap max-h-60 overflow-y-auto">
+                {bulkError}
+              </div>
+            )}
+
+            <div className="bg-muted/50 p-4 rounded-md text-sm space-y-2">
+              <p className="font-semibold">File Format:</p>
+              <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                <li><strong>SKU</strong> (required) - Product SKU code</li>
+                <li><strong>Quantity</strong> (required) - Adjustment quantity</li>
+                <li><strong>Adjustment Type</strong> (optional) - ADD, REMOVE, or REPLACE (defaults to selected type)</li>
+                <li><strong>Reason Name</strong> (optional) - Reason for adjustment</li>
+                <li><strong>Bin IDs</strong> (optional) - Comma-separated bin IDs or codes</li>
+                <li><strong>Notes</strong> (optional) - Additional notes</li>
+              </ul>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowBulkUpload(false);
+                  setBulkFile(null);
+                  setBulkError(null);
+                  setBulkSuccess(null);
+                }}
+                disabled={bulkLoading}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleBulkUpload}
+                disabled={bulkLoading || !bulkFile}
+              >
+                {bulkLoading ? (
+                  <>
+                    <Package className="w-4 h-4 mr-2 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4 mr-2" />
+                    Upload & Process
+                  </>
+                )}
               </Button>
             </div>
           </div>

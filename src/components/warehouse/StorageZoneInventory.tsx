@@ -78,16 +78,94 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
         query = query.eq('item_type', itemType);
       }
       
-      const { data, error } = await query.order('moved_to_storage_date', { ascending: false });
+      const { data, error } = await query
+        .order('moved_to_storage_date', { ascending: false })
+        .order('bin_id', { ascending: true });
 
       if (error) throw error;
-      const filtered = ((data as any) || []).filter((i: any) => i?.bin?.location_type === 'STORAGE');
       
-      // Consolidate duplicate items before displaying
-      const consolidated = consolidateInventory(filtered as WarehouseInventory[]);
-      setInventory(consolidated);
+      // Debug: Log raw data from DB
+      console.log('🔍 [StorageZone] Raw data from DB:', data?.length || 0);
+      
+      const filtered = ((data as any) || []).filter((i: any) => {
+        const isStorage = i?.bin?.location_type === 'STORAGE';
+        if (!isStorage && itemType === 'PRODUCT') {
+          console.warn('⚠️ [StorageZone] Excluded non-storage bin:', i.bin?.bin_code, 'location_type:', i.bin?.location_type);
+        }
+        return isStorage;
+      });
+      
+      // Debug: Log after bin filter
+      console.log('🔍 [StorageZone] After bin filter:', filtered.length);
+      
+      // Fetch product_master data separately if item_type is PRODUCT
+      let productMap = new Map<string, any>();
+      if (itemType === 'PRODUCT') {
+        const itemIds = filtered
+          .map((i: any) => i.item_id)
+          .filter((id: any) => id) as string[];
+        
+        if (itemIds.length > 0) {
+          const { data: productsData, error: productsError } = await supabase
+            .from('product_master')
+            .select('id, sku, class, size, name, brand, category, main_image, image_url, image1, image2, images')
+            .in('id', itemIds);
+          
+          if (!productsError && productsData) {
+            productsData.forEach((product: any) => {
+              productMap.set(product.id, product);
+            });
+          }
+        }
+      }
+      
+      // Merge product data into inventory items
+      const inventoryWithProducts = filtered.map((item: any) => {
+        if (itemType === 'PRODUCT' && item.item_id && productMap.has(item.item_id)) {
+          return {
+            ...item,
+            product: productMap.get(item.item_id)
+          };
+        }
+        return item;
+      });
+      
+      // Debug: Log after product merge
+      console.log('🔍 [StorageZone] After product merge:', inventoryWithProducts.length);
+      
+      // Debug: Group inventory by item_id for PRODUCT type to verify all bins
+      if (itemType === 'PRODUCT') {
+        const groupedByItemId = inventoryWithProducts.reduce((acc: any, item: any) => {
+          const key = item.item_id;
+          if (!acc[key]) acc[key] = [];
+          acc[key].push({
+            bin: item.bin?.bin_code,
+            quantity: item.quantity,
+            bin_id: item.bin_id,
+            inventory_id: item.id
+          });
+          return acc;
+        }, {});
+        console.log('📦 [StorageZone] Inventory grouped by item_id:', groupedByItemId);
+      }
+      
+      // For PRODUCT type, don't consolidate - show separate rows for each bin
+      // For other types, consolidate as before
+      let processedInventory;
+      if (itemType === 'PRODUCT') {
+        // Don't consolidate - show all rows separately
+        processedInventory = inventoryWithProducts as WarehouseInventory[];
+      } else {
+        // Consolidate duplicate items before displaying
+        processedInventory = consolidateInventory(inventoryWithProducts as WarehouseInventory[]);
+      }
+      
+      // Debug: Log final processed inventory
+      console.log('🔍 [StorageZone] Final inventory:', processedInventory.length);
+      
+      setInventory(processedInventory);
 
-      const summaries = createBinSummaries(consolidated);
+      const summaries = createBinSummaries(processedInventory);
       setBinSummaries(summaries);
     } catch (error) {
       console.error('Error loading storage inventory:', error);
@@ -319,13 +397,13 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
               <TableHeader>
                 <TableRow>
                   <TableHead>Image</TableHead>
-                  <TableHead>Item Details</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Color</TableHead>
-                  <TableHead>Quantity</TableHead>
-                  <TableHead>Bin Location</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Moved To Storage</TableHead>
+                  <TableHead>SKU</TableHead>
+                  <TableHead>Class</TableHead>
+                  <TableHead>Size</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Brand</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Bin & Inventory</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -333,68 +411,80 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 {filteredInventory.map((item) => {
                   const statusConfig = getStatusConfig(item.status);
                   const itemTypeConfig = getItemTypeConfig(item.item_type);
+                  
+                  // Get product details from product_master if available
+                  const product = (item as any).product;
+                  const productImage = product?.main_image || product?.image_url || product?.image1 || item.grn_item?.item_image_url;
+                  const productSku = product?.sku || item.item_code;
+                  const productClass = product?.class || '-';
+                  const productSize = product?.size || '-';
+                  const productName = product?.name || item.item_name;
+                  const productBrand = product?.brand || '-';
+                  const productCategory = product?.category || '-';
+                  
                   return (
-                    <TableRow key={item.id}>
+                    <TableRow key={`${item.id}-${item.bin_id}`}>
                       <TableCell>
-                        {item.grn_item?.item_image_url ? (
+                        {productImage ? (
                           <img
-                            src={item.grn_item.item_image_url}
-                            alt={item.item_name}
-                            className="w-12 h-12 object-cover rounded border"
+                            src={productImage}
+                            alt={productName}
+                            className="w-16 h-16 object-cover rounded border"
                             onError={(e) => { 
                               // Show placeholder if image fails to load
                               (e.currentTarget as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yNCAzNkMzMC42Mjc0IDM2IDM2IDMwLjYyNzQgMzYgMjRDMzYgMTcuMzcyNiAzMC42Mjc0IDEyIDI0IDEyQzE3LjM3MjYgMTIgMTIgMTcuMzcyNiAxMiAyNEMxMiAzMC42Mjc0IDE3LjM3MjYgMzYgMjQgMzZaIiBmaWxsPSIjOUNBM0FGIi8+CjxwYXRoIGQ9Ik0yNCAyOEMyNi4yMDkxIDI4IDI4IDI2LjIwOTEgMjggMjRDMjggMjEuNzkwOSAyNi4yMDkxIDIwIDI0IDIwQzIxLjc5MDkgMjAgMjAgMjEuNzkwOSAyMCAyNEMyMCAyNi4yMDkxIDIxLjc5MDkgMjggMjQgMjhaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K';
                             }}
                           />
                         ) : (
-                          <div className="w-12 h-12 bg-gray-100 rounded border flex items-center justify-center">
+                          <div className="w-16 h-16 bg-gray-100 rounded border flex items-center justify-center">
                             <Package className="w-6 h-6 text-gray-400" />
                           </div>
                         )}
                       </TableCell>
                       <TableCell>
+                        <span className="font-mono font-medium text-sm">{productSku || '-'}</span>
+                      </TableCell>
+                      <TableCell>
+                        {productClass && productClass !== '-' ? (
+                          <Badge variant="secondary">{productClass}</Badge>
+                        ) : (
+                          '-'
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {productSize && productSize !== '-' ? (
+                          <Badge variant="outline">{productSize}</Badge>
+                        ) : (
+                          '-'
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-medium">{productName || '-'}</div>
+                      </TableCell>
+                      <TableCell>
+                        {productBrand && productBrand !== '-' ? productBrand : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {productCategory && productCategory !== '-' ? (
+                          <Badge variant="outline">{productCategory}</Badge>
+                        ) : (
+                          '-'
+                        )}
+                      </TableCell>
+                      <TableCell>
                         <div>
-                          <p className="font-medium">{item.item_name}</p>
-                          {/* <p className="text-sm text-muted-foreground">{item.item_code}</p> */}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={`${itemTypeConfig.bgColor} ${itemTypeConfig.color}`}>
-                          {itemTypeConfig.label}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{item.grn_item?.item_color || item.grn_item?.fabric_color || '-'}</span>
-                          {(item.grn_item?.item_color || item.grn_item?.fabric_color) && (
-                            <div 
-                              className="w-4 h-4 rounded-full border border-gray-300"
-                              style={{ backgroundColor: (item.grn_item?.item_color || item.grn_item?.fabric_color || '').toLowerCase() }}
-                              title={item.grn_item?.item_color || item.grn_item?.fabric_color || ''}
-                            />
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="font-medium">{item.quantity} {item.unit}</div>
-                      </TableCell>
-                      <TableCell>
-                        <div>
-                          <p className="font-medium">{item.bin?.bin_code}</p>
-                          <p className="text-sm text-muted-foreground">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="font-medium text-sm">{item.bin?.bin_code}</p>
+                            <Badge variant="outline" className="text-xs">
+                              {item.quantity} {item.unit}
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
                             {item.bin?.rack?.floor?.warehouse?.name} &gt; 
                             Floor {item.bin?.rack?.floor?.floor_number} &gt; 
                             {item.bin?.rack?.rack_code}
                           </p>
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={`${statusConfig.bgColor} ${statusConfig.color}`}>
-                          {statusConfig.label}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <p className="text-sm">{item.moved_to_storage_date ? new Date(item.moved_to_storage_date).toLocaleString() : '-'}</p>
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-2">
