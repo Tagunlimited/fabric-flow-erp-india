@@ -24,11 +24,13 @@ import { InventoryLogsModal } from './InventoryLogsModal';
 interface ReceivingZoneInventoryProps {
   onTransferItem?: (inventory: WarehouseInventory) => void;
   onViewDetails?: (inventory: WarehouseInventory) => void;
+  itemType?: 'FABRIC' | 'ITEM' | 'PRODUCT'; // Optional filter for item type
 }
 
 export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
   onTransferItem,
-  onViewDetails
+  onViewDetails,
+  itemType
 }) => {
   const [inventory, setInventory] = useState<WarehouseInventory[]>([]);
   const [binSummaries, setBinSummaries] = useState<BinInventorySummary[]>([]);
@@ -45,7 +47,7 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
       setLoading(true);
       
       // Get all inventory in receiving zone bins
-      const { data, error } = await supabase
+      let query = supabase
         .from('warehouse_inventory')
         .select(`
           *,
@@ -87,8 +89,14 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
             inspection_notes
           )
         `)
-        .eq('status', 'RECEIVED' as any)
-        .order('received_date', { ascending: false });
+        .eq('status', 'RECEIVED' as any);
+      
+      // Filter by item_type if provided
+      if (itemType) {
+        query = query.eq('item_type', itemType);
+      }
+      
+      const { data, error } = await query.order('received_date', { ascending: false });
 
       if (error) throw error;
       

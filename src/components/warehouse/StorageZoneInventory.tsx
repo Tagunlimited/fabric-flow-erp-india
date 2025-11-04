@@ -13,9 +13,10 @@ import { InventoryLogsModal } from './InventoryLogsModal';
 
 interface StorageZoneInventoryProps {
   onViewDetails?: (inventory: WarehouseInventory) => void;
+  itemType?: 'FABRIC' | 'ITEM' | 'PRODUCT'; // Optional filter for item type
 }
 
-export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onViewDetails }) => {
+export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onViewDetails, itemType }) => {
   const [inventory, setInventory] = useState<WarehouseInventory[]>([]);
   const [binSummaries, setBinSummaries] = useState<BinInventorySummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,7 +29,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
   const loadInventory = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      let query = supabase
         .from('warehouse_inventory')
         .select(`
           *,
@@ -70,8 +71,14 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
             inspection_notes
           )
         `)
-        .eq('status', 'IN_STORAGE' as any)
-        .order('moved_to_storage_date', { ascending: false });
+        .eq('status', 'IN_STORAGE' as any);
+      
+      // Filter by item_type if provided
+      if (itemType) {
+        query = query.eq('item_type', itemType);
+      }
+      
+      const { data, error } = await query.order('moved_to_storage_date', { ascending: false });
 
       if (error) throw error;
       const filtered = ((data as any) || []).filter((i: any) => i?.bin?.location_type === 'STORAGE');

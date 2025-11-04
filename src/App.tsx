@@ -27,6 +27,8 @@ import ProductMasterPage from "./pages/masters/ProductMasterPage";
 import ItemMasterPage from "./pages/masters/ItemMasterPage";
 import WarehouseMasterPage from "./pages/masters/WarehouseMasterPage";
 import WarehouseInventoryPage from "./pages/warehouse/WarehouseInventoryPage";
+import ProductInventoryPage from "./pages/inventory/ProductInventoryPage";
+import InventoryAdjustmentPage from "./pages/inventory/InventoryAdjustmentPage";
 import CustomerTypeMasterPage from "./pages/masters/CustomerTypeMasterPage";
 import SupplierMasterPage from "./pages/masters/SupplierMasterPage";
 import BrandingTypePage from "./pages/masters/BrandingTypePage";
@@ -301,6 +303,16 @@ const App = () => {
                 <Route path="/inventory/size-types" element={
                   <ProtectedRouteWithCompanySettings>
                     <SizeTypesPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/inventory/products" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ProductInventoryPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/inventory/adjustment" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <InventoryAdjustmentPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 

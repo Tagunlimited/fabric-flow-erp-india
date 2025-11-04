@@ -37,8 +37,14 @@ export default defineConfig(({ mode }) => ({
     target: 'es2022'
   },
   optimizeDeps: {
+    include: ['jsbarcode'],
     esbuildOptions: {
       target: 'es2022'
+    }
+  },
+  build: {
+    commonjsOptions: {
+      include: [/jsbarcode/, /node_modules/]
     }
   }
 }));

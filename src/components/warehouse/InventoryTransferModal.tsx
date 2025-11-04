@@ -38,9 +38,10 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
 
-  // Load available storage bins
+  // Load available storage bins - Loads ALL bins regardless of item type
   const loadAvailableBins = async () => {
     try {
+      // Load all active storage bins - products and raw materials use the same bins
       const { data, error } = await supabase
         .from('bins' as any)
         .select(`
@@ -65,8 +66,18 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
         .eq('is_active', true as any)
         .order('bin_code');
 
-      if (error) throw error;
-      setAvailableBins(((data as unknown) as Bin[]) || []);
+      if (error) {
+        console.error('Error loading bins:', error);
+        throw error;
+      }
+      
+      const bins = ((data as unknown) as Bin[]) || [];
+      console.log(`Loaded ${bins.length} storage bins for transfer`);
+      setAvailableBins(bins);
+      
+      if (bins.length === 0) {
+        toast.warning('No storage bins found. Please create bins in Warehouse Master.');
+      }
     } catch (error) {
       console.error('Error loading bins:', error);
       toast.error('Failed to load available storage bins');

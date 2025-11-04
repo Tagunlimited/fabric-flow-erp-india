@@ -87,7 +87,7 @@ export function ImageMaster() {
   const [uploadCategory, setUploadCategory] = useState('');
   const [uploadDescription, setUploadDescription] = useState('');
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'table' | 'card'>('card');
+  const [viewMode, setViewMode] = useState<'table' | 'card'>('table');
   const [folderStructure, setFolderStructure] = useState<FolderStructure>({});
   const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
   const [selectedPath, setSelectedPath] = useState<string>('');
@@ -1044,18 +1044,18 @@ export function ImageMaster() {
           </DialogContent>
         </Dialog>
           <Button
-            variant={viewMode === 'card' ? 'default' : 'outline'}
-            onClick={() => setViewMode('card')}
-          >
-            <Grid3X3 className="w-4 h-4 mr-2" />
-            Card View
-          </Button>
-          <Button
             variant={viewMode === 'table' ? 'default' : 'outline'}
             onClick={() => setViewMode('table')}
           >
             <List className="w-4 h-4 mr-2" />
             Table View
+          </Button>
+          <Button
+            variant={viewMode === 'card' ? 'default' : 'outline'}
+            onClick={() => setViewMode('card')}
+          >
+            <Grid3X3 className="w-4 h-4 mr-2" />
+            Card View
           </Button>
         </div>
       </div>

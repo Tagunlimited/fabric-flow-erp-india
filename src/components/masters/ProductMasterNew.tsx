@@ -12,7 +12,10 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { BarcodeTab } from "./BarcodeTab";
+import { InventoryAdjustment } from "./InventoryAdjustment";
 import { 
   Plus, 
   Edit, 
@@ -1205,21 +1208,17 @@ export function ProductMasterNew() {
 
   return (
     <div className="w-full px-4 py-8 space-y-6">
-      {/* Navigation Tabs */}
-      <div className="flex space-x-8 border-b">
-        <div className="pb-2 border-b-2 border-blue-600 text-blue-600 font-medium">
-          Product Master
-        </div>
-        <div className="pb-2 text-gray-500 hover:text-gray-700 cursor-pointer">
-          Inventory Approvals
-        </div>
-        <div className="pb-2 text-gray-500 hover:text-gray-700 cursor-pointer">
-          Stock Movement
-        </div>
-        <div className="pb-2 text-gray-500 hover:text-gray-700 cursor-pointer">
-          Barcode
-        </div>
-      </div>
+      <Tabs defaultValue="product-master" className="w-full">
+        {/* Navigation Tabs */}
+        <TabsList className="grid w-full max-w-2xl grid-cols-4">
+          <TabsTrigger value="product-master">Product Master</TabsTrigger>
+          <TabsTrigger value="inventory-approvals">Inventory Adjustment</TabsTrigger>
+          <TabsTrigger value="stock-movement">Stock Movement</TabsTrigger>
+          <TabsTrigger value="barcode">Barcode</TabsTrigger>
+        </TabsList>
+
+        {/* Product Master Tab Content */}
+        <TabsContent value="product-master" className="space-y-6 mt-6">
 
       {/* Header and Actions */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -2183,6 +2182,30 @@ export function ProductMasterNew() {
           </div>
         </div>
       </div>
+        </TabsContent>
+
+        {/* Inventory Adjustment Tab Content */}
+        <TabsContent value="inventory-approvals" className="space-y-6 mt-6">
+          <InventoryAdjustment />
+        </TabsContent>
+
+        {/* Stock Movement Tab Content */}
+        <TabsContent value="stock-movement" className="space-y-6 mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Stock Movement</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-muted-foreground">Stock movement functionality coming soon.</p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Barcode Tab Content */}
+        <TabsContent value="barcode" className="space-y-6 mt-6">
+          <BarcodeTab products={products} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
