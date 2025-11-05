@@ -45,12 +45,62 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (user) {
       setProfileLoading(true);
       try {
+        // Check if session is still valid before fetching profile
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError || !session) {
+          console.warn('No valid session, attempting to refresh...');
+          try {
+            const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+            if (refreshError || !refreshed.session) {
+              console.error('Session refresh failed:', refreshError);
+              setUser(null);
+              setProfile(null);
+              setProfileLoading(false);
+              return;
+            }
+            setUser(refreshed.session.user);
+          } catch (refreshErr) {
+            console.error('Error refreshing session:', refreshErr);
+            setUser(null);
+            setProfile(null);
+            setProfileLoading(false);
+            return;
+          }
+        }
+
         console.log(`Attempting to refresh profile (attempt ${retryCount + 1})`);
         const userProfile = await authService.getUserProfile(user.id);
         setProfile(userProfile);
         console.log('Profile refreshed successfully:', userProfile);
-      } catch (error) {
+      } catch (error: any) {
         console.warn('Profile refresh failed:', error?.message || 'Unknown error');
+        
+        // Handle JWT expired errors
+        if (error?.code === '401' || error?.message?.includes('JWT') || error?.message?.includes('expired')) {
+          console.log('JWT expired, attempting to refresh session...');
+          try {
+            const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+            if (refreshError || !refreshed.session) {
+              console.error('Session refresh failed after JWT expiry:', refreshError);
+              setUser(null);
+              setProfile(null);
+              setProfileLoading(false);
+              return;
+            }
+            setUser(refreshed.session.user);
+            // Retry profile fetch once after refresh
+            if (retryCount === 0) {
+              setTimeout(() => refreshProfile(1), 500);
+              return;
+            }
+          } catch (refreshErr) {
+            console.error('Error refreshing session after JWT expiry:', refreshErr);
+            setUser(null);
+            setProfile(null);
+            setProfileLoading(false);
+            return;
+          }
+        }
         
         // Retry once if it's a network error or first attempt
         if (retryCount === 0) {
@@ -91,13 +141,53 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   useEffect(() => {
     // Get initial session, try to refresh if missing
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+      if (error) {
+        console.error('Error getting session:', error);
+        // If session error, try to refresh
+        if (error.message?.includes('expired') || error.message?.includes('JWT')) {
+          try {
+            const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+            if (refreshError) {
+              console.error('Session refresh failed:', refreshError);
+              setUser(null);
+              setProfile(null);
+              setLoading(false);
+              return;
+            }
+            if (refreshed.session?.user) {
+              setUser(refreshed.session.user);
+              await refreshProfile();
+              setLoading(false);
+              return;
+            }
+          } catch (refreshErr) {
+            console.error('Error refreshing session:', refreshErr);
+          }
+        }
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
+        return;
+      }
+
       let user = session?.user ?? null;
       if (!user && session?.refresh_token) {
         // Try to refresh session if possible
-        const { data: refreshed } = await supabase.auth.refreshSession({ refresh_token: session.refresh_token });
-        user = refreshed.session?.user ?? null;
+        try {
+          const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+          if (refreshError) {
+            console.error('Session refresh error:', refreshError);
+            setUser(null);
+            setLoading(false);
+            return;
+          }
+          user = refreshed.session?.user ?? null;
+        } catch (err) {
+          console.error('Error refreshing session:', err);
+        }
       }
+      
       if (user) {
         if (isLoginExpired()) {
           signOut();
@@ -115,6 +205,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state change:', event, session?.user?.id);
+      
       if (event === 'SIGNED_OUT') {
         setUser(null);
         setProfile(null);
@@ -126,9 +218,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
         await refreshProfile();
         setLoading(false);
       } else if (event === 'TOKEN_REFRESHED' && session?.user) {
+        console.log('Token refreshed successfully');
         setUser(session.user);
-        // Don't set loading to false on token refresh to prevent re-renders
-        // setLoading(false);
+        // Refresh profile after token refresh
+        await refreshProfile();
+      } else if (event === 'USER_UPDATED' && session?.user) {
+        setUser(session.user);
       }
     });
 

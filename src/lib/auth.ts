@@ -78,6 +78,31 @@ export const authService = {
 
       if (error) {
         console.error('Profile fetch error:', error);
+        // Handle JWT expired errors - try to refresh session
+        if (error.code === '401' || error.message?.includes('JWT') || error.message?.includes('expired') || error.message?.includes('unauthorized')) {
+          console.log('JWT expired, attempting to refresh session...');
+          try {
+            const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+            if (refreshError || !refreshed.session) {
+              console.error('Session refresh failed:', refreshError);
+              return null;
+            }
+            // Retry the profile fetch after refresh
+            const { data: retryData, error: retryError } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('user_id', userId)
+              .maybeSingle();
+            if (retryError) {
+              console.error('Profile fetch still failing after refresh:', retryError);
+              return null;
+            }
+            return retryData;
+          } catch (refreshErr) {
+            console.error('Error during session refresh:', refreshErr);
+            return null;
+          }
+        }
         // Handle RLS policy recursion errors
         if (error.code === '42P17' || error.message.includes('infinite recursion') || error.message.includes('policy')) {
           console.warn('RLS policy recursion detected, skipping profile fetch');

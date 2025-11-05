@@ -377,7 +377,7 @@ export default function ReceiptPage() {
         console.log('Updating order balance...');
         const { data: order, error: orderUpdateError } = await supabase
           .from('orders')
-          .select('id, final_amount, balance_amount')
+          .select('id, final_amount, balance_amount, order_type, status')
           .eq('order_number', selected.number)
           .single();
 
@@ -403,15 +403,27 @@ export default function ReceiptPage() {
               newBalance
             });
 
+            // Prepare update object
+            const updateData: any = { balance_amount: newBalance };
+            
+            // For readymade orders, update status from 'pending' to 'confirmed' when receipt is created
+            if (order.order_type === 'readymade' && order.status === 'pending') {
+              updateData.status = 'confirmed';
+              console.log('Updating readymade order status from pending to confirmed');
+            }
+
             const { error: balanceUpdateError } = await supabase
               .from('orders')
-              .update({ balance_amount: newBalance })
+              .update(updateData)
               .eq('id', order.id);
 
             if (balanceUpdateError) {
               console.error('Error updating order balance:', balanceUpdateError);
             } else {
               console.log('Order balance updated successfully');
+              if (updateData.status === 'confirmed') {
+                console.log('Order status updated to confirmed');
+              }
             }
           }
         }

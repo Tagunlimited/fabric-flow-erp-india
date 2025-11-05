@@ -11,7 +11,7 @@ import { InventoryTransferModal } from '@/components/warehouse/InventoryTransfer
 import { InventoryAdjustment } from '@/components/masters/InventoryAdjustment';
 import { WarehouseInventory } from '@/types/warehouse-inventory';
 import { supabase } from '@/integrations/supabase/client';
-import { Package, Search, Image as ImageIcon, X, ChevronLeft, ChevronRight, Settings, Upload, FileSpreadsheet, Download } from 'lucide-react';
+import { Package, Search, Image as ImageIcon, X, ChevronLeft, ChevronRight, Settings, Upload, FileSpreadsheet, Download, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -27,6 +27,8 @@ interface Product {
   name?: string;
   brand?: string;
   category?: string;
+  size?: string;
+  color?: string;
   main_image?: string;
   image_url?: string;
   image1?: string;
@@ -114,7 +116,9 @@ const ProductInventoryPage: React.FC = () => {
           product.name?.toLowerCase().includes(searchLower) ||
           product.class?.toLowerCase().includes(searchLower) ||
           product.brand?.toLowerCase().includes(searchLower) ||
-          product.category?.toLowerCase().includes(searchLower)
+          product.category?.toLowerCase().includes(searchLower) ||
+          product.size?.toLowerCase().includes(searchLower) ||
+          product.color?.toLowerCase().includes(searchLower)
         );
       });
       setFilteredProducts(filtered);
@@ -126,7 +130,7 @@ const ProductInventoryPage: React.FC = () => {
       setLoading(true);
       const { data, error } = await supabase
         .from('product_master')
-        .select('id, sku, class, name, brand, category, main_image, image_url, image1, image2, images, current_stock, created_at')
+        .select('id, sku, class, name, brand, category, size, color, main_image, image_url, image1, image2, images, current_stock, created_at')
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -630,6 +634,18 @@ const ProductInventoryPage: React.FC = () => {
 
   return (
     <ErpLayout>
+      <style>{`
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+      `}</style>
       <div className="w-full px-6 py-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -643,67 +659,95 @@ const ProductInventoryPage: React.FC = () => {
             <Button
               variant="outline"
               onClick={() => setBulkUploadDialogOpen(true)}
-              className="flex items-center gap-2"
+              className="flex items-center gap-2 transition-all duration-200 hover:scale-105 hover:shadow-md active:scale-95"
             >
-              <Upload className="h-4 w-4" />
+              <Upload className="h-4 w-4 transition-transform duration-200 group-hover:rotate-12" />
               Bulk Upload
             </Button>
             <Button
               variant="outline"
               onClick={() => setAdjustmentDialogOpen(true)}
-              className="flex items-center gap-2"
+              className="flex items-center gap-2 transition-all duration-200 hover:scale-105 hover:shadow-md active:scale-95"
             >
-              <Settings className="h-4 w-4" />
+              <Settings className="h-4 w-4 transition-transform duration-200 group-hover:rotate-90" />
               Inventory Adjustment
             </Button>
-            <Badge variant="outline" className="flex items-center gap-1">
-              <Package className="h-3 w-3" />
+            <Badge 
+              variant="outline" 
+              className="flex items-center gap-1 transition-all duration-200 hover:scale-105 hover:shadow-sm cursor-default"
+            >
+              <Package className="h-3 w-3 transition-transform duration-200 hover:rotate-12" />
               {filteredProducts.length} Products
             </Badge>
           </div>
         </div>
 
         {/* Search */}
-        <Card>
+        <Card className="transition-all duration-200 hover:shadow-md">
           <CardContent className="pt-6">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+            <div className="relative group">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4 transition-all duration-200 group-focus-within:text-primary group-focus-within:scale-110" />
               <Input
-                placeholder="Search by SKU, Name, Class, Brand, or Category..."
+                placeholder="Search by SKU, Name, Class, Brand, Color, Size, or Category..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10"
+                className="pl-10 transition-all duration-200 focus:ring-2 focus:ring-primary/20 focus:border-primary"
               />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-all duration-200 hover:scale-110"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
             </div>
           </CardContent>
         </Card>
 
         {/* Products Table */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Product Inventory</CardTitle>
+        <Card className="transition-all duration-200 hover:shadow-lg">
+          <CardHeader className="transition-colors duration-200 hover:bg-muted/30">
+            <CardTitle className="flex items-center gap-2">
+              <Package className="h-5 w-5 text-primary transition-transform duration-200 hover:rotate-12" />
+              Product Inventory
+            </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             {loading ? (
-              <div className="text-center py-8">
-                <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4 animate-pulse" />
-                <p className="text-muted-foreground">Loading products...</p>
+              <div className="text-center py-12">
+                <Loader2 className="h-12 w-12 text-primary mx-auto mb-4 animate-spin" />
+                <p className="text-muted-foreground animate-pulse">Loading products...</p>
               </div>
             ) : filteredProducts.length === 0 ? (
-              <div className="text-center py-8">
-                <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">
+              <div className="text-center py-12">
+                <div className="relative inline-block">
+                  <Package className="h-16 w-16 text-muted-foreground mx-auto mb-4 transition-all duration-300 hover:scale-110 hover:rotate-12" />
+                  <div className="absolute inset-0 bg-primary/10 rounded-full blur-xl animate-pulse" />
+                </div>
+                <p className="text-muted-foreground text-lg">
                   {searchTerm ? 'No products found matching your search.' : 'No products found in inventory.'}
                 </p>
+                {searchTerm && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => setSearchTerm('')}
+                    className="mt-4 transition-all duration-200 hover:scale-105"
+                  >
+                    Clear search
+                  </Button>
+                )}
               </div>
             ) : (
               <div className="overflow-x-auto w-full">
                 <Table>
                   <TableHeader>
-                    <TableRow>
+                    <TableRow className="hover:bg-muted/50 transition-colors">
                       <TableHead className="w-[120px]">Image</TableHead>
                       <TableHead>SKU</TableHead>
                       <TableHead>Class</TableHead>
+                      <TableHead>Color</TableHead>
+                      <TableHead>Size</TableHead>
                       <TableHead>Name</TableHead>
                       <TableHead>Brand</TableHead>
                       <TableHead>Category</TableHead>
@@ -711,73 +755,118 @@ const ProductInventoryPage: React.FC = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredProducts.map((product) => {
+                    {filteredProducts.map((product, index) => {
                       const imageUrl = getProductImage(product);
                       const images = getAllProductImages(product);
                       return (
-                        <TableRow key={product.id}>
+                        <TableRow 
+                          key={product.id}
+                          className="hover:bg-muted/50 transition-all duration-200 cursor-pointer border-b border-border/50 hover:border-primary/20 hover:shadow-sm"
+                          style={{
+                            animation: `fadeIn 0.3s ease-out ${index * 0.03}s both`
+                          }}
+                        >
                           <TableCell>
                             {imageUrl ? (
                               <div 
-                                className="relative w-20 h-20 rounded border overflow-hidden bg-muted flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity"
+                                className="relative w-20 h-20 rounded-lg border-2 border-border overflow-hidden bg-muted flex items-center justify-center cursor-pointer group transition-all duration-300 hover:scale-105 hover:shadow-lg hover:border-primary/50"
                                 onClick={() => handleImageClick(product)}
                               >
                                 <img
                                   src={imageUrl}
                                   alt={product.name || 'Product'}
-                                  className="w-full h-full object-cover"
+                                  className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
                                   onError={(e) => {
                                     e.currentTarget.style.display = 'none';
                                     if (e.currentTarget.parentElement) {
-                                      e.currentTarget.parentElement.innerHTML = '<div class="w-20 h-20 rounded border bg-muted flex items-center justify-center"><svg class="w-8 h-8 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div>';
+                                      e.currentTarget.parentElement.innerHTML = '<div class="w-20 h-20 rounded-lg border-2 border-border bg-muted flex items-center justify-center transition-colors hover:bg-muted/80"><svg class="w-8 h-8 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div>';
                                     }
                                   }}
                                 />
                                 {images.length > 1 && (
-                                  <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1 rounded">
+                                  <div className="absolute bottom-1 right-1 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded-md backdrop-blur-sm transition-all duration-200 group-hover:bg-black/80 group-hover:scale-110">
                                     {images.length}
                                   </div>
                                 )}
+                                <div className="absolute inset-0 bg-primary/0 group-hover:bg-primary/5 transition-colors duration-300" />
                               </div>
                             ) : (
-                              <div className="w-20 h-20 rounded border bg-muted flex items-center justify-center">
-                                <ImageIcon className="w-8 h-8 text-muted-foreground" />
+                              <div className="w-20 h-20 rounded-lg border-2 border-border bg-muted flex items-center justify-center transition-all duration-200 hover:bg-muted/80 hover:border-primary/30">
+                                <ImageIcon className="w-8 h-8 text-muted-foreground transition-transform duration-200 hover:scale-110" />
                               </div>
                             )}
                           </TableCell>
                           <TableCell>
                             <button
                               onClick={() => handleSkuClick(product)}
-                              className="font-mono font-medium text-primary hover:underline cursor-pointer"
+                              className="font-mono font-medium text-primary hover:text-primary/80 hover:underline cursor-pointer transition-all duration-200 hover:scale-105 inline-block"
                             >
                               {product.sku || '-'}
                             </button>
                           </TableCell>
                           <TableCell>
                             {product.class ? (
-                              <Badge variant="secondary">{product.class}</Badge>
+                              <Badge 
+                                variant="secondary" 
+                                className="transition-all duration-200 hover:scale-105 hover:shadow-sm cursor-default"
+                              >
+                                {product.class}
+                              </Badge>
                             ) : (
-                              '-'
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {product.color ? (
+                              <Badge 
+                                variant="secondary" 
+                                className="transition-all duration-200 hover:scale-105 hover:shadow-sm cursor-default"
+                              >
+                                {product.color}
+                              </Badge>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {product.size ? (
+                              <Badge 
+                                variant="secondary" 
+                                className="transition-all duration-200 hover:scale-105 hover:shadow-sm cursor-default"
+                              >
+                                {product.size}
+                              </Badge>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
                             )}
                           </TableCell>
                           <TableCell className="font-medium">
-                            {product.name || '-'}
+                            <span className="transition-colors duration-200 hover:text-primary">
+                              {product.name || '-'}
+                            </span>
                           </TableCell>
                           <TableCell>
-                            {product.brand || '-'}
+                            <span className="transition-colors duration-200 hover:text-primary/80">
+                              {product.brand || '-'}
+                            </span>
                           </TableCell>
                           <TableCell>
                             {product.category ? (
-                              <Badge variant="outline">{product.category}</Badge>
+                              <Badge 
+                                variant="outline" 
+                                className="transition-all duration-200 hover:scale-105 hover:shadow-sm hover:border-primary/50 cursor-default"
+                              >
+                                {product.category}
+                              </Badge>
                             ) : (
-                              '-'
+                              <span className="text-muted-foreground">-</span>
                             )}
                           </TableCell>
                           <TableCell className="text-right">
                             {product.current_stock !== undefined && product.current_stock !== null ? (
                               <Badge 
                                 variant={product.current_stock > 0 ? 'default' : 'secondary'}
-                                className="font-mono cursor-pointer hover:opacity-80 transition-opacity"
+                                className="font-mono cursor-pointer transition-all duration-200 hover:scale-110 hover:shadow-md active:scale-95"
                                 onClick={() => handleInventoryClick(product)}
                               >
                                 {product.current_stock} pcs
