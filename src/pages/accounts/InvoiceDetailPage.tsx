@@ -467,7 +467,7 @@ export default function InvoiceDetailPage() {
                           <td className="border border-gray-300 px-4 py-2">
                             <div className="flex items-start gap-3">
                               {(() => {
-                                const displayImage = getOrderItemDisplayImage(item);
+                                const displayImage = getOrderItemDisplayImage(item, order);
                                 return displayImage ? (
                                   <img
                                     src={displayImage}

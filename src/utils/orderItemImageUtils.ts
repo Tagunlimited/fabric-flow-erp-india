@@ -1,13 +1,68 @@
 /**
  * Utility function to get the display image for an order item.
  * Priority: mockup_images (column) > mockup_images (specifications) > category_image_url
+ * For readymade orders: Always use category_image_url (skip mockup images)
  * 
  * @param item - Order item object with potential image sources
+ * @param order - Optional order object to check order_type
  * @returns Image URL string or null if no image is available
  */
-export function getOrderItemDisplayImage(item: any): string | null {
+export function getOrderItemDisplayImage(item: any, order?: any): string | null {
   if (!item) return null;
 
+  // Check if this is a readymade order
+  let isReadymade = false;
+  
+  // Check order object first (if provided)
+  if (order && order.order_type === 'readymade') {
+    isReadymade = true;
+  }
+  
+  // Also check specifications for order_type (for readymade orders)
+  if (!isReadymade) {
+    try {
+      let specifications = item.specifications;
+      
+      // Parse if specifications is a string
+      if (typeof specifications === 'string') {
+        specifications = JSON.parse(specifications);
+      }
+      
+      if (specifications && typeof specifications === 'object') {
+        if (specifications.order_type === 'readymade') {
+          isReadymade = true;
+        }
+      }
+    } catch (error) {
+      // If parsing fails, continue
+    }
+  }
+
+  // For readymade orders, prioritize class_image (the image shown when selecting class)
+  if (isReadymade) {
+    try {
+      let specifications = item.specifications;
+      if (typeof specifications === 'string') {
+        specifications = JSON.parse(specifications);
+      }
+      if (specifications && typeof specifications === 'object' && specifications.class_image) {
+        const classImage = specifications.class_image;
+        if (typeof classImage === 'string' && classImage.trim()) {
+          return classImage.trim();
+        }
+      }
+    } catch (error) {
+      // If parsing fails, continue to fallback
+    }
+    
+    // Fallback to category_image_url if class_image is not available
+    if (item.category_image_url && typeof item.category_image_url === 'string' && item.category_image_url.trim()) {
+      return item.category_image_url.trim();
+    }
+    return null;
+  }
+
+  // For custom orders, use mockup images if available
   // Priority 1: Check mockup_images column (TEXT[] array)
   if (item.mockup_images && Array.isArray(item.mockup_images) && item.mockup_images.length > 0) {
     const firstMockup = item.mockup_images[0];

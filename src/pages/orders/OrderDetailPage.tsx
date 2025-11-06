@@ -65,6 +65,7 @@ interface Order {
   customer_id: string;
   sales_manager: string;
   status: string;
+  order_type?: string;
   total_amount: number;
   tax_amount: number;
   final_amount: number;
@@ -197,6 +198,713 @@ function calculateGSTRatesBreakdown(orderItems: any[], order: Order | null) {
     .sort((a, b) => a.rate - b.rate);
 }
 
+// Component to display readymade order form with existing order data
+function ReadymadeOrderFormView({ orderId, order, customer, orderItems }: { orderId: string; order: Order; customer: Customer | null; orderItems: OrderItem[] }) {
+  const [formData, setFormData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [salesManager, setSalesManager] = useState<SalesManager | null>(null);
+  const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
+  const [loadingActivities, setLoadingActivities] = useState(false);
+  const [totalReceipts, setTotalReceipts] = useState<number>(0);
+
+  useEffect(() => {
+    const loadOrderData = async () => {
+      try {
+        if (!order || !customer) return;
+
+        // Parse order items to extract product data
+        const products = orderItems.map((item: OrderItem) => {
+          const specs = typeof item.specifications === 'string' 
+            ? JSON.parse(item.specifications) 
+            : item.specifications || {};
+          
+            return {
+            product_master_id: specs.product_master_id || '',
+            product_id: specs.product_id || '',
+            product_name: specs.product_name || item.product_description || '',
+            class: specs.class || '',
+            size: specs.size || '',
+            color: specs.color || '',
+            category: specs.category || '',
+            quantity: item.quantity || 0,
+            sizes_quantities: specs.sizes_quantities || {},
+            unit_price: item.unit_price || 0,
+            gst_rate: item.gst_rate || order.gst_rate || 0,
+            total_price: item.total_price || 0,
+            class_image: specs.class_image || null, // Include class image
+            reference_images: specs.reference_images || [],
+            mockup_images: specs.mockup_images || [],
+            attachments: specs.attachments || [],
+            branding_items: specs.branding_items || []
+          };
+        });
+
+        setFormData({
+          order_date: new Date(order.order_date),
+          expected_delivery_date: new Date(order.expected_delivery_date),
+          customer_id: order.customer_id,
+          sales_manager: order.sales_manager || '',
+          products: products,
+          payment_channel: order.payment_channel || '',
+          reference_id: order.reference_id || '',
+          advance_amount: order.advance_amount || 0,
+          notes: order.notes || '',
+          additional_charges: []
+        });
+      } catch (error) {
+        console.error('Error loading order data:', error);
+        toast.error('Failed to load order data');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadOrderData();
+  }, [order, customer, orderItems]);
+
+  // Fetch sales manager
+  useEffect(() => {
+    const fetchSalesManager = async () => {
+      if (order?.sales_manager) {
+        try {
+          const { data: salesManagerData } = await supabase
+            .from('employees')
+            .select('id, full_name, avatar_url')
+            .eq('id', order.sales_manager)
+            .single();
+          
+          if (salesManagerData) {
+            setSalesManager(salesManagerData as unknown as SalesManager);
+          }
+        } catch (error) {
+          console.error('Error fetching sales manager:', error);
+        }
+      }
+    };
+    
+    fetchSalesManager();
+  }, [order?.sales_manager]);
+
+  // Fetch order activities
+  useEffect(() => {
+    const fetchOrderActivities = async () => {
+      if (!orderId) return;
+      
+      try {
+        setLoadingActivities(true);
+        const { data: activitiesData, error: activitiesError } = await supabase
+          .from('order_lifecycle_view')
+          .select('*')
+          .eq('order_id', orderId)
+          .order('performed_at', { ascending: false });
+        
+        if (activitiesError) throw activitiesError;
+        setOrderActivities((activitiesData as unknown as OrderActivity[]) || []);
+      } catch (error) {
+        console.error('Error fetching order activities:', error);
+      } finally {
+        setLoadingActivities(false);
+      }
+    };
+    
+    fetchOrderActivities();
+  }, [orderId]);
+
+  // Fetch total receipts
+  useEffect(() => {
+    const fetchTotalReceipts = async () => {
+      if (!order?.order_number) return;
+      
+      try {
+        const { data: receiptsData, error: receiptsError } = await supabase
+          .from('receipts')
+          .select('amount')
+          .eq('reference_number', order.order_number)
+          .eq('reference_type', 'order');
+        
+        if (receiptsError) throw receiptsError;
+        
+        const total = (receiptsData || []).reduce((sum, receipt) => sum + Number(receipt.amount || 0), 0);
+        setTotalReceipts(total);
+      } catch (error) {
+        console.error('Error fetching receipts:', error);
+      }
+    };
+    
+    fetchTotalReceipts();
+  }, [order?.order_number]);
+
+  // Helper functions for activities
+  const getActivityIcon = (activityType: string) => {
+    switch (activityType) {
+      case 'order_created': return '📋';
+      case 'order_updated': return '✏️';
+      case 'status_changed': return '🔄';
+      case 'delivery_date_updated': return '📅';
+      case 'amount_updated': return '💰';
+      case 'sales_manager_changed': return '👤';
+      case 'item_added': return '➕';
+      case 'item_updated': return '✏️';
+      case 'quantity_updated': return '📊';
+      case 'price_updated': return '💰';
+      case 'specifications_updated': return '📋';
+      case 'item_removed': return '➖';
+      case 'payment_received': return '💳';
+      case 'file_uploaded': return '📎';
+      case 'order_dispatched': return '🚚';
+      case 'order_cancelled': return '❌';
+      default: return '📝';
+    }
+  };
+
+  const getActivityColor = (activityType: string) => {
+    switch (activityType) {
+      case 'order_created': return 'bg-blue-100 border-blue-300 text-blue-700';
+      case 'order_updated': return 'bg-yellow-100 border-yellow-300 text-yellow-700';
+      case 'status_changed': return 'bg-purple-100 border-purple-300 text-purple-700';
+      case 'payment_received': return 'bg-green-100 border-green-300 text-green-700';
+      case 'order_dispatched': return 'bg-indigo-100 border-indigo-300 text-indigo-700';
+      case 'order_cancelled': return 'bg-red-100 border-red-300 text-red-700';
+      default: return 'bg-gray-100 border-gray-300 text-gray-700';
+    }
+  };
+
+  const parseMaybeJson = (value: any) => {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  };
+
+  const formatDateTimeSafe = (value: any, options?: Intl.DateTimeFormatOptions) => {
+    if (!value) return 'N/A';
+    try {
+      const date = new Date(value);
+      if (isNaN(date.getTime())) return String(value);
+      return date.toLocaleString('en-IN', options || {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return String(value);
+    }
+  };
+
+  // Calculate order totals
+  const { subtotal, gstAmount, grandTotal } = calculateOrderSummary(orderItems, order);
+  const gstBreakdown = calculateGSTRatesBreakdown(orderItems, order);
+
+  if (loading || !formData) {
+    return <div className="text-center py-8">Loading order data...</div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Main Content Grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
+        <div className="xl:col-span-3 space-y-6">
+          {/* Customer & Order Details */}
+          <Card>
+        <CardHeader>
+          <CardTitle>Customer & Order Details</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Customer</Label>
+              <Input value={customer?.company_name || ''} readOnly className="bg-muted" />
+            </div>
+            <div className="space-y-2">
+              <Label>Order Date</Label>
+              <Input value={new Date(order.order_date).toLocaleDateString()} readOnly className="bg-muted" />
+            </div>
+            <div className="space-y-2">
+              <Label>Expected Delivery Date</Label>
+              <Input value={new Date(order.expected_delivery_date).toLocaleDateString()} readOnly className="bg-muted" />
+            </div>
+            <div className="space-y-2">
+              <Label>Order Number</Label>
+              <Input value={order.order_number} readOnly className="bg-muted" />
+            </div>
+            {order.reference_id && (
+              <div className="space-y-2">
+                <Label>Reference ID</Label>
+                <Input value={order.reference_id} readOnly className="bg-muted" />
+              </div>
+            )}
+            {order.notes && (
+              <div className="space-y-2 md:col-span-2">
+                <Label>Notes</Label>
+                <Input value={order.notes} readOnly className="bg-muted" />
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Products */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Products</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {formData.products.map((product: any, index: number) => {
+            // Get product image from order items - prioritize class_image from specifications
+            const orderItem = orderItems.find((item: OrderItem) => {
+              const specs = typeof item.specifications === 'string' 
+                ? JSON.parse(item.specifications) 
+                : item.specifications || {};
+              return specs.product_id === product.product_id || specs.product_master_id === product.product_master_id;
+            });
+            
+            // Get class image from specifications first (this is the image shown when selecting class)
+            let productImage = null;
+            if (orderItem) {
+              const specs = typeof orderItem.specifications === 'string' 
+                ? JSON.parse(orderItem.specifications) 
+                : orderItem.specifications || {};
+              // Prioritize class_image (the image shown when selecting class)
+              productImage = specs.class_image || getOrderItemDisplayImage(orderItem, order);
+            }
+            
+            return (
+            <div key={index} className="border rounded-lg p-4 space-y-4">
+              <div className="flex justify-between items-start">
+                <h4 className="font-medium">Product {index + 1}</h4>
+              </div>
+
+              {/* Product Image and Fields in Single Row */}
+              <div className="flex items-start gap-4">
+                {productImage && (
+                  <img 
+                    src={productImage} 
+                    alt={product.product_name || 'Product'} 
+                    className="w-24 h-24 object-cover rounded-lg border flex-shrink-0"
+                  />
+                )}
+                <div className="flex items-center gap-4 flex-wrap flex-1">
+                  <div className="space-y-2">
+                    <Label>Class</Label>
+                    <Input value={product.class || ''} readOnly className="bg-muted" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Product</Label>
+                    <Input value={product.product_name || ''} readOnly className="bg-muted" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Color</Label>
+                    <Input value={product.color || ''} readOnly className="bg-muted" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Category</Label>
+                    <Input value={product.category || ''} readOnly className="bg-muted" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Size-wise Quantities */}
+              {product.sizes_quantities && Object.keys(product.sizes_quantities).length > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-base font-semibold">Size-wise Quantities</Label>
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 p-4 border rounded-lg bg-muted/30">
+                    {(() => {
+                      // Sort sizes in order: S, M, L, XL, 2XL
+                      const sizeOrder = ['S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
+                      const sortedSizes = Object.entries(product.sizes_quantities).sort(([sizeA], [sizeB]) => {
+                        const indexA = sizeOrder.indexOf(sizeA);
+                        const indexB = sizeOrder.indexOf(sizeB);
+                        // If both sizes are in the order, sort by their position
+                        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+                        // If only A is in order, it comes first
+                        if (indexA !== -1) return -1;
+                        // If only B is in order, it comes first
+                        if (indexB !== -1) return 1;
+                        // If neither is in order, sort alphabetically
+                        return sizeA.localeCompare(sizeB);
+                      });
+                      
+                      return sortedSizes.map(([size, qty]) => (
+                        <div key={size} className="space-y-1">
+                          <Label className="text-sm font-medium">{size}</Label>
+                          <Input
+                            type="number"
+                            value={qty as number}
+                            readOnly
+                            className="bg-background text-center"
+                          />
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Total Quantity: <span className="font-semibold">{product.quantity}</span>
+                  </div>
+                </div>
+              )}
+
+              {(!product.sizes_quantities || Object.keys(product.sizes_quantities).length === 0) && (
+                <div className="space-y-2">
+                  <Label>Quantity</Label>
+                  <Input value={product.quantity} readOnly className="bg-muted" />
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label>Unit Price</Label>
+                  <Input value={formatCurrency(product.unit_price)} readOnly className="bg-muted" />
+                </div>
+                <div className="space-y-2">
+                  <Label>GST Rate</Label>
+                  <Input value={`${product.gst_rate}%`} readOnly className="bg-muted" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Total Price</Label>
+                  <Input value={formatCurrency(product.total_price)} readOnly className="bg-muted" />
+                </div>
+              </div>
+
+              {/* Images and Branding */}
+              {(product.reference_images?.length > 0 || product.mockup_images?.length > 0 || product.attachments?.length > 0 || product.branding_items?.length > 0) && (
+                <div className="space-y-4 mt-4 border-t pt-4">
+                  {product.reference_images?.length > 0 && (
+                    <div className="space-y-2">
+                      <Label>Reference Images</Label>
+                      <div className="flex gap-2 flex-wrap">
+                        {product.reference_images.map((url: string, idx: number) => (
+                          <img key={idx} src={url} alt={`Reference ${idx + 1}`} className="w-20 h-20 object-cover rounded border" />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {product.mockup_images?.length > 0 && (
+                    <div className="space-y-2">
+                      <Label>Mockup Images</Label>
+                      <div className="flex gap-2 flex-wrap">
+                        {product.mockup_images.map((url: string, idx: number) => (
+                          <img key={idx} src={url} alt={`Mockup ${idx + 1}`} className="w-20 h-20 object-cover rounded border" />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {product.attachments?.length > 0 && (
+                    <div className="space-y-2">
+                      <Label>Attachments</Label>
+                      <div className="space-y-1">
+                        {product.attachments.map((url: string, idx: number) => (
+                          <a key={idx} href={url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline block">
+                            Attachment {idx + 1}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {product.branding_items?.length > 0 && (
+                    <div className="space-y-2">
+                      <Label>Branding Details</Label>
+                      <div className="space-y-2">
+                        {product.branding_items.map((branding: any, idx: number) => (
+                          <div key={idx} className="p-3 border rounded bg-muted/30">
+                            <div className="grid grid-cols-3 gap-2 text-sm">
+                              <div><strong>Type:</strong> {branding.branding_type}</div>
+                              <div><strong>Placement:</strong> {branding.placement}</div>
+                              <div><strong>Measurement:</strong> {branding.measurement}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+        </div>
+
+        {/* Sidebar Cards */}
+        <div className="xl:col-span-1 space-y-6">
+          {/* Order Information */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <FileText className="w-5 h-5 mr-2" />
+                Order Information
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <p className="text-sm text-muted-foreground">Order Date</p>
+                <p className="font-medium">
+                  {new Date(order.order_date).toLocaleDateString('en-GB', {
+                    day: '2-digit',
+                    month: 'long',
+                    year: 'numeric'
+                  })}
+                </p>
+              </div>
+              {order.expected_delivery_date && (
+                <div>
+                  <p className="text-sm text-muted-foreground">Expected Delivery</p>
+                  <p className="font-medium">
+                    {new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
+                      day: '2-digit',
+                      month: 'long',
+                      year: 'numeric'
+                    })}
+                  </p>
+                </div>
+              )}
+              {salesManager && (
+                <div>
+                  <p className="text-sm text-muted-foreground">Sales Manager</p>
+                  <div className="flex items-center gap-2">
+                    {salesManager.avatar_url ? (
+                      <img
+                        src={salesManager.avatar_url}
+                        alt={salesManager.full_name}
+                        className="w-8 h-8 rounded-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                        <User className="w-4 h-4 text-primary" />
+                      </div>
+                    )}
+                    <p className="font-medium">{salesManager.full_name}</p>
+                  </div>
+                </div>
+              )}
+              {order.notes && (
+                <div>
+                  <p className="text-sm text-muted-foreground">Notes</p>
+                  <p className="font-medium text-sm">{order.notes}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Customer Information */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <User className="w-5 h-5 mr-2" />
+                Customer Information
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <p className="font-semibold text-lg">{customer?.company_name}</p>
+                <p className="text-muted-foreground">{customer?.contact_person}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Email</p>
+                <p className="font-medium">{customer?.email}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Phone</p>
+                <p className="font-medium">{customer?.phone}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Address</p>
+                <p className="font-medium">
+                  {customer?.address}, {customer?.city}, {customer?.state} - {customer?.pincode}
+                </p>
+              </div>
+              {customer?.gstin && (
+                <div>
+                  <p className="text-sm text-muted-foreground">GSTIN</p>
+                  <p className="font-medium">{customer.gstin}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Order Summary */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <DollarSign className="w-5 h-5 mr-2" />
+                Order Summary
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex justify-between">
+                <span>Subtotal</span>
+                <span>{formatCurrency(order.total_amount)}</span>
+              </div>
+              {(() => {
+                if (gstBreakdown.length === 0) {
+                  return (
+                    <div className="flex justify-between">
+                      <span>GST (0%)</span>
+                      <span>{formatCurrency(0)}</span>
+                    </div>
+                  );
+                } else if (gstBreakdown.length === 1) {
+                  return (
+                    <div className="flex justify-between">
+                      <span>GST ({gstBreakdown[0].rate}%)</span>
+                      <span>{formatCurrency(gstBreakdown[0].amount)}</span>
+                    </div>
+                  );
+                } else {
+                  return (
+                    <div className="space-y-1">
+                      {gstBreakdown.map((gst, index) => (
+                        <div key={index} className="flex justify-between text-sm">
+                          <span>GST ({gst.rate}%)</span>
+                          <span>{formatCurrency(gst.amount)}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between font-medium border-t pt-1">
+                        <span>Total GST</span>
+                        <span>{formatCurrency(gstBreakdown.reduce((sum, gst) => sum + gst.amount, 0))}</span>
+                      </div>
+                    </div>
+                  );
+                }
+              })()}
+              <div className="flex justify-between">
+                <span>Amount Paid</span>
+                <span className="text-green-600">{formatCurrency(totalReceipts)}</span>
+              </div>
+              <hr />
+              <div className="flex justify-between font-bold text-lg">
+                <span>Total Amount</span>
+                <span>{formatCurrency(grandTotal)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Balance Due</span>
+                <span className={grandTotal - totalReceipts > 0 ? "text-orange-600" : "text-green-600"}>
+                  {formatCurrency(grandTotal - totalReceipts)}
+                </span>
+              </div>
+              
+              {order.reference_id && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Reference ID</span>
+                  <span>{order.reference_id}</span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Order Lifecycle */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between text-base sm:text-lg">
+                <div className="flex items-center">
+                  <Calendar className="w-5 h-5 mr-2" />
+                  Order Lifecycle
+                </div>
+                <Badge variant="outline" className="text-xs whitespace-nowrap">
+                  {orderActivities.length} activities
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="overflow-x-hidden">
+              {loadingActivities ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+                </div>
+              ) : orderActivities.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <p>No activities recorded yet</p>
+                </div>
+              ) : (
+                <div className="space-y-4 max-h-96 overflow-y-auto overflow-x-hidden pr-1 sm:pr-2">
+                  {orderActivities.map((activity, index) => (
+                    <div key={activity.id} className="relative">
+                      {/* Timeline connector */}
+                      {index < orderActivities.length - 1 && (
+                        <div className="absolute left-[0.875rem] sm:left-[1.125rem] top-6 sm:top-7 w-0.5 h-6 sm:h-7 bg-gray-200"></div>
+                      )}
+                      
+                      <div className="flex items-start gap-3 sm:gap-3">
+                        {/* Activity icon */}
+                        <div className={`flex-shrink-0 w-7 h-7 sm:w-9 sm:h-9 rounded-full border-2 flex items-center justify-center text-sm sm:text-base ${getActivityColor(activity.activity_type)}`}>
+                          {getActivityIcon(activity.activity_type)}
+                        </div>
+                        
+                        {/* Activity content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="w-full rounded-lg border bg-muted/10 p-3 sm:p-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-1 gap-1">
+                              <h4 className="font-semibold text-xs sm:text-sm break-words break-all leading-snug">
+                                {activity.activity_description}
+                              </h4>
+                              <span className="text-[11px] sm:text-xs text-muted-foreground sm:max-w-[65%] whitespace-normal sm:whitespace-normal break-words break-all sm:text-right">
+                                {formatDateTimeSafe(activity.performed_at)}
+                              </span>
+                            </div>
+                          
+                            {/* User info */}
+                            {activity.user_name && (
+                              <p className="text-[11px] sm:text-xs text-muted-foreground mb-2 break-words">
+                                By: {activity.user_name} {activity.user_email ? `(${activity.user_email})` : ''}
+                              </p>
+                            )}
+                          
+                            {/* Activity details */}
+                            {activity.metadata && (
+                              <div className="bg-muted/30 rounded-lg p-3 mt-2 text-[11px] sm:text-xs">
+                                {activity.activity_type === 'payment_received' && (
+                                  <div className="space-y-1">
+                                    <div className="flex justify-between text-xs">
+                                      <span>Amount:</span>
+                                      <span className="font-medium">{formatCurrency(parseMaybeJson(activity.metadata)?.payment_amount)}</span>
+                                    </div>
+                                    <div className="flex justify-between text-xs">
+                                      <span>Method:</span>
+                                      <span className="font-medium">{parseMaybeJson(activity.metadata)?.payment_type}</span>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {activity.activity_type === 'status_changed' && activity.old_values && activity.new_values && (
+                                  <div className="space-y-1 text-[11px] sm:text-xs">
+                                    <div className="flex justify-between text-xs">
+                                      <span>From:</span>
+                                      <Badge variant="outline" className="text-xs">
+                                        {parseMaybeJson(activity.old_values)?.status?.replace('_', ' ').toUpperCase()}
+                                      </Badge>
+                                    </div>
+                                    <div className="flex justify-between text-xs">
+                                      <span>To:</span>
+                                      <Badge variant="outline" className="text-xs">
+                                        {parseMaybeJson(activity.new_values)?.status?.replace('_', ' ').toUpperCase()}
+                                      </Badge>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OrderDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -257,9 +965,14 @@ export default function OrderDetailPage() {
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [totalReceipts, setTotalReceipts] = useState<number>(0);
 
-  // Handle back navigation based on referrer
+  // Handle back navigation based on referrer and order type
   const handleBackNavigation = () => {
     const from = searchParams.get('from');
+    // Check if this is a readymade order
+    if (order?.order_type === 'readymade') {
+      navigate('/orders/readymade', { state: { refreshOrders: true } });
+      return;
+    }
     if (from === 'production') {
       navigate('/production', { state: { refreshOrders: true } });
     } else {
@@ -321,11 +1034,16 @@ export default function OrderDetailPage() {
 
       // Always navigate back to orders list after any deletion attempt
       // (whether successful, failed, or order not found)
-      const from = searchParams.get('from');
-      if (from === 'production') {
-        navigate('/production', { state: { refreshOrders: true } });
+      // Check if this was a readymade order
+      if (order?.order_type === 'readymade') {
+        navigate('/orders/readymade', { state: { refreshOrders: true } });
       } else {
-        navigate('/orders', { state: { refreshOrders: true } });
+        const from = searchParams.get('from');
+        if (from === 'production') {
+          navigate('/production', { state: { refreshOrders: true } });
+        } else {
+          navigate('/orders', { state: { refreshOrders: true } });
+        }
       }
     } catch (error) {
       console.error('Error deleting order:', error);
@@ -1110,9 +1828,38 @@ export default function OrderDetailPage() {
             <p className="text-muted-foreground mb-4">The requested order could not be found.</p>
             <Button onClick={handleBackNavigation}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to {searchParams.get('from') === 'production' ? 'Production' : 'Orders'}
+              Back to {order?.order_type === 'readymade' ? 'Readymade Orders' : (searchParams.get('from') === 'production' ? 'Production' : 'Orders')}
             </Button>
           </div>
+        </div>
+      </ErpLayout>
+    );
+  }
+
+  // For readymade orders, show the form with order data
+  if (order.order_type === 'readymade') {
+    return (
+      <ErpLayout>
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <Button 
+                variant="ghost" 
+                onClick={handleBackNavigation}
+                className="flex items-center"
+              >
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to Readymade Orders
+              </Button>
+              <div>
+                <h1 className="text-3xl font-bold">Readymade Order Details</h1>
+                <p className="text-muted-foreground">Order #{order.order_number}</p>
+              </div>
+            </div>
+          </div>
+          
+          {/* Show Readymade Order Form with all fields */}
+          <ReadymadeOrderFormView orderId={id || ''} order={order} customer={customer} orderItems={orderItems} />
         </div>
       </ErpLayout>
     );
@@ -1372,10 +2119,11 @@ export default function OrderDetailPage() {
                             <div className="xl:w-2/5 space-y-6">
                               {/* Product Image with priority: mockup > category */}
                               {(() => {
-                                const displayImage = getOrderItemDisplayImage(item);
+                                const displayImage = getOrderItemDisplayImage(item, order);
                                 const { mockup_images } = extractImagesFromSpecifications(item.specifications);
-                                const hasMockup = (item.mockup_images && item.mockup_images.length > 0) || 
-                                                 (mockup_images && mockup_images.length > 0);
+                                const isReadymadeOrder = order?.order_type === 'readymade';
+                                const hasMockup = !isReadymadeOrder && ((item.mockup_images && item.mockup_images.length > 0) || 
+                                                 (mockup_images && mockup_images.length > 0));
                                 
                                 return displayImage ? (
                                   <div>
@@ -1798,7 +2546,7 @@ export default function OrderDetailPage() {
                                  <tr key={index} className="hover:bg-gray-50">
                                    <td className="border border-gray-300 px-3 py-2">
                                      {(() => {
-                                       const displayImage = getOrderItemDisplayImage(item);
+                                       const displayImage = getOrderItemDisplayImage(item, order);
                                        return displayImage ? (
                                          <img
                                            src={displayImage}

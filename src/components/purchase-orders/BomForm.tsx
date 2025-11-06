@@ -301,7 +301,7 @@ export function BomForm() {
             order_id: decodedOrderData.order_id,
             order_item_id: decodedOrderData.order_item_id,
             product_name: decodedOrderData.order_item.product_description || '',
-            product_image_url: getOrderItemDisplayImage(decodedOrderData.order_item) || null,
+            product_image_url: getOrderItemDisplayImage(decodedOrderData.order_item, decodedOrderData.order) || null,
             total_order_qty: decodedOrderData.order_item.quantity || 0,
           }));
         }
@@ -546,7 +546,7 @@ export function BomForm() {
           ...prev,
           order_id: (order as any).id,
           product_name: firstItem.product_description || firstItem.product?.name || '',
-          product_image_url: getOrderItemDisplayImage(firstItem) || firstItem.product?.image_url || null,
+          product_image_url: getOrderItemDisplayImage(firstItem, order) || firstItem.product?.image_url || null,
           total_order_qty: totalQty,
         }));
       }

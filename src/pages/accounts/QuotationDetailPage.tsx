@@ -30,6 +30,7 @@ interface Order {
   final_amount: number;
   sales_manager?: string;
   gst_rate?: number;
+  order_type?: string;
 }
 interface Customer {
   id: string;
@@ -810,12 +811,25 @@ export default function QuotationDetailPage() {
                                          (order?.gst_rate ?? 0);
                           const gstAmt = (amount * gstRate) / 100;
                           const total = amount + gstAmt;
+                          
+                          // Parse specifications for readymade orders
+                          let specs: any = {};
+                          try {
+                            specs = typeof item.specifications === 'string' 
+                              ? JSON.parse(item.specifications) 
+                              : item.specifications || {};
+                          } catch (e) {
+                            specs = item.specifications || {};
+                          }
+                          
+                          const isReadymade = order?.order_type === 'readymade';
+                          
                           return (
                             <tr key={item.id}>
                               <td className="border border-gray-400 px-3 py-2">
                                 <div className="flex items-start gap-3">
                                   {(() => {
-                                    const displayImage = getOrderItemDisplayImage(item);
+                                    const displayImage = getOrderItemDisplayImage(item, order);
                                     return displayImage ? (
                                       <img
                                         src={displayImage}
@@ -825,17 +839,44 @@ export default function QuotationDetailPage() {
                                     ) : null;
                                   })()}
                                   <div className="flex-1">
-                                    <div className="text-sm text-gray-600 font-semibold">
-                                      {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
-                                    </div>
-                                    <div className="font-semibold">{item.product_description}</div>
-                                    <div className="text-sm text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
-                                    {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
-                                      <div className="text-sm text-gray-600">
-                                        Sizes: {sortSizes(item.sizes_quantities)
-                                          .map(([size, qty]) => `${size}(${qty})`)
-                                            .join(', ')}
-                                      </div>
+                                    {isReadymade ? (
+                                      <>
+                                        <div className="font-semibold">{specs.product_name || item.product_description}</div>
+                                        <div className="text-sm text-gray-600">
+                                          {specs.class && <span>Class: {specs.class}</span>}
+                                          {specs.color && <span className="ml-2">Color: {specs.color}</span>}
+                                          {specs.category && <span className="ml-2">Category: {specs.category}</span>}
+                                        </div>
+                                        {specs.sizes_quantities && typeof specs.sizes_quantities === 'object' && Object.keys(specs.sizes_quantities).length > 0 && (
+                                          <div className="text-sm text-gray-600 mt-1">
+                                            Size-wise: {sortSizes(specs.sizes_quantities)
+                                              .map(([size, qty]) => `${size}(${qty})`)
+                                              .join(', ')}
+                                          </div>
+                                        )}
+                                        {specs.branding_items && Array.isArray(specs.branding_items) && specs.branding_items.length > 0 && (
+                                          <div className="text-sm text-gray-600 mt-1">
+                                            Branding: {specs.branding_items.map((b: any, i: number) => 
+                                              `${b.branding_type}${b.placement ? ` (${b.placement})` : ''}`
+                                            ).join(', ')}
+                                          </div>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <>
+                                        <div className="text-sm text-gray-600 font-semibold">
+                                          {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
+                                        </div>
+                                        <div className="font-semibold">{item.product_description}</div>
+                                        <div className="text-sm text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
+                                        {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
+                                          <div className="text-sm text-gray-600">
+                                            Sizes: {sortSizes(item.sizes_quantities)
+                                              .map(([size, qty]) => `${size}(${qty})`)
+                                                .join(', ')}
+                                          </div>
+                                        )}
+                                      </>
                                     )}
                                   </div>
                                 </div>
@@ -1160,20 +1201,55 @@ export default function QuotationDetailPage() {
                                      (order.gst_rate ?? 0);
                         const gstAmt = (amount * gstRate) / 100;
                         const total = amount + gstAmt;
+                        
+                        // Parse specifications for readymade orders
+                        const specs = typeof item.specifications === 'string' 
+                          ? JSON.parse(item.specifications) 
+                          : item.specifications || {};
+                        
+                        const isReadymade = order?.order_type === 'readymade';
+                        
                         return (
                           <tr key={item.id}>
                           <td className="border border-gray-400 px-1 py-1 align-top">
-                            <div className="font-semibold text-xs">{item.product_description}</div>
-                            <div className="text-xs text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
-                            <div className="text-xs text-gray-600">
-                              {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
-                            </div>
-                            {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
-                              <div className="text-xs text-gray-600">
-                                Sizes: {sortSizes(item.sizes_quantities)
-                                  .map(([size, qty]) => `${size}(${qty})`)
-                                    .join(', ')}
-                              </div>
+                            {isReadymade ? (
+                              <>
+                                <div className="font-semibold text-xs">{specs.product_name || item.product_description}</div>
+                                <div className="text-xs text-gray-600">
+                                  {specs.class && <span>Class: {specs.class}</span>}
+                                  {specs.color && <span className="ml-1">Color: {specs.color}</span>}
+                                  {specs.category && <span className="ml-1">Category: {specs.category}</span>}
+                                </div>
+                                {specs.sizes_quantities && typeof specs.sizes_quantities === 'object' && Object.keys(specs.sizes_quantities).length > 0 && (
+                                  <div className="text-xs text-gray-600">
+                                    Size-wise: {sortSizes(specs.sizes_quantities)
+                                      .map(([size, qty]) => `${size}(${qty})`)
+                                      .join(', ')}
+                                  </div>
+                                )}
+                                {specs.branding_items && Array.isArray(specs.branding_items) && specs.branding_items.length > 0 && (
+                                  <div className="text-xs text-gray-600">
+                                    Branding: {specs.branding_items.map((b: any) => 
+                                      `${b.branding_type}${b.placement ? ` (${b.placement})` : ''}`
+                                    ).join(', ')}
+                                  </div>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                <div className="font-semibold text-xs">{item.product_description}</div>
+                                <div className="text-xs text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
+                                <div className="text-xs text-gray-600">
+                                  {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
+                                </div>
+                                {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
+                                  <div className="text-xs text-gray-600">
+                                    Sizes: {sortSizes(item.sizes_quantities)
+                                      .map(([size, qty]) => `${size}(${qty})`)
+                                        .join(', ')}
+                                  </div>
+                                )}
+                              </>
                             )}
                           </td>
                           <td className="border border-gray-400 px-1 py-1 align-top text-center">
