@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ShoppingCart, Plus, Eye, Package, Clock, CheckCircle, Search, Filter, RefreshCw } from "lucide-react";
+import { ShoppingCart, Plus, Eye, Package, Clock, CheckCircle, Search, Filter, RefreshCw, Truck } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
@@ -185,7 +185,7 @@ const ReadymadeOrdersPage = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
           <Card className="shadow-erp-md bg-blue-100 text-blue-900">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium opacity-90">
@@ -228,6 +228,22 @@ const ReadymadeOrdersPage = () => {
                   {orders.filter(o => o.status === 'confirmed').length}
                 </span>
                 <Package className="w-5 h-5 text-blue-700" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-erp-md bg-purple-100 text-purple-900">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium opacity-90">
+                Dispatched
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-bold">
+                  {orders.filter(o => o.status === 'dispatched').length}
+                </span>
+                <Truck className="w-5 h-5 text-purple-700" />
               </div>
             </CardContent>
           </Card>

@@ -46,16 +46,19 @@ const WarehouseInventoryPage: React.FC = () => {
       }
 
       // Fetch totals by status; filter location type client-side to avoid RLS join issues
+      // Exclude PRODUCT items - only show FABRIC and ITEM
       const { data, error } = await supabase
         .from('warehouse_inventory' as any)
         .select(`
           quantity,
           status,
+          item_type,
           bin:bin_id (
             id,
             location_type
           )
-        `);
+        `)
+        .in('item_type', ['FABRIC', 'ITEM'] as any);
       
       if (error) {
         console.error('Error fetching warehouse inventory totals:', error);
@@ -66,16 +69,21 @@ const WarehouseInventoryPage: React.FC = () => {
       const rows = (data as any) || [];
       console.log('Warehouse inventory rows:', rows);
       
-      const receivingQty = rows
+      // Filter out PRODUCT items (only show FABRIC and ITEM)
+      const filteredRows = rows.filter((r: any) => 
+        r.item_type === 'FABRIC' || r.item_type === 'ITEM'
+      );
+      
+      const receivingQty = filteredRows
         .filter((r: any) => r.status === 'RECEIVED' && r.bin?.location_type === 'RECEIVING_ZONE')
         .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
-      const storageQty = rows
+      const storageQty = filteredRows
         .filter((r: any) => r.status === 'IN_STORAGE' && r.bin?.location_type === 'STORAGE')
         .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
-      const dispatchQty = rows
+      const dispatchQty = filteredRows
         .filter((r: any) => r.status === 'READY_TO_DISPATCH' && r.bin?.location_type === 'DISPATCH_ZONE')
         .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
-      const allQty = rows.reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
+      const allQty = filteredRows.reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
       
       console.log('Warehouse inventory totals:', { receiving: receivingQty, storage: storageQty, dispatch: dispatchQty, all: allQty });
       setTotals({ receiving: receivingQty, storage: storageQty, dispatch: dispatchQty, all: allQty });
@@ -261,7 +269,7 @@ const WarehouseInventoryPage: React.FC = () => {
 
   return (
     <ErpLayout>
-      <div className="container mx-auto p-6 space-y-6">
+      <div className="w-full p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -397,11 +405,15 @@ const WarehouseInventoryPage: React.FC = () => {
           <ReceivingZoneInventory
             onTransferItem={handleTransferItem}
             onViewDetails={handleViewDetails}
+            itemType={undefined} // Don't filter by single type, but components will filter out PRODUCT
           />
         </TabsContent>
 
         <TabsContent value="storage" className="space-y-4">
-          <StorageZoneInventory onViewDetails={handleViewDetails} />
+          <StorageZoneInventory 
+            onViewDetails={handleViewDetails}
+            itemType={undefined} // Don't filter by single type, but components will filter out PRODUCT
+          />
         </TabsContent>
 
         <TabsContent value="dispatch" className="space-y-4">

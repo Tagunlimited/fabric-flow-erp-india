@@ -1,10 +1,10 @@
 import { ErpLayout } from '@/components/ErpLayout';
-import { PurchaseOrderList } from '@/components/purchase-orders/PurchaseOrderList';
+import { PurchaseOrderDashboard } from '@/components/purchase-orders/PurchaseOrderDashboard';
 
 const PurchaseOrderListPage = () => {
   return (
     <ErpLayout>
-      <PurchaseOrderList />
+      <PurchaseOrderDashboard />
     </ErpLayout>
   );
 };

@@ -55,7 +55,7 @@ export function useOrdersWithReceipts<T = any>(): OrdersWithReceiptsResult<T> {
       // 2) Single robust server-side filter using OR when possible; fall back to single IN
       let ordersQuery: any = supabase
         .from("orders")
-        .select(`*, customer:customers(company_name)`) as any;
+        .select(`*, customer:customers(company_name), order_type`) as any;
 
       if (orderIds.length && orderNumbers.length) {
         const idsList = orderIds.join(",");

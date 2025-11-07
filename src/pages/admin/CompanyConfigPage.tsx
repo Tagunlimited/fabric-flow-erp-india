@@ -215,10 +215,10 @@ const CompanyConfigPage = () => {
 
   return (
     <ErpLayout>
-      <div className="container mx-auto p-6">
+      <div className="w-full space-y-6">
         <BackButton />
         
-        <div className="mb-6">
+        <div className="space-y-2">
           <h1 className="text-3xl font-bold text-gray-900">Company Configuration</h1>
           <p className="text-gray-600 mt-2">Manage your company information and branding assets</p>
         </div>
@@ -229,7 +229,7 @@ const CompanyConfigPage = () => {
           </Alert>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Company Information */}
           <Card>
             <CardHeader>
@@ -775,7 +775,7 @@ const CompanyConfigPage = () => {
           </Card>
         </div>
 
-        <div className="mt-6 flex gap-4">
+        <div className="flex gap-4">
           <Button 
             onClick={handleSave} 
             disabled={saving}

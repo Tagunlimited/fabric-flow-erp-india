@@ -5,13 +5,15 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Badge } from '../ui/badge';
 import { Search, Eye, Edit, FileText, Plus, Users, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
 import { BomDisplayCard } from './BomDisplayCard';
 import { BomToPOWizardDialog } from './BomToPOWizardDialog';
 import { getBomCompletionStatus } from '@/services/bomPOTracking';
 import { toast } from 'sonner';
+import { Label } from '../ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 
 interface BomRecord {
   id: string;
@@ -51,6 +53,12 @@ export function BomList({ refreshTrigger }: BomListProps) {
   const [wizardDialogOpen, setWizardDialogOpen] = useState(false);
   const [processedBomItems, setProcessedBomItems] = useState<any[]>([]);
   const [recentlyCreatedPOs, setRecentlyCreatedPOs] = useState<Set<string>>(new Set());
+  const [allocationDialogOpen, setAllocationDialogOpen] = useState(false);
+  const [allocationTargetItem, setAllocationTargetItem] = useState<any | null>(null);
+  const [allocationSourceId, setAllocationSourceId] = useState<string>('');
+  const [allocationQuantity, setAllocationQuantity] = useState<string>('0');
+  const [allocationLoading, setAllocationLoading] = useState(false);
+  const [allocationError, setAllocationError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchBoms();
@@ -180,26 +188,332 @@ export function BomList({ refreshTrigger }: BomListProps) {
     }
   };
 
-  const processBomItemsWithImages = async (bomItems: any[]) => {
+  const fetchBomItemsForBom = async (bomId: string) => {
+    const tableAttempts = [
+      { table: 'bom_record_items', label: 'bom_record_items' },
+      { table: 'bom_items', label: 'bom_items' },
+      { table: 'bill_of_materials_items', label: 'bill_of_materials_items' }
+    ];
+
+    let lastSuccessfulData: any[] | null = null;
+
+    for (const attempt of tableAttempts) {
+      try {
+        const { data, error } = await supabase
+          .from(attempt.table as any)
+          .select('*')
+          .eq('bom_id', bomId);
+
+        if (error) {
+          console.warn(`Failed to fetch BOM items from ${attempt.label}`, error);
+          continue;
+        }
+
+        console.log(`Fetched ${data?.length || 0} BOM items from ${attempt.label}`);
+
+        if (data) {
+          lastSuccessfulData = data;
+          if (data.length > 0) {
+            return data;
+          }
+        }
+      } catch (err) {
+        console.error(`Unexpected error while fetching BOM items from ${attempt.label}`, err);
+      }
+    }
+
+    return lastSuccessfulData || [];
+  };
+
+  const processBomItemsWithImages = async (bomItems: any[], currentBomId?: string) => {
     if (!bomItems || bomItems.length === 0) {
       setProcessedBomItems([]);
       return;
     }
 
-    const processedItems = await Promise.all(
-      bomItems.filter(item => {
-        const isValid = item && item.id && (item.item_name || item.category);
-        if (!isValid) {
-          console.log('Filtering out invalid item:', item);
+    const fetchStockForBomItem = async (item: any) => {
+      const category = (item?.category || '').toLowerCase();
+      const itemTypeFilter = category === 'fabric' ? 'FABRIC' : 'ITEM';
+      let resolvedUnit = item?.unit_of_measure || item?.required_unit || '';
+      const fabricName = item?.fabric_name?.trim() || item?.item_name?.split(' - ')[0]?.trim();
+      const normalizedItemName = item?.item_name?.trim();
+
+      const normalize = (value: string | number | null | undefined) =>
+        `${value ?? ''}`.trim().toLowerCase();
+
+      const matchesInventoryRow = (row: any) => {
+        if (!row) return false;
+        if (item?.item_id && row.item_id && row.item_id === item.item_id) {
+          return true;
         }
-        return isValid;
-      }).map(async (item) => {
+
+        const targetCode = normalize((item as any)?.item_code);
+        const rowCode = normalize(row.item_code);
+        if (targetCode && rowCode && targetCode === rowCode) {
+          return true;
+        }
+
+        const rowName = normalize(row.item_name);
+        if (category === 'fabric') {
+          const targetFabricName = normalize(fabricName);
+          if (targetFabricName && rowName === targetFabricName) {
+            return true;
+          }
+        } else {
+          const targetItemName = normalize(normalizedItemName);
+          if (targetItemName && rowName === targetItemName) {
+            return true;
+          }
+        }
+
+        return false;
+      };
+
+      const fetchWarehouseInventory = async (
+        configureQuery?: (query: any) => any
+      ): Promise<any[] | null> => {
+        try {
+          let query = supabase
+            .from('warehouse_inventory' as any)
+            .select('id, quantity, unit, item_name, item_code, item_id')
+            .eq('status', 'IN_STORAGE')
+            .eq('item_type', itemTypeFilter);
+
+          if (configureQuery) {
+            query = configureQuery(query);
+          }
+
+          const { data, error } = await query;
+
+          if (error) {
+            console.warn('Failed to fetch warehouse inventory for BOM item', {
+              itemId: item?.id,
+              category,
+              error
+            });
+            return null;
+          }
+
+          if (data && data.length > 0) {
+            const filtered = (data as any[]).filter(matchesInventoryRow);
+            if (filtered.length > 0) {
+              return filtered;
+            }
+          }
+        } catch (err) {
+          console.error('Unexpected error while fetching warehouse inventory for BOM item', {
+            itemId: item?.id,
+            err
+          });
+        }
+
+        return null;
+      };
+
+      const warehouseInventoryStrategies: ((query: any) => any)[] = [];
+
+      if (item?.item_id) {
+        warehouseInventoryStrategies.push((query) => query.eq('item_id', item.item_id));
+      }
+
+      if (item?.item_code) {
+        warehouseInventoryStrategies.push((query) => query.eq('item_code', item.item_code));
+      }
+
+      if (category === 'fabric') {
+        if (fabricName) {
+          warehouseInventoryStrategies.push((query) => query.eq('item_name', fabricName));
+          warehouseInventoryStrategies.push((query) => query.ilike('item_name', `%${fabricName}%`));
+        }
+      } else if (normalizedItemName) {
+        warehouseInventoryStrategies.push((query) => query.eq('item_name', normalizedItemName));
+        warehouseInventoryStrategies.push((query) => query.ilike('item_name', `%${normalizedItemName}%`));
+      }
+
+      let inventoryRows: any[] | null = null;
+
+      for (const strategy of warehouseInventoryStrategies) {
+        inventoryRows = await fetchWarehouseInventory(strategy);
+        if (inventoryRows && inventoryRows.length > 0) {
+          break;
+        }
+      }
+
+      if (!inventoryRows) {
+        inventoryRows = await fetchWarehouseInventory();
+      }
+
+      let totalQuantity = 0;
+      let inventoryAllocationsMap: Record<string, number> = {};
+
+      if (inventoryRows && inventoryRows.length > 0) {
+        totalQuantity = inventoryRows.reduce((sum, row) => sum + Number(row?.quantity || 0), 0);
+
+        const unitFromRow = inventoryRows.find((row) => row?.unit)?.unit;
+        if (unitFromRow) {
+          resolvedUnit = unitFromRow;
+        }
+
+        try {
+          const inventoryIds = inventoryRows.map((row) => row.id);
+          if (inventoryIds.length > 0) {
+            const { data: allocationRows, error: allocationError } = await supabase
+              .from('inventory_allocations' as any)
+              .select('warehouse_inventory_id, quantity')
+              .in('warehouse_inventory_id', inventoryIds);
+
+            if (allocationError) {
+              console.warn('Failed to fetch allocation summary for inventory rows', allocationError);
+            } else if (allocationRows) {
+              inventoryAllocationsMap = allocationRows.reduce((acc: Record<string, number>, row: any) => {
+                const key = row.warehouse_inventory_id;
+                const qty = Number(row.quantity || 0);
+                acc[key] = (acc[key] || 0) + qty;
+                return acc;
+              }, {} as Record<string, number>);
+            }
+          }
+        } catch (err) {
+          console.error('Unexpected error while fetching inventory allocations summary', err);
+        }
+      } else if (category === 'fabric') {
+        try {
+          if (fabricName) {
+            let fabricQuery = supabase
+              .from('fabric_stock_summary' as any)
+              .select('total_available, total_quantity, unit, color, gsm')
+              .eq('fabric_name', fabricName);
+
+            const fabricColor = item?.fabric_color?.trim();
+            const fabricGsm = item?.fabric_gsm?.trim();
+
+            if (fabricColor) {
+              fabricQuery = fabricQuery.eq('color', fabricColor);
+            }
+
+            if (fabricGsm) {
+              fabricQuery = fabricQuery.eq('gsm', fabricGsm);
+            }
+
+            const { data: fabricStockRows, error: fabricStockError } = await fabricQuery.limit(1);
+
+            if (fabricStockError) {
+              console.warn('Failed to fetch fabric stock summary for BOM item', {
+                itemId: item?.id,
+                fabricName,
+                fabricColor,
+                fabricGsm,
+                error: fabricStockError
+              });
+            } else if (fabricStockRows && fabricStockRows.length > 0) {
+              const fabricStock = fabricStockRows[0] as any;
+              const available = Number(
+                fabricStock?.total_available ?? fabricStock?.total_quantity ?? 0
+              );
+              if (!Number.isNaN(available)) {
+                totalQuantity = available;
+              }
+              if (fabricStock?.unit) {
+                resolvedUnit = fabricStock.unit;
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Unexpected error while resolving fabric stock summary for BOM item', {
+            itemId: item?.id,
+            error
+          });
+        }
+      }
+
+      let totalAllocatedToThisItem = 0;
+      try {
+        const { data: bomAllocations, error: bomAllocationError } = await supabase
+          .from('inventory_allocations' as any)
+          .select('quantity')
+          .eq('bom_item_id', item.id);
+
+        if (bomAllocationError) {
+          console.warn('Failed to fetch allocations for BOM item', bomAllocationError);
+        } else if (bomAllocations) {
+          totalAllocatedToThisItem = bomAllocations.reduce((sum: number, row: any) => {
+            return sum + Number(row.quantity || 0);
+          }, 0);
+        }
+      } catch (err) {
+        console.error('Unexpected error while fetching BOM item allocations', err);
+      }
+
+      const inventorySources = (inventoryRows || []).map((row) => {
+        const allocated = Number(inventoryAllocationsMap[row.id] || 0);
+        const quantity = Number(row.quantity || 0);
+        return {
+          id: row.id,
+          quantity,
+          allocated,
+          available: Math.max(quantity - allocated, 0),
+          unit: row.unit
+        };
+      });
+
+      const totalAllocatedFromInventory = inventorySources.reduce(
+        (sum, source) => sum + source.allocated,
+        0
+      );
+
+      const totalAvailable = inventorySources.reduce(
+        (sum, source) => sum + source.available,
+        0
+      );
+
+      return {
+        unit: resolvedUnit,
+        totalQuantity,
+        totalAvailable,
+        inventorySources,
+        totalAllocatedToThisItem,
+        totalAllocatedFromInventory
+      };
+    };
+
+    const processedItems = await Promise.all(
+      bomItems.map(async (item, index) => {
+        if (!item || (!item.item_name && !item.fabric_name)) {
+          console.log('Skipping invalid BOM item payload:', item);
+          return null;
+        }
+
         console.log('Processing BOM item for display:', item);
-        
+
         // Fetch image for the item
-        let imageUrl = null;
+        let imageUrl =
+          item.item_image_url ||
+          item.image_url ||
+          item.item?.image_url ||
+          item.item?.image ||
+          null;
+        const fabricCode =
+          item.fabric_code ||
+          item.item?.fabric_code ||
+          item.item?.item_code ||
+          item.item_code ||
+          null;
+        const stockInfo = await fetchStockForBomItem(item);
+        const safeStockInfo = {
+          unit:
+            stockInfo?.unit ||
+            item.unit_of_measure ||
+            item.required_unit ||
+            item.unit ||
+            '',
+          totalQuantity: Number(stockInfo?.totalQuantity ?? item.stock ?? 0),
+          totalAvailable: Number(stockInfo?.totalAvailable ?? item.stock ?? 0),
+          inventorySources: stockInfo?.inventorySources || [],
+          totalAllocatedToThisItem: Number(stockInfo?.totalAllocatedToThisItem ?? item.total_allocated ?? 0),
+          totalAllocatedFromInventory: Number(stockInfo?.totalAllocatedFromInventory ?? 0)
+        };
         
-        if (item.category === 'Fabric') {
+        if (!imageUrl && item.category === 'Fabric') {
           // Fetch fabric image
           try {
             const fabricName = item.fabric_name || item.item_name?.split(' - ')[0] || '';
@@ -208,34 +522,75 @@ export function BomList({ refreshTrigger }: BomListProps) {
             
             console.log('Fetching fabric image for:', { fabricName, fabricColor, fabricGsm });
             
-            // Try exact match first
-            let fabricResult = await supabase
-              .from('fabric_master')
-              .select('image')
-              .eq('fabric_name', fabricName)
-              .eq('color', fabricColor)
-              .eq('gsm', fabricGsm)
-              .single();
-            
-            if (fabricResult.error) {
-              // Try partial match - just name
-              fabricResult = await supabase
-                .from('fabric_master')
-                .select('image')
-                .eq('fabric_name', fabricName)
-                .single();
+            const attemptFetchFabric = async (
+              configureQuery: (query: any) => any
+            ) => {
+              try {
+                let query = supabase
+                  .from('fabric_master')
+                  .select('image, image_url, color, gsm, fabric_code');
+
+                query = configureQuery(query);
+
+                const { data, error } = await query.limit(1);
+                if (error) {
+                  console.warn('Fabric image lookup error', error);
+                  return null;
+                }
+                return data && data.length > 0 ? data[0] : null;
+              } catch (err) {
+                console.warn('Unexpected fabric image lookup error', err);
+                return null;
+              }
+            };
+
+            let fabricRecord: any = null;
+
+            if (fabricCode) {
+              fabricRecord = await attemptFetchFabric((query) => query.eq('fabric_code', fabricCode));
             }
-            
-            if (!fabricResult.error && (fabricResult.data as any)?.image) {
-              imageUrl = (fabricResult.data as any).image;
-              console.log('Found fabric image:', imageUrl);
+
+            if (!fabricRecord && fabricName) {
+              fabricRecord = await attemptFetchFabric((query) => {
+                let next = query.eq('fabric_name', fabricName);
+                if (fabricColor) {
+                  next = next.eq('color', fabricColor);
+                }
+                if (fabricGsm) {
+                  next = next.eq('gsm', fabricGsm);
+                }
+                return next;
+              });
+
+              if (!fabricRecord) {
+                fabricRecord = await attemptFetchFabric((query) => {
+                  let next = query.ilike('fabric_name', fabricName);
+                  if (fabricColor) {
+                    next = next.ilike('color', fabricColor);
+                  }
+                  return next;
+                });
+              }
+
+              if (!fabricRecord) {
+                fabricRecord = await attemptFetchFabric((query) =>
+                  query.ilike('fabric_name', `%${fabricName}%`)
+                );
+              }
+            }
+
+            if (fabricRecord) {
+              imageUrl = fabricRecord.image_url || fabricRecord.image || null;
+              if (imageUrl) {
+                console.log('Found fabric image:', imageUrl);
+              }
             } else {
-              console.log('No fabric image found:', fabricResult.error);
+              console.log('No fabric image found for fabric:', fabricName);
             }
           } catch (error) {
             console.log('Error fetching fabric image:', error);
           }
-        } else if (item.item_id) {
+        } else if (!imageUrl && item.item_id) {
           // Fetch item image
           try {
             console.log('Fetching item image for item_id:', item.item_id);
@@ -256,21 +611,60 @@ export function BomList({ refreshTrigger }: BomListProps) {
             console.log('Error fetching item image:', error);
           }
         }
-        
+        const resolvedCategoryRaw =
+          item.category ||
+          item.item_category ||
+          item.selected_item_type ||
+          item.item_type ||
+          (item.fabric_name ? 'Fabric' : 'Item');
+        const resolvedCategory =
+          resolvedCategoryRaw?.toLowerCase() === 'fabric'
+            ? 'Fabric'
+            : resolvedCategoryRaw || 'Item';
+
+        const resolvedName =
+          item.item_name ||
+          (resolvedCategory === 'Fabric' ? item.fabric_name : null) ||
+          item.item_code ||
+          'Unnamed Item';
+
+        const requiredQty = Number(
+          item.qty_total ??
+            item.required_qty ??
+            item.quantity ??
+            item.qty_required ??
+            0
+        );
+
+        const requiredUnit =
+          item.unit_of_measure || item.required_unit || item.unit || safeStockInfo.unit || '';
+
+        const bomItemId =
+          (typeof item.id === 'string' && item.id.trim().length > 0)
+            ? item.id
+            : null;
+
         return {
-          id: item.id,
-          item_name: item.item_name,
-          category: item.category,
-          required_qty: item.qty_total,
-          required_unit: item.unit_of_measure,
-          in_stock: item.stock,
-          stock_unit: item.unit_of_measure,
-          image_url: imageUrl || item.item?.image_url || item.item?.image || null
+          id: bomItemId,
+          bom_id: item.bom_id || currentBomId || selectedBom?.id || item.bomId || null,
+          item_name: resolvedName,
+          category: resolvedCategory,
+          required_qty: requiredQty,
+          required_unit: requiredUnit,
+          in_stock: safeStockInfo.totalAvailable,
+          stock_unit: safeStockInfo.unit,
+          fabric_code: fabricCode,
+          image_url: imageUrl,
+          allocation: {
+            totalAllocated: safeStockInfo.totalAllocatedToThisItem,
+            totalAvailable: safeStockInfo.totalAvailable,
+            inventorySources: safeStockInfo.inventorySources
+          }
         };
       })
     );
-    
-    setProcessedBomItems(processedItems);
+
+    setProcessedBomItems(processedItems.filter(Boolean));
   };
 
   const viewBomDetails = async (bom: BomRecord) => {
@@ -294,9 +688,193 @@ export function BomList({ refreshTrigger }: BomListProps) {
     
     setSelectedBom(bom);
     setDetailDialogOpen(true);
-    
-    // Process BOM items with images
-    await processBomItemsWithImages(bom.bom_record_items || []);
+    setProcessedBomItems([]);
+
+    let itemsToProcess = bom.bom_record_items && bom.bom_record_items.length > 0
+      ? bom.bom_record_items
+      : null;
+
+    if (!itemsToProcess || itemsToProcess.length === 0) {
+      itemsToProcess = await fetchBomItemsForBom(bom.id);
+    }
+
+    console.log('BOM items resolved for processing:', itemsToProcess?.length || 0);
+
+    await processBomItemsWithImages(itemsToProcess || [], bom.id);
+  };
+
+  useEffect(() => {
+    if (!selectedBom || !detailDialogOpen) return;
+
+    const channel = supabase
+      .channel(`inventory-allocations-bom-${selectedBom.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'inventory_allocations'
+        },
+        () => {
+          if (selectedBom?.bom_record_items) {
+      processBomItemsWithImages(selectedBom.bom_record_items, selectedBom.id);
+            processBomItemsWithImages(selectedBom.bom_record_items, selectedBom.id);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [selectedBom, detailDialogOpen]);
+
+  const resetAllocationDialog = () => {
+    setAllocationTargetItem(null);
+    setAllocationSourceId('');
+    setAllocationQuantity('0');
+    setAllocationError(null);
+  };
+
+  const openAllocationDialog = (item: any) => {
+    setAllocationTargetItem(item);
+    const firstAvailableSource = item?.allocation?.inventorySources?.find((src: any) => src.available > 0);
+    setAllocationSourceId(firstAvailableSource?.id || '');
+    const requiredRemaining = Math.max(item.required_qty - (item.allocation?.totalAllocated || 0), 0);
+    const defaultQuantity = Math.min(requiredRemaining, firstAvailableSource?.available || item.in_stock || 0);
+    setAllocationQuantity(defaultQuantity > 0 ? String(Number(defaultQuantity.toFixed(3))) : '0');
+    setAllocationDialogOpen(true);
+  };
+
+  const openAllocateAllDialog = () => {
+    if (!processedBomItems.length) return;
+    const aggregateAvailable = processedBomItems.flatMap((item: any) => item.allocation?.inventorySources || []);
+    const firstAvailableSource = aggregateAvailable.find((src: any) => src.available > 0);
+    setAllocationTargetItem({
+      id: null,
+      isBulk: true,
+      items: processedBomItems,
+      stock_unit: firstAvailableSource?.unit,
+      required_unit: processedBomItems[0]?.required_unit || '',
+      allocation: {
+        inventorySources: aggregateAvailable,
+        totalAvailable: aggregateAvailable.reduce((sum: number, src: any) => sum + (src.available || 0), 0)
+      }
+    });
+    setAllocationSourceId(firstAvailableSource?.id || '');
+    setAllocationQuantity('0');
+    setAllocationDialogOpen(true);
+  };
+
+  const handleAllocateStock = async () => {
+    if (!allocationTargetItem || !selectedBom) {
+      return;
+    }
+
+    const parsedQuantity = Number(allocationQuantity);
+    const selectedSource = allocationTargetItem.allocation?.inventorySources?.find((src: any) => src.id === allocationSourceId);
+    if (!allocationSourceId || !selectedSource) {
+      setAllocationError('Please choose a stock source to allocate from.');
+      return;
+    }
+
+    if (Number.isNaN(parsedQuantity) || parsedQuantity <= 0) {
+      setAllocationError('Please enter a valid allocation quantity greater than zero.');
+      return;
+    }
+
+    if (parsedQuantity > selectedSource.available) {
+      setAllocationError(`Cannot allocate more than ${selectedSource.available} ${selectedSource.unit || allocationTargetItem.stock_unit || ''} from the selected source.`);
+      return;
+    }
+
+    if (!allocationTargetItem.isBulk) {
+      const remainingRequired = Math.max(allocationTargetItem.required_qty - (allocationTargetItem.allocation?.totalAllocated || 0), 0);
+      if (parsedQuantity > remainingRequired) {
+        setAllocationError(`Allocation exceeds remaining required quantity (${remainingRequired}).`);
+        return;
+      }
+    }
+
+    try {
+      setAllocationLoading(true);
+      setAllocationError(null);
+
+      if (allocationTargetItem.isBulk) {
+        const remainingItems = allocationTargetItem.items.filter((item: any) => {
+          const remaining = Math.max(item.required_qty - (item.allocation?.totalAllocated || 0), 0);
+          return remaining > 0 && item.allocation?.totalAvailable > 0;
+        });
+
+        if (!remainingItems.length) {
+          setAllocationError('All items are already fully allocated.');
+          return;
+        }
+
+        const allocationBatch = remainingItems.map((item: any) => {
+          const remaining = Math.max(item.required_qty - (item.allocation?.totalAllocated || 0), 0);
+          const allocatable = Math.min(
+            remaining,
+            item.allocation?.totalAvailable || 0,
+            selectedSource.available
+          );
+          selectedSource.available -= allocatable;
+          return {
+            warehouse_inventory_id: allocationSourceId,
+            bom_id: selectedBom.id,
+            bom_item_id: item.id,
+            quantity: allocatable,
+            unit: item.stock_unit || selectedSource.unit || item.required_unit
+          };
+        }).filter((entry) => entry.quantity > 0);
+
+        if (!allocationBatch.length) {
+          setAllocationError('No allocatable quantity found for the selected source.');
+          return;
+        }
+
+        const { error } = await supabase
+          .from('inventory_allocations' as any)
+          .insert(allocationBatch);
+
+        if (error) {
+          console.error('Failed to allocate stock', error);
+          setAllocationError('Failed to allocate stock. Please try again.');
+          return;
+        }
+      } else {
+        const { error } = await supabase
+          .from('inventory_allocations' as any)
+          .insert({
+            warehouse_inventory_id: allocationSourceId,
+            bom_id: selectedBom.id,
+            bom_item_id: allocationTargetItem.id,
+            quantity: parsedQuantity,
+            unit: allocationTargetItem.stock_unit || selectedSource.unit || allocationTargetItem.required_unit
+          });
+
+        if (error) {
+          console.error('Failed to allocate stock', error);
+          setAllocationError('Failed to allocate stock. Please try again.');
+          return;
+        }
+      }
+
+
+      toast.success('Stock allocated successfully');
+
+      if (selectedBom?.bom_record_items && selectedBom?.id) {
+        await processBomItemsWithImages(selectedBom.bom_record_items, selectedBom.id);
+      }
+
+      resetAllocationDialog();
+      setAllocationDialogOpen(false);
+    } catch (err) {
+      console.error('Unexpected error during stock allocation', err);
+      setAllocationError('An unexpected error occurred while allocating stock.');
+    } finally {
+      setAllocationLoading(false);
+    }
   };
 
   const editBom = (bom: BomRecord) => {
@@ -670,12 +1248,81 @@ export function BomList({ refreshTrigger }: BomListProps) {
               productImageUrl={selectedBom.product_image_url}
               totalOrderQty={selectedBom.total_order_qty}
               bomItems={processedBomItems}
+              onAllocateClick={openAllocationDialog}
+              onAllocateAllClick={openAllocateAllDialog}
               onViewClick={() => {
                 setDetailDialogOpen(false);
                 createPurchaseOrderFromBom(selectedBom);
               }}
             />
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={allocationDialogOpen} onOpenChange={(open) => {
+        setAllocationDialogOpen(open);
+        if (!open) {
+          resetAllocationDialog();
+        }
+      }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Allocate Stock</DialogTitle>
+          </DialogHeader>
+          {allocationTargetItem && (
+            <div className="space-y-4">
+              <div>
+                <div className="text-sm text-muted-foreground">Item</div>
+                <div className="text-base font-semibold">{allocationTargetItem.item_name}</div>
+                <div className="text-xs text-muted-foreground">Required: {allocationTargetItem.required_qty} {allocationTargetItem.required_unit}</div>
+                <div className="text-xs text-muted-foreground">Allocated: {allocationTargetItem.allocation?.totalAllocated || 0} {allocationTargetItem.stock_unit}</div>
+                <div className="text-xs text-muted-foreground">Available to allocate: {allocationTargetItem.allocation?.totalAvailable || 0} {allocationTargetItem.stock_unit}</div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Stock Source</Label>
+                <Select value={allocationSourceId} onValueChange={setAllocationSourceId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(allocationTargetItem.allocation?.inventorySources || [])
+                      .filter((src: any) => src.available > 0)
+                      .map((src: any) => (
+                        <SelectItem key={src.id} value={src.id}>
+                          Bin Stock • Available {src.available} {src.unit || allocationTargetItem.stock_unit}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Quantity to Allocate</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={allocationQuantity}
+                  onChange={(e) => setAllocationQuantity(e.target.value)}
+                />
+                {allocationError && (
+                  <div className="text-sm text-red-500">{allocationError}</div>
+                )}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setAllocationDialogOpen(false);
+              resetAllocationDialog();
+            }} disabled={allocationLoading}>
+              Cancel
+            </Button>
+            <Button onClick={handleAllocateStock} disabled={allocationLoading}>
+              {allocationLoading ? 'Allocating...' : 'Allocate'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

@@ -120,6 +120,7 @@ interface Product {
   attachments: File[];
   product_description: string;
   fabric_id: string;
+  fabric_base_id?: string;
   gsm: string;
   color: string;
   remarks: string;
@@ -348,16 +349,16 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
   // Handle fabric selection and auto-select GSM and price
   const handleFabricSelect = (productIndex: number, fabricId: string) => {
-    const selectedFabric = fabrics.find(f => f.id === fabricId);
     setFormData(prev => ({
       ...prev,
       products: prev.products.map((p, i) => 
         i === productIndex ? { 
           ...p, 
+          fabric_base_id: fabricId,
           fabric_id: fabricId, 
-          color: '', // Reset color - user will select from dropdown
-          gsm: selectedFabric?.gsm || '',
-          price: selectedFabric?.rate || 0
+        color: '', // Reset color - user will select from dropdown
+        gsm: '',
+        price: p.price
         } : p
       )
     }));
@@ -365,25 +366,70 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
   // Handle color selection
   const handleColorSelect = (productIndex: number, color: string) => {
-    setFormData(prev => ({
+  setFormData(prev => {
+    const product = prev.products[productIndex];
+    const baseFabric = fabrics.find(
+      f => f.id === (product.fabric_base_id || product.fabric_id)
+    );
+    const variants = baseFabric
+      ? fabrics.filter(f => f.fabric_name === baseFabric.fabric_name)
+      : [];
+    const matchingVariant = variants.find(
+      (variant) =>
+        variant.color === color && (!product.gsm || !variant.gsm || variant.gsm === product.gsm)
+    ) || variants.find((variant) => variant.color === color);
+
+    return {
       ...prev,
-      products: prev.products.map((p, i) => 
-        i === productIndex ? { ...p, color: color } : p
+      products: prev.products.map((p, i) =>
+        i === productIndex
+          ? {
+              ...p,
+              color,
+              fabric_id: matchingVariant?.id || p.fabric_id,
+              fabric_base_id: p.fabric_base_id || p.fabric_id,
+              gsm: matchingVariant?.gsm || p.gsm,
+              price: matchingVariant?.rate ?? p.price
+            }
+          : p
       )
-    }));
+    };
+  });
   };
 
   // Get available colors for selected fabric
   const getAvailableColors = (productIndex: number) => {
-    const product = formData.products[productIndex];
-    if (!product.fabric_id) return [];
-    
-    const selectedFabric = fabrics.find(f => f.id === product.fabric_id);
+  const product = formData.products[productIndex];
+  const baseId = product.fabric_base_id || product.fabric_id;
+  if (!baseId) return [];
+  
+  const selectedFabric = fabrics.find(f => f.id === baseId);
     if (!selectedFabric) return [];
     
     // Get all fabrics with the same fabric_name but different colors
     return fabrics.filter(f => f.fabric_name === selectedFabric.fabric_name);
   };
+
+const getSelectedFabricVariant = (productIndex: number) => {
+  const product = formData.products[productIndex];
+  if (!product.fabric_id || !product.color || !product.gsm) return null;
+  const variant = fabrics.find(f => f.id === product.fabric_id);
+  if (!variant) return null;
+  // Ensure variant matches selected attributes; if not, try to resolve by attributes
+  if (
+    variant.color !== product.color ||
+    (variant.gsm && product.gsm && variant.gsm !== product.gsm)
+  ) {
+    const resolved = fabrics.find(
+      (f) =>
+        f.fabric_name === variant.fabric_name &&
+        f.color === product.color &&
+        (!product.gsm || f.gsm === product.gsm)
+    );
+    return resolved || variant;
+  }
+  return variant;
+};
 
   // Color and GSM are now automatically selected with fabric
   // No separate color selection needed
@@ -452,6 +498,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
       attachments: [],
       product_description: '',
       fabric_id: '',
+    fabric_base_id: '',
       gsm: '',
       color: '',
       remarks: '',
@@ -556,7 +603,8 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
               ...product,
               product_category_id: categoryId,
               category_image_url: category?.category_image_url || '',
-              fabric_id: '' // Reset fabric selection when category changes
+              fabric_id: '', // Reset fabric selection when category changes
+              fabric_base_id: ''
             }
           : product
       )
@@ -1284,7 +1332,9 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
                 </Button>
               </div>
 
-              {formData.products.map((product, productIndex) => (
+              {formData.products.map((product, productIndex) => {
+                const selectedFabricVariant = getSelectedFabricVariant(productIndex);
+                return (
                 <Card key={productIndex} className="relative border-l-4 border-l-primary bg-gradient-to-r from-primary/5 to-background shadow-lg">
                   <CardHeader className="pb-3 bg-gradient-to-r from-primary/10 to-transparent">
                     <div className="flex justify-between items-center">
@@ -1421,7 +1471,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
         <div>
           <Label className="text-base font-semibold text-gray-700 mb-2 block">Fabric</Label>
           <Select
-            value={product.fabric_id}
+            value={product.fabric_base_id || product.fabric_id}
             onValueChange={(value) => handleFabricSelect(productIndex, value)}
             disabled={false}
           >
@@ -1432,13 +1482,6 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
               {getFilteredFabricNames(productIndex).map((fabric) => (
                 <SelectItem key={fabric.id} value={fabric.id}>
                   <div className="flex items-center gap-2">
-                    {fabric.image && (
-                      <img 
-                        src={fabric.image} 
-                        alt={fabric.fabric_name} 
-                        className="w-6 h-6 object-cover rounded border"
-                      />
-                    )}
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{fabric.fabric_name}</span>
                       {fabric.gsm && <span className="text-muted-foreground">({fabric.gsm} GSM)</span>}
@@ -1504,6 +1547,24 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
         />
       </div>
     </div>
+    {selectedFabricVariant?.image && (
+      <div className="flex items-center gap-4 rounded-lg border border-dashed border-primary/40 bg-primary/5 p-4">
+        <img
+          src={selectedFabricVariant.image}
+          alt={`${selectedFabricVariant.fabric_name} ${selectedFabricVariant.color}`}
+          className="w-20 h-20 object-cover rounded-md border"
+        />
+        <div>
+          <div className="font-semibold text-sm text-primary">{selectedFabricVariant.fabric_name}</div>
+          <div className="text-sm text-muted-foreground">
+            {selectedFabricVariant.color} • {selectedFabricVariant.gsm || product.gsm} GSM
+          </div>
+          {selectedFabricVariant.fabric_code && (
+            <div className="text-xs text-muted-foreground">Code: {selectedFabricVariant.fabric_code}</div>
+          )}
+        </div>
+      </div>
+    )}
 {/* <div className="space-y-3">
                         <Label>Color</Label>
                         {product.fabric_id ? (
@@ -2040,7 +2101,8 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
                   </CardContent>
                 </Card>
-              ))}
+              );
+              })}
             </div>
 
             {/* Order Summary */}
