@@ -502,41 +502,48 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
   const generateOrderNumber = async () => {
     try {
-      // Get the latest order number to determine the next sequence
-      const { data, error } = await supabase
-        .from('orders')
-        .select('order_number')
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      if (error) throw error;
-
-      let nextSequence = 1;
-      if (data && data.length > 0) {
-        const lastOrderNumber = data[0].order_number;
-        // Extract sequence number from formats like "TUC/25-26/JUL/342" or "ORD001"
-        const match = lastOrderNumber.match(/(\d+)$/);
-        if (match) {
-          nextSequence = parseInt(match[1]) + 1;
-        }
-      }
-
       const now = new Date();
       const year = now.getFullYear().toString().slice(-2);
       const nextYear = (now.getFullYear() + 1).toString().slice(-2);
       const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+      const monthPattern = `TUC/${year}-${nextYear}/${month}/%`;
+
+      // Get all orders for the current month/year to find the highest sequence
+      const { data, error } = await supabase
+        .from('orders')
+        .select('order_number')
+        .like('order_number', monthPattern)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      let maxSequence = 0;
+      if (data && data.length > 0) {
+        // Extract sequence numbers from all orders in this month
+        data.forEach((order: any) => {
+          const match = order.order_number.match(/(\d+)$/);
+          if (match) {
+            const sequence = parseInt(match[1], 10);
+            if (sequence > maxSequence) {
+              maxSequence = sequence;
+            }
+          }
+        });
+      }
+
+      const nextSequence = maxSequence + 1;
       const sequence = nextSequence.toString().padStart(3, '0');
       
       return `TUC/${year}-${nextYear}/${month}/${sequence}`;
     } catch (error) {
       console.error('Error generating order number:', error);
-      // Fallback to random if sequence generation fails
+      // Fallback: try with timestamp to ensure uniqueness
       const now = new Date();
       const year = now.getFullYear().toString().slice(-2);
       const nextYear = (now.getFullYear() + 1).toString().slice(-2);
       const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-      const sequence = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-      return `TUC/${year}-${nextYear}/${month}/${sequence}`;
+      const timestamp = Date.now().toString().slice(-3); // Last 3 digits of timestamp
+      return `TUC/${year}-${nextYear}/${month}/${timestamp}`;
     }
   };
 
@@ -964,17 +971,44 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
       console.log('Inserting order data:', orderData);
       
-      // First, let's test if we can create a simple order without items
-      const { data: orderResult, error: orderError } = await supabase
-        .from('orders')
-        .insert(orderData)
-        .select()
-        .single();
+      // Retry logic for duplicate order numbers
+      let orderResult;
+      let orderError;
+      let retries = 3;
+      
+      while (retries > 0) {
+        const result = await supabase
+          .from('orders')
+          .insert(orderData)
+          .select()
+          .single();
+
+        orderError = result.error;
+        
+        if (!orderError) {
+          orderResult = result.data;
+          break;
+        }
+        
+        // If it's a duplicate key error, regenerate order number and retry
+        if (orderError.code === '23505' && orderError.message?.includes('order_number')) {
+          console.warn('Duplicate order number detected, regenerating...');
+          orderData.order_number = await generateOrderNumber();
+          retries--;
+        } else {
+          // For other errors, throw immediately
+          break;
+        }
+      }
 
       if (orderError) {
         console.error('Order creation error:', orderError);
         console.error('Order data that failed:', JSON.stringify(orderData, null, 2));
         throw orderError;
+      }
+
+      if (!orderResult) {
+        throw new Error('Failed to create order after retries');
       }
 
       console.log('Order created successfully:', orderResult);

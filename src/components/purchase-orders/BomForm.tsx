@@ -142,6 +142,7 @@ export function BomForm() {
     [key: number]: {
       selectedFabricName?: string;
       selectedColor?: string;
+      selectedGsm?: string;
       availableColors?: string[];
       availableGsm?: string[];
     }
@@ -149,6 +150,15 @@ export function BomForm() {
   
   // Caching for performance
   const attributesCache = useRef<Map<string, any>>(new Map());
+
+  // State for inventory and PO quantities
+  const [itemQuantities, setItemQuantities] = useState<Record<string, {
+    inventoryQty: number;
+    poQty: number;
+    blockedQty: number;
+  }>>({});
+
+  const [quantitiesLoading, setQuantitiesLoading] = useState<Record<string, boolean>>({});
 
   // Get unique item types from item_master
   const itemTypes = useMemo(() => {
@@ -276,6 +286,242 @@ export function BomForm() {
       fabric.gsm === gsm
     );
   }, [fabricOptions]);
+
+  // Generate a unique key for an item (for quantity lookup)
+  const getItemKey = useCallback((item: BomLineItem): string => {
+    if (item.item_type === 'fabric') {
+      const fabricName = (item.fabric_name || '').trim().toLowerCase();
+      const fabricColor = (item.fabric_color || '').trim().toLowerCase();
+      const fabricGsm = (item.fabric_gsm || '').trim().toLowerCase();
+      return `fabric:${fabricName}:${fabricColor}:${fabricGsm}`;
+    } else {
+      // For items, prefer item_id, fallback to item_name
+      if (item.item_id) {
+        return `item:${item.item_id}`;
+      } else if (item.item_name) {
+        return `item:${(item.item_name || '').trim().toLowerCase()}`;
+      }
+      return `item:${item.id || ''}`;
+    }
+  }, []);
+
+  // Fetch inventory quantity for a fabric or item
+  const fetchInventoryQuantity = useCallback(async (item: BomLineItem): Promise<number> => {
+    try {
+      let totalInventory = 0;
+
+      if (item.item_type === 'fabric') {
+        // For fabrics, match by fabric_name, color, and gsm
+        const fabricName = (item.fabric_name || '').trim();
+        const fabricColor = (item.fabric_color || '').trim();
+        const fabricGsm = (item.fabric_gsm || '').trim();
+
+        if (!fabricName) return 0;
+
+        // First, try to find fabric_id from fabric_master
+        let fabricId: string | null = null;
+        if (fabricName && fabricColor && fabricGsm) {
+          const { data: fabricData, error: fabricError } = await supabase
+            .from('fabric_master')
+            .select('id')
+            .eq('fabric_name', fabricName as any)
+            .eq('color', fabricColor as any)
+            .eq('gsm', fabricGsm as any)
+            .limit(1)
+            .single();
+          
+          if (!fabricError && fabricData && (fabricData as any).id) {
+            fabricId = (fabricData as any).id;
+          }
+        }
+
+        // Query inventory table by fabric_id
+        if (fabricId) {
+          const { data: inventoryData, error: invError } = await supabase
+            .from('inventory')
+            .select('stock_quantity')
+            .eq('fabric_id', fabricId as any);
+          
+          if (!invError && inventoryData && Array.isArray(inventoryData)) {
+            totalInventory += inventoryData.reduce((sum, inv: any) => sum + (Number(inv.stock_quantity) || 0), 0);
+          }
+        }
+
+        // Query fabric_inventory table by fabric_id
+        if (fabricId) {
+          const { data: fabricInventoryData, error: fabricInvError } = await supabase
+            .from('fabric_inventory')
+            .select('quantity')
+            .eq('fabric_id', fabricId as any);
+          
+          if (!fabricInvError && fabricInventoryData && Array.isArray(fabricInventoryData)) {
+            totalInventory += fabricInventoryData.reduce((sum, inv: any) => sum + (Number(inv.quantity) || 0), 0);
+          }
+        }
+
+        // Query warehouse_inventory table by fabric attributes
+        const { data: warehouseInventoryData, error: whInvError } = await supabase
+          .from('warehouse_inventory')
+          .select('quantity')
+          .eq('item_type', 'FABRIC' as any)
+          .ilike('fabric_name', fabricName)
+          .ilike('fabric_color', fabricColor)
+          .ilike('fabric_gsm', fabricGsm);
+        
+        if (!whInvError && warehouseInventoryData && Array.isArray(warehouseInventoryData)) {
+          totalInventory += warehouseInventoryData.reduce((sum, inv: any) => sum + (Number(inv.quantity) || 0), 0);
+        }
+      } else {
+        // For items, match by item_id or item_name
+        const itemId = item.item_id;
+        const itemName = (item.item_name || '').trim();
+
+        if (itemId) {
+          // Query inventory table by item_id
+          const { data: inventoryData, error: invError } = await supabase
+            .from('inventory')
+            .select('stock_quantity')
+            .eq('item_id', itemId as any);
+          
+          if (!invError && inventoryData && Array.isArray(inventoryData)) {
+            totalInventory += inventoryData.reduce((sum, inv: any) => sum + (Number(inv.stock_quantity) || 0), 0);
+          }
+
+          // Query warehouse_inventory table by item_id
+          const { data: warehouseInventoryData, error: whInvError } = await supabase
+            .from('warehouse_inventory')
+            .select('quantity')
+            .eq('item_type', 'ITEM' as any)
+            .eq('item_id', itemId as any);
+          
+          if (!whInvError && warehouseInventoryData && Array.isArray(warehouseInventoryData)) {
+            totalInventory += warehouseInventoryData.reduce((sum, inv: any) => sum + (Number(inv.quantity) || 0), 0);
+          }
+        } else if (itemName) {
+          // Fallback: match by item_name in warehouse_inventory
+          const { data: warehouseInventoryData, error: whInvError } = await supabase
+            .from('warehouse_inventory')
+            .select('quantity')
+            .eq('item_type', 'ITEM' as any)
+            .ilike('item_name', itemName);
+          
+          if (!whInvError && warehouseInventoryData && Array.isArray(warehouseInventoryData)) {
+            totalInventory += warehouseInventoryData.reduce((sum, inv: any) => sum + (Number(inv.quantity) || 0), 0);
+          }
+        }
+      }
+
+      return totalInventory;
+    } catch (error) {
+      console.error('Error fetching inventory quantity:', error);
+      return 0;
+    }
+  }, []);
+
+  // Fetch PO quantity (blocked quantity) for a fabric or item
+  // IMPORTANT: This aggregates GLOBALLY across ALL POs, not just POs linked to the current BOM
+  // This matches the logic used in PurchaseOrderList.tsx for calculating remaining quantities
+  const fetchPOQuantity = useCallback(async (item: BomLineItem): Promise<number> => {
+    try {
+      // Fetch ALL purchase order items globally (across all POs)
+      const { data: allPOItems, error: poError } = await supabase
+        .from('purchase_order_items')
+        .select('quantity, item_type, item_id, item_name, fabric_name, fabric_color, fabric_gsm');
+      
+      if (poError || !allPOItems || !Array.isArray(allPOItems)) {
+        console.error('Error fetching PO items:', poError);
+        return 0;
+      }
+
+      // Create a global map of ordered quantities (same logic as PurchaseOrderList.tsx)
+      const poItemsByKey: Map<string, number> = new Map();
+      
+      allPOItems.forEach((poItem: any) => {
+        // Create a unique key for matching items/fabrics (normalized)
+        let itemKey = '';
+        if (poItem.item_type === 'fabric') {
+          const fabricName = (poItem.fabric_name || '').trim().toLowerCase();
+          const fabricColor = (poItem.fabric_color || '').trim().toLowerCase();
+          const fabricGsm = (poItem.fabric_gsm || '').trim().toLowerCase();
+          itemKey = `fabric:${fabricName}:${fabricColor}:${fabricGsm}`;
+        } else {
+          const itemId = poItem.item_id || '';
+          const itemName = (poItem.item_name || '').trim().toLowerCase();
+          if (itemId) {
+            itemKey = `item:${itemId}`;
+          } else if (itemName) {
+            itemKey = `item:${itemName}`;
+          } else {
+            itemKey = `item:${poItem.id || ''}`;
+          }
+        }
+        
+        // Aggregate quantities GLOBALLY across ALL POs
+        const currentQty = poItemsByKey.get(itemKey) || 0;
+        poItemsByKey.set(itemKey, currentQty + (Number(poItem.quantity) || 0));
+      });
+
+      // Now match the BOM item against the global PO items map
+      let totalPOQty = 0;
+
+      if (item.item_type === 'fabric') {
+        // For fabrics, match by fabric_name, color, and gsm (normalized)
+        const fabricName = (item.fabric_name || '').trim().toLowerCase();
+        const fabricColor = (item.fabric_color || '').trim().toLowerCase();
+        const fabricGsm = (item.fabric_gsm || '').trim().toLowerCase();
+
+        if (!fabricName) return 0;
+
+        // Create the exact match key
+        const exactKey = `fabric:${fabricName}:${fabricColor}:${fabricGsm}`;
+        totalPOQty = poItemsByKey.get(exactKey) || 0;
+
+        // If no exact match, try partial matching (fabric name + color, or name only)
+        if (totalPOQty === 0) {
+          // Try matching by fabric name + color (without GSM)
+          if (fabricName && fabricColor) {
+            const partialKey = `fabric:${fabricName}:${fabricColor}:`;
+            for (const [key, qty] of poItemsByKey.entries()) {
+              if (key.startsWith(partialKey)) {
+                totalPOQty += qty;
+              }
+            }
+          }
+
+          // If still no match, try matching by fabric name only
+          if (totalPOQty === 0 && fabricName) {
+            const nameKey = `fabric:${fabricName}:`;
+            for (const [key, qty] of poItemsByKey.entries()) {
+              if (key.startsWith(nameKey)) {
+                totalPOQty += qty;
+              }
+            }
+          }
+        }
+      } else {
+        // For items, match by item_id or item_name
+        const itemId = item.item_id;
+        const itemName = (item.item_name || '').trim().toLowerCase();
+
+        if (itemId) {
+          // Try exact match by item_id
+          const exactKey = `item:${itemId}`;
+          totalPOQty = poItemsByKey.get(exactKey) || 0;
+        }
+        
+        // If no match and we have item_name, try matching by item_name
+        if (totalPOQty === 0 && itemName) {
+          const nameKey = `item:${itemName}`;
+          totalPOQty = poItemsByKey.get(nameKey) || 0;
+        }
+      }
+
+      return totalPOQty;
+    } catch (error) {
+      console.error('Error fetching PO quantity:', error);
+      return 0;
+    }
+  }, []);
 
   useEffect(() => {
     fetchCustomers();
@@ -786,9 +1032,9 @@ export function BomForm() {
                 .eq('id', item.item_id)
                 .single();
               
-              if (!itemError && (itemData?.image || itemData?.image_url)) {
+              if (!itemError && itemData && ((itemData as any).image || (itemData as any).image_url)) {
                 // Update the item with the image URL
-                const imageUrl = itemData.image || itemData.image_url;
+                const imageUrl = (itemData as any).image || (itemData as any).image_url;
                 setItems(prevItems => 
                   prevItems.map(prevItem => 
                     prevItem.id === item.id 
@@ -1105,6 +1351,75 @@ export function BomForm() {
       }
     });
   }, [bom.total_order_qty, items.length]);
+
+  // Fetch quantities in real-time when items are selected
+  useEffect(() => {
+    const fetchQuantitiesForItems = async () => {
+      const quantityPromises: Promise<void>[] = [];
+
+      items.forEach((item) => {
+        // Only fetch if item has required identifiers
+        const shouldFetch = item.item_type === 'fabric' 
+          ? (item.fabric_name && item.fabric_color && item.fabric_gsm)
+          : (item.item_id || item.item_name);
+
+        if (shouldFetch) {
+          const itemKey = getItemKey(item);
+          
+          // Skip if already loading or already fetched (unless item changed)
+          if (quantitiesLoading[itemKey]) return;
+
+          quantityPromises.push(
+            (async () => {
+              setQuantitiesLoading(prev => ({ ...prev, [itemKey]: true }));
+              
+              try {
+                const [inventoryQty, poQty] = await Promise.all([
+                  fetchInventoryQuantity(item),
+                  fetchPOQuantity(item)
+                ]);
+
+                // Blocked quantity is the portion of the BOM's required quantity that has been covered by POs
+                // It's the minimum of: required quantity (qty_total) and total PO quantity
+                const requiredQty = item.qty_total || 0;
+                const blockedQty = Math.min(requiredQty, poQty);
+
+                setItemQuantities(prev => ({
+                  ...prev,
+                  [itemKey]: {
+                    inventoryQty,
+                    poQty,
+                    blockedQty
+                  }
+                }));
+              } catch (error) {
+                console.error(`Error fetching quantities for ${itemKey}:`, error);
+                setItemQuantities(prev => ({
+                  ...prev,
+                  [itemKey]: {
+                    inventoryQty: 0,
+                    poQty: 0,
+                    blockedQty: 0
+                  }
+                }));
+              } finally {
+                setQuantitiesLoading(prev => ({ ...prev, [itemKey]: false }));
+              }
+            })()
+          );
+        }
+      });
+
+      await Promise.all(quantityPromises);
+    };
+
+    // Debounce the fetch to avoid excessive API calls
+    const timeoutId = setTimeout(() => {
+      fetchQuantitiesForItems();
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [items, fetchInventoryQuantity, fetchPOQuantity, getItemKey]);
 
   // Calculate totals
   const totals = useMemo(() => {
@@ -1441,10 +1756,10 @@ export function BomForm() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold">
-              {isEditMode ? 'Edit BOM' : 'Create New BOM'}
+              {isReadOnly ? 'View BOM' : isEditMode ? 'Edit BOM' : 'Create New BOM'}
             </h1>
             <p className="text-muted-foreground">
-              {isEditMode ? 'Modify existing Bill of Materials' : 'Create a new Bill of Materials'}
+              {isReadOnly ? 'View Bill of Materials details' : isEditMode ? 'Modify existing Bill of Materials' : 'Create a new Bill of Materials'}
             </p>
           </div>
         </div>
@@ -1574,13 +1889,13 @@ export function BomForm() {
                     </div>
 
                       {/* Fabric Details */}
-                      <div className="flex-1 grid grid-cols-6 gap-4 items-center">
+                      <div className="flex-1 grid grid-cols-9 gap-4 items-center">
                         {/* Fabric Name */}
                         <div>
                           <Label className="text-sm font-medium">Fabric</Label>
-                          {item.is_prefilled ? (
+                          {isReadOnly || item.is_prefilled ? (
                             <div className="text-sm font-medium">
-                              {item.fabric_name || 'N/A'}
+                              {item.fabric_name || fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName || 'N/A'}
                             </div>
                           ) : (
                             <Select
@@ -1605,9 +1920,9 @@ export function BomForm() {
                         {/* Color */}
                         <div>
                           <Label className="text-sm font-medium">Color</Label>
-                          {item.is_prefilled ? (
+                          {isReadOnly || item.is_prefilled ? (
                             <div className="text-sm">
-                              {item.fabric_color || 'N/A'}
+                              {item.fabric_color || fabricSelectionState[getItemIndex(item.id)]?.selectedColor || 'N/A'}
                             </div>
                           ) : (
                               <Select
@@ -1632,7 +1947,7 @@ export function BomForm() {
                         {/* GSM */}
                         <div>
                           <Label className="text-sm font-medium">Gsm</Label>
-                          {item.is_prefilled ? (
+                          {isReadOnly || item.is_prefilled ? (
                             <div className="text-sm">
                               {item.fabric_gsm ? `${item.fabric_gsm} Gsm` : 'N/A'}
                             </div>
@@ -1659,6 +1974,11 @@ export function BomForm() {
                         {/* Qty/Pc or Pcs in 1 {uom} */}
                           <div>
                           <Label className="text-sm font-medium">{getQtyLabel(item)}</Label>
+                          {isReadOnly ? (
+                            <div className="text-sm">
+                              {item.qty_per_product || 0}
+                            </div>
+                          ) : (
                             <Input
                             type="number"
                             value={item.qty_per_product}
@@ -1677,6 +1997,7 @@ export function BomForm() {
                               disabled={isReadOnly}
                             className="w-20"
                           />
+                          )}
                         </div>
 
                         {/* UOM */}
@@ -1693,6 +2014,42 @@ export function BomForm() {
                           <div className="text-sm font-medium">
                             {typeof item.qty_total === 'number' ? item.qty_total.toFixed(2) : item.qty_total} {item.unit_of_measure || 'Kgs'}
                           </div>
+                        </div>
+
+                        {/* Inventory Qty */}
+                        <div>
+                          <Label className="text-sm font-medium">Inventory Qty</Label>
+                          {quantitiesLoading[getItemKey(item)] ? (
+                            <div className="text-sm text-muted-foreground">Loading...</div>
+                          ) : (
+                            <div className="text-sm font-medium">
+                              {itemQuantities[getItemKey(item)]?.inventoryQty?.toFixed(2) || '0.00'} {item.unit_of_measure || 'Kgs'}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* PO Qty */}
+                        <div>
+                          <Label className="text-sm font-medium">PO Qty</Label>
+                          {quantitiesLoading[getItemKey(item)] ? (
+                            <div className="text-sm text-muted-foreground">Loading...</div>
+                          ) : (
+                            <div className="text-sm font-medium">
+                              {itemQuantities[getItemKey(item)]?.poQty?.toFixed(2) || '0.00'} {item.unit_of_measure || 'Kgs'}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Blocked Qty */}
+                        <div>
+                          <Label className="text-sm font-medium">Blocked Qty</Label>
+                          {quantitiesLoading[getItemKey(item)] ? (
+                            <div className="text-sm text-muted-foreground">Loading...</div>
+                          ) : (
+                            <div className="text-sm font-medium">
+                              {itemQuantities[getItemKey(item)]?.blockedQty?.toFixed(2) || '0.00'} {item.unit_of_measure || 'Kgs'}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -1761,10 +2118,15 @@ export function BomForm() {
                       </div>
 
                       {/* Item Details */}
-                      <div className="flex-1 grid grid-cols-6 gap-4 items-center">
+                      <div className="flex-1 grid grid-cols-9 gap-4 items-center">
                         {/* Item Types */}
                         <div>
                           <Label className="text-sm font-medium">Item Types</Label>
+                          {isReadOnly ? (
+                            <div className="text-sm">
+                              {item.selected_item_type || item.item_category || 'N/A'}
+                            </div>
+                          ) : (
                                  <Select
                             value={item.selected_item_type || ''}
                                    onValueChange={(value) => {
@@ -1787,11 +2149,17 @@ export function BomForm() {
                                       ))}
                                     </SelectContent>
                                  </Select>
+                          )}
                         </div>
                                  
                         {/* Item Name */}
                         <div>
                           <Label className="text-sm font-medium">Item Name</Label>
+                          {isReadOnly ? (
+                            <div className="text-sm font-medium">
+                              {item.item_name || 'N/A'}
+                            </div>
+                          ) : (
                                  <Select
                             value={item.item_id}
                             onValueChange={(value) => handleItemSelection(index, 'item', value)}
@@ -1808,11 +2176,17 @@ export function BomForm() {
                                       ))}
                                     </SelectContent>
                                  </Select>
+                          )}
                                </div>
 
                         {/* Qty/Pc or Pcs in 1 {uom} */}
                           <div>
                           <Label className="text-sm font-medium">{getQtyLabel(item)}</Label>
+                          {isReadOnly ? (
+                            <div className="text-sm">
+                              {item.qty_per_product || 0}
+                            </div>
+                          ) : (
                             <Input
                               type="number"
                             value={item.qty_per_product}
@@ -1830,6 +2204,7 @@ export function BomForm() {
                               disabled={isReadOnly}
                             className="w-20"
                             />
+                          )}
                           </div>
 
                         {/* UOM */}
@@ -1848,8 +2223,41 @@ export function BomForm() {
                           </div>
                         </div>
 
-                        {/* Empty column for alignment */}
-                        <div></div>
+                        {/* Inventory Qty */}
+                        <div>
+                          <Label className="text-sm font-medium">Inventory Qty</Label>
+                          {quantitiesLoading[getItemKey(item)] ? (
+                            <div className="text-sm text-muted-foreground">Loading...</div>
+                          ) : (
+                            <div className="text-sm font-medium">
+                              {itemQuantities[getItemKey(item)]?.inventoryQty?.toFixed(2) || '0.00'} {item.unit_of_measure || 'Pcs'}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* PO Qty */}
+                        <div>
+                          <Label className="text-sm font-medium">PO Qty</Label>
+                          {quantitiesLoading[getItemKey(item)] ? (
+                            <div className="text-sm text-muted-foreground">Loading...</div>
+                          ) : (
+                            <div className="text-sm font-medium">
+                              {itemQuantities[getItemKey(item)]?.poQty?.toFixed(2) || '0.00'} {item.unit_of_measure || 'Pcs'}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Blocked Qty */}
+                        <div>
+                          <Label className="text-sm font-medium">Blocked Qty</Label>
+                          {quantitiesLoading[getItemKey(item)] ? (
+                            <div className="text-sm text-muted-foreground">Loading...</div>
+                          ) : (
+                            <div className="text-sm font-medium">
+                              {itemQuantities[getItemKey(item)]?.blockedQty?.toFixed(2) || '0.00'} {item.unit_of_measure || 'Pcs'}
+                            </div>
+                          )}
+                        </div>
                     </div>
 
                     {/* Remove Button */}
