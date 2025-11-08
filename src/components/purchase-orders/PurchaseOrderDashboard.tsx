@@ -11,30 +11,11 @@ import { format } from 'date-fns';
 import { RefreshCw, Plus, CheckCircle2, Hourglass, ClipboardList, Package } from 'lucide-react';
 import { BomToPOWizardDialog } from './BomToPOWizardDialog';
 import { toast } from 'sonner';
-
-interface PendingItem {
-  bom_item_id: string;
-  bom_id: string;
-  bom_number: string;
-  bom_status: string | null;
-  order_id?: string | null;
-  product_name: string | null;
-  product_image_url: string | null;
-  item_name: string;
-  item_type: string | null;
-  category: string | null;
-  qty_total: number;
-  total_ordered: number;
-  total_allocated: number;
-  remaining_quantity: number;
-  unit: string | null;
-  fabric_name: string | null;
-  fabric_color: string | null;
-  fabric_gsm: string | null;
-  image_url: string | null;
-  notes: string | null;
-  bom_created_at: string | null;
-}
+import {
+  getPendingItemPlaceholder,
+  PendingItemGroup,
+  usePendingPoItems
+} from '@/hooks/usePendingPoItems';
 
 interface PurchaseOrderLite {
   id: string;
@@ -51,31 +32,25 @@ interface PurchaseOrderLite {
   grns: Array<{ id: string; grn_number: string; status: string | null; grn_date: string | null }>;
 }
 
-interface PendingItemGroup {
-  key: string;
-  displayName: string;
-  type: string;
-  unit: string | null;
-  imageUrl: string | null;
-  totalRequired: number;
-  totalOrdered: number;
-  totalRemaining: number;
-  bomBreakdowns: PendingItem[];
-}
-
-const PLACEHOLDER_IMAGE = 'https://placehold.co/80x80?text=IMG';
+const PLACEHOLDER_IMAGE = getPendingItemPlaceholder();
 
 export function PurchaseOrderDashboard() {
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState<'pending' | 'in_progress' | 'completed'>('pending');
-  const [loadingPending, setLoadingPending] = useState(true);
   const [loadingPOs, setLoadingPOs] = useState(true);
-  const [pendingItems, setPendingItems] = useState<PendingItem[]>([]);
   const [inProgressPOs, setInProgressPOs] = useState<PurchaseOrderLite[]>([]);
   const [completedPOs, setCompletedPOs] = useState<PurchaseOrderLite[]>([]);
   const [wizardBom, setWizardBom] = useState<{ id: string; number: string } | null>(null);
   const [refreshFlag, setRefreshFlag] = useState(0);
+  const {
+    pendingItems,
+    fabricGroups,
+    itemGroups,
+    loading: loadingPending,
+    error: pendingError,
+    refresh: refreshPending
+  } = usePendingPoItems();
 
   const formatQuantity = (value: number | string | null | undefined) => {
     const num = Number(value);
@@ -86,237 +61,17 @@ export function PurchaseOrderDashboard() {
   };
 
   const refreshAll = useCallback(() => {
+    void refreshPending();
     setRefreshFlag(prev => prev + 1);
-  }, []);
+  }, [refreshPending]);
 
   useEffect(() => {
-    const loadPending = async () => {
-      try {
-        setLoadingPending(true);
-        let pendingData: PendingItem[] = [];
+    if (pendingError) {
+      toast.error('Failed to load pending BOM items');
+    }
+  }, [pendingError]);
 
-        const { data, error } = await supabase
-          .from('pending_po_items_view')
-          .select('*')
-          .gt('remaining_quantity', 0)
-          .order('bom_number', { ascending: true });
-
-        if (error) {
-          // Fallback to manual aggregation when the view is missing (e.g. local dev)
-          if ((error as any)?.code === 'PGRST205') {
-            const { data: fallbackData, error: fallbackError } = await supabase
-              .from('bom_record_items')
-              .select(`
-                id,
-                bom_id,
-                item_name,
-                category,
-                qty_total,
-                unit_of_measure,
-                to_order,
-                stock,
-                fabric_name,
-                fabric_color,
-                fabric_gsm,
-                item_id,
-                item_code,
-                item_image_url,
-                notes,
-                bom_records (
-                  bom_number,
-                  status,
-                  order_id,
-                  product_name,
-                  product_image_url,
-                  created_at
-                ),
-                bom_po_items (ordered_quantity),
-                inventory_allocations (quantity)
-              `);
-
-            if (fallbackError) throw fallbackError;
-
-            pendingData = (fallbackData || []).map((row: any) => {
-              const allocations = Array.isArray(row.bom_po_items) ? row.bom_po_items : [];
-              const totalOrdered = allocations.reduce((sum: number, alloc: any) => sum + Number(alloc?.ordered_quantity || 0), 0);
-              const remainingQuantity = Number(row.qty_total || 0) - totalOrdered;
-              const inventoryAllocations = Array.isArray(row.inventory_allocations) ? row.inventory_allocations : [];
-              const totalAllocated = inventoryAllocations.reduce((sum: number, alloc: any) => sum + Number(alloc?.quantity || 0), 0);
-              const hasInventory = Number(row.stock || 0) > 0;
-
-              if (totalAllocated > 0 || hasInventory || remainingQuantity <= 0) {
-                return null;
-              }
-
-          return {
-                bom_item_id: row.id,
-                bom_id: row.bom_id,
-                bom_number: row.bom_records?.bom_number || 'Unknown',
-                bom_status: row.bom_records?.status || null,
-                order_id: row.bom_records?.order_id || null,
-                product_name: row.bom_records?.product_name || null,
-                product_image_url: row.bom_records?.product_image_url || null,
-                item_name: row.item_name,
-                item_type: row.category,
-                category: row.category,
-                qty_total: row.qty_total,
-                unit: row.unit_of_measure || null,
-                to_order: row.to_order,
-                stock: row.stock,
-                total_ordered: totalOrdered,
-                total_allocated: totalAllocated,
-                remaining_quantity: remainingQuantity,
-                fabric_name: row.fabric_name,
-                fabric_color: row.fabric_color,
-                fabric_gsm: row.fabric_gsm,
-                fabric_id: row.fabric_id,
-                item_id: row.item_id,
-                item_code: row.item_code,
-                image_url: row.item_image_url,
-                notes: row.notes,
-                bom_created_at: row.bom_records?.created_at || null
-              } as PendingItem & { bom_created_at: string | null };
-            }).filter((row: any) => row !== null) as PendingItem[];
-          } else {
-            throw error;
-          }
-        } else {
-          pendingData = (data || []) as PendingItem[];
-        }
-
-        const imageCache = new Map<string, string | null>();
-
-        const resolveImageForPendingItem = async (item: PendingItem): Promise<string | null> => {
-          if (item.image_url) {
-            return item.image_url;
-          }
-
-          const cacheKey = [
-            (item.item_type || item.category || '').toLowerCase(),
-            item.item_id || '',
-            item.item_code || '',
-            item.fabric_id || '',
-            item.fabric_name || '',
-            item.fabric_color || '',
-            item.fabric_gsm || ''
-          ].join('|');
-
-          if (imageCache.has(cacheKey)) {
-            return imageCache.get(cacheKey) || null;
-          }
-
-          let resolvedImage: string | null = null;
-          const typeKey = (item.item_type || item.category || '').toLowerCase();
-
-          try {
-            if (typeKey === 'fabric') {
-              if (item.fabric_id) {
-                const { data, error } = await supabase
-                  .from('fabric_master')
-                  .select('image_url, image')
-                  .eq('id', item.fabric_id)
-                  .limit(1)
-                  .maybeSingle();
-                if (!error && data) {
-                  resolvedImage = (data as any).image_url || (data as any).image || null;
-                }
-              }
-
-              if (!resolvedImage && item.fabric_name) {
-                let query = supabase
-                  .from('fabric_master')
-                  .select('image_url, image')
-                  .eq('fabric_name', item.fabric_name);
-
-                if (item.fabric_color) {
-                  query = query.eq('color', item.fabric_color);
-                }
-                if (item.fabric_gsm) {
-                  query = query.eq('gsm', item.fabric_gsm);
-                }
-
-                const { data, error } = await query.limit(1).maybeSingle();
-                if (!error && data) {
-                  resolvedImage = (data as any).image_url || (data as any).image || null;
-                }
-
-                if (!resolvedImage) {
-                  const { data: ilikeData, error: ilikeError } = await supabase
-                    .from('fabric_master')
-                    .select('image_url, image')
-                    .ilike('fabric_name', `%${item.fabric_name}%`)
-                    .limit(1)
-                    .maybeSingle();
-                  if (!ilikeError && ilikeData) {
-                    resolvedImage = (ilikeData as any).image_url || (ilikeData as any).image || null;
-                  }
-                }
-              }
-            } else {
-              if (item.item_id) {
-                const { data, error } = await supabase
-                  .from('item_master')
-                  .select('image_url, image')
-                  .eq('id', item.item_id)
-                  .limit(1)
-                  .maybeSingle();
-                if (!error && data) {
-                  resolvedImage = (data as any).image_url || (data as any).image || null;
-                }
-              }
-
-              if (!resolvedImage && item.item_code) {
-                const { data, error } = await supabase
-                  .from('item_master')
-                  .select('image_url, image')
-                  .eq('item_code', item.item_code)
-                  .limit(1)
-                  .maybeSingle();
-                if (!error && data) {
-                  resolvedImage = (data as any).image_url || (data as any).image || null;
-                }
-              }
-            }
-          } catch (err) {
-            console.warn('Failed to resolve image for pending item', {
-              bom_item_id: item.bom_item_id,
-              bom_id: item.bom_id,
-              err
-            });
-          }
-
-          if (!resolvedImage) {
-            resolvedImage = item.product_image_url || null;
-          }
-
-          imageCache.set(cacheKey, resolvedImage);
-          return resolvedImage;
-        };
-
-        const pendingWithImages: PendingItem[] = [];
-        for (const item of pendingData as PendingItem[]) {
-          const imageUrl = await resolveImageForPendingItem(item);
-          pendingWithImages.push({ ...item, image_url: imageUrl });
-        }
-
-        const sorted = pendingWithImages.sort((a, b) => {
-          const typeA = (a.item_type || '').toLowerCase();
-          const typeB = (b.item_type || '').toLowerCase();
-          if (typeA === typeB) {
-            return a.item_name.localeCompare(b.item_name);
-          }
-          return typeA.localeCompare(typeB);
-        });
-
-        setPendingItems(sorted);
-      } catch (error) {
-        console.error('Failed to load pending BOM items', error);
-        toast.error('Failed to load pending BOM items');
-      } finally {
-        setLoadingPending(false);
-      }
-    };
-
+  useEffect(() => {
     const loadPOs = async () => {
       try {
         setLoadingPOs(true);
@@ -359,7 +114,6 @@ export function PurchaseOrderDashboard() {
       }
     };
 
-    loadPending();
     loadPOs();
   }, [refreshFlag]);
 
@@ -373,56 +127,6 @@ export function PurchaseOrderDashboard() {
       completedPOs: completedPOs.length
     };
   }, [pendingItems, inProgressPOs.length, completedPOs.length]);
-
-  const fabricPending = useMemo(() => {
-    return pendingItems.filter(item => (item.item_type || item.category || '').toLowerCase() === 'fabric');
-  }, [pendingItems]);
-
-  const nonFabricPending = useMemo(() => {
-    return pendingItems.filter(item => (item.item_type || item.category || '').toLowerCase() !== 'fabric');
-  }, [pendingItems]);
-
-  const buildItemGroups = useCallback((rows: PendingItem[]): PendingItemGroup[] => {
-    const groupsMap = new Map<string, PendingItemGroup>();
-
-    rows.forEach(item => {
-      const typeKey = (item.item_type || item.category || '-').toLowerCase();
-      const isFabric = typeKey === 'fabric';
-      const identity = isFabric
-        ? [item.fabric_name?.toLowerCase() || '', item.fabric_color?.toLowerCase() || '', item.fabric_gsm || ''].join('|')
-        : (item.item_id || item.item_code || item.item_name || '').toLowerCase();
-      const key = `${typeKey}|${identity}`;
-
-      const totalRequired = Number(item.qty_total || 0);
-      const totalOrdered = Number(item.total_ordered || 0);
-      const totalRemaining = Number(item.remaining_quantity || 0);
-
-      const existing = groupsMap.get(key);
-      if (existing) {
-        existing.totalRequired += totalRequired;
-        existing.totalOrdered += totalOrdered;
-        existing.totalRemaining += totalRemaining;
-        existing.bomBreakdowns.push(item);
-      } else {
-        groupsMap.set(key, {
-          key,
-          displayName: item.item_name,
-          type: item.item_type || item.category || '-',
-          unit: item.unit || null,
-          imageUrl: item.image_url,
-          totalRequired,
-          totalOrdered,
-          totalRemaining,
-          bomBreakdowns: [item]
-        });
-      }
-    });
-
-    return Array.from(groupsMap.values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
-  }, []);
-
-  const fabricGroups = useMemo(() => buildItemGroups(fabricPending), [buildItemGroups, fabricPending]);
-  const itemGroups = useMemo(() => buildItemGroups(nonFabricPending), [buildItemGroups, nonFabricPending]);
 
   const renderPendingSection = (title: string, groups: PendingItemGroup[]) => {
     if (groups.length === 0) {

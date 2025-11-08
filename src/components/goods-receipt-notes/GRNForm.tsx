@@ -97,6 +97,7 @@ type PurchaseOrder = {
   status: string;
   total_amount: number;
   items: any[];
+  grns?: Array<{ id: string; status?: string | null }>;
 };
 
 type Supplier = {
@@ -147,38 +148,6 @@ const GRNForm = () => {
   // Only Form View is supported now
   const [previewOpen, setPreviewOpen] = useState(false);
 
-  // Check if a PO is fully received
-  const checkPOFullyReceived = useCallback(async (poId: string) => {
-    try {
-      // Get total ordered quantities from PO items
-      const { data: poItems, error: poError } = await supabase
-        .from('purchase_order_items')
-        .select('id, quantity')
-        .eq('po_id', poId as any);
-
-      if (poError) throw poError;
-
-      if (!poItems || poItems.length === 0) return false;
-
-      // Get total received quantities from GRN items
-      const { data: grnItems, error: grnError } = await supabase
-        .from('grn_items')
-        .select('po_item_id, received_quantity')
-        .in('po_item_id', poItems.map((item: any) => item.id));
-
-      if (grnError) throw grnError;
-
-      // Calculate totals
-      const totalOrdered = poItems.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0);
-      const totalReceived = grnItems.reduce((sum: number, item: any) => sum + (item.received_quantity || 0), 0);
-
-      return totalReceived >= totalOrdered;
-    } catch (error) {
-      console.error('Error checking PO fully received:', error);
-      return false;
-    }
-  }, []);
-
   // Fetch purchase orders for selection
   const fetchPurchaseOrders = useCallback(async () => {
     try {
@@ -186,28 +155,103 @@ const GRNForm = () => {
       const { data, error } = await supabase
         .from('purchase_orders')
         .select(`
-          *,
+          id,
+          po_number,
+          supplier_id,
+          order_date,
+          status,
+          total_amount,
           supplier:supplier_master(id, supplier_name, supplier_code),
-          items:purchase_order_items(*)
+          grns:grn_master(id)
         `)
         // Show all purchase orders regardless of status
         .order('created_at', { ascending: false });
 
       if (error) throw error;
       console.log('Fetched purchase orders:', data?.length || 0, 'orders');
+
+      const purchaseOrderList = ((data as PurchaseOrder[]) || []).map(po => ({
+        ...po,
+        items: []
+      }));
+      const poIds = purchaseOrderList.map(po => po.id);
+
+      const receivedByPo = new Map<string, number>();
+      const itemsByPo = new Map<string, any[]>();
+
+      if (poIds.length > 0) {
+        const { data: poItems, error: poItemsError } = await supabase
+          .from('purchase_order_items')
+          .select(
+            `
+              id,
+              po_id,
+              item_type,
+              item_id,
+              item_name,
+              item_image_url,
+              quantity,
+              unit_of_measure,
+              fabric_name,
+              fabric_color,
+              fabric_gsm,
+              fabric_id
+            `
+          )
+          .in('po_id', poIds);
+
+        if (poItemsError) {
+          console.warn('Failed to fetch purchase order line items for GRN form', poItemsError);
+        } else {
+          (poItems || []).forEach(item => {
+            const poId = (item as any).po_id;
+            if (!itemsByPo.has(poId)) {
+              itemsByPo.set(poId, []);
+            }
+            itemsByPo.get(poId)!.push(item);
+          });
+        }
+
+        const { data: grnTotals, error: grnTotalsError } = await supabase
+          .from('grn_items')
+          .select('received_quantity, purchase_order_items!inner(po_id)')
+          .in('purchase_order_items.po_id', poIds);
+
+        if (grnTotalsError) {
+          console.warn('Failed to fetch aggregated GRN totals for POs', grnTotalsError);
+        } else {
+          (grnTotals || []).forEach(entry => {
+            const poId = (entry as any)?.purchase_order_items?.po_id;
+            if (poId) {
+              const current = receivedByPo.get(poId) || 0;
+              receivedByPo.set(poId, current + Number((entry as any).received_quantity || 0));
+            }
+          });
+        }
+      }
       
       // Filter out POs that are fully received (only for new GRN creation)
       if (isNew) {
-        const filteredPOs = [];
-        for (const po of (data as any[]) || []) {
-          const isFullyReceived = await checkPOFullyReceived(po.id);
-          if (!isFullyReceived) {
-            filteredPOs.push(po);
+        const filteredPOs = purchaseOrderList.filter(po => {
+          // Skip POs that already have at least one GRN
+          if (po.grns && po.grns.length > 0) {
+            return false;
           }
-        }
+
+          po.items = itemsByPo.get(po.id) || [];
+
+          const totalOrdered = (po.items || []).reduce((sum, item: any) => sum + Number(item.quantity || 0), 0);
+          const totalReceived = receivedByPo.get(po.id) || 0;
+
+          return totalReceived < totalOrdered;
+        });
         setPurchaseOrders(filteredPOs as any);
       } else {
-        setPurchaseOrders((data as any) || []);
+        const enrichedPOs = purchaseOrderList.map(po => ({
+          ...po,
+          items: itemsByPo.get(po.id) || []
+        }));
+        setPurchaseOrders(enrichedPOs as any);
       }
     } catch (error) {
       console.error('Error fetching purchase orders:', error);
@@ -215,7 +259,7 @@ const GRNForm = () => {
     } finally {
       setLoadingPOs(false);
     }
-  }, [isNew, checkPOFullyReceived]);
+  }, [isNew]);
 
   // Fetch suppliers
   const fetchSuppliers = useCallback(async () => {
@@ -419,6 +463,37 @@ const GRNForm = () => {
       loadGRN();
     }
   }, [fetchPurchaseOrders, fetchSuppliers, fetchCompanySettings, loadGRN, isNew]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('grn-po-live')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'purchase_orders' },
+        () => {
+          void fetchPurchaseOrders();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'grn_master' },
+        () => {
+          void fetchPurchaseOrders();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'grn_items' },
+        () => {
+          void fetchPurchaseOrders();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchPurchaseOrders]);
 
   // Do NOT pre-generate GRN numbers on the client.
   // The database trigger will assign a number only when the record is inserted.
