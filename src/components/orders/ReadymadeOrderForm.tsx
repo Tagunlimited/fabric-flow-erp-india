@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +18,7 @@ import { format } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { cn, formatCurrency } from '@/lib/utils';
+import { usePageState } from '@/contexts/AppCacheContext';
 
 interface Customer {
   id: string;
@@ -149,7 +150,7 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
   const [mainImages, setMainImages] = useState<{ [key: number]: { reference?: string; mockup?: string } }>({});
   const [imageModal, setImageModal] = useState<{ open: boolean; url: string | null }>({ open: false, url: null });
 
-  const [formData, setFormData] = useState<ReadymadeOrderFormData>({
+  const initialFormData = useMemo<ReadymadeOrderFormData>(() => ({
     order_date: new Date(),
     expected_delivery_date: new Date(),
     customer_id: preSelectedCustomer?.id || '',
@@ -160,11 +161,96 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
     advance_amount: 0,
     notes: '',
     additional_charges: []
-  });
+  }), [preSelectedCustomer?.id]);
+
+  const {
+    state: formData,
+    updateState: updateFormState,
+    resetState: resetFormState
+  } = usePageState<ReadymadeOrderFormData>('readymadeOrderFormData', initialFormData);
+
+  const setFormData = useCallback(
+    (value: ReadymadeOrderFormData | ((prev: ReadymadeOrderFormData) => ReadymadeOrderFormData)) => {
+      updateFormState((prev: ReadymadeOrderFormData) => {
+        if (typeof value === 'function') {
+          return (value as (prev: ReadymadeOrderFormData) => ReadymadeOrderFormData)(prev);
+        }
+        return value;
+      });
+    },
+    [updateFormState]
+  );
 
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    if (preSelectedCustomer?.id) {
+      setFormData(prev => {
+        if (prev.customer_id) return prev;
+        return {
+          ...prev,
+          customer_id: preSelectedCustomer.id
+        };
+      });
+    }
+  }, [preSelectedCustomer?.id, setFormData]);
+
+  useEffect(() => {
+    setFormData(prev => {
+      let changed = false;
+      const next = { ...prev };
+
+      if (!(next.order_date instanceof Date)) {
+        next.order_date = new Date(next.order_date);
+        changed = true;
+      }
+      if (!(next.expected_delivery_date instanceof Date)) {
+        next.expected_delivery_date = new Date(next.expected_delivery_date);
+        changed = true;
+      }
+
+      const normalizedProducts = (next.products || []).map(product => {
+        let productChanged = false;
+        const normalized = { ...product };
+
+        if (!normalized.sizes_quantities) {
+          normalized.sizes_quantities = {};
+          productChanged = true;
+        }
+        if (!Array.isArray(normalized.reference_images)) {
+          normalized.reference_images = [];
+          productChanged = true;
+        }
+        if (!Array.isArray(normalized.mockup_images)) {
+          normalized.mockup_images = [];
+          productChanged = true;
+        }
+        if (!Array.isArray(normalized.attachments)) {
+          normalized.attachments = [];
+          productChanged = true;
+        }
+        if (!Array.isArray(normalized.branding_items)) {
+          normalized.branding_items = [];
+          productChanged = true;
+        }
+
+        if (productChanged) {
+          changed = true;
+          return normalized;
+        }
+        return product;
+      });
+
+      if (changed) {
+        next.products = normalizedProducts;
+        return next;
+      }
+
+      return prev;
+    });
+  }, [setFormData]);
 
   const fetchData = async () => {
     try {
@@ -830,6 +916,8 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
       } else {
         navigate('/orders/readymade');
       }
+      
+      resetFormState();
     } catch (error: any) {
       console.error('Error creating order:', error);
       toast.error(error.message || 'Failed to create order');
@@ -838,11 +926,11 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
     }
   };
 
-      const { subtotal, gstAmount, total } = calculateTotals();
+  const { subtotal, gstAmount, total } = calculateTotals();
   const grandTotal = total;
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
+    <form onSubmit={handleSubmit} className="space-y-6" data-form-key="readymadeOrderForm">
       <Card>
         <CardHeader>
           <CardTitle>Customer & Order Details</CardTitle>
@@ -850,11 +938,12 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="customer">Customer *</Label>
+                  <Label htmlFor="customer">Customer *</Label>
               <CustomerSearchSelect
                 value={formData.customer_id}
-                onValueChange={(customerId) => setFormData({ ...formData, customer_id: customerId })}
+                onValueChange={(customerId) => setFormData(prev => ({ ...prev, customer_id: customerId }))}
                 placeholder="Search by name, phone, contact person..."
+                cacheKey="customerSearchSelect-readymade"
               />
             </div>
 

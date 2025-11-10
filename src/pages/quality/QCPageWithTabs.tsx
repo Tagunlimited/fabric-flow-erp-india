@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ErpLayout } from "@/components/ErpLayout";
+import { usePersistentTabState } from "@/hooks/usePersistentTabState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -31,7 +32,11 @@ export default function QCPageWithTabs() {
   const [selectAssignmentsForOrder, setSelectAssignmentsForOrder] = useState<null | { order_id: string; order_number: string; options: { assignment_id: string; batch_name?: string; picked: number; batch_leader_name?: string; batch_leader_avatar?: string | null }[] }>(null);
   const [qcOpen, setQcOpen] = useState(false);
   const [qcCtx, setQcCtx] = useState<null | { assignmentId: string; orderId: string; orderNumber: string }>(null);
-  const [activeTab, setActiveTab] = useState("pending");
+  // Use persistent tab state to prevent resetting to first tab on refresh
+  const { activeTab, setActiveTab } = usePersistentTabState({
+    pageKey: 'qc',
+    defaultValue: 'pending'
+  });
 
   useEffect(() => {
     loadPickedOrders();

@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppCache } from './AppCacheContext';
 import { useCallback, useEffect, useRef } from 'react';
+import { usePageVisibility } from './usePageVisibility';
 
 // Enhanced query options with caching
 interface CachedQueryOptions {
@@ -85,21 +86,9 @@ export function useCachedQuery<T = any>({
     refetchOnReconnect: false, // Prevent refetch on reconnect
   });
 
-  // Auto-refresh logic
-  useEffect(() => {
-    if (!enabled || !query.data) return;
-
-    const interval = setInterval(() => {
-      const timeSinceLastFetch = Date.now() - lastFetchTime.current;
-      const shouldRefetch = timeSinceLastFetch > staleTime;
-
-      if (shouldRefetch && document.visibilityState === 'visible') {
-        query.refetch();
-      }
-    }, 60000); // Check every minute
-
-    return () => clearInterval(interval);
-  }, [enabled, query.data, staleTime, query.refetch]);
+  // Auto-refresh logic - DISABLED to prevent unwanted refreshes
+  // Removed visibility-based auto-refresh to prevent page refreshes on tab switch
+  // Data will only refresh when explicitly requested or when staleTime expires naturally
 
   return {
     ...query,
@@ -218,7 +207,8 @@ export function usePageDataCache<T = any>(
     fetchData();
   }, [fetchData]);
 
-  // Auto-refresh if enabled
+  // Auto-refresh if enabled - DISABLED visibility-based refresh
+  // Only refresh based on time intervals, not visibility changes
   useEffect(() => {
     if (!options.autoRefresh || !data) return;
 
@@ -226,7 +216,8 @@ export function usePageDataCache<T = any>(
       const timeSinceLastFetch = Date.now() - lastFetchTime.current;
       const shouldRefresh = timeSinceLastFetch > (options.refreshInterval || 5 * 60 * 1000);
 
-      if (shouldRefresh && document.visibilityState === 'visible') {
+      // Only refresh based on time, not visibility state
+      if (shouldRefresh) {
         fetchData(true);
       }
     }, 60000); // Check every minute
@@ -345,24 +336,9 @@ export function useVisibilityAwareData<T = any>(
     }
   }, [fetchFn, options.enabled]);
 
-  // Handle visibility change
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      const wasVisible = isVisible.current;
-      isVisible.current = document.visibilityState === 'visible';
-
-      // If becoming visible and data is stale, refetch
-      if (!wasVisible && isVisible.current && options.refetchOnVisible) {
-        const timeSinceLastFetch = Date.now() - lastFetchTime.current;
-        if (timeSinceLastFetch > (options.staleTime || 5 * 60 * 1000)) {
-          fetchData();
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [fetchData, options.refetchOnVisible, options.staleTime]);
+  // Handle visibility change - DISABLED to prevent unwanted refreshes
+  // Removed visibility-based refetching to prevent page refreshes on tab switch
+  // Data will only refresh when explicitly requested via refetch()
 
   // Initial fetch
   useEffect(() => {

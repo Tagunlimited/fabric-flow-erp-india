@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useAppCache } from '@/contexts/AppCacheContext';
+import { usePageVisibility } from '@/hooks/usePageVisibility';
 
 interface GlobalFormPersistenceProviderProps {
   children: React.ReactNode;
@@ -20,33 +21,26 @@ export function GlobalFormPersistenceProvider({
   const lastSaveTime = useRef<number>(0);
   const changeTimeoutRef = useRef<NodeJS.Timeout>();
 
-  // Prevent page refresh when there are unsaved changes
-  useEffect(() => {
-    if (!preventRefresh) return;
-
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (hasUnsavedChanges) {
-        e.preventDefault();
-        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
-        return e.returnValue;
+  // Use centralized visibility manager - only save on hidden, never refresh on visible
+  usePageVisibility({
+    enabled: preventRefresh,
+    preventAutoRefresh: true, // Prevent any auto-refresh behavior
+    callbacks: {
+      onHidden: () => {
+        // Only save when tab becomes hidden, never trigger refresh
+        if (hasUnsavedChanges) {
+          saveAllFormStates();
+        }
+      },
+      onBeforeUnload: (e: BeforeUnloadEvent) => {
+        if (hasUnsavedChanges) {
+          e.preventDefault();
+          e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+          return e.returnValue;
+        }
       }
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden' && hasUnsavedChanges) {
-        // Save all form states when tab becomes hidden
-        saveAllFormStates();
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [hasUnsavedChanges, preventRefresh]);
+    }
+  });
 
   // Save all form states
   const saveAllFormStates = useCallback(() => {

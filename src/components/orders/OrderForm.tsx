@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +20,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { cn, formatCurrency } from '@/lib/utils';
 import { getOrderItemDisplayImageForForm, getImageSrcFromFileOrUrl } from '@/utils/orderItemImageUtils';
+import { usePageState } from '@/contexts/AppCacheContext';
 
 interface Customer {
   id: string;
@@ -170,7 +171,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
   const [brandingTypes, setBrandingTypes] = useState<BrandingType[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const [formData, setFormData] = useState<OrderFormData>({
+  const initialFormData = useMemo<OrderFormData>(() => ({
     order_date: new Date(),
     expected_delivery_date: new Date(),
     customer_id: preSelectedCustomer?.id || '',
@@ -181,97 +182,68 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
     reference_id: '',
     advance_amount: 0,
     additional_charges: []
-  });
+  }), [preSelectedCustomer?.id]);
 
-  const [isLoaded, setIsLoaded] = useState(true);
-  const [hasSavedData, setHasSavedData] = useState(false);
-  const [isFormLoading, setIsFormLoading] = useState(false);
+  const {
+    state: formData,
+    updateState: updateFormState,
+    resetState: resetFormState,
+    hasSavedState: hasSavedFormState
+  } = usePageState<OrderFormData>('customOrderForm', initialFormData);
 
-  // Simple form persistence using localStorage directly
+  const setFormData = useCallback(
+    (value: OrderFormData | ((prev: OrderFormData) => OrderFormData)) => {
+      updateFormState((prev: OrderFormData) => {
+        if (typeof value === 'function') {
+          return (value as (prev: OrderFormData) => OrderFormData)(prev);
+        }
+        return value;
+      });
+    },
+    [updateFormState]
+  );
+
+  // Normalize persisted primitives (dates, arrays) after hydration
   useEffect(() => {
-    setIsFormLoading(true);
-    try {
-      const savedData = localStorage.getItem('orderFormData');
-      if (savedData && !preSelectedCustomer) {
-        console.log('OrderForm: Loading saved form data from localStorage');
-        const parsedData = JSON.parse(savedData);
-        
-        // Convert date strings back to Date objects
-        if (parsedData.order_date) {
-          parsedData.order_date = new Date(parsedData.order_date);
-        }
-        if (parsedData.expected_delivery_date) {
-          parsedData.expected_delivery_date = new Date(parsedData.expected_delivery_date);
-        }
-        
-        // Ensure all products have customizations array
-        if (parsedData.products) {
-          parsedData.products = parsedData.products.map((product: any) => ({
-            ...product,
-            customizations: product.customizations || []
-          }));
-        }
-        
-        setFormData(parsedData);
-        setHasSavedData(true);
-        console.log('OrderForm: Form data loaded successfully');
+    setFormData(prev => {
+      let changed = false;
+      const next = { ...prev };
+
+      if (!(next.order_date instanceof Date)) {
+        next.order_date = new Date(next.order_date);
+        changed = true;
       }
-    } catch (error) {
-      console.error('Error loading order form data:', error);
-    } finally {
-      setIsFormLoading(false);
-    }
-  }, [preSelectedCustomer]);
-
-  // Save form data to localStorage with debounce
-  useEffect(() => {
-    if (!preSelectedCustomer) {
-      const timeoutId = setTimeout(() => {
-        try {
-          console.log('OrderForm: Saving form data to localStorage');
-          localStorage.setItem('orderFormData', JSON.stringify(formData));
-        } catch (error) {
-          console.error('Error saving order form data:', error);
-        }
-      }, 2000); // 2 second debounce
-
-      return () => clearTimeout(timeoutId);
-    }
-  }, [formData, preSelectedCustomer]);
-
-  // Prevent navigation when tab regains focus
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        console.log('OrderForm: Tab regained focus - preventing any navigation');
-        // Don't do anything that could trigger navigation
+      if (!(next.expected_delivery_date instanceof Date)) {
+        next.expected_delivery_date = new Date(next.expected_delivery_date);
+        changed = true;
       }
-    };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+      const normalizedProducts = (next.products || []).map(product => {
+        if (product.customizations && Array.isArray(product.customizations)) {
+          return product;
+        }
+        changed = true;
+        return {
+          ...product,
+          customizations: product.customizations || []
+        };
+      });
 
-  const resetData = () => {
-    setFormData({
-      order_date: new Date(),
-      expected_delivery_date: new Date(),
-      customer_id: preSelectedCustomer?.id || '',
-      sales_manager: '',
-      products: [createEmptyProduct()],
-      gst_rate: 18,
-      payment_channel: '',
-      reference_id: '',
-      advance_amount: 0,
-      additional_charges: []
+      if (changed) {
+        next.products = normalizedProducts;
+        return next;
+      }
+
+      return prev;
     });
-    setHasSavedData(false);
-    try {
-      localStorage.removeItem('orderFormData');
-    } catch (error) {
-      console.error('Error clearing order form data:', error);
-    }
-  };
+  }, [setFormData]); // normalize persisted data once on mount
+
+  // DISABLED: Visibility change handler - using centralized visibility manager
+  // No action needed on visibility change to prevent unwanted refreshes
+
+  const resetData = useCallback(() => {
+    resetFormState();
+  }, [resetFormState]);
 
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [selectedCategoryImage, setSelectedCategoryImage] = useState<string>('');
@@ -292,6 +264,18 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
       setSelectedCustomer(preSelectedCustomer);
     }
   }, [preSelectedCustomer]);
+
+  useEffect(() => {
+    if (preSelectedCustomer?.id) {
+      setFormData(prev => {
+        if (prev.customer_id) return prev;
+        return {
+          ...prev,
+          customer_id: preSelectedCustomer.id
+        };
+      });
+    }
+  }, [preSelectedCustomer?.id, setFormData]);
 
   // Auto-scroll functionality - DISABLED as per user request
   // useEffect(() => {
@@ -957,11 +941,8 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('OrderForm: Form submission started');
-    
-    // Prevent submission if we're in the middle of a tab focus change or form loading
-    if (document.hidden || isFormLoading) {
-      console.log('OrderForm: Preventing submission during tab focus change or form loading');
+    // Prevent submission if tab is hidden
+    if (document.hidden) {
       return;
     }
     
@@ -1130,34 +1111,13 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
   const { subtotal, gstAmount, additionalChargesTotal, grandTotal, balance } = calculateTotals();
 
-  // Show loading state while form data is being loaded
-  if (!isLoaded) {
-    return (
-      <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Create New Order</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-center py-8">
-              <div className="text-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-                <p className="text-muted-foreground">Loading form data...</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
           <div className="flex justify-between items-center">
             <CardTitle>Create New Order</CardTitle>
-            {hasSavedData && (
+            {hasSavedFormState && (
               <div className="flex items-center gap-2">
                 <Badge variant="secondary" className="bg-green-100 text-green-800">
                   Saved Progress
@@ -1238,6 +1198,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                       onValueChange={handleCustomerSelect}
                       onCustomerSelect={(customer) => setSelectedCustomer(customer)}
                       placeholder="Search by name, phone, contact person..."
+                      cacheKey="customerSearchSelect-customOrder"
                     />
                   </div>
                 )}
