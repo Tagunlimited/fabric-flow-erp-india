@@ -687,7 +687,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                     displayCode = fabricMaster.fabric_code || '-';
                     displayName = fabricMaster.fabric_name || item.item_name;
                     displayType = 'Fabric'; // Always show "Fabric" for fabric items
-                    displayColor = fabricMaster.color || item.grn_item?.fabric_color || '-';
+                    displayColor = item.grn_item?.fabric_color || fabricMaster.color || '-';
                     // Combine material (type) and GSM: e.g., "Cotton 240 GSM"
                     const material = fabricMaster.type || '';
                     const gsm = fabricMaster.gsm || '';
@@ -700,7 +700,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                     displayCode = itemMaster.item_code || '-';
                     displayName = itemMaster.item_name || item.item_name;
                     displayType = itemMaster.item_type || '-';
-                    displayColor = itemMaster.color || item.grn_item?.item_color || '-';
+                    displayColor = item.grn_item?.item_color || itemMaster.color || '-';
                     displayMaterialGsm = itemMaster.material || '-';
                     displayBrand = itemMaster.brand || '-';
                     displaySize = itemMaster.size || '-';

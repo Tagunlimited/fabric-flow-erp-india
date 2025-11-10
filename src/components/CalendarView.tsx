@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { 
   Calendar, 
   ChevronLeft, 
@@ -22,7 +23,8 @@ import {
   Plus,
   AlertCircle,
   CalendarDays,
-  XCircle
+  XCircle,
+  Eye
 } from "lucide-react";
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from "sonner";
@@ -40,7 +42,7 @@ interface CalendarEvent {
   assignedBy?: string;
   deadline?: string;
   createdAt?: string;
-  assignedEmployees?: Array<{id: string, name: string}>; // For display purposes
+  assignedEmployees?: Array<{id: string, name: string, avatar_url?: string | null}>; // For display purposes
 }
 
 export function CalendarView() {
@@ -61,8 +63,8 @@ export function CalendarView() {
     date: ''
   });
   const [departments, setDepartments] = useState<string[]>([]);
-  const [employees, setEmployees] = useState<Array<{id: string, name: string, department: string}>>([]);
-  const [filteredEmployees, setFilteredEmployees] = useState<Array<{id: string, name: string, department: string}>>([]);
+  const [employees, setEmployees] = useState<Array<{id: string, name: string, department: string, avatar_url?: string | null}>>([]);
+  const [filteredEmployees, setFilteredEmployees] = useState<Array<{id: string, name: string, department: string, avatar_url?: string | null}>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,7 +94,7 @@ export function CalendarView() {
         if (!eventMap[dateKey]) eventMap[dateKey] = [];        
         // Parse assigned_to field (could be JSON array or single value)
         let assignedToIds: string[] = [];
-        let assignedEmployees: Array<{id: string, name: string}> = [];
+        let assignedEmployees: Array<{id: string, name: string, avatar_url?: string | null}> = [];
         
         if (event.assigned_to) {
           try {
@@ -103,12 +105,13 @@ export function CalendarView() {
             assignedToIds = [event.assigned_to];
           }
           
-          // Get employee names for display
+          // Get employee names and avatars for display
           assignedEmployees = assignedToIds.map((id: string) => {
             const employee = employees.find(emp => emp.id === id);
             return {
               id,
-              name: employee ? employee.name : 'Unknown Employee'
+              name: employee ? employee.name : 'Unknown Employee',
+              avatar_url: employee?.avatar_url || null
             };
           });
         }
@@ -154,6 +157,18 @@ export function CalendarView() {
     }
   };
 
+  // Refetch events when employees are first loaded to ensure avatars are populated
+  // This ensures that employee avatars are available when events are displayed
+  const [employeesLoaded, setEmployeesLoaded] = useState(false);
+  
+  useEffect(() => {
+    if (employees.length > 0 && !employeesLoaded) {
+      setEmployeesLoaded(true);
+      // Refetch events to populate avatars now that employees are loaded
+      fetchEvents();
+    }
+  }, [employees.length, employeesLoaded]);
+
   const fetchDepartments = async () => {
     try {
       const { data, error } = await supabase
@@ -179,7 +194,7 @@ export function CalendarView() {
     try {
       const { data, error } = await supabase
         .from('employees')
-        .select('id, full_name, department')
+        .select('id, full_name, department, avatar_url')
         .order('full_name');
       
       if (error) {
@@ -189,7 +204,8 @@ export function CalendarView() {
         const employeeList = (data as any[]).map(emp => ({
           id: emp.id,
           name: emp.full_name,
-          department: emp.department || 'Unknown'
+          department: emp.department || 'Unknown',
+          avatar_url: emp.avatar_url || null
         }));
         setEmployees(employeeList);
         setFilteredEmployees(employeeList);
@@ -365,49 +381,197 @@ export function CalendarView() {
     }
   };
 
+  const getAvatarUrl = (employee: {id: string, name: string, avatar_url?: string | null}) => {
+    if (employee.avatar_url) {
+      return employee.avatar_url;
+    }
+    
+    // Fallback to placeholder images based on name
+    const avatars = [
+      'photo-1581092795360-fd1ca04f0952',
+      'photo-1485827404703-89b55fcc595e',
+      'photo-1581091226825-a6a2a5aee158',
+      'photo-1501286353178-1ec881214838'
+    ];
+    const index = employee.name.charCodeAt(0) % avatars.length;
+    return `https://images.unsplash.com/${avatars[index]}?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=40&h=40&q=80`;
+  };
+
+  const getInitials = (name: string) => {
+    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  };
+
   const handleDragStart = (e: React.DragEvent, event: CalendarEvent, sourceDate: string) => {
+    console.log('Drag started:', { eventId: event.id, eventTitle: event.title, sourceDate });
+    e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('application/json', JSON.stringify({ event, sourceDate }));
   };
 
-  const handleDrop = (e: React.DragEvent, targetDate: string) => {
+  const handleDrop = async (e: React.DragEvent, targetDate: string) => {
     e.preventDefault();
+    e.stopPropagation();
+    
     const data = e.dataTransfer.getData('application/json');
-    if (!data) return;
+    if (!data) {
+      console.log('No drag data found');
+      return;
+    }
     
-    const { event, sourceDate } = JSON.parse(data);
+    let parsedData;
+    try {
+      parsedData = JSON.parse(data);
+    } catch (err) {
+      console.error('Error parsing drag data:', err);
+      return;
+    }
     
-    if (sourceDate === targetDate) return;
-
-    setEvents(prev => {
-      const newEvents = { ...prev };
-      
-      // Get the original ID (remove any -moved- suffix if present)
-      const originalId = event.id.split('-moved-')[0];
-      
-      // Remove from source - check both original ID and any moved ID variations
-      newEvents[sourceDate] = newEvents[sourceDate]?.filter(e => {
-        const eOriginalId = e.id.split('-moved-')[0];
-        return eOriginalId !== originalId;
-      }) || [];
-      
-      // Remove from target if it already exists there (to prevent duplicates)
-      newEvents[targetDate] = newEvents[targetDate]?.filter(e => {
-        const eOriginalId = e.id.split('-moved-')[0];
-        return eOriginalId !== originalId;
-      }) || [];
-      
-      // Add to target with original ID (no need to create new ID)
-      if (!newEvents[targetDate]) newEvents[targetDate] = [];
-      newEvents[targetDate].push({ ...event, id: originalId });
-      
-      return newEvents;
+    const { event, sourceDate } = parsedData;
+    
+    console.log('Drag and drop:', { 
+      eventId: event.id, 
+      eventTitle: event.title, 
+      sourceDate, 
+      targetDate,
+      sourceEqualsTarget: sourceDate === targetDate
     });
     
-    toast.success(`Event moved to ${new Date(targetDate).toLocaleDateString()}`);
+    if (sourceDate === targetDate) {
+      console.log('Source and target are the same, ignoring');
+      return;
+    }
+
+    // Get the original ID (remove any -moved- suffix if present)
+    const originalId = event.id.split('-moved-')[0];
+    
+    // Convert targetDate string (which is from toDateString()) back to a proper date
+    // targetDate is in format like "Mon Nov 10 2025" or the "today" variable (which is also a toDateString())
+    let targetDateObj: Date;
+    let targetDateKey: string;
+    
+    // Check if targetDate matches today's date string
+    const todayDateString = new Date().toDateString();
+    
+    if (targetDate === today || targetDate === todayDateString) {
+      // If target is "today", use current date
+      targetDateObj = new Date();
+      targetDateObj.setHours(0, 0, 0, 0);
+      // Use today's date string directly to ensure exact match
+      targetDateKey = todayDateString;
+    } else {
+      // Parse the date string - toDateString() format: "Mon Nov 10 2025"
+      targetDateObj = new Date(targetDate);
+      if (isNaN(targetDateObj.getTime())) {
+        console.error('Invalid target date:', targetDate);
+        toast.error('Invalid date');
+        return;
+      }
+      targetDateObj.setHours(0, 0, 0, 0);
+      targetDateKey = targetDateObj.toDateString();
+    }
+    
+    // Format as YYYY-MM-DD for database (use local date, not UTC, to avoid timezone issues)
+    const year = targetDateObj.getFullYear();
+    const month = String(targetDateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(targetDateObj.getDate()).padStart(2, '0');
+    const formattedDate = `${year}-${month}-${day}`;
+    
+    console.log('Date conversion:', {
+      targetDate,
+      targetDateObj: targetDateObj.toISOString(),
+      formattedDate,
+      targetDateKey
+    });
+    
+    try {
+      // Update local state first for immediate UI feedback
+      setEvents(prev => {
+        const newEvents = { ...prev };
+        
+        // Remove from source
+        if (newEvents[sourceDate]) {
+          newEvents[sourceDate] = newEvents[sourceDate].filter(e => {
+            const eOriginalId = e.id.split('-moved-')[0];
+            return eOriginalId !== originalId;
+          });
+          
+          // Clean up empty arrays
+          if (newEvents[sourceDate].length === 0) {
+            delete newEvents[sourceDate];
+          }
+        }
+        
+        // Remove from target if it already exists there (to prevent duplicates)
+        if (newEvents[targetDateKey]) {
+          newEvents[targetDateKey] = newEvents[targetDateKey].filter(e => {
+            const eOriginalId = e.id.split('-moved-')[0];
+            return eOriginalId !== originalId;
+          });
+        }
+        
+        // Add to target
+        if (!newEvents[targetDateKey]) {
+          newEvents[targetDateKey] = [];
+        }
+        newEvents[targetDateKey].push({ ...event, id: originalId });
+        
+        console.log('State updated:', {
+          sourceDate,
+          targetDateKey,
+          sourceEvents: newEvents[sourceDate]?.length || 0,
+          targetEvents: newEvents[targetDateKey]?.length || 0,
+          allDateKeys: Object.keys(newEvents),
+          eventAdded: newEvents[targetDateKey]?.find(e => e.id === originalId)?.title
+        });
+        
+        return newEvents;
+      });
+      
+      // Update the event date in the database
+      console.log('Updating database:', { originalId, formattedDate });
+      const { error, data: updateData } = await supabase
+        .from('calendar_events')
+        .update({ date: formattedDate } as any)
+        .eq('id', originalId as any)
+        .select();
+      
+      if (error) {
+        console.error('Error updating event date in database:', error);
+        toast.error(`Failed to update event date: ${error.message}`);
+        
+        // Revert the state change on error
+        console.log('Reverting state due to error');
+        await fetchEvents();
+        return;
+      }
+      
+      console.log('Database updated successfully:', updateData);
+      toast.success(`Event moved to ${targetDateObj.toLocaleDateString()}`);
+      
+      // Refresh events after a short delay to sync with database
+      // This ensures we have the latest data, but the UI is already updated from state
+      setTimeout(async () => {
+        console.log('Refreshing events from database...');
+        try {
+          await fetchEvents();
+          console.log('Events refreshed successfully');
+        } catch (err) {
+          console.error('Error refreshing events after move:', err);
+        }
+      }, 300);
+      
+    } catch (err: any) {
+      console.error('Error moving event:', err);
+      toast.error(`Failed to move event: ${err.message}`);
+      
+      // Revert on error
+      await fetchEvents();
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
   };
 
   const getNext7Days = () => {
@@ -627,61 +791,80 @@ export function CalendarView() {
 
         <TabsContent value="active" className="space-y-6">
           {/* Header */}
-          <div>
-            <h2 className="text-3xl font-bold flex items-center">
-              <Calendar className="w-8 h-8 mr-3 text-primary" />
-              7-Day Schedule Calendar
-            </h2>
-            <p className="text-muted-foreground mt-2">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h2 className="text-3xl font-bold flex items-center gap-3">
+                <Calendar className="w-8 h-8 text-primary" />
+                Calendar View
+              </h2>
+              <p className="text-muted-foreground mt-1 text-sm">
+                Schedule overview for all processes and events.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm">
+                <Eye className="w-4 h-4 mr-2" />
+                Switch to Dashboard
+              </Button>
+            </div>
+          </div>
+
+          {/* Calendar Instructions */}
+          <div className="mb-4">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <CalendarDays className="w-4 h-4" />
+              <span>7-Day Schedule Calendar</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1 ml-6">
               Drag and drop events to reschedule. All processes, deliveries, and payments at a glance.
             </p>
           </div>
 
-          {/* Today's Card - Full Width */}
+          {/* Today's View - Large Card */}
           {(() => {
             const todayEvents = activeEventsOnly[today] || [];
-            const isToday = true;
+            const todayDate = new Date();
             
             return (
               <Card 
-                className="w-full ring-2 ring-primary bg-primary/5 animate-fade-in"
-                onDrop={(e) => handleDrop(e, today)}
-                onDragOver={handleDragOver}
+                className="w-full mb-6 border-2 border-primary/20 bg-gradient-to-br from-primary/5 to-primary/10"
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleDrop(e, today);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleDragOver(e);
+                }}
               >
-                <CardHeader className="pb-4 bg-gradient-to-r from-primary/10 to-primary/5">
+                <CardHeader className="pb-4">
                   <CardTitle className="text-center">
-                    <div className="text-2xl font-bold text-primary">
-                      Today - {new Date().toLocaleDateString('en-US', { weekday: 'long' })}
+                    <div className="text-xl font-bold text-primary mb-1">
+                      Today - {todayDate.toLocaleDateString('en-US', { weekday: 'long' })}
                     </div>
-                    <div className="text-4xl font-bold text-primary mt-2">
-                      {new Date().getDate()}
+                    <div className="text-6xl font-bold text-primary my-2">
+                      {todayDate.getDate()}
                     </div>
                     <div className="text-lg text-muted-foreground">
-                      {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                      {todayDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
                     </div>
-                    {todayEvents.length > 0 && (
-                      <div className="mt-3">
-                        <Badge variant="secondary" className="text-sm">
-                          {todayEvents.length} item{todayEvents.length !== 1 ? 's' : ''} scheduled
-                        </Badge>
-                      </div>
-                    )}
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="p-6">
+                <CardContent className="p-6 min-h-[200px]">
                   {loading ? (
                     <div className="text-center py-12">
-                      <p>Loading events...</p>
+                      <p className="text-muted-foreground">Loading events...</p>
                     </div>
                   ) : error ? (
                     <div className="text-center py-12 text-red-500">
                       Error: {error}
                     </div>
                   ) : todayEvents.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                       {todayEvents
                         .sort((a, b) => {
-                          // Handle null/undefined time values
                           const timeA = a.time || '';
                           const timeB = b.time || '';
                           return timeA.localeCompare(timeB);
@@ -692,48 +875,45 @@ export function CalendarView() {
                             draggable
                             onDragStart={(e) => handleDragStart(e, event, today)}
                             onClick={() => setSelectedEvent(event)}
-                            className={`p-4 rounded-lg border cursor-pointer hover:shadow-lg transition-all hover-scale ${getEventColor(event.type, event.status, event.priority)}`}
+                            className={`p-3 rounded-lg border cursor-move hover:shadow-md transition-all ${getEventColor(event.type, event.status, event.priority)}`}
                           >
                             <div className="flex items-start justify-between mb-2">
-                              <Badge className={`text-xs px-2 py-1 ${getTypeBadgeColor(event.type)}`}>
+                              <Badge className={`text-xs px-2 py-0.5 ${getTypeBadgeColor(event.type)}`}>
                                 {event.type.toUpperCase()}
                               </Badge>
-                              <div className={`w-3 h-3 rounded-full ${getPriorityDot(event.priority)}`}></div>
+                              <div className={`w-2.5 h-2.5 rounded-full ${getPriorityDot(event.priority)}`}></div>
                             </div>
-                            <p className="text-sm font-semibold leading-tight text-foreground mb-2">
+                            <p className="text-sm font-semibold text-foreground mb-2 line-clamp-2">
                               {event.title}
                             </p>
-                            <div className="flex items-center justify-between text-sm text-muted-foreground mb-2">
-                              <span className="font-medium">{event.time || 'No time set'}</span>
-                              {event.department && <span className="text-xs">• {event.department}</span>}
-                            </div>
                             {event.assignedEmployees && event.assignedEmployees.length > 0 && (
-                              <div className="mb-2">
-                                <div className="flex flex-wrap gap-1">
-                                  {event.assignedEmployees.slice(0, 2).map((emp) => (
-                                    <span key={emp.id} className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                                      {emp.name}
-                                    </span>
-                                  ))}
-                                  {event.assignedEmployees.length > 2 && (
-                                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
-                                      +{event.assignedEmployees.length - 2} more
-                                    </span>
-                                  )}
-                                </div>
+                              <div className="flex items-center gap-2 mb-2">
+                                <Avatar className="w-6 h-6">
+                                  <AvatarImage src={getAvatarUrl(event.assignedEmployees[0])} alt={event.assignedEmployees[0].name} />
+                                  <AvatarFallback className="text-xs bg-primary/10 text-primary">
+                                    {getInitials(event.assignedEmployees[0].name)}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="text-xs text-muted-foreground">
+                                  {event.assignedEmployees[0].name}
+                                  {event.assignedEmployees.length > 1 && ` +${event.assignedEmployees.length - 1}`}
+                                </span>
                               </div>
                             )}
-                            <p className="text-xs text-muted-foreground line-clamp-2 leading-tight">
-                              {event.details || 'No details'}
-                            </p>
+                            {event.time && (
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Clock className="w-3 h-3" />
+                                <span>{event.time}</span>
+                              </div>
+                            )}
                           </div>
                         ))}
                     </div>
                   ) : (
                     <div className="text-center text-muted-foreground py-12">
-                      <CalendarDays className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                      <p className="text-lg font-medium">No events scheduled for today</p>
-                      <p className="text-sm">Perfect time to plan your day!</p>
+                      <CalendarDays className="w-16 h-16 mx-auto mb-4 opacity-30" />
+                      <p className="text-lg font-medium">No events scheduled for today.</p>
+                      <p className="text-sm mt-1">Perfect time to plan your day!</p>
                     </div>
                   )}
                 </CardContent>
@@ -741,48 +921,58 @@ export function CalendarView() {
             );
           })()}
 
-          {/* Other Days - Compact Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mt-6">
-            {next7Days.slice(1).map((date, index) => {
+          {/* 7-Day Schedule - Vertical Columns */}
+          <div className="grid grid-cols-7 gap-3">
+            {next7Days.slice(1).map((date) => {
               const dateKey = date.toDateString();
               const dayEvents = activeEventsOnly[dateKey] || [];
-              const isExpanded = expandedDate === dateKey;
+              const isToday = dateKey === today;
               
               return (
-                <Card 
+                <div
                   key={dateKey}
-                  className={`transition-all duration-300 cursor-pointer hover-scale ${
-                    isExpanded ? 'md:col-span-2 lg:col-span-3' : ''
+                  className={`flex flex-col min-h-[500px] rounded-lg border-2 p-3 transition-all ${
+                    isToday ? 'border-primary/40 bg-primary/5' : 'border-border bg-card'
                   }`}
-                  onClick={() => setExpandedDate(isExpanded ? null : dateKey)}
-                  onDrop={(e) => handleDrop(e, dateKey)}
-                  onDragOver={handleDragOver}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleDrop(e, dateKey);
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleDragOver(e);
+                  }}
                 >
-                  <CardHeader className="pb-2 bg-muted/20">
-                    <CardTitle className="text-center">
-                      <div className="text-sm font-semibold">
-                        {date.toLocaleDateString('en-US', { weekday: 'short' })}
+                  {/* Day Header */}
+                  <div className="mb-3 pb-2 border-b">
+                    <div className="text-xs font-medium text-muted-foreground uppercase">
+                      {date.toLocaleDateString('en-US', { weekday: 'short' })}
+                    </div>
+                    <div className="text-2xl font-bold mt-1">
+                      {date.getDate()}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {date.toLocaleDateString('en-US', { month: 'short' })}
+                    </div>
+                    {dayEvents.length > 0 && (
+                      <Badge variant="secondary" className="mt-2 text-xs">
+                        {dayEvents.length}
+                      </Badge>
+                    )}
+                  </div>
+
+                  {/* Events List */}
+                  <div className="flex-1 space-y-2">
+                    {dayEvents.length === 0 ? (
+                      <div className="text-center text-muted-foreground py-8">
+                        <CalendarDays className="w-6 h-6 mx-auto mb-2 opacity-30" />
+                        <p className="text-xs">No events</p>
                       </div>
-                      <div className="text-xl font-bold">
-                        {date.getDate()}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {date.toLocaleDateString('en-US', { month: 'short' })}
-                      </div>
-                      {dayEvents.length > 0 && (
-                        <div className="mt-1">
-                          <Badge variant="outline" className="text-xs">
-                            {dayEvents.length}
-                          </Badge>
-                        </div>
-                      )}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-2">
-                    <div className="space-y-1">{/* Dynamic height for all events */}
-                      {dayEvents
+                    ) : (
+                      dayEvents
                         .sort((a, b) => {
-                          // Handle null/undefined time values
                           const timeA = a.time || '';
                           const timeB = b.time || '';
                           return timeA.localeCompare(timeB);
@@ -792,61 +982,42 @@ export function CalendarView() {
                             key={event.id}
                             draggable
                             onDragStart={(e) => handleDragStart(e, event, dateKey)}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedEvent(event);
-                            }}
-                            className={`p-2 rounded border cursor-pointer hover:shadow-sm transition-all ${getEventColor(event.type, event.status, event.priority)} ${
-                              isExpanded ? 'mb-2' : ''
-                            }`}
+                            onClick={() => setSelectedEvent(event)}
+                            className={`p-3 rounded-lg border cursor-move hover:shadow-md transition-all group ${getEventColor(event.type, event.status, event.priority)}`}
                           >
-                            <div className="flex items-start justify-between mb-1">
-                              <Badge className={`text-xs px-1 py-0.5 ${getTypeBadgeColor(event.type)}`}>
+                            <div className="flex items-start justify-between mb-2">
+                              <Badge className={`text-xs px-1.5 py-0.5 ${getTypeBadgeColor(event.type)}`}>
                                 {event.type.substring(0, 3).toUpperCase()}
                               </Badge>
-                              <div className={`w-2 h-2 rounded-full ${getPriorityDot(event.priority)}`}></div>
+                              <div className={`w-2 h-2 rounded-full ${getPriorityDot(event.priority)} opacity-0 group-hover:opacity-100 transition-opacity`}></div>
                             </div>
-                            <p className="text-xs font-medium leading-tight text-foreground mb-1 line-clamp-2">
+                            <p className="text-xs font-semibold text-foreground mb-2 line-clamp-2">
                               {event.title}
                             </p>
                             {event.assignedEmployees && event.assignedEmployees.length > 0 && (
-                              <div className="mb-1">
-                                <div className="flex flex-wrap gap-1">
-                                  {event.assignedEmployees.slice(0, 1).map((emp) => (
-                                    <span key={emp.id} className="text-xs bg-blue-100 text-blue-800 px-1 py-0.5 rounded">
-                                      {emp.name}
-                                    </span>
-                                  ))}
-                                  {event.assignedEmployees.length > 1 && (
-                                    <span className="text-xs bg-gray-100 text-gray-600 px-1 py-0.5 rounded">
-                                      +{event.assignedEmployees.length - 1}
-                                    </span>
-                                  )}
-                                </div>
+                              <div className="flex items-center gap-1.5 mb-1">
+                                <Avatar className="w-5 h-5">
+                                  <AvatarImage src={getAvatarUrl(event.assignedEmployees[0])} alt={event.assignedEmployees[0].name} />
+                                  <AvatarFallback className="text-[10px] bg-primary/10 text-primary">
+                                    {getInitials(event.assignedEmployees[0].name)}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="text-xs text-muted-foreground truncate">
+                                  {event.assignedEmployees[0].name}
+                                </span>
                               </div>
                             )}
-                            {isExpanded && (
-                              <>
-                                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                  <span>{event.time || 'No time'}</span>
-                                  {event.department && <span>• {event.department}</span>}
-                                </div>
-                                <p className="text-xs text-muted-foreground mt-1 line-clamp-2 leading-tight">
-                                  {event.details || 'No details'}
-                                </p>
-                              </>
+                            {event.time && (
+                              <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                                <Clock className="w-3 h-3" />
+                                <span>{event.time}</span>
+                              </div>
                             )}
                           </div>
-                        ))}
-                      {dayEvents.length === 0 && (
-                        <div className="text-center text-muted-foreground text-xs py-4">
-                          <CalendarDays className="w-4 h-4 mx-auto mb-1 opacity-50" />
-                          <p>No events</p>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
+                        ))
+                    )}
+                  </div>
+                </div>
               );
             })}
           </div>
@@ -877,11 +1048,17 @@ export function CalendarView() {
                     </div>
                     {event.assignedEmployees && event.assignedEmployees.length > 0 && (
                       <div className="mb-2">
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex items-center gap-2 flex-wrap">
                           {event.assignedEmployees.map((emp) => (
-                            <span key={emp.id} className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
-                              {emp.name}
-                            </span>
+                            <div key={emp.id} className="flex items-center gap-1.5">
+                              <Avatar className="w-5 h-5">
+                                <AvatarImage src={getAvatarUrl(emp)} alt={emp.name} />
+                                <AvatarFallback className="text-[10px] bg-green-100 text-green-800">
+                                  {getInitials(emp.name)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <span className="text-xs text-green-800">{emp.name}</span>
+                            </div>
                           ))}
                         </div>
                       </div>
@@ -926,11 +1103,17 @@ export function CalendarView() {
                     </div>
                     {event.assignedEmployees && event.assignedEmployees.length > 0 && (
                       <div className="mb-2">
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex items-center gap-2 flex-wrap">
                           {event.assignedEmployees.map((emp) => (
-                            <span key={emp.id} className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded">
-                              {emp.name}
-                            </span>
+                            <div key={emp.id} className="flex items-center gap-1.5">
+                              <Avatar className="w-5 h-5">
+                                <AvatarImage src={getAvatarUrl(emp)} alt={emp.name} />
+                                <AvatarFallback className="text-[10px] bg-red-100 text-red-800">
+                                  {getInitials(emp.name)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <span className="text-xs text-red-800">{emp.name}</span>
+                            </div>
                           ))}
                         </div>
                       </div>
@@ -986,11 +1169,17 @@ export function CalendarView() {
               {selectedEvent.assignedEmployees && selectedEvent.assignedEmployees.length > 0 && (
                 <div>
                   <Label className="text-sm font-medium">Assigned To</Label>
-                  <div className="flex flex-wrap gap-2 mt-1">
+                  <div className="flex flex-wrap gap-3 mt-2">
                     {selectedEvent.assignedEmployees.map((emp) => (
-                      <Badge key={emp.id} variant="secondary" className="text-sm">
-                        {emp.name}
-                      </Badge>
+                      <div key={emp.id} className="flex items-center gap-2">
+                        <Avatar className="w-8 h-8">
+                          <AvatarImage src={getAvatarUrl(emp)} alt={emp.name} />
+                          <AvatarFallback className="bg-primary/10 text-primary text-xs">
+                            {getInitials(emp.name)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="text-sm font-medium">{emp.name}</span>
+                      </div>
                     ))}
                   </div>
                 </div>
