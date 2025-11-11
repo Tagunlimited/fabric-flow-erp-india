@@ -620,7 +620,7 @@ export function SupplierMaster() {
           <Button 
             onClick={() => setShowBulkUpload(true)}
             variant="outline"
-            className="bg-gradient-to-r from-green-500 to-emerald-500 text-white hover:scale-105 transition-transform"
+            className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground hover:scale-105 transition-transform"
           >
             <Upload className="w-4 h-4 mr-2" />
             Bulk Upload
@@ -1323,7 +1323,7 @@ export function SupplierMaster() {
                       <Button 
                         onClick={uploadSuppliers}
                         disabled={uploadedData.filter(r => r.errors.length === 0).length === 0}
-                        className="bg-green-600 hover:bg-green-700"
+                        className="bg-primary hover:bg-primary/90 text-primary-foreground"
                       >
                         <Upload className="w-4 h-4 mr-2" />
                         Upload {uploadedData.filter(r => r.errors.length === 0).length} Suppliers

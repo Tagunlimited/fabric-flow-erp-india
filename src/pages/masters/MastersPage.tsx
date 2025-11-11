@@ -13,7 +13,8 @@ import {
   Settings,
   Tag,
   Wrench,
-  Image
+  Image,
+  Truck
 } from "lucide-react";
 
 const masters = [
@@ -58,6 +59,12 @@ const masters = [
     description: "Define customer types and configurations",
     icon: Users,
     path: "/masters/customer-types"
+  },
+  {
+    title: "Supplier Master",
+    description: "Manage supplier information and details",
+    icon: Truck,
+    path: "/masters/suppliers"
   },
   {
     title: "Branding Type Master",

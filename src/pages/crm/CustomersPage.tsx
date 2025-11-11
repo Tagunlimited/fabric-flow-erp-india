@@ -3,7 +3,7 @@ import { CustomerList } from "@/components/customers/CustomerList";
 
 const CustomersPage = () => {
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <CustomerList />
     </ErpLayout>
   );

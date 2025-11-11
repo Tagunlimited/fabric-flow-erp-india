@@ -3,7 +3,7 @@ import { ImageMaster } from "@/components/masters/ImageMaster";
 
 const ImageMasterPage = () => {
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <ImageMaster />
     </ErpLayout>
   );

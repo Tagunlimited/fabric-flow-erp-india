@@ -524,7 +524,7 @@ export default function ProductPartsManager() {
 
   if (loading) {
     return (
-      <ErpLayout>
+      <ErpLayout fullPage>
         <div className="flex items-center justify-center h-64">
           <div className="text-lg">Loading...</div>
         </div>
@@ -533,7 +533,7 @@ export default function ProductPartsManager() {
   }
 
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <div className="space-y-6">
         <div className="flex justify-between items-center">
           <h1 className="text-3xl font-bold">Product Parts Manager</h1>

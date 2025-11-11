@@ -3,7 +3,7 @@ import SizeTypes from "./SizeTypes";
 
 const SizeTypesPage = () => {
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <SizeTypes />
     </ErpLayout>
   );

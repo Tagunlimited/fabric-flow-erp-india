@@ -3,7 +3,7 @@ import ProductCategories from "./ProductCategories";
 
 const ProductCategoriesPage = () => {
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <ProductCategories />
     </ErpLayout>
   );

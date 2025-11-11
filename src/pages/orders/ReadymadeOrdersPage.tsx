@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ShoppingCart, Plus, Eye, Package, Clock, CheckCircle, Search, Filter, RefreshCw, Truck } from "lucide-react";
+import { Shirt, Plus, Eye, Package, Clock, CheckCircle, Search, Filter, RefreshCw, Truck } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
@@ -196,7 +196,7 @@ const ReadymadeOrdersPage = () => {
             <CardContent>
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold">{orders.length}</span>
-                <ShoppingCart className="w-5 h-5 text-blue-700" />
+                <Shirt className="w-5 h-5 text-blue-700" />
               </div>
             </CardContent>
           </Card>

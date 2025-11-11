@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Search, Plus, Edit, Trash2, Download, Upload, X, FileText, ShoppingCart } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, Download, Upload, X, FileText, ShoppingCart, Shirt } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { CustomerForm } from './CustomerForm';
 import { OrderForm } from '../orders/OrderForm';
+import { ReadymadeOrderForm } from '../orders/ReadymadeOrderForm';
 import { calculateLifetimeValue, formatCurrency } from '@/lib/utils';
 import * as XLSX from 'xlsx';
 
@@ -52,7 +53,9 @@ export function CustomerList() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [showOrderDialog, setShowOrderDialog] = useState(false);
+  const [showOrderTypeDialog, setShowOrderTypeDialog] = useState(false);
   const [selectedCustomerForOrder, setSelectedCustomerForOrder] = useState<Customer | null>(null);
+  const [selectedOrderType, setSelectedOrderType] = useState<'custom' | 'readymade' | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -200,7 +203,19 @@ export function CustomerList() {
 
   const handlePlaceOrder = (customer: Customer) => {
     setSelectedCustomerForOrder(customer);
+    setShowOrderTypeDialog(true);
+  };
+
+  const handleOrderTypeSelect = (orderType: 'custom' | 'readymade') => {
+    setSelectedOrderType(orderType);
+    setShowOrderTypeDialog(false);
     setShowOrderDialog(true);
+  };
+
+  const handleOrderDialogClose = () => {
+    setShowOrderDialog(false);
+    setSelectedCustomerForOrder(null);
+    setSelectedOrderType(null);
   };
 
   const handleFormSave = (customer: Customer) => {
@@ -672,16 +687,18 @@ export function CustomerList() {
 
   if (showForm) {
     return (
-      <CustomerForm
-        customer={editingCustomer}
-        onSave={handleFormSave}
-        onCancel={handleFormCancel}
-      />
+      <div className="p-6">
+        <CustomerForm
+          customer={editingCustomer}
+          onSave={handleFormSave}
+          onCancel={handleFormCancel}
+        />
+      </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
@@ -932,12 +949,53 @@ export function CustomerList() {
         </DialogContent>
       </Dialog>
 
+      {/* Order Type Selection Dialog */}
+      <Dialog open={showOrderTypeDialog} onOpenChange={setShowOrderTypeDialog}>
+        <DialogContent className="max-w-2xl w-full">
+          <DialogHeader>
+            <DialogTitle className="text-2xl">Select Order Type</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-6 py-6">
+            <p className="text-base text-muted-foreground">
+              Choose the type of order you want to create for <strong className="text-foreground">{selectedCustomerForOrder?.company_name}</strong>
+            </p>
+            <div className="grid grid-cols-1 gap-6">
+              <Button
+                onClick={() => handleOrderTypeSelect('custom')}
+                className="h-auto p-8 flex flex-col items-start space-y-3 bg-primary hover:bg-primary/90 text-left"
+              >
+                <div className="flex items-center w-full justify-between">
+                  <span className="text-xl font-semibold">Custom Order</span>
+                  <ShoppingCart className="w-6 h-6" />
+                </div>
+                <span className="text-sm text-primary-foreground/90 text-left leading-relaxed">
+                  Create a custom order with specific requirements and customizations
+                </span>
+              </Button>
+              <Button
+                onClick={() => handleOrderTypeSelect('readymade')}
+                variant="outline"
+                className="h-auto p-8 flex flex-col items-start space-y-3 border-2 hover:bg-primary hover:text-primary-foreground text-left"
+              >
+                <div className="flex items-center w-full justify-between">
+                  <span className="text-xl font-semibold">Readymade Order</span>
+                  <Shirt className="w-6 h-6" />
+                </div>
+                <span className="text-sm text-muted-foreground text-left leading-relaxed hover:text-primary-foreground">
+                  Create an order for ready-to-ship products from inventory
+                </span>
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Place Order Dialog */}
-      <Dialog open={showOrderDialog} onOpenChange={setShowOrderDialog}>
+      <Dialog open={showOrderDialog} onOpenChange={handleOrderDialogClose}>
         <DialogContent className="max-w-7xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              Place Order - {selectedCustomerForOrder?.company_name}
+              {selectedOrderType === 'readymade' ? 'Place Readymade Order' : 'Place Custom Order'} - {selectedCustomerForOrder?.company_name}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
@@ -960,17 +1018,39 @@ export function CustomerList() {
                 </div>
               </div>
             )}
-            <OrderForm 
-              preSelectedCustomer={selectedCustomerForOrder}
-              onOrderCreated={() => {
-                setShowOrderDialog(false);
-                setSelectedCustomerForOrder(null);
-                toast({
-                  title: "Success",
-                  description: "Order created successfully",
-                });
-              }}
-            />
+            {selectedOrderType === 'readymade' ? (
+              <ReadymadeOrderForm 
+                preSelectedCustomer={selectedCustomerForOrder ? {
+                  id: selectedCustomerForOrder.id,
+                  company_name: selectedCustomerForOrder.company_name,
+                  email: selectedCustomerForOrder.email,
+                  phone: selectedCustomerForOrder.phone,
+                  address: selectedCustomerForOrder.address,
+                  city: selectedCustomerForOrder.city,
+                  state: selectedCustomerForOrder.state_name || '',
+                  pincode: selectedCustomerForOrder.pincode,
+                  gstin: selectedCustomerForOrder.gstin || ''
+                } : null}
+                onOrderCreated={() => {
+                  handleOrderDialogClose();
+                  toast({
+                    title: "Success",
+                    description: "Readymade order created successfully",
+                  });
+                }}
+              />
+            ) : (
+              <OrderForm 
+                preSelectedCustomer={selectedCustomerForOrder}
+                onOrderCreated={() => {
+                  handleOrderDialogClose();
+                  toast({
+                    title: "Success",
+                    description: "Custom order created successfully",
+                  });
+                }}
+              />
+            )}
           </div>
         </DialogContent>
       </Dialog>

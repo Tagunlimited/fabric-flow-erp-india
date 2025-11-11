@@ -3,7 +3,7 @@ import { SupplierMaster } from "@/components/masters/SupplierMaster";
 
 export default function SupplierMasterPage() {
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <SupplierMaster />
     </ErpLayout>
   );
