@@ -1067,17 +1067,9 @@ export default function OrderDetailPage() {
     }
   }, [order?.order_number]);
 
-  // Refresh receipts when page regains focus (e.g., after creating a receipt)
-  useEffect(() => {
-    const handleFocus = () => {
-      if (order?.order_number) {
-        fetchTotalReceipts();
-      }
-    };
-
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [order?.order_number]);
+  // DISABLED: Refresh receipts on focus - prevents unwanted auto-refresh
+  // Receipts will only refresh when explicitly needed (e.g., after creating a receipt)
+  // Removed focus-based auto-refresh to prevent page refreshes on tab switch
 
   const fetchOrderDetails = async () => {
       try {

@@ -9,12 +9,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Trash2, Plus, ExternalLink, X, ArrowLeft, Printer, Download, Share2 } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Trash2, Plus, ExternalLink, X, ArrowLeft, Printer, Download, Share2, Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { ProductImage } from '@/components/ui/OptimizedImage';
 import { convertImageToBase64WithCache, createFallbackLogo } from '@/utils/imageUtils';
+import { Checkbox } from '@/components/ui/checkbox';
+import { PendingItem, PendingItemGroup, getPendingItemPlaceholder, usePendingPoItems } from '@/hooks/usePendingPoItems';
 
 type CompanySettings = {
   company_name: string;
@@ -38,6 +41,8 @@ type LineItem = {
   quantity: number;
   unit_of_measure?: string;
   remarks?: string;
+  notes?: string;
+  item_color?: string | null;
   attributes?: Record<string, any> | null;
   fabricSelections?: { color: string; gsm: string; quantity: number }[];
   itemSelections?: { id: string; label: string; image_url?: string | null; quantity: number }[];
@@ -46,6 +51,11 @@ type LineItem = {
   fabric_name?: string;
   fabric_color?: string;
   fabric_gsm?: string;
+  // Pending BOM linkage
+  bom_item_id?: string;
+  bom_id?: string;
+  bom_number?: string;
+  product_name?: string | null;
 };
 
 type PurchaseOrder = {
@@ -128,9 +138,431 @@ export function PurchaseOrderForm() {
   const [items, setItems] = useState<LineItem[]>([]);
   // Option lists by type
   const [fabricOptions, setFabricOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
-  const [itemOptions, setItemOptions] = useState<{ id: string; label: string; image_url?: string | null; item_type?: string; uom?: string; type?: string }[]>([]);
+  const [itemOptions, setItemOptions] = useState<{ id: string; label: string; image_url?: string | null; item_type?: string; uom?: string; type?: string; color?: string | null }[]>([]);
   const [productOptions, setProductOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
   const [itemTypeOptions, setItemTypeOptions] = useState<string[]>([]);
+
+  const {
+    pendingItems,
+    fabricGroups,
+    itemGroups,
+    loading: pendingLoading,
+    error: pendingError,
+    refresh: refreshPending
+  } = usePendingPoItems();
+
+  const pendingPlaceholder = useMemo(() => getPendingItemPlaceholder(), []);
+
+  const pendingSelectionMap = useMemo(() => {
+    const map = new Map<string, LineItem>();
+    items.forEach(item => {
+      if (item.bom_item_id) {
+        map.set(item.bom_item_id, item);
+      }
+    });
+    return map;
+  }, [items]);
+
+  const itemColorMap = useMemo(() => {
+    const map = new Map<string, string | null>();
+    itemOptions.forEach(option => {
+      if (option.id) {
+        map.set(option.id, option.color || null);
+      }
+    });
+    return map;
+  }, [itemOptions]);
+
+  const manualItems = useMemo(() => items.filter(item => !item.bom_item_id), [items]);
+  const manualFabricItems = useMemo(
+    () => manualItems.filter(item => item.item_type === 'fabric'),
+    [manualItems]
+  );
+  const manualNonFabricItems = useMemo(
+    () => manualItems.filter(item => item.item_type !== 'fabric'),
+    [manualItems]
+  );
+
+  const formatQuantity = (value: number | string | null | undefined) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      return '0.00';
+    }
+    return num.toFixed(2);
+  };
+
+  const aggregatedSelectedItems = useMemo(() => {
+    const grouped = new Map<
+      string,
+      {
+        key: string;
+        item_name: string;
+        item_type: string;
+        item_id?: string | null;
+        unit_of_measure?: string;
+        total_quantity: number;
+        item_image_url?: string | null;
+        fabric_name?: string;
+        fabric_color?: string;
+        fabric_gsm?: string;
+        item_color?: string | null;
+        remarks: Set<string>;
+      }
+    >();
+  
+    items.forEach(item => {
+      const qty = Number(item.quantity || 0);
+      if (!Number.isFinite(qty) || qty <= 0) return;
+      const unit = item.unit_of_measure || '';
+      const itemType = (item.item_type || '').toLowerCase() || 'item';
+      const identityKey =
+        itemType === 'fabric'
+          ? [
+              'fabric',
+              (item.fabric_name || item.item_name || '').toLowerCase(),
+              (item.fabric_color || '').toLowerCase(),
+              (item.fabric_gsm || '').toLowerCase(),
+              unit.toLowerCase()
+            ].join('|')
+          : [
+              'item',
+              (item.item_id || item.item_name || '').toLowerCase(),
+              unit.toLowerCase()
+            ].join('|');
+
+      const resolvedColor = item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null);
+      const existing = grouped.get(identityKey);
+      if (existing) {
+        existing.total_quantity += qty;
+        if (item.remarks) {
+          existing.remarks.add(item.remarks);
+        }
+        if (item.notes) {
+          existing.remarks.add(item.notes);
+        }
+        if (!existing.item_color && resolvedColor) {
+          existing.item_color = resolvedColor;
+        }
+        if (!existing.fabric_color && item.fabric_color) {
+          existing.fabric_color = item.fabric_color;
+        }
+        if (!existing.item_id && item.item_id) {
+          existing.item_id = item.item_id;
+        }
+      } else {
+        const remarksSet = new Set<string>();
+        if (item.remarks) {
+          remarksSet.add(item.remarks);
+        }
+        if (item.notes) {
+          remarksSet.add(item.notes);
+        }
+        grouped.set(identityKey, {
+          key: identityKey,
+          item_name: item.item_name,
+          item_type: item.item_type || 'item',
+          item_id: item.item_id || null,
+          item_category: item.item_category || null,
+          unit_of_measure: unit,
+          total_quantity: qty,
+          item_image_url: item.item_image_url,
+          fabric_name: item.fabric_name,
+          fabric_color: item.fabric_color,
+          fabric_gsm: item.fabric_gsm,
+          item_color: resolvedColor,
+          remarks: remarksSet
+        });
+      }
+    });
+
+    return Array.from(grouped.values()).map(entry => ({
+      ...entry,
+      remarks: Array.from(entry.remarks).filter(Boolean).join(' | ')
+    }));
+  }, [items]);
+
+  useEffect(() => {
+    if (pendingError) {
+      toast.error('Failed to load pending BOM items');
+    }
+  }, [pendingError]);
+
+  const createLineItemFromPending = (pending: PendingItem): LineItem => {
+    const typeKey = (pending.item_type || pending.category || '').toLowerCase();
+    const isFabric = typeKey === 'fabric';
+    return {
+      item_type: isFabric ? 'fabric' : 'item',
+      item_id: pending.item_id || '',
+      item_name: pending.item_name,
+      item_image_url: pending.image_url || null,
+      quantity: Number(pending.remaining_quantity || pending.qty_total || 0),
+      unit_of_measure: pending.unit || (isFabric ? 'kgs' : 'pcs'),
+      remarks: '',
+      item_category: pending.category || (isFabric ? 'Fabric' : null),
+      item_color: pending.item_color || null,
+      fabric_name: isFabric ? pending.fabric_name || pending.item_name : undefined,
+      fabric_color: isFabric ? pending.fabric_color || undefined : undefined,
+      fabric_gsm: isFabric ? pending.fabric_gsm || undefined : undefined,
+      bom_item_id: pending.bom_item_id,
+      bom_id: pending.bom_id,
+      bom_number: pending.bom_number,
+      product_name: pending.product_name
+    };
+  };
+
+  const ensureLineItemFromPending = (pending: PendingItem) => {
+    setItems(prev => {
+      const idx = prev.findIndex(item => item.bom_item_id === pending.bom_item_id);
+      if (idx >= 0) {
+        const existing = prev[idx];
+        const merged: LineItem = {
+          ...createLineItemFromPending(pending),
+          ...existing,
+          quantity: existing.quantity ?? Number(pending.remaining_quantity || 0),
+          unit_of_measure: existing.unit_of_measure || pending.unit || (existing.item_type === 'fabric' ? 'kgs' : 'pcs'),
+          remarks: existing.remarks || existing.notes || '',
+          item_color: existing.item_color || pending.item_color || null
+        };
+        const updated = [...prev];
+        updated[idx] = merged;
+        return updated;
+      }
+      return [...prev, createLineItemFromPending(pending)];
+    });
+  };
+
+  const removeLineItemByBom = (bomItemId: string) => {
+    setItems(prev => prev.filter(item => item.bom_item_id !== bomItemId));
+  };
+
+  const updateLineItemByBom = (bomItemId: string, updates: Partial<LineItem>) => {
+    setItems(prev =>
+      prev.map(item =>
+        item.bom_item_id === bomItemId
+          ? {
+              ...item,
+              ...updates
+            }
+          : item
+      )
+    );
+  };
+
+  const handleTogglePendingSelection = (pending: PendingItem, checked: boolean) => {
+    if (checked) {
+      ensureLineItemFromPending(pending);
+    } else {
+      removeLineItemByBom(pending.bom_item_id);
+    }
+  };
+
+  const handleGroupSelection = (group: PendingItemGroup, checked: boolean) => {
+    group.bomBreakdowns.forEach(item => {
+      handleTogglePendingSelection(item, checked);
+    });
+  };
+
+  const renderPendingSection = (title: string, groups: PendingItemGroup[]) => (
+    <Card key={title} className="border border-primary/20">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-4">
+          <CardTitle>{title}</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {groups.length === 0 ? (
+          <div className="py-8 text-center text-muted-foreground">
+            No pending {title.toLowerCase()} requirements.
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {groups.map(group => {
+              const selectedCount = group.bomBreakdowns.filter(item =>
+                pendingSelectionMap.has(item.bom_item_id)
+              ).length;
+              const groupChecked =
+                selectedCount === 0
+                  ? false
+                  : selectedCount === group.bomBreakdowns.length
+                    ? true
+                    : ('indeterminate' as const);
+
+              return (
+              <div key={group.key} className="rounded-lg border border-dashed border-primary/30 p-4">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div className="flex items-center gap-4">
+                    <Checkbox
+                      checked={groupChecked}
+                      onCheckedChange={value => handleGroupSelection(group, value === true)}
+                      disabled={isReadOnly}
+                    />
+                    <ProductImage
+                      src={group.imageUrl || pendingPlaceholder}
+                      alt={group.displayName}
+                      className="h-16 w-16 rounded object-cover"
+                      fallbackText="IMG"
+                    />
+                    <div>
+                      <div className="text-lg font-semibold">{group.displayName}</div>
+                      <div className="text-xs uppercase tracking-wide text-muted-foreground">{group.type}</div>
+                    </div>
+                  </div>
+                  <div className="grid w-full grid-cols-3 gap-4 text-sm md:w-auto md:text-right">
+                    <div>
+                      <div className="text-muted-foreground">Required</div>
+                      <div className="font-semibold">
+                        {formatQuantity(group.totalRequired)} {group.unit || ''}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">Ordered</div>
+                      <div className="font-semibold">
+                        {formatQuantity(group.totalOrdered)} {group.unit || ''}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">Remaining</div>
+                      <div className="font-semibold text-primary">
+                        {formatQuantity(group.totalRemaining)} {group.unit || ''}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="[&>th]:align-middle">
+                        <TableHead className="w-[5%] text-center">Select</TableHead>
+                        <TableHead className="w-[24%] text-left">BOM</TableHead>
+                        <TableHead className="w-[10%] text-right">Required</TableHead>
+                        <TableHead className="w-[10%] text-right">Ordered</TableHead>
+                        <TableHead className="w-[10%] text-right">Remaining</TableHead>
+                        <TableHead className="w-[12%] text-right">Qty</TableHead>
+                        <TableHead className="w-[9%] text-center">UOM</TableHead>
+                        <TableHead className="w-[15%] text-left">Remark</TableHead>
+                        <TableHead className="w-[15%] text-center">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {group.bomBreakdowns
+                        .slice()
+                        .sort((a, b) => a.bom_number.localeCompare(b.bom_number))
+                        .map(item => {
+                          const selectedItem = pendingSelectionMap.get(item.bom_item_id);
+                          const isSelected = Boolean(selectedItem);
+                          const quantityValue = selectedItem
+                            ? selectedItem.quantity
+                            : Number(item.remaining_quantity || 0);
+                          const unitValue =
+                            selectedItem?.unit_of_measure || item.unit || group.unit || '';
+                          const remarkValue = selectedItem?.remarks || '';
+
+                          return (
+                            <TableRow key={item.bom_item_id} className="[&>td]:align-middle">
+                              <TableCell className="text-center">
+                                <Checkbox
+                                  checked={isSelected}
+                                  onCheckedChange={value =>
+                                    handleTogglePendingSelection(item, value === true)
+                                  }
+                                  disabled={isReadOnly}
+                                />
+                              </TableCell>
+                              <TableCell className="w-[24%]">
+                                <div className="font-medium">{item.bom_number}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  {item.product_name || 'Unnamed Product'}
+                                </div>
+                              </TableCell>
+                              <TableCell className="w-[10%] text-right whitespace-nowrap tabular-nums">
+                                {formatQuantity(item.qty_total)} {item.unit || ''}
+                              </TableCell>
+                              <TableCell className="w-[10%] text-right whitespace-nowrap tabular-nums">
+                                {formatQuantity(item.total_ordered)} {item.unit || ''}
+                              </TableCell>
+                              <TableCell className="w-[10%] text-right whitespace-nowrap tabular-nums font-semibold text-primary">
+                                {formatQuantity(item.remaining_quantity)} {item.unit || ''}
+                              </TableCell>
+                              <TableCell className="w-[10%] text-right whitespace-nowrap tabular-nums font-semibold text-primary">
+                                {formatQuantity(item.remaining_quantity)} {item.unit || ''}
+                              </TableCell>
+                              <TableCell className="w-[12%] text-right">
+                                <Input
+                                  type="number"
+                                  value={quantityValue}
+                                  onChange={e => {
+                                    if (!isSelected) return;
+                                    const value = parseFloat(e.target.value);
+                                    updateLineItemByBom(item.bom_item_id, {
+                                      quantity: Number.isFinite(value) ? value : 0
+                                    });
+                                  }}
+                                  disabled={!isSelected || isReadOnly}
+                                  className="text-right"
+                                  min={0}
+                                />
+                              </TableCell>
+                              <TableCell className="w-[9%] text-center">
+                                <Input
+                                  value={unitValue}
+                                  onChange={e => {
+                                    if (!isSelected) return;
+                                    updateLineItemByBom(item.bom_item_id, {
+                                      unit_of_measure: e.target.value
+                                    });
+                                  }}
+                                  disabled={!isSelected || isReadOnly}
+                                  className="text-center"
+                                />
+                              </TableCell>
+                              <TableCell className="w-[15%]">
+                                <Input
+                                  value={remarkValue}
+                                  onChange={e => {
+                                    if (!isSelected) return;
+                                    updateLineItemByBom(item.bom_item_id, {
+                                      remarks: e.target.value
+                                    });
+                                  }}
+                                  disabled={!isSelected || isReadOnly}
+                                  placeholder="Add remark"
+                                />
+                              </TableCell>
+                              <TableCell className="w-[15%] text-center">
+                                <div className="flex items-center justify-center gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => navigate(`/bom/${item.bom_id}`)}
+                                  >
+                                    View BOM
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => removeLineItemByBom(item.bom_item_id)}
+                                    disabled={!isSelected || isReadOnly}
+                                    className="text-red-600 hover:text-red-700"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 
   // Process BOM data from URL params
   useEffect(() => {
@@ -382,6 +814,7 @@ export function PurchaseOrderForm() {
           // Enrich with data from options if available and not already set
           item_image_url: bestImageUrl,
           item_category: item.item_category || itemOption?.item_type || itemOption?.type || 'Not specified',
+          item_color: item.item_color || itemOption?.color || null,
           // Also update fabric-specific fields if this is a fabric item
           ...(item.item_type === 'fabric' && {
             fabric_color: item.fabric_color || fabricOption?.color || 'N/A',
@@ -493,29 +926,33 @@ export function PurchaseOrderForm() {
         `${companySettings.address || ''}${companySettings.city ? ', ' + companySettings.city : ''}${companySettings.state ? ', ' + companySettings.state : ''}${companySettings.pincode ? ' - ' + companySettings.pincode : ''}`.replace(/^,\s*/, '') : 
         'Company Address';
       
-      // Generate line items table HTML
-      const lineItemsHTML = items.map(item => {
+      // Generate aggregated line items table HTML
+      const aggregatedItems = aggregatedSelectedItems.length > 0 ? aggregatedSelectedItems : items.map(item => ({
+        key: item.id || item.item_id || item.item_name,
+        item_name: item.item_name,
+        remarks: [item.remarks, item.notes].filter(Boolean).join(' | '),
+        item_type: item.item_type,
+        item_id: item.item_id || null,
+        item_category: item.item_category,
+        fabric_color: item.fabric_color,
+        fabric_gsm: item.fabric_gsm,
+        item_color: item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null),
+        quantity: item.quantity,
+        unit_of_measure: item.unit_of_measure
+      }));
+
+      const lineItemsHTML = aggregatedItems.map(item => {
         // Debug logging for fabric items
-        if (item.item_type === 'fabric') {
-          console.log('PDF - Fabric item data:', {
-            itemName: item.item_name,
-            itemType: item.item_type,
-            fabricColor: item.fabric_color,
-            fabricGsm: item.fabric_gsm,
-            fabricName: item.fabric_name,
-            fabricSelections: item.fabricSelections,
-            attributes: item.attributes
-          });
-        }
+        console.log('PDF - Aggregated item data:', item);
         
         return `
         <tr>
-          <td>${item.item_name}</td>
+          <td>${item.item_name || 'N/A'}</td>
           <td>${item.remarks || '-'}</td>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
-          <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : '-'}</td>
+          <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A')}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
-          <td style="text-align: right;">${item.quantity}</td>
+          <td style="text-align: right;">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
         </tr>
       `;
@@ -693,29 +1130,33 @@ export function PurchaseOrderForm() {
         `${companySettings.address || ''}${companySettings.city ? ', ' + companySettings.city : ''}${companySettings.state ? ', ' + companySettings.state : ''}${companySettings.pincode ? ' - ' + companySettings.pincode : ''}`.replace(/^,\s*/, '') : 
         'Company Address';
       
-      // Generate line items table HTML
-      const lineItemsHTML = items.map(item => {
+      // Generate aggregated line items table HTML
+      const aggregatedItems = aggregatedSelectedItems.length > 0 ? aggregatedSelectedItems : items.map(item => ({
+        key: item.id || item.item_id || item.item_name,
+        item_name: item.item_name,
+        remarks: [item.remarks, item.notes].filter(Boolean).join(' | '),
+        item_type: item.item_type,
+        item_id: item.item_id || null,
+        item_category: item.item_category,
+        fabric_color: item.fabric_color,
+        fabric_gsm: item.fabric_gsm,
+        item_color: item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null),
+        quantity: item.quantity,
+        unit_of_measure: item.unit_of_measure
+      }));
+
+      const lineItemsHTML = aggregatedItems.map(item => {
         // Debug logging for fabric items
-        if (item.item_type === 'fabric') {
-          console.log('Print - Fabric item data:', {
-            itemName: item.item_name,
-            itemType: item.item_type,
-            fabricColor: item.fabric_color,
-            fabricGsm: item.fabric_gsm,
-            fabricName: item.fabric_name,
-            fabricSelections: item.fabricSelections,
-            attributes: item.attributes
-          });
-        }
+        console.log('Print - Aggregated item data:', item);
         
         return `
         <tr>
           <td>${item.item_name || 'N/A'}</td>
-          <td>${item.notes || item.remarks || '-'}</td>
+          <td>${item.remarks || '-'}</td>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
-          <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : '-'}</td>
+          <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A')}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
-          <td class="number-cell">${item.quantity}</td>
+          <td class="number-cell">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
         </tr>
       `;
@@ -1099,7 +1540,7 @@ export function PurchaseOrderForm() {
       // Fetch items with comprehensive error handling
       const { data: items, error: itemError } = await supabase
         .from('item_master')
-        .select('id, item_name, item_type, image_url, image, uom')
+        .select('id, item_name, item_type, image_url, image, uom, color')
         .order('item_name');
       
       if (itemError) {
@@ -1114,6 +1555,7 @@ export function PurchaseOrderForm() {
         item_type: i.item_type || 'item',
         type: i.item_type || 'item',
         uom: i.uom || 'pcs',
+        color: i.color || null,
       }));
       console.log('Item options loaded:', {
         count: mappedItems.length,
@@ -1190,19 +1632,55 @@ export function PurchaseOrderForm() {
       if (itemsError) throw itemsError;
       
       // Process line items - use existing GST data from database
-      const processedItems = (lineItems || []).map(item => ({
-        ...item,
-        item_type: item.item_type || 'item', // Ensure item_type is set
-        // Map fabric-specific fields from database
-        fabric_name: item.fabric_name || null,
-        fabric_color: item.fabric_color || null,
-        fabric_gsm: item.fabric_gsm || null,
-        item_color: item.item_color || null,
-        // Ensure proper field mapping
-        type: item.item_type || 'item',
-        quantity: item.quantity || 0,
-        unit_of_measure: item.unit_of_measure || 'pcs'
-      }));
+      let trackingMap = new Map<string, any>();
+      try {
+        const { data: trackingData, error: trackingError } = await supabase
+          .from('bom_po_items')
+          .select(`
+            po_item_id,
+            bom_item_id,
+            bom_id,
+            ordered_quantity,
+            bom_record_items (
+              item_name,
+              item_image_url,
+              fabric_name,
+              fabric_color,
+              fabric_gsm,
+              category
+            )
+          `)
+          .eq('po_id', id);
+
+        if (trackingError) {
+          console.warn('Failed to load BOM tracking for PO', trackingError);
+        } else {
+          trackingMap = new Map((trackingData || []).map(entry => [entry.po_item_id, entry]));
+        }
+      } catch (trackingException) {
+        console.warn('Unhandled error while loading BOM tracking for PO', trackingException);
+      }
+
+      const processedItems = (lineItems || []).map(item => {
+        const tracking = trackingMap.get(item.id);
+        const bomRecord = tracking?.bom_record_items;
+        return {
+          ...item,
+          item_type: item.item_type || 'item', // Ensure item_type is set
+          // Map fabric-specific fields from database or BOM linkage
+          fabric_name: item.fabric_name || bomRecord?.fabric_name || null,
+          fabric_color: item.fabric_color || bomRecord?.fabric_color || null,
+          fabric_gsm: item.fabric_gsm || bomRecord?.fabric_gsm || null,
+          item_color: item.item_color || null,
+          item_image_url: item.item_image_url || bomRecord?.item_image_url || null,
+          // Ensure proper field mapping
+          type: item.item_type || 'item',
+          quantity: item.quantity || 0,
+          unit_of_measure: item.unit_of_measure || 'pcs',
+          bom_item_id: item.bom_item_id || tracking?.bom_item_id || null,
+          bom_id: item.bom_id || tracking?.bom_id || null,
+        };
+      });
       
       // No pricing calculations needed for purchase orders
       const itemsWithTotals = processedItems;
@@ -1239,6 +1717,7 @@ export function PurchaseOrderForm() {
       item_image_url: null,
       quantity: 0,
       unit_of_measure: type === 'fabric' ? 'kgs' : 'pcs',
+      item_color: null,
       item_category: type === 'item' ? null : undefined,
     };
     setItems(prev => [...prev, newItem]);
@@ -1284,6 +1763,7 @@ export function PurchaseOrderForm() {
           item_name: selected.label,
           item_image_url: selected.image_url,
           unit_of_measure: selected.uom || 'pcs',
+          item_color: (selected as any).color || null,
             });
           }
         }
@@ -1374,6 +1854,14 @@ export function PurchaseOrderForm() {
           .eq('po_id', poId);
 
         if (deleteError) throw deleteError;
+
+        // Delete existing BOM tracking records for this PO
+        const { error: deleteTrackingError } = await supabase
+          .from('bom_po_items')
+          .delete()
+          .eq('po_id', poId);
+
+        if (deleteTrackingError) throw deleteTrackingError;
     } else {
         // Create new PO
         console.log('🆕 Creating new PO with data:', poData);
@@ -1386,6 +1874,10 @@ export function PurchaseOrderForm() {
 
         if (createError) throw createError;
         poId = newPo.id;
+      }
+
+      if (!poId) {
+        throw new Error('Failed to resolve purchase order ID after save.');
       }
 
       // Insert line items
@@ -1404,10 +1896,6 @@ export function PurchaseOrderForm() {
           fabric_color: item.fabric_color || null,
           fabric_gsm: item.fabric_gsm || null,
           fabric_id: item.item_id || null // For fabric items, item_id is the fabric_id
-        }),
-        // Add item color for non-fabric items
-        ...(item.item_type !== 'fabric' && {
-          item_color: item.item_color || null
         })
       }));
 
@@ -1415,11 +1903,42 @@ export function PurchaseOrderForm() {
       console.log('First item type:', lineItemsData[0]?.item_type);
       console.log('First item type type:', typeof lineItemsData[0]?.item_type);
 
-      const { error: itemsError } = await supabase
+      const { data: insertedItems, error: itemsError } = await supabase
         .from('purchase_order_items')
-        .insert(lineItemsData);
+        .insert(lineItemsData)
+        .select('id');
 
       if (itemsError) throw itemsError;
+
+      const trackingRecords = (insertedItems || [])
+        .map((row, index) => {
+          const source = itemsWithTotals[index];
+          const quantityValue = Number(source?.quantity || 0);
+          if (!source?.bom_item_id || !source?.bom_id || !Number.isFinite(quantityValue)) {
+            return null;
+          }
+          return {
+            bom_id: source.bom_id,
+            bom_item_id: source.bom_item_id,
+            po_id: poId,
+            po_item_id: row.id,
+            ordered_quantity: quantityValue
+          };
+        })
+        .filter((record): record is {
+          bom_id: string;
+          bom_item_id: string;
+          po_id: string;
+          po_item_id: string;
+          ordered_quantity: number;
+        } => record !== null);
+
+      if (trackingRecords.length > 0) {
+        const { error: trackingInsertError } = await supabase
+          .from('bom_po_items')
+          .insert(trackingRecords);
+        if (trackingInsertError) throw trackingInsertError;
+      }
 
       toast.success('Purchase order saved successfully');
       navigate('/procurement/po');
@@ -1646,8 +2165,137 @@ export function PurchaseOrderForm() {
         </CardContent>
       </Card>
 
+      {/* Pending BOM Selection */}
+      {!isReadOnly && (
+      <div className="space-y-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-2xl font-semibold">Pending BOM Items</h2>
+            <p className="text-sm text-muted-foreground">
+              Select the materials to include in this purchase order. Adjust quantities and remarks before saving.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary" className="text-sm">
+              {pendingSelectionMap.size} selected
+            </Badge>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                refreshPending().catch(() => {
+                  // Errors handled via pendingError state and toast in effect.
+                });
+              }}
+              disabled={pendingLoading}
+              className="flex items-center gap-2"
+            >
+              {pendingLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Refreshing
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4" />
+                  Refresh
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+
+        {pendingError && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+            Failed to load pending BOM data. Review your connection and try refreshing.
+          </div>
+        )}
+
+        {pendingLoading ? (
+          <Card>
+            <CardContent className="py-6 space-y-4">
+              <Skeleton className="h-6 w-1/3" />
+              <Skeleton className="h-32" />
+              <Skeleton className="h-32" />
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-6">
+            {renderPendingSection('Fabric', fabricGroups)}
+            {renderPendingSection('Item', itemGroups)}
+          </div>
+        )}
+      </div>
+      )}
+
       {/* Line Items */}
       <div className="space-y-6">
+        {isReadOnly && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Selected Items</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {aggregatedSelectedItems.length === 0 ? (
+                <div className="py-8 text-center text-muted-foreground">
+                  No items captured for this purchase order.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {aggregatedSelectedItems.map(item => (
+                    <div
+                      key={item.key}
+                      className="flex flex-col gap-4 rounded-lg border p-4 md:flex-row md:items-center md:justify-between"
+                    >
+                      <div className="flex items-center gap-4">
+                        <ProductImage
+                          src={item.item_image_url}
+                          alt={item.item_name}
+                          className="h-16 w-16 rounded object-cover"
+                          fallbackText="IMG"
+                        />
+                        <div>
+                          <div className="text-lg font-semibold">{item.item_name}</div>
+                          <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                            {item.item_type}
+                          </div>
+                          {item.item_type?.toLowerCase() === 'fabric' ? (
+                            <div className="text-xs text-muted-foreground">
+                              {[item.fabric_color, item.fabric_gsm ? `${item.fabric_gsm} GSM` : null]
+                                .filter(Boolean)
+                                .join(' • ')}
+                            </div>
+                          ) : (item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null)) ? (
+                            <div className="text-xs text-muted-foreground">
+                              {item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null)}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-start gap-2 text-sm md:items-end">
+                        <div>
+                          <div className="text-muted-foreground">Total Quantity</div>
+                          <div className="font-semibold">
+                            {formatQuantity(item.total_quantity)} {item.unit_of_measure || ''}
+                          </div>
+                        </div>
+                        {item.remarks && (
+                          <div className="max-w-xl text-left md:text-right">
+                            <div className="text-muted-foreground">Remarks</div>
+                            <div>{item.remarks}</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {!isReadOnly && (
+          <>
         {/* Fabric Section */}
       <Card>
           <CardHeader>
@@ -1666,14 +2314,14 @@ export function PurchaseOrderForm() {
             </div>
         </CardHeader>
         <CardContent>
-            {items.filter(item => item.item_type === 'fabric').length === 0 ? (
+            {manualFabricItems.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 No fabrics added yet. Click + to add fabric.
               </div>
             ) : (
               <div className="space-y-4">
                 {items.map((it, idx) => {
-                  if (it.item_type !== 'fabric') return null;
+                  if (it.item_type !== 'fabric' || it.bom_item_id) return null;
                   return (
                     <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
                       {/* Fabric Image */}
@@ -1790,14 +2438,14 @@ export function PurchaseOrderForm() {
                           </div>
           </CardHeader>
           <CardContent>
-            {items.filter(item => item.item_type === 'item').length === 0 ? (
+            {manualNonFabricItems.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 No items added yet. Click + to add item.
                           </div>
             ) : (
               <div className="space-y-4">
                 {items.map((it, idx) => {
-                  if (it.item_type !== 'item') return null;
+                  if (it.item_type !== 'item' || it.bom_item_id) return null;
                   return (
                     <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
                       {/* Item Image */}
@@ -1926,6 +2574,8 @@ export function PurchaseOrderForm() {
             )}
         </CardContent>
       </Card>
+          </>
+        )}
       </div>
 
       <Card>

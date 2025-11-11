@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ShoppingCart, Plus, Eye, Edit, Package, Truck, Clock, CheckCircle, Search, Filter, Trash2, RefreshCw } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { usePersistentTabState } from "@/hooks/usePersistentTabState";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { OrderForm } from "@/components/orders/OrderForm";
@@ -55,7 +56,11 @@ const OrdersPage = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [salesManagers, setSalesManagers] = useState<{ [key: string]: { id: string; full_name: string; avatar_url?: string } }>({});
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("list");
+  // Use persistent tab state to prevent resetting to first tab on refresh
+  const { activeTab, setActiveTab } = usePersistentTabState({
+    pageKey: 'orders',
+    defaultValue: 'list'
+  });
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
@@ -71,7 +76,6 @@ const OrdersPage = () => {
   // Handle navigation state to refresh orders when returning from order detail
   useEffect(() => {
     if (location.state?.refreshOrders && activeTab === "list") {
-      console.log('OrdersPage: Navigation state indicates refresh needed');
       fetchOrders(true); // Force refresh when returning from order detail
       // Clear the state to prevent unnecessary refreshes
       navigate(location.pathname, { replace: true, state: {} });
@@ -80,7 +84,6 @@ const OrdersPage = () => {
 
   const fetchOrders = async (forceRefresh = false) => {
     try {
-      console.log('OrdersPage: fetchOrders called', forceRefresh ? '(force refresh)' : '');
       setLoading(true);
       
       // Clear orders state first if force refresh
@@ -100,7 +103,6 @@ const OrdersPage = () => {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      console.log('OrdersPage: Orders fetched:', data?.length || 0, 'orders');
       
       // Fetch sales managers if there are orders with sales_manager field
       if (data && data.length > 0) {
@@ -553,12 +555,9 @@ const OrdersPage = () => {
           <TabsContent value="create" className="space-y-6">
             <OrderForm 
               onOrderCreated={async () => {
-                console.log('OrdersPage: onOrderCreated callback triggered');
                 setActiveTab("list");
-                console.log('OrdersPage: Switching to list tab');
                 // Add a small delay to ensure the tab switch completes
                 setTimeout(async () => {
-                  console.log('OrdersPage: Fetching orders after delay');
                   await fetchOrders();
                 }, 100);
                 toast.success("Order created successfully!");

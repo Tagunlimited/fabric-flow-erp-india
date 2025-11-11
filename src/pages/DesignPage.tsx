@@ -32,12 +32,20 @@ interface Order {
   final_amount: number;
   balance_amount: number;
   mockup_url?: string;
+  order_type?: string;
+  order_items?: Array<{
+    id: string;
+    specifications: any;
+  }>;
 }
 
 const DesignPage = () => {
   const navigate = useNavigate();
   const { config: company } = useCompanySettings();
-  const { orders, loading, refetch } = useOrdersWithReceipts<Order>();
+  const { orders: ordersWithReceipts, loading: ordersLoading, refetch } = useOrdersWithReceipts<Order>();
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<"pending" | "completed">("pending");
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
@@ -47,11 +55,137 @@ const DesignPage = () => {
   const [showPrintDialog, setShowPrintDialog] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
 
+  // Fetch order items for each order to check mockup/branding
   useEffect(() => {
-    // orders are fetched by the hook; keep effect to satisfy other dependencies if needed
-  }, []);
+    const fetchOrdersWithItems = async () => {
+      if (ordersWithReceipts.length === 0) {
+        setOrders([]);
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        const orderIds = ordersWithReceipts.map(o => o.id);
+        
+        // Fetch order items with specifications
+        const { data: orderItems, error: itemsError } = await supabase
+          .from('order_items')
+          .select('id, order_id, specifications')
+          .in('order_id', orderIds);
+
+        if (itemsError) throw itemsError;
+
+        // Group order items by order_id
+        const itemsByOrderId: { [key: string]: any[] } = {};
+        (orderItems || []).forEach((item: any) => {
+          if (!itemsByOrderId[item.order_id]) {
+            itemsByOrderId[item.order_id] = [];
+          }
+          itemsByOrderId[item.order_id].push(item);
+        });
+
+        // Enrich orders with order_items
+        const enrichedOrders = ordersWithReceipts.map(order => ({
+          ...order,
+          order_items: itemsByOrderId[order.id] || []
+        }));
+
+        setOrders(enrichedOrders);
+      } catch (error) {
+        console.error('Error fetching order items:', error);
+        setOrders(ordersWithReceipts);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (!ordersLoading) {
+      fetchOrdersWithItems();
+    }
+  }, [ordersWithReceipts, ordersLoading]);
 
   const fetchOrders = async () => { await refetch(); };
+
+  // Check if order has mockup uploaded (for custom orders)
+  const hasMockup = (order: Order): boolean => {
+    if (!order.order_items || order.order_items.length === 0) return false;
+    
+    return order.order_items.some((item: any) => {
+      try {
+        const specs = typeof item.specifications === 'string' 
+          ? JSON.parse(item.specifications) 
+          : item.specifications || {};
+        
+        const mockupImages = specs.mockup_images || [];
+        return Array.isArray(mockupImages) && mockupImages.length > 0;
+      } catch {
+        return false;
+      }
+    });
+  };
+
+  // Check if order has branding (for readymade orders)
+  const hasBranding = (order: Order): boolean => {
+    if (!order.order_items || order.order_items.length === 0) return false;
+    
+    return order.order_items.some((item: any) => {
+      try {
+        const specs = typeof item.specifications === 'string' 
+          ? JSON.parse(item.specifications) 
+          : item.specifications || {};
+        
+        const brandingItems = specs.branding_items || [];
+        
+        // Check if branding_items is an array with at least one valid item
+        if (!Array.isArray(brandingItems) || brandingItems.length === 0) {
+          return false;
+        }
+        
+        // Check if at least one branding item has valid data (not just empty objects)
+        return brandingItems.some((branding: any) => {
+          // A valid branding item should have at least branding_type filled
+          return branding && 
+                 typeof branding === 'object' && 
+                 branding.branding_type && 
+                 branding.branding_type.trim() !== '';
+        });
+      } catch {
+        return false;
+      }
+    });
+  };
+
+  // Check if order is completed based on criteria
+  const isOrderCompleted = (order: Order): boolean => {
+    // Check order_type from order or from order_items specifications
+    let isReadymade = order.order_type === 'readymade';
+    
+    // If order_type is not set on order, check specifications
+    if (!isReadymade && order.order_items && order.order_items.length > 0) {
+      const firstItem = order.order_items[0];
+      try {
+        const specs = typeof firstItem.specifications === 'string' 
+          ? JSON.parse(firstItem.specifications) 
+          : firstItem.specifications || {};
+        isReadymade = specs.order_type === 'readymade';
+      } catch {
+        // If parsing fails, assume it's not readymade
+      }
+    }
+    
+    if (isReadymade) {
+      // Readymade: Has receipt AND has branding (with valid branding items)
+      return hasBranding(order);
+    } else {
+      // Custom: Has receipt AND has mockup
+      return hasMockup(order);
+    }
+  };
+
+  // Separate orders into pending and completed
+  const pendingOrders = orders.filter(order => !isOrderCompleted(order));
+  const completedOrders = orders.filter(order => isOrderCompleted(order));
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -94,8 +228,11 @@ const DesignPage = () => {
     }
   };
 
+  // Get current tab orders
+  const currentTabOrders = activeTab === "completed" ? completedOrders : pendingOrders;
+
   // Derived filtered, searched, and sorted orders
-  const filteredOrders = orders
+  const filteredOrders = currentTabOrders
     .filter(order => !filterStatus || order.status === filterStatus)
     .filter(order => {
       if (!searchTerm) return true;
@@ -190,7 +327,7 @@ const DesignPage = () => {
             <CardContent>
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold">
-                  {orders.filter(o => o.status === 'completed').length}
+                  {completedOrders.length}
                 </span>
                 <CheckCircle className="w-5 h-5 text-green-700" />
               </div>
@@ -198,10 +335,17 @@ const DesignPage = () => {
           </Card>
         </div>
 
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "pending" | "completed")} className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="pending">Pending ({pendingOrders.length})</TabsTrigger>
+            <TabsTrigger value="completed">Completed ({completedOrders.length})</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="pending" className="space-y-6">
         <Card>
           <CardHeader>
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
-              <CardTitle>Orders with Receipts</CardTitle>
+                  <CardTitle>Pending Orders (with Receipts)</CardTitle>
               <div className="flex flex-wrap items-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => setShowSearch(v => !v)}>
                   <Search className="w-4 h-4 mr-2" />
@@ -267,7 +411,7 @@ const DesignPage = () => {
                       <TableHead>Status</TableHead>
                       <TableHead>Amount</TableHead>
                       <TableHead>Balance</TableHead>
-                      <TableHead>Mockup</TableHead>
+                      <TableHead>Mockup/Branding</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -295,7 +439,13 @@ const DesignPage = () => {
                         <TableCell>{formatCurrency(order.final_amount || 0)}</TableCell>
                         <TableCell>{formatCurrency(order.balance_amount || 0)}</TableCell>
                         <TableCell>
-                          {order.mockup_url ? (
+                          {(() => {
+                            // Check if order has mockup (for custom) or branding (for readymade)
+                            const hasMockupOrBranding = order.order_type === 'readymade' 
+                              ? hasBranding(order) 
+                              : hasMockup(order);
+                            
+                            return hasMockupOrBranding ? (
                             <div className="w-6 h-6 bg-green-100 rounded flex items-center justify-center">
                               <FileImage className="w-4 h-4 text-green-600" />
                             </div>
@@ -303,7 +453,8 @@ const DesignPage = () => {
                             <div className="w-6 h-6 bg-gray-100 rounded flex items-center justify-center">
                               <FileImage className="w-4 h-4 text-gray-400" />
                             </div>
-                          )}
+                            );
+                          })()}
                         </TableCell>
                         <TableCell>
                           <div className="flex space-x-2">
@@ -324,12 +475,161 @@ const DesignPage = () => {
                     ))}
                   </TableBody>
                 </Table>
+                    {filteredOrders.length === 0 && !loading && (
+                      <div className="text-center py-8 text-muted-foreground">
+                        No pending orders found
+                      </div>
+                    )}
               </div>
             )}
           </CardContent>
         </Card>
+          </TabsContent>
 
-        {/* Upload removed; handled in Order Detail Page */}
+          <TabsContent value="completed" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
+                  <CardTitle>Completed Orders (with Receipts)</CardTitle>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => setShowSearch(v => !v)}>
+                      <Search className="w-4 h-4 mr-2" />
+                      Search
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <Filter className="w-4 h-4 mr-2" />
+                          Filter
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setFilterStatus(null)} className={!filterStatus ? 'bg-accent/20 font-semibold' : ''}>All Statuses</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setFilterStatus("pending")} className={filterStatus === "pending" ? 'bg-accent/20 font-semibold' : ''}>Pending</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setFilterStatus("confirmed")} className={filterStatus === "confirmed" ? 'bg-accent/20 font-semibold' : ''}>Confirmed</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setFilterStatus("in_production")} className={filterStatus === "in_production" ? 'bg-accent/20 font-semibold' : ''}>In Production</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setFilterStatus("completed")} className={filterStatus === "completed" ? 'bg-accent/20 font-semibold' : ''}>Completed</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setFilterStatus("cancelled")} className={filterStatus === "cancelled" ? 'bg-accent/20 font-semibold' : ''}>Cancelled</DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          Sort
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setSortBy("date_desc")} className={sortBy === "date_desc" ? 'bg-accent/20 font-semibold' : ''}>Newest First</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSortBy("date_asc")} className={sortBy === "date_asc" ? 'bg-accent/20 font-semibold' : ''}>Oldest First</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSortBy("amount_desc")} className={sortBy === "amount_desc" ? 'bg-accent/20 font-semibold' : ''}>Amount High-Low</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSortBy("amount_asc")} className={sortBy === "amount_asc" ? 'bg-accent/20 font-semibold' : ''}>Amount Low-High</DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <Button onClick={fetchOrders} variant="outline">Refresh</Button>
+                  </div>
+                </div>
+                {showSearch && (
+                  <div className="mt-2">
+                    <Input
+                      autoFocus
+                      placeholder="Search by order number or customer name..."
+                      value={searchTerm}
+                      onChange={e => setSearchTerm(e.target.value)}
+                      className="max-w-xs"
+                    />
+                  </div>
+                )}
+              </CardHeader>
+              <CardContent className="p-2 sm:p-4">
+                {loading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table className="min-w-[600px]">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Order Number</TableHead>
+                          <TableHead>Customer</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Balance</TableHead>
+                          <TableHead>Mockup/Branding</TableHead>
+                          <TableHead>Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredOrders.map((order) => (
+                          <TableRow 
+                            key={order.id} 
+                            className="cursor-pointer hover:bg-muted/50"
+                            onClick={() => navigate(`/orders/${order.id}`)}
+                          >
+                            <TableCell className="font-medium">{order.order_number}</TableCell>
+                            <TableCell>{order.customer?.company_name}</TableCell>
+                            <TableCell>
+                              {new Date(order.order_date).toLocaleDateString('en-GB', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: '2-digit'
+                              })}
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={getStatusColor(order.status)}>
+                                {order.status.replace('_', ' ').toUpperCase()}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>{formatCurrency(order.final_amount || 0)}</TableCell>
+                            <TableCell>{formatCurrency(order.balance_amount || 0)}</TableCell>
+                            <TableCell>
+                              {(() => {
+                                // Check if order has mockup (for custom) or branding (for readymade)
+                                const hasMockupOrBranding = order.order_type === 'readymade' 
+                                  ? hasBranding(order) 
+                                  : hasMockup(order);
+                                
+                                return hasMockupOrBranding ? (
+                                  <div className="w-6 h-6 bg-green-100 rounded flex items-center justify-center">
+                                    <FileImage className="w-4 h-4 text-green-600" />
+                                  </div>
+                                ) : (
+                                  <div className="w-6 h-6 bg-gray-100 rounded flex items-center justify-center">
+                                    <FileImage className="w-4 h-4 text-gray-400" />
+                                  </div>
+                                );
+                              })()}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex space-x-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    navigate(`/orders/${order.id}`);
+                                  }}
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    {filteredOrders.length === 0 && !loading && (
+                      <div className="text-center py-8 text-muted-foreground">
+                        No completed orders found
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
 
         {/* Print Dialog */}
         <Dialog open={showPrintDialog} onOpenChange={setShowPrintDialog}>

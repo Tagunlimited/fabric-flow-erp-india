@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +20,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { cn, formatCurrency } from '@/lib/utils';
 import { getOrderItemDisplayImageForForm, getImageSrcFromFileOrUrl } from '@/utils/orderItemImageUtils';
+import { usePageState } from '@/contexts/AppCacheContext';
 
 interface Customer {
   id: string;
@@ -120,6 +121,7 @@ interface Product {
   attachments: File[];
   product_description: string;
   fabric_id: string;
+  fabric_base_id?: string;
   gsm: string;
   color: string;
   remarks: string;
@@ -169,7 +171,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
   const [brandingTypes, setBrandingTypes] = useState<BrandingType[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const [formData, setFormData] = useState<OrderFormData>({
+  const initialFormData = useMemo<OrderFormData>(() => ({
     order_date: new Date(),
     expected_delivery_date: new Date(),
     customer_id: preSelectedCustomer?.id || '',
@@ -180,97 +182,68 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
     reference_id: '',
     advance_amount: 0,
     additional_charges: []
-  });
+  }), [preSelectedCustomer?.id]);
 
-  const [isLoaded, setIsLoaded] = useState(true);
-  const [hasSavedData, setHasSavedData] = useState(false);
-  const [isFormLoading, setIsFormLoading] = useState(false);
+  const {
+    state: formData,
+    updateState: updateFormState,
+    resetState: resetFormState,
+    hasSavedState: hasSavedFormState
+  } = usePageState<OrderFormData>('customOrderForm', initialFormData);
 
-  // Simple form persistence using localStorage directly
+  const setFormData = useCallback(
+    (value: OrderFormData | ((prev: OrderFormData) => OrderFormData)) => {
+      updateFormState((prev: OrderFormData) => {
+        if (typeof value === 'function') {
+          return (value as (prev: OrderFormData) => OrderFormData)(prev);
+        }
+        return value;
+      });
+    },
+    [updateFormState]
+  );
+
+  // Normalize persisted primitives (dates, arrays) after hydration
   useEffect(() => {
-    setIsFormLoading(true);
-    try {
-      const savedData = localStorage.getItem('orderFormData');
-      if (savedData && !preSelectedCustomer) {
-        console.log('OrderForm: Loading saved form data from localStorage');
-        const parsedData = JSON.parse(savedData);
-        
-        // Convert date strings back to Date objects
-        if (parsedData.order_date) {
-          parsedData.order_date = new Date(parsedData.order_date);
-        }
-        if (parsedData.expected_delivery_date) {
-          parsedData.expected_delivery_date = new Date(parsedData.expected_delivery_date);
-        }
-        
-        // Ensure all products have customizations array
-        if (parsedData.products) {
-          parsedData.products = parsedData.products.map((product: any) => ({
-            ...product,
-            customizations: product.customizations || []
-          }));
-        }
-        
-        setFormData(parsedData);
-        setHasSavedData(true);
-        console.log('OrderForm: Form data loaded successfully');
+    setFormData(prev => {
+      let changed = false;
+      const next = { ...prev };
+
+      if (!(next.order_date instanceof Date)) {
+        next.order_date = new Date(next.order_date);
+        changed = true;
       }
-    } catch (error) {
-      console.error('Error loading order form data:', error);
-    } finally {
-      setIsFormLoading(false);
-    }
-  }, [preSelectedCustomer]);
-
-  // Save form data to localStorage with debounce
-  useEffect(() => {
-    if (!preSelectedCustomer) {
-      const timeoutId = setTimeout(() => {
-        try {
-          console.log('OrderForm: Saving form data to localStorage');
-          localStorage.setItem('orderFormData', JSON.stringify(formData));
-        } catch (error) {
-          console.error('Error saving order form data:', error);
-        }
-      }, 2000); // 2 second debounce
-
-      return () => clearTimeout(timeoutId);
-    }
-  }, [formData, preSelectedCustomer]);
-
-  // Prevent navigation when tab regains focus
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        console.log('OrderForm: Tab regained focus - preventing any navigation');
-        // Don't do anything that could trigger navigation
+      if (!(next.expected_delivery_date instanceof Date)) {
+        next.expected_delivery_date = new Date(next.expected_delivery_date);
+        changed = true;
       }
-    };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+      const normalizedProducts = (next.products || []).map(product => {
+        if (product.customizations && Array.isArray(product.customizations)) {
+          return product;
+        }
+        changed = true;
+        return {
+          ...product,
+          customizations: product.customizations || []
+        };
+      });
 
-  const resetData = () => {
-    setFormData({
-      order_date: new Date(),
-      expected_delivery_date: new Date(),
-      customer_id: preSelectedCustomer?.id || '',
-      sales_manager: '',
-      products: [createEmptyProduct()],
-      gst_rate: 18,
-      payment_channel: '',
-      reference_id: '',
-      advance_amount: 0,
-      additional_charges: []
+      if (changed) {
+        next.products = normalizedProducts;
+        return next;
+      }
+
+      return prev;
     });
-    setHasSavedData(false);
-    try {
-      localStorage.removeItem('orderFormData');
-    } catch (error) {
-      console.error('Error clearing order form data:', error);
-    }
-  };
+  }, [setFormData]); // normalize persisted data once on mount
+
+  // DISABLED: Visibility change handler - using centralized visibility manager
+  // No action needed on visibility change to prevent unwanted refreshes
+
+  const resetData = useCallback(() => {
+    resetFormState();
+  }, [resetFormState]);
 
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [selectedCategoryImage, setSelectedCategoryImage] = useState<string>('');
@@ -291,6 +264,18 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
       setSelectedCustomer(preSelectedCustomer);
     }
   }, [preSelectedCustomer]);
+
+  useEffect(() => {
+    if (preSelectedCustomer?.id) {
+      setFormData(prev => {
+        if (prev.customer_id) return prev;
+        return {
+          ...prev,
+          customer_id: preSelectedCustomer.id
+        };
+      });
+    }
+  }, [preSelectedCustomer?.id, setFormData]);
 
   // Auto-scroll functionality - DISABLED as per user request
   // useEffect(() => {
@@ -348,16 +333,16 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
   // Handle fabric selection and auto-select GSM and price
   const handleFabricSelect = (productIndex: number, fabricId: string) => {
-    const selectedFabric = fabrics.find(f => f.id === fabricId);
     setFormData(prev => ({
       ...prev,
       products: prev.products.map((p, i) => 
         i === productIndex ? { 
           ...p, 
+          fabric_base_id: fabricId,
           fabric_id: fabricId, 
-          color: '', // Reset color - user will select from dropdown
-          gsm: selectedFabric?.gsm || '',
-          price: selectedFabric?.rate || 0
+        color: '', // Reset color - user will select from dropdown
+        gsm: '',
+        price: p.price
         } : p
       )
     }));
@@ -365,25 +350,70 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
   // Handle color selection
   const handleColorSelect = (productIndex: number, color: string) => {
-    setFormData(prev => ({
+  setFormData(prev => {
+    const product = prev.products[productIndex];
+    const baseFabric = fabrics.find(
+      f => f.id === (product.fabric_base_id || product.fabric_id)
+    );
+    const variants = baseFabric
+      ? fabrics.filter(f => f.fabric_name === baseFabric.fabric_name)
+      : [];
+    const matchingVariant = variants.find(
+      (variant) =>
+        variant.color === color && (!product.gsm || !variant.gsm || variant.gsm === product.gsm)
+    ) || variants.find((variant) => variant.color === color);
+
+    return {
       ...prev,
-      products: prev.products.map((p, i) => 
-        i === productIndex ? { ...p, color: color } : p
+      products: prev.products.map((p, i) =>
+        i === productIndex
+          ? {
+              ...p,
+              color,
+              fabric_id: matchingVariant?.id || p.fabric_id,
+              fabric_base_id: p.fabric_base_id || p.fabric_id,
+              gsm: matchingVariant?.gsm || p.gsm,
+              price: matchingVariant?.rate ?? p.price
+            }
+          : p
       )
-    }));
+    };
+  });
   };
 
   // Get available colors for selected fabric
   const getAvailableColors = (productIndex: number) => {
-    const product = formData.products[productIndex];
-    if (!product.fabric_id) return [];
-    
-    const selectedFabric = fabrics.find(f => f.id === product.fabric_id);
+  const product = formData.products[productIndex];
+  const baseId = product.fabric_base_id || product.fabric_id;
+  if (!baseId) return [];
+  
+  const selectedFabric = fabrics.find(f => f.id === baseId);
     if (!selectedFabric) return [];
     
     // Get all fabrics with the same fabric_name but different colors
     return fabrics.filter(f => f.fabric_name === selectedFabric.fabric_name);
   };
+
+const getSelectedFabricVariant = (productIndex: number) => {
+  const product = formData.products[productIndex];
+  if (!product.fabric_id || !product.color || !product.gsm) return null;
+  const variant = fabrics.find(f => f.id === product.fabric_id);
+  if (!variant) return null;
+  // Ensure variant matches selected attributes; if not, try to resolve by attributes
+  if (
+    variant.color !== product.color ||
+    (variant.gsm && product.gsm && variant.gsm !== product.gsm)
+  ) {
+    const resolved = fabrics.find(
+      (f) =>
+        f.fabric_name === variant.fabric_name &&
+        f.color === product.color &&
+        (!product.gsm || f.gsm === product.gsm)
+    );
+    return resolved || variant;
+  }
+  return variant;
+};
 
   // Color and GSM are now automatically selected with fabric
   // No separate color selection needed
@@ -452,6 +482,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
       attachments: [],
       product_description: '',
       fabric_id: '',
+    fabric_base_id: '',
       gsm: '',
       color: '',
       remarks: '',
@@ -556,7 +587,8 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
               ...product,
               product_category_id: categoryId,
               category_image_url: category?.category_image_url || '',
-              fabric_id: '' // Reset fabric selection when category changes
+              fabric_id: '', // Reset fabric selection when category changes
+              fabric_base_id: ''
             }
           : product
       )
@@ -909,11 +941,8 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('OrderForm: Form submission started');
-    
-    // Prevent submission if we're in the middle of a tab focus change or form loading
-    if (document.hidden || isFormLoading) {
-      console.log('OrderForm: Preventing submission during tab focus change or form loading');
+    // Prevent submission if tab is hidden
+    if (document.hidden) {
       return;
     }
     
@@ -1082,34 +1111,13 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
   const { subtotal, gstAmount, additionalChargesTotal, grandTotal, balance } = calculateTotals();
 
-  // Show loading state while form data is being loaded
-  if (!isLoaded) {
-    return (
-      <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Create New Order</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-center py-8">
-              <div className="text-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-                <p className="text-muted-foreground">Loading form data...</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
           <div className="flex justify-between items-center">
             <CardTitle>Create New Order</CardTitle>
-            {hasSavedData && (
+            {hasSavedFormState && (
               <div className="flex items-center gap-2">
                 <Badge variant="secondary" className="bg-green-100 text-green-800">
                   Saved Progress
@@ -1190,6 +1198,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
                       onValueChange={handleCustomerSelect}
                       onCustomerSelect={(customer) => setSelectedCustomer(customer)}
                       placeholder="Search by name, phone, contact person..."
+                      cacheKey="customerSearchSelect-customOrder"
                     />
                   </div>
                 )}
@@ -1284,7 +1293,9 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
                 </Button>
               </div>
 
-              {formData.products.map((product, productIndex) => (
+              {formData.products.map((product, productIndex) => {
+                const selectedFabricVariant = getSelectedFabricVariant(productIndex);
+                return (
                 <Card key={productIndex} className="relative border-l-4 border-l-primary bg-gradient-to-r from-primary/5 to-background shadow-lg">
                   <CardHeader className="pb-3 bg-gradient-to-r from-primary/10 to-transparent">
                     <div className="flex justify-between items-center">
@@ -1421,7 +1432,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
         <div>
           <Label className="text-base font-semibold text-gray-700 mb-2 block">Fabric</Label>
           <Select
-            value={product.fabric_id}
+            value={product.fabric_base_id || product.fabric_id}
             onValueChange={(value) => handleFabricSelect(productIndex, value)}
             disabled={false}
           >
@@ -1432,13 +1443,6 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
               {getFilteredFabricNames(productIndex).map((fabric) => (
                 <SelectItem key={fabric.id} value={fabric.id}>
                   <div className="flex items-center gap-2">
-                    {fabric.image && (
-                      <img 
-                        src={fabric.image} 
-                        alt={fabric.fabric_name} 
-                        className="w-6 h-6 object-cover rounded border"
-                      />
-                    )}
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{fabric.fabric_name}</span>
                       {fabric.gsm && <span className="text-muted-foreground">({fabric.gsm} GSM)</span>}
@@ -1504,6 +1508,24 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
         />
       </div>
     </div>
+    {selectedFabricVariant?.image && (
+      <div className="flex items-center gap-4 rounded-lg border border-dashed border-primary/40 bg-primary/5 p-4">
+        <img
+          src={selectedFabricVariant.image}
+          alt={`${selectedFabricVariant.fabric_name} ${selectedFabricVariant.color}`}
+          className="w-20 h-20 object-cover rounded-md border"
+        />
+        <div>
+          <div className="font-semibold text-sm text-primary">{selectedFabricVariant.fabric_name}</div>
+          <div className="text-sm text-muted-foreground">
+            {selectedFabricVariant.color} • {selectedFabricVariant.gsm || product.gsm} GSM
+          </div>
+          {selectedFabricVariant.fabric_code && (
+            <div className="text-xs text-muted-foreground">Code: {selectedFabricVariant.fabric_code}</div>
+          )}
+        </div>
+      </div>
+    )}
 {/* <div className="space-y-3">
                         <Label>Color</Label>
                         {product.fabric_id ? (
@@ -2040,7 +2062,8 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
                   </CardContent>
                 </Card>
-              ))}
+              );
+              })}
             </div>
 
             {/* Order Summary */}

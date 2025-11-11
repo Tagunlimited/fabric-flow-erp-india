@@ -10,10 +10,21 @@ import { supabase } from '@/integrations/supabase/client';
 import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS, ITEM_TYPE_CONFIGS } from '@/types/warehouse-inventory';
 import { toast } from 'sonner';
 import { InventoryLogsModal } from './InventoryLogsModal';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 interface StorageZoneInventoryProps {
   onViewDetails?: (inventory: WarehouseInventory) => void;
   itemType?: 'FABRIC' | 'ITEM' | 'PRODUCT'; // Optional filter for item type
+}
+
+interface AllocationDetail {
+  allocationId: string;
+  bomNumber: string;
+  orderNumber: string;
+  quantity: number;
+  unit: string;
+  itemName: string;
+  allocatedAt: string;
 }
 
 export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onViewDetails, itemType }) => {
@@ -25,6 +36,11 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
   const [itemTypeFilter, setItemTypeFilter] = useState<string>('all');
   const [logsModalOpen, setLogsModalOpen] = useState(false);
   const [selectedInventoryForLogs, setSelectedInventoryForLogs] = useState<WarehouseInventory | null>(null);
+  const [allocationModalOpen, setAllocationModalOpen] = useState(false);
+  const [selectedAllocationDetails, setSelectedAllocationDetails] = useState<{
+    inventory: WarehouseInventory;
+    details: AllocationDetail[];
+  } | null>(null);
 
   const loadInventory = async () => {
     try {
@@ -76,6 +92,9 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
       // Filter by item_type if provided
       if (itemType) {
         query = query.eq('item_type', itemType);
+      } else {
+        // Exclude PRODUCT items - only show FABRIC and ITEM for Raw Material inventory
+        query = query.in('item_type', ['FABRIC', 'ITEM'] as any);
       }
       
       const { data, error } = await query
@@ -98,30 +117,143 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
       // Debug: Log after bin filter
       console.log('🔍 [StorageZone] After bin filter:', filtered.length);
       
-      // Fetch product_master data separately if item_type is PRODUCT
-      let productMap = new Map<string, any>();
-      if (itemType === 'PRODUCT') {
-        const itemIds = filtered
-          .map((i: any) => i.item_id)
-          .filter((id: any) => id) as string[];
+      // Fetch item_master and fabric_master data for FABRIC and ITEM types
+      const fabricIds = filtered
+        .filter((i: any) => i.item_type === 'FABRIC' && i.item_id)
+        .map((i: any) => i.item_id) as string[];
+      
+      const itemIds = filtered
+        .filter((i: any) => i.item_type === 'ITEM' && i.item_id)
+        .map((i: any) => i.item_id) as string[];
+      
+      const productIds = filtered
+        .filter((i: any) => i.item_type === 'PRODUCT' && i.item_id)
+        .map((i: any) => i.item_id) as string[];
+      
+      // Fetch fabric_master data by ID
+      let fabricMap = new Map<string, any>();
+      if (fabricIds.length > 0) {
+        const { data: fabricsData, error: fabricsError } = await supabase
+          .from('fabric_master')
+          .select('id, fabric_code, fabric_name, color, type, gsm, image')
+          .in('id', fabricIds);
         
-        if (itemIds.length > 0) {
-          const { data: productsData, error: productsError } = await supabase
-            .from('product_master')
-            .select('id, sku, class, size, name, brand, category, main_image, image_url, image1, image2, images')
-            .in('id', itemIds);
+        if (!fabricsError && fabricsData) {
+          fabricsData.forEach((fabric: any) => {
+            fabricMap.set(fabric.id, fabric);
+          });
+          console.log('✅ [StorageZone] Fetched fabrics by ID:', fabricsData.length, 'fabricIds requested:', fabricIds.length);
+        } else {
+          console.warn('⚠️ [StorageZone] Error fetching fabrics by ID:', fabricsError);
+        }
+      }
+      
+      // For fabrics without item_id or where ID lookup failed, try to match by fabric name
+      const fabricItemsWithoutMatch = filtered.filter((i: any) => 
+        i.item_type === 'FABRIC' && (!i.item_id || !fabricMap.has(i.item_id))
+      );
+      
+      if (fabricItemsWithoutMatch.length > 0) {
+        // Get unique fabric names from items without matches
+        const fabricNames = Array.from(new Set(
+          fabricItemsWithoutMatch
+            .map((i: any) => i.grn_item?.fabric_name || i.item_name)
+            .filter(Boolean)
+        )) as string[];
+        
+        if (fabricNames.length > 0) {
+          const { data: fabricsByNameData, error: fabricsByNameError } = await supabase
+            .from('fabric_master')
+            .select('id, fabric_code, fabric_name, color, type, gsm, image')
+            .in('fabric_name', fabricNames);
           
-          if (!productsError && productsData) {
-            productsData.forEach((product: any) => {
-              productMap.set(product.id, product);
+          if (!fabricsByNameError && fabricsByNameData) {
+            // Create a map by fabric_name for easy lookup
+            const fabricByNameMap = new Map<string, any>();
+            fabricsByNameData.forEach((fabric: any) => {
+              fabricByNameMap.set(fabric.fabric_name.toLowerCase(), fabric);
             });
+            
+            // Match fabrics by name and add to fabricMap
+            fabricItemsWithoutMatch.forEach((item: any) => {
+              const fabricName = (item.grn_item?.fabric_name || item.item_name || '').toLowerCase();
+              if (fabricByNameMap.has(fabricName)) {
+                const fabric = fabricByNameMap.get(fabricName);
+                // Store by item_id if available, or by a generated key
+                const key = item.item_id || `name_${fabricName}`;
+                fabricMap.set(key, fabric);
+                // Also update item.item_id if it was null
+                if (!item.item_id) {
+                  item.item_id = fabric.id;
+                }
+              }
+            });
+            console.log('✅ [StorageZone] Matched fabrics by name:', fabricsByNameData.length);
           }
         }
       }
       
-      // Merge product data into inventory items
-      const inventoryWithProducts = filtered.map((item: any) => {
-        if (itemType === 'PRODUCT' && item.item_id && productMap.has(item.item_id)) {
+      // Fetch item_master data
+      let itemMasterMap = new Map<string, any>();
+      if (itemIds.length > 0) {
+        const { data: itemsData, error: itemsError } = await supabase
+          .from('item_master')
+          .select('id, item_code, item_name, item_type, material, brand, color, size, image')
+          .in('id', itemIds);
+        
+        if (!itemsError && itemsData) {
+          itemsData.forEach((item: any) => {
+            itemMasterMap.set(item.id, item);
+          });
+        }
+      }
+      
+      // Fetch product_master data separately if item_type is PRODUCT
+      let productMap = new Map<string, any>();
+      if (itemType === 'PRODUCT' && productIds.length > 0) {
+        const { data: productsData, error: productsError } = await supabase
+          .from('product_master')
+          .select('id, sku, class, size, name, brand, category, main_image, image_url, image1, image2, images')
+          .in('id', productIds);
+        
+        if (!productsError && productsData) {
+          productsData.forEach((product: any) => {
+            productMap.set(product.id, product);
+          });
+        }
+      }
+      
+      // Merge master data into inventory items
+      const inventoryWithMasters = filtered.map((item: any) => {
+        if (item.item_type === 'FABRIC') {
+          // Try to find fabric by item_id first
+          if (item.item_id && fabricMap.has(item.item_id)) {
+            return {
+              ...item,
+              fabric_master: fabricMap.get(item.item_id)
+            };
+          }
+          // If not found by ID, try to match by name
+          const fabricName = (item.grn_item?.fabric_name || item.item_name || '').toLowerCase();
+          const nameKey = `name_${fabricName}`;
+          if (fabricMap.has(nameKey)) {
+            return {
+              ...item,
+              fabric_master: fabricMap.get(nameKey)
+            };
+          }
+          // Debug log if fabric not found
+          if (!item.item_id) {
+            console.warn('⚠️ [StorageZone] Fabric item without item_id:', item.item_name, 'fabric_name:', item.grn_item?.fabric_name);
+          } else {
+            console.warn('⚠️ [StorageZone] Fabric not found in fabricMap for item_id:', item.item_id, 'item_name:', item.item_name);
+          }
+        } else if (item.item_type === 'ITEM' && item.item_id && itemMasterMap.has(item.item_id)) {
+          return {
+            ...item,
+            item_master: itemMasterMap.get(item.item_id)
+          };
+        } else if (item.item_type === 'PRODUCT' && item.item_id && productMap.has(item.item_id)) {
           return {
             ...item,
             product: productMap.get(item.item_id)
@@ -130,12 +262,12 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
         return item;
       });
       
-      // Debug: Log after product merge
-      console.log('🔍 [StorageZone] After product merge:', inventoryWithProducts.length);
+      // Debug: Log after master data merge
+      console.log('🔍 [StorageZone] After master data merge:', inventoryWithMasters.length);
       
       // Debug: Group inventory by item_id for PRODUCT type to verify all bins
       if (itemType === 'PRODUCT') {
-        const groupedByItemId = inventoryWithProducts.reduce((acc: any, item: any) => {
+        const groupedByItemId = inventoryWithMasters.reduce((acc: any, item: any) => {
           const key = item.item_id;
           if (!acc[key]) acc[key] = [];
           acc[key].push({
@@ -154,18 +286,20 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
       let processedInventory;
       if (itemType === 'PRODUCT') {
         // Don't consolidate - show all rows separately
-        processedInventory = inventoryWithProducts as WarehouseInventory[];
+        processedInventory = inventoryWithMasters as WarehouseInventory[];
       } else {
-        // Consolidate duplicate items before displaying
-        processedInventory = consolidateInventory(inventoryWithProducts as WarehouseInventory[]);
+      // Consolidate duplicate items before displaying
+        processedInventory = consolidateInventory(inventoryWithMasters as WarehouseInventory[]);
       }
       
       // Debug: Log final processed inventory
       console.log('🔍 [StorageZone] Final inventory:', processedInventory.length);
       
-      setInventory(processedInventory);
+      const inventoryWithAllocations = await attachAllocationData(processedInventory as any);
 
-      const summaries = createBinSummaries(processedInventory);
+      setInventory(inventoryWithAllocations as any);
+
+      const summaries = createBinSummaries(inventoryWithAllocations as any);
       setBinSummaries(summaries);
     } catch (error) {
       console.error('Error loading storage inventory:', error);
@@ -244,6 +378,111 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     return Array.from(binMap.values());
   };
 
+  const attachAllocationData = async (
+    inventoryData: (WarehouseInventory & { consolidatedIds?: string[] })[]
+  ): Promise<(WarehouseInventory & { allocated_quantity?: number; allocation_details?: AllocationDetail[] })[]> => {
+    const inventoryIdSet = new Set<string>();
+
+    inventoryData.forEach((item) => {
+      const ids = (item as any).consolidatedIds?.length ? (item as any).consolidatedIds : [item.id];
+      ids.forEach((id: string) => inventoryIdSet.add(id));
+    });
+
+    if (inventoryIdSet.size === 0) {
+      return inventoryData.map((item) => ({
+        ...item,
+        allocated_quantity: 0,
+        allocation_details: []
+      }));
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('inventory_allocations' as any)
+        .select(`
+          id,
+          warehouse_inventory_id,
+          quantity,
+          unit,
+          created_at,
+          bom_item:bom_item_id (
+            id,
+            item_name,
+            bom:bom_id (
+              id,
+              bom_number,
+              order:order_id (
+                order_number
+              )
+            )
+          )
+        `)
+        .in('warehouse_inventory_id', Array.from(inventoryIdSet));
+
+      if (error) {
+        console.warn('Failed to load allocation data for inventory items', error);
+        return inventoryData.map((item) => ({
+          ...item,
+          allocated_quantity: 0,
+          allocation_details: []
+        }));
+      }
+
+      const allocationMap = new Map<string, { total: number; details: AllocationDetail[] }>();
+
+      (data || []).forEach((row: any) => {
+        const inventoryId = row.warehouse_inventory_id;
+        const quantity = Number(row.quantity || 0);
+        const unit = row.unit || '';
+        const bomItem = row.bom_item || {};
+        const bom = bomItem?.bom || {};
+        const order = bom?.order || {};
+
+        const detail: AllocationDetail = {
+          allocationId: row.id,
+          quantity,
+          unit,
+          bomNumber: bom?.bom_number || '—',
+          orderNumber: order?.order_number || '—',
+          itemName: bomItem?.item_name || '—',
+          allocatedAt: row.created_at
+        };
+
+        const existing = allocationMap.get(inventoryId) || { total: 0, details: [] };
+        existing.total += quantity;
+        existing.details.push(detail);
+        allocationMap.set(inventoryId, existing);
+      });
+
+      return inventoryData.map((item) => {
+        const ids = (item as any).consolidatedIds?.length ? (item as any).consolidatedIds : [item.id];
+        let totalAllocated = 0;
+        let details: AllocationDetail[] = [];
+
+        ids.forEach((id: string) => {
+          const entry = allocationMap.get(id);
+          if (entry) {
+            totalAllocated += entry.total;
+            details = details.concat(entry.details);
+          }
+        });
+
+        return {
+          ...item,
+          allocated_quantity: totalAllocated,
+          allocation_details: details
+        };
+      });
+    } catch (error) {
+      console.error('Unexpected error while attaching allocation data', error);
+      return inventoryData.map((item) => ({
+        ...item,
+        allocated_quantity: 0,
+        allocation_details: []
+      }));
+    }
+  };
+
   const filteredInventory = inventory.filter(item => {
     const matchesSearch = searchTerm === '' || 
       item.item_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -266,11 +505,25 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
       })
       .subscribe();
 
+    const allocationChannel = supabase
+      .channel('storage_inventory_allocations')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_allocations' } as any, () => {
+        loadInventory();
+      })
+      .subscribe();
+
     return () => {
       window.removeEventListener('warehouse-inventory-updated', handler as any);
       try { supabase.removeChannel(channel); } catch {}
+      try { supabase.removeChannel(allocationChannel); } catch {}
     };
   }, []);
+
+  const handleOpenAllocationDetails = (inventoryItem: WarehouseInventory) => {
+    const details = (inventoryItem as any).allocation_details || [];
+    setSelectedAllocationDetails({ inventory: inventoryItem, details });
+    setAllocationModalOpen(true);
+  };
 
   const getStatusConfig = (status: string) => {
     return INVENTORY_STATUS_CONFIGS[status as keyof typeof INVENTORY_STATUS_CONFIGS] || INVENTORY_STATUS_CONFIGS.IN_STORAGE;
@@ -380,7 +633,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 <SelectItem value="all">All Types</SelectItem>
                 <SelectItem value="FABRIC">Fabric</SelectItem>
                 <SelectItem value="ITEM">Item</SelectItem>
-                <SelectItem value="PRODUCT">Product</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -397,13 +649,15 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
               <TableHeader>
                 <TableRow>
                   <TableHead>Image</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>Class</TableHead>
-                  <TableHead>Size</TableHead>
+                  <TableHead>Code</TableHead>
                   <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Color</TableHead>
+                  <TableHead>Material/GSM</TableHead>
                   <TableHead>Brand</TableHead>
-                  <TableHead>Category</TableHead>
+                  <TableHead>Size</TableHead>
                   <TableHead>Bin & Inventory</TableHead>
+                  <TableHead>Allocated</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -412,23 +666,85 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                   const statusConfig = getStatusConfig(item.status);
                   const itemTypeConfig = getItemTypeConfig(item.item_type);
                   
-                  // Get product details from product_master if available
+                  // Get master data based on item type
+                  const fabricMaster = (item as any).fabric_master;
+                  const itemMaster = (item as any).item_master;
                   const product = (item as any).product;
-                  const productImage = product?.main_image || product?.image_url || product?.image1 || item.grn_item?.item_image_url;
-                  const productSku = product?.sku || item.item_code;
-                  const productClass = product?.class || '-';
-                  const productSize = product?.size || '-';
-                  const productName = product?.name || item.item_name;
-                  const productBrand = product?.brand || '-';
-                  const productCategory = product?.category || '-';
                   
+                  // Determine display values based on item type
+                  let displayImage: string | undefined;
+                  let displayCode: string;
+                  let displayName: string;
+                  let displayType: string;
+                  let displayColor: string;
+                  let displayMaterialGsm: string;
+                  let displayBrand: string;
+                  let displaySize: string;
+                  
+                  if (item.item_type === 'FABRIC' && fabricMaster) {
+                    displayImage = fabricMaster.image || item.grn_item?.item_image_url;
+                    // Always use fabric_code from fabric_master, never fallback to item_code which might be URL
+                    displayCode = fabricMaster.fabric_code || '-';
+                    displayName = fabricMaster.fabric_name || item.item_name;
+                    displayType = 'Fabric'; // Always show "Fabric" for fabric items
+                    displayColor = item.grn_item?.fabric_color || fabricMaster.color || '-';
+                    // Combine material (type) and GSM: e.g., "Cotton 240 GSM"
+                    const material = fabricMaster.type || '';
+                    const gsm = fabricMaster.gsm || '';
+                    displayMaterialGsm = material && gsm ? `${material} ${gsm} GSM` : material || gsm || '-';
+                    displayBrand = '-';
+                    displaySize = '-';
+                  } else if (item.item_type === 'ITEM' && itemMaster) {
+                    displayImage = itemMaster.image || item.grn_item?.item_image_url;
+                    // Always use item_code from item_master
+                    displayCode = itemMaster.item_code || '-';
+                    displayName = itemMaster.item_name || item.item_name;
+                    displayType = itemMaster.item_type || '-';
+                    displayColor = item.grn_item?.item_color || itemMaster.color || '-';
+                    displayMaterialGsm = itemMaster.material || '-';
+                    displayBrand = itemMaster.brand || '-';
+                    displaySize = itemMaster.size || '-';
+                  } else if (item.item_type === 'PRODUCT' && product) {
+                    displayImage = product.main_image || product.image_url || product.image1 || item.grn_item?.item_image_url;
+                    displayCode = product.sku || '-';
+                    displayName = product.name || item.item_name;
+                    displayType = product.class || '-';
+                    displayColor = '-';
+                    displayMaterialGsm = '-';
+                    displayBrand = product.brand || '-';
+                    displaySize = product.size || '-';
+                  } else {
+                    // Fallback to GRN item data - but check if item_code looks like a URL
+                    displayImage = item.grn_item?.item_image_url;
+                    // If item_code looks like a URL, don't use it
+                    const itemCode = item.item_code || '';
+                    displayCode = (itemCode.startsWith('http://') || itemCode.startsWith('https://')) ? '-' : itemCode;
+                    displayName = item.item_name;
+                    // For fabric items, show "Fabric" in Type column
+                    displayType = item.item_type === 'FABRIC' ? 'Fabric' : item.item_type || '-';
+                    displayColor = item.grn_item?.fabric_color || item.grn_item?.item_color || '-';
+                    // For fabric items, try to combine material and GSM if available
+                    if (item.item_type === 'FABRIC') {
+                      // Try to get material from fabric_name or other sources if available
+                      const fabricGsm = item.grn_item?.fabric_gsm || '';
+                      displayMaterialGsm = fabricGsm ? `${fabricGsm} GSM` : '-';
+                    } else {
+                      displayMaterialGsm = item.grn_item?.fabric_gsm || '-';
+                    }
+                    displayBrand = '-';
+                    displaySize = '-';
+                  }
+                  
+                  const allocatedQuantity = Number((item as any).allocated_quantity || 0);
+                  const availableQuantity = Math.max(Number(item.quantity || 0) - allocatedQuantity, 0);
+
                   return (
                     <TableRow key={`${item.id}-${item.bin_id}`}>
                       <TableCell>
-                        {productImage ? (
+                        {displayImage ? (
                           <img
-                            src={productImage}
-                            alt={productName}
+                            src={displayImage}
+                            alt={displayName}
                             className="w-16 h-16 object-cover rounded border"
                             onError={(e) => { 
                               // Show placeholder if image fails to load
@@ -442,31 +758,38 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                         )}
                       </TableCell>
                       <TableCell>
-                        <span className="font-mono font-medium text-sm">{productSku || '-'}</span>
+                        <span className="font-mono font-medium text-sm">{displayCode || '-'}</span>
                       </TableCell>
                       <TableCell>
-                        {productClass && productClass !== '-' ? (
-                          <Badge variant="secondary">{productClass}</Badge>
+                        <div className="font-medium">{displayName || '-'}</div>
+                      </TableCell>
+                      <TableCell>
+                        {displayType && displayType !== '-' ? (
+                          <Badge variant="secondary">{displayType}</Badge>
                         ) : (
                           '-'
                         )}
                       </TableCell>
                       <TableCell>
-                        {productSize && productSize !== '-' ? (
-                          <Badge variant="outline">{productSize}</Badge>
-                        ) : (
-                          '-'
-                        )}
+                        <div className="flex items-center gap-2">
+                          <span>{displayColor !== '-' ? displayColor : '-'}</span>
+                          {displayColor !== '-' && (
+                            <div 
+                              className="w-4 h-4 rounded-full border border-gray-300"
+                              style={{ backgroundColor: displayColor.toLowerCase() }}
+                            />
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
-                        <div className="font-medium">{productName || '-'}</div>
+                        {displayMaterialGsm !== '-' ? displayMaterialGsm : '-'}
                       </TableCell>
                       <TableCell>
-                        {productBrand && productBrand !== '-' ? productBrand : '-'}
+                        {displayBrand !== '-' ? displayBrand : '-'}
                       </TableCell>
                       <TableCell>
-                        {productCategory && productCategory !== '-' ? (
-                          <Badge variant="outline">{productCategory}</Badge>
+                        {displaySize !== '-' ? (
+                          <Badge variant="outline">{displaySize}</Badge>
                         ) : (
                           '-'
                         )}
@@ -476,15 +799,34 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                           <div className="flex items-center gap-2 mb-1">
                             <p className="font-medium text-sm">{item.bin?.bin_code}</p>
                             <Badge variant="outline" className="text-xs">
-                              {item.quantity} {item.unit}
+                              Total {item.quantity} {item.unit}
                             </Badge>
                           </div>
+                          <p className="text-xs text-muted-foreground">
+                            Available: {availableQuantity} {item.unit}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Allocated: {allocatedQuantity} {item.unit}
+                          </p>
                           <p className="text-xs text-muted-foreground">
                             {item.bin?.rack?.floor?.warehouse?.name} &gt; 
                             Floor {item.bin?.rack?.floor?.floor_number} &gt; 
                             {item.bin?.rack?.rack_code}
                           </p>
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        {allocatedQuantity > 0 ? (
+                          <Button
+                            variant="link"
+                            className="p-0 h-auto"
+                            onClick={() => handleOpenAllocationDetails(item)}
+                          >
+                            {allocatedQuantity} {item.unit}
+                          </Button>
+                        ) : (
+                          <span className="text-muted-foreground">0 {item.unit}</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-2">
@@ -528,6 +870,49 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 itemName={selectedInventoryForLogs.item_name}
                 consolidatedIds={(selectedInventoryForLogs as any).consolidatedIds}
               />
+            )}
+            {selectedAllocationDetails && (
+              <Dialog
+                open={allocationModalOpen}
+                onOpenChange={(open) => {
+                  setAllocationModalOpen(open);
+                  if (!open) {
+                    setSelectedAllocationDetails(null);
+                  }
+                }}
+              >
+                <DialogContent className="max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Allocated Stock Details</DialogTitle>
+                    <DialogDescription>
+                      {selectedAllocationDetails.inventory.item_name} — {selectedAllocationDetails.inventory.bin?.bin_code}
+                    </DialogDescription>
+                  </DialogHeader>
+                  {selectedAllocationDetails.details.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No allocations recorded for this item.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {selectedAllocationDetails.details.map((detail) => (
+                        <div key={detail.allocationId} className="border rounded-lg p-3">
+                          <div className="flex justify-between text-sm font-semibold">
+                            <span>BOM #{detail.bomNumber}</span>
+                            <span>{detail.quantity} {detail.unit}</span>
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-1">
+                            Order #{detail.orderNumber}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Item: {detail.itemName}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Allocated at: {new Date(detail.allocatedAt).toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </DialogContent>
+              </Dialog>
             )}
             {filteredInventory.length === 0 && (
               <div className="text-center py-8">

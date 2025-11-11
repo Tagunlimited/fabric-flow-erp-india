@@ -29,7 +29,7 @@ interface State {
   code: string;
 }
 
-export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) {
+function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) {
   const navigate = useNavigate();
   const { data: formData, updateData: setFormData, resetData, isLoaded, hasSavedData } = useFormData('customerForm', {
     company_name: '',
@@ -254,7 +254,7 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
         </div>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4" data-form-key="customerForm">
           {error && (
             <Alert variant="destructive">
               <AlertDescription>{error}</AlertDescription>
@@ -432,4 +432,11 @@ export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) 
       </CardContent>
     </Card>
   );
+}
+
+export function CustomerForm({ customer, onSave, onCancel }: CustomerFormProps) {
+  // For dialog forms, we don't need FormPersistenceWrapper as it can interfere with dialog behavior
+  // The useFormData hook from FormPersistenceContext already provides persistence
+  // and we've disabled auto-refresh globally, so the form won't refresh on tab switch
+  return <CustomerFormContent customer={customer} onSave={onSave} onCancel={onCancel} />;
 }

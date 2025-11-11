@@ -94,6 +94,9 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
       // Filter by item_type if provided
       if (itemType) {
         query = query.eq('item_type', itemType);
+      } else {
+        // Exclude PRODUCT items - only show FABRIC and ITEM for Raw Material inventory
+        query = query.in('item_type', ['FABRIC', 'ITEM'] as any);
       }
       
       const { data, error } = await query
@@ -117,30 +120,143 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
       // Debug: Log after bin filter
       console.log('🔍 [ReceivingZone] After bin filter:', filtered.length);
       
-      // Fetch product_master data separately if item_type is PRODUCT
-      let productMap = new Map<string, any>();
-      if (itemType === 'PRODUCT') {
-        const itemIds = filtered
-          .map((i: any) => i.item_id)
-          .filter((id: any) => id) as string[];
+      // Fetch item_master and fabric_master data for FABRIC and ITEM types
+      const fabricIds = filtered
+        .filter((i: any) => i.item_type === 'FABRIC' && i.item_id)
+        .map((i: any) => i.item_id) as string[];
+      
+      const itemIds = filtered
+        .filter((i: any) => i.item_type === 'ITEM' && i.item_id)
+        .map((i: any) => i.item_id) as string[];
+      
+      const productIds = filtered
+        .filter((i: any) => i.item_type === 'PRODUCT' && i.item_id)
+        .map((i: any) => i.item_id) as string[];
+      
+      // Fetch fabric_master data by ID
+      let fabricMap = new Map<string, any>();
+      if (fabricIds.length > 0) {
+        const { data: fabricsData, error: fabricsError } = await supabase
+          .from('fabric_master')
+          .select('id, fabric_code, fabric_name, color, type, gsm, image')
+          .in('id', fabricIds);
         
-        if (itemIds.length > 0) {
-          const { data: productsData, error: productsError } = await supabase
-            .from('product_master')
-            .select('id, sku, class, size, name, brand, category, main_image, image_url, image1, image2, images')
-            .in('id', itemIds);
+        if (!fabricsError && fabricsData) {
+          fabricsData.forEach((fabric: any) => {
+            fabricMap.set(fabric.id, fabric);
+          });
+          console.log('✅ [ReceivingZone] Fetched fabrics by ID:', fabricsData.length, 'fabricIds requested:', fabricIds.length);
+        } else {
+          console.warn('⚠️ [ReceivingZone] Error fetching fabrics by ID:', fabricsError);
+        }
+      }
+      
+      // For fabrics without item_id or where ID lookup failed, try to match by fabric name
+      const fabricItemsWithoutMatch = filtered.filter((i: any) => 
+        i.item_type === 'FABRIC' && (!i.item_id || !fabricMap.has(i.item_id))
+      );
+      
+      if (fabricItemsWithoutMatch.length > 0) {
+        // Get unique fabric names from items without matches
+        const fabricNames = Array.from(new Set(
+          fabricItemsWithoutMatch
+            .map((i: any) => i.grn_item?.fabric_name || i.item_name)
+            .filter(Boolean)
+        )) as string[];
+        
+        if (fabricNames.length > 0) {
+          const { data: fabricsByNameData, error: fabricsByNameError } = await supabase
+            .from('fabric_master')
+            .select('id, fabric_code, fabric_name, color, type, gsm, image')
+            .in('fabric_name', fabricNames);
           
-          if (!productsError && productsData) {
-            productsData.forEach((product: any) => {
-              productMap.set(product.id, product);
+          if (!fabricsByNameError && fabricsByNameData) {
+            // Create a map by fabric_name for easy lookup
+            const fabricByNameMap = new Map<string, any>();
+            fabricsByNameData.forEach((fabric: any) => {
+              fabricByNameMap.set(fabric.fabric_name.toLowerCase(), fabric);
             });
+            
+            // Match fabrics by name and add to fabricMap
+            fabricItemsWithoutMatch.forEach((item: any) => {
+              const fabricName = (item.grn_item?.fabric_name || item.item_name || '').toLowerCase();
+              if (fabricByNameMap.has(fabricName)) {
+                const fabric = fabricByNameMap.get(fabricName);
+                // Store by item_id if available, or by a generated key
+                const key = item.item_id || `name_${fabricName}`;
+                fabricMap.set(key, fabric);
+                // Also update item.item_id if it was null
+                if (!item.item_id) {
+                  item.item_id = fabric.id;
+                }
+              }
+            });
+            console.log('✅ [ReceivingZone] Matched fabrics by name:', fabricsByNameData.length);
           }
         }
       }
       
-      // Merge product data into inventory items
-      const inventoryWithProducts = filtered.map((item: any) => {
-        if (itemType === 'PRODUCT' && item.item_id && productMap.has(item.item_id)) {
+      // Fetch item_master data
+      let itemMasterMap = new Map<string, any>();
+      if (itemIds.length > 0) {
+        const { data: itemsData, error: itemsError } = await supabase
+          .from('item_master')
+          .select('id, item_code, item_name, item_type, material, brand, color, size, image')
+          .in('id', itemIds);
+        
+        if (!itemsError && itemsData) {
+          itemsData.forEach((item: any) => {
+            itemMasterMap.set(item.id, item);
+          });
+        }
+      }
+      
+      // Fetch product_master data separately if item_type is PRODUCT
+      let productMap = new Map<string, any>();
+      if (itemType === 'PRODUCT' && productIds.length > 0) {
+        const { data: productsData, error: productsError } = await supabase
+          .from('product_master')
+          .select('id, sku, class, size, name, brand, category, main_image, image_url, image1, image2, images')
+          .in('id', productIds);
+        
+        if (!productsError && productsData) {
+          productsData.forEach((product: any) => {
+            productMap.set(product.id, product);
+          });
+        }
+      }
+      
+      // Merge master data into inventory items
+      const inventoryWithMasters = filtered.map((item: any) => {
+        if (item.item_type === 'FABRIC') {
+          // Try to find fabric by item_id first
+          if (item.item_id && fabricMap.has(item.item_id)) {
+            return {
+              ...item,
+              fabric_master: fabricMap.get(item.item_id)
+            };
+          }
+          // If not found by ID, try to match by name
+          const fabricName = (item.grn_item?.fabric_name || item.item_name || '').toLowerCase();
+          const nameKey = `name_${fabricName}`;
+          if (fabricMap.has(nameKey)) {
+            return {
+              ...item,
+              fabric_master: fabricMap.get(nameKey)
+            };
+          }
+          // Debug log if fabric not found
+          if (!item.item_id) {
+            console.warn('⚠️ [ReceivingZone] Fabric item without item_id:', item.item_name, 'fabric_name:', item.grn_item?.fabric_name);
+          } else {
+            console.warn('⚠️ [ReceivingZone] Fabric not found in fabricMap for item_id:', item.item_id, 'item_name:', item.item_name);
+          }
+        } else if (item.item_type === 'ITEM' && item.item_id && itemMasterMap.has(item.item_id)) {
+          return {
+            ...item,
+            item_master: itemMasterMap.get(item.item_id)
+          };
+        } else if (item.item_type === 'PRODUCT' && item.item_id && productMap.has(item.item_id)) {
           return {
             ...item,
             product: productMap.get(item.item_id)
@@ -149,12 +265,12 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
         return item;
       });
       
-      // Debug: Log after product merge
-      console.log('🔍 [ReceivingZone] After product merge:', inventoryWithProducts.length);
+      // Debug: Log after master data merge
+      console.log('🔍 [ReceivingZone] After master data merge:', inventoryWithMasters.length);
       
       // Debug: Group inventory by item_id for PRODUCT type to verify all bins
       if (itemType === 'PRODUCT') {
-        const groupedByItemId = inventoryWithProducts.reduce((acc: any, item: any) => {
+        const groupedByItemId = inventoryWithMasters.reduce((acc: any, item: any) => {
           const key = item.item_id;
           if (!acc[key]) acc[key] = [];
           acc[key].push({
@@ -173,10 +289,10 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
       let processedInventory;
       if (itemType === 'PRODUCT') {
         // Don't consolidate - show all rows separately
-        processedInventory = inventoryWithProducts as WarehouseInventory[];
+        processedInventory = inventoryWithMasters as WarehouseInventory[];
       } else {
-        // Consolidate duplicate items before displaying
-        processedInventory = consolidateInventory(inventoryWithProducts as WarehouseInventory[]);
+      // Consolidate duplicate items before displaying
+        processedInventory = consolidateInventory(inventoryWithMasters as WarehouseInventory[]);
       }
       
       // Debug: Log final processed inventory
@@ -431,7 +547,6 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                 <SelectItem value="all">All Types</SelectItem>
                 <SelectItem value="FABRIC">Fabric</SelectItem>
                 <SelectItem value="ITEM">Item</SelectItem>
-                <SelectItem value="PRODUCT">Product</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -449,12 +564,13 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
               <TableHeader>
                 <TableRow>
                   <TableHead>Image</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>Class</TableHead>
-                  <TableHead>Size</TableHead>
+                  <TableHead>Code</TableHead>
                   <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Color</TableHead>
+                  <TableHead>Material/GSM</TableHead>
                   <TableHead>Brand</TableHead>
-                  <TableHead>Category</TableHead>
+                  <TableHead>Size</TableHead>
                   <TableHead>Bin & Inventory</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
@@ -464,27 +580,86 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                   const statusConfig = getStatusConfig(item.status);
                   const itemTypeConfig = getItemTypeConfig(item.item_type);
                   
-                  // Get product details from product_master if available
+                  // Get master data based on item type
+                  const fabricMaster = (item as any).fabric_master;
+                  const itemMaster = (item as any).item_master;
                   const product = (item as any).product;
-                  const productImage = product?.main_image || product?.image_url || product?.image1 || item.grn_item?.item_image_url;
-                  const productSku = product?.sku || item.item_code;
-                  const productClass = product?.class || '-';
-                  const productSize = product?.size || '-';
-                  const productName = product?.name || item.item_name;
-                  const productBrand = product?.brand || '-';
-                  const productCategory = product?.category || '-';
+                  
+                  // Determine display values based on item type
+                  let displayImage: string | undefined;
+                  let displayCode: string;
+                  let displayName: string;
+                  let displayType: string;
+                  let displayColor: string;
+                  let displayMaterialGsm: string;
+                  let displayBrand: string;
+                  let displaySize: string;
+                  
+                  if (item.item_type === 'FABRIC' && fabricMaster) {
+                    displayImage = fabricMaster.image || item.grn_item?.item_image_url;
+                    // Always use fabric_code from fabric_master, never fallback to item_code which might be URL
+                    displayCode = fabricMaster.fabric_code || '-';
+                    displayName = fabricMaster.fabric_name || item.item_name;
+                    displayType = 'Fabric'; // Always show "Fabric" for fabric items
+                    displayColor = item.grn_item?.fabric_color || fabricMaster.color || '-';
+                    // Combine material (type) and GSM: e.g., "Cotton 240 GSM"
+                    const material = fabricMaster.type || '';
+                    const gsm = fabricMaster.gsm || '';
+                    displayMaterialGsm = material && gsm ? `${material} ${gsm} GSM` : material || gsm || '-';
+                    displayBrand = '-';
+                    displaySize = '-';
+                  } else if (item.item_type === 'ITEM' && itemMaster) {
+                    displayImage = itemMaster.image || item.grn_item?.item_image_url;
+                    // Always use item_code from item_master
+                    displayCode = itemMaster.item_code || '-';
+                    displayName = itemMaster.item_name || item.item_name;
+                    displayType = itemMaster.item_type || '-';
+                    displayColor = item.grn_item?.item_color || itemMaster.color || '-';
+                    displayMaterialGsm = itemMaster.material || '-';
+                    displayBrand = itemMaster.brand || '-';
+                    displaySize = itemMaster.size || '-';
+                  } else if (item.item_type === 'PRODUCT' && product) {
+                    displayImage = product.main_image || product.image_url || product.image1 || item.grn_item?.item_image_url;
+                    displayCode = product.sku || '-';
+                    displayName = product.name || item.item_name;
+                    displayType = product.class || '-';
+                    displayColor = '-';
+                    displayMaterialGsm = '-';
+                    displayBrand = product.brand || '-';
+                    displaySize = product.size || '-';
+                  } else {
+                    // Fallback to GRN item data - but check if item_code looks like a URL
+                    displayImage = item.grn_item?.item_image_url;
+                    // If item_code looks like a URL, don't use it
+                    const itemCode = item.item_code || '';
+                    displayCode = (itemCode.startsWith('http://') || itemCode.startsWith('https://')) ? '-' : itemCode;
+                    displayName = item.item_name;
+                    // For fabric items, show "Fabric" in Type column
+                    displayType = item.item_type === 'FABRIC' ? 'Fabric' : item.item_type || '-';
+                    displayColor = item.grn_item?.fabric_color || item.grn_item?.item_color || '-';
+                    // For fabric items, try to combine material and GSM if available
+                    if (item.item_type === 'FABRIC') {
+                      // Try to get material from fabric_name or other sources if available
+                      const fabricGsm = item.grn_item?.fabric_gsm || '';
+                      displayMaterialGsm = fabricGsm ? `${fabricGsm} GSM` : '-';
+                    } else {
+                      displayMaterialGsm = item.grn_item?.fabric_gsm || '-';
+                    }
+                    displayBrand = '-';
+                    displaySize = '-';
+                  }
                   
                   return (
                     <TableRow key={`${item.id}-${item.bin_id}`}>
                       <TableCell>
-                        {productImage ? (
+                        {displayImage ? (
                           <img
-                            src={productImage}
-                            alt={productName}
+                            src={displayImage}
+                            alt={displayName}
                             className="w-16 h-16 object-cover rounded border"
                             onError={(e) => { 
                               // Show placeholder if image fails to load
-                              (e.currentTarget as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yNCAzNkMzMC42Mjc0IDM2IDM2IDMwLjYyNzQgMzYgMjRDMzYgMTcuMzcyNiAzMC42Mjc0IDEyIDI0IDEyQzE3LjM3MjYgMTIgMTIgMTcuMzcyNiAxMiAyNEMxMiAzMC42Mjc0IDE3LjM3MjYgMzYgMjQgMzZaIiBmaWxsPSIjOUNBM0FGIi8+CjxwYXRoIGQ9Ik0yNCAyOEMyNi4yMDkxIDI4IDI4IDI2LjIwOTEgMjggMjRDMjggMjEuNzkwOSAyNi4yMDkxIDIwIDI0IDIwQzIxLjc5MDkgMjAgMjAgMjEuNzkwOSAyMCAyNEMyMCAyNi4yMDkxIDIxLjc5MDkgMjggMjQgMjhaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K';
+                              (e.currentTarget as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yNCAzNkMzMC42Mzc0IDM2IDM2IDMwLjYyNzQgMzYgMjRDMzYgMTcuMzcyNiAzMC42Mzc0IDEyIDI0IDEyQzE3LjM3MjYgMTIgMTIgMTcuMzcyNiAxMiAyNEMxMiAzMC42Mzc0IDE3LjM3MjYgMzYgMjQgMzZaIiBmaWxsPSIjOUNBM0FGIi8+CjxwYXRoIGQ9Ik0yNCAyOEMyNi4yMDkxIDI4IDI4IDI2LjIwOTEgMjggMjRDMjggMjEuNzkwOSAyNi4yMDkxIDIwIDI0IDIwQzIxLjc5MDkgMjAgMjAgMjEuNzkwOSAyMCAyNEMyMCAyNi4yMDkxIDIxLjc5MDkgMjggMjQgMjhaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K';
                             }}
                           />
                         ) : (
@@ -494,31 +669,38 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                         )}
                       </TableCell>
                       <TableCell>
-                        <span className="font-mono font-medium text-sm">{productSku || '-'}</span>
+                        <span className="font-mono font-medium text-sm">{displayCode || '-'}</span>
                       </TableCell>
                       <TableCell>
-                        {productClass && productClass !== '-' ? (
-                          <Badge variant="secondary">{productClass}</Badge>
+                        <div className="font-medium">{displayName || '-'}</div>
+                      </TableCell>
+                      <TableCell>
+                        {displayType && displayType !== '-' ? (
+                          <Badge variant="secondary">{displayType}</Badge>
                         ) : (
                           '-'
                         )}
                       </TableCell>
                       <TableCell>
-                        {productSize && productSize !== '-' ? (
-                          <Badge variant="outline">{productSize}</Badge>
-                        ) : (
-                          '-'
-                        )}
+                        <div className="flex items-center gap-2">
+                          <span>{displayColor !== '-' ? displayColor : '-'}</span>
+                          {displayColor !== '-' && (
+                            <div 
+                              className="w-4 h-4 rounded-full border border-gray-300"
+                              style={{ backgroundColor: displayColor.toLowerCase() }}
+                            />
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
-                        <div className="font-medium">{productName || '-'}</div>
+                        {displayMaterialGsm !== '-' ? displayMaterialGsm : '-'}
                       </TableCell>
                       <TableCell>
-                        {productBrand && productBrand !== '-' ? productBrand : '-'}
+                        {displayBrand !== '-' ? displayBrand : '-'}
                       </TableCell>
                       <TableCell>
-                        {productCategory && productCategory !== '-' ? (
-                          <Badge variant="outline">{productCategory}</Badge>
+                        {displaySize !== '-' ? (
+                          <Badge variant="outline">{displaySize}</Badge>
                         ) : (
                           '-'
                         )}

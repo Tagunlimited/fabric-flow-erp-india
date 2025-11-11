@@ -78,6 +78,177 @@ export function BomList() {
       return;
     }
 
+    const fetchStockForBomItem = async (item: any) => {
+      const category = (item?.category || '').toLowerCase();
+      const itemTypeFilter = category === 'fabric' ? 'FABRIC' : 'ITEM';
+      let resolvedQuantity = Number(item?.stock ?? 0) || 0;
+      let resolvedUnit = item?.unit_of_measure || item?.required_unit || '';
+
+      const fabricName = item?.fabric_name?.trim() || item?.item_name?.split(' - ')[0]?.trim();
+      const normalizedItemName = item?.item_name?.trim();
+
+      const fetchWarehouseInventory = async (
+        configureQuery?: (query: any) => any
+      ): Promise<any[] | null> => {
+        try {
+          let query = supabase
+            .from('warehouse_inventory' as any)
+            .select('quantity, unit, item_name, item_code')
+            .eq('status', 'IN_STORAGE')
+            .eq('item_type', itemTypeFilter);
+
+          if (configureQuery) {
+            query = configureQuery(query);
+          }
+
+          const { data, error } = await query;
+
+          if (error) {
+            console.warn('Failed to fetch warehouse inventory for BOM item', {
+              itemId: item?.id,
+              category,
+              error
+            });
+            return null;
+          }
+
+          if (data && data.length > 0) {
+            return data as any[];
+          }
+        } catch (err) {
+          console.error('Unexpected error while fetching warehouse inventory for BOM item', {
+            itemId: item?.id,
+            err
+          });
+        }
+
+        return null;
+      };
+
+      const warehouseInventoryStrategies: ((query: any) => any)[] = [];
+
+      if (item?.item_id) {
+        warehouseInventoryStrategies.push((query) => query.eq('item_id', item.item_id));
+      }
+
+      if (item?.item_code) {
+        warehouseInventoryStrategies.push((query) => query.eq('item_code', item.item_code));
+      }
+
+      if (category === 'fabric') {
+        if (fabricName) {
+          warehouseInventoryStrategies.push((query) => query.eq('item_name', fabricName));
+          warehouseInventoryStrategies.push((query) => query.ilike('item_name', `%${fabricName}%`));
+        }
+      } else if (normalizedItemName) {
+        warehouseInventoryStrategies.push((query) => query.eq('item_name', normalizedItemName));
+        warehouseInventoryStrategies.push((query) => query.ilike('item_name', `%${normalizedItemName}%`));
+      }
+
+      let inventoryRows: any[] | null = null;
+
+      for (const strategy of warehouseInventoryStrategies) {
+        inventoryRows = await fetchWarehouseInventory(strategy);
+        if (inventoryRows && inventoryRows.length > 0) {
+          break;
+        }
+      }
+
+      if (!inventoryRows) {
+        inventoryRows = await fetchWarehouseInventory();
+      }
+
+      if (inventoryRows && inventoryRows.length > 0) {
+        resolvedQuantity = inventoryRows.reduce(
+          (sum, row) => sum + Number(row?.quantity || 0),
+          0
+        );
+
+        const unitFromRow = inventoryRows.find((row) => row?.unit)?.unit;
+        if (unitFromRow) {
+          resolvedUnit = unitFromRow;
+        }
+      } else if (category === 'fabric') {
+        try {
+          if (fabricName) {
+            let fabricQuery = supabase
+              .from('fabric_stock_summary' as any)
+              .select('total_available, total_quantity, unit, color, gsm')
+              .eq('fabric_name', fabricName);
+
+            const fabricColor = item?.fabric_color?.trim();
+            const fabricGsm = item?.fabric_gsm?.trim();
+
+            if (fabricColor) {
+              fabricQuery = fabricQuery.eq('color', fabricColor);
+            }
+
+            if (fabricGsm) {
+              fabricQuery = fabricQuery.eq('gsm', fabricGsm);
+            }
+
+            const { data: fabricStockRows, error: fabricStockError } = await fabricQuery.limit(1);
+
+            if (fabricStockError) {
+              console.warn('Failed to fetch fabric stock summary for BOM item', {
+                itemId: item?.id,
+                fabricName,
+                fabricColor,
+                fabricGsm,
+                error: fabricStockError
+              });
+            } else if (fabricStockRows && fabricStockRows.length > 0) {
+              const fabricStock = fabricStockRows[0] as any;
+              const available = Number(
+                fabricStock?.total_available ?? fabricStock?.total_quantity ?? 0
+              );
+              if (!Number.isNaN(available)) {
+                resolvedQuantity = available;
+              }
+              if (fabricStock?.unit) {
+                resolvedUnit = fabricStock.unit;
+              }
+            } else {
+              const { data: nameOnlyRows, error: nameOnlyError } = await supabase
+                .from('fabric_stock_summary' as any)
+                .select('total_available, total_quantity, unit')
+                .eq('fabric_name', fabricName)
+                .limit(1);
+
+              if (nameOnlyError) {
+                console.warn('Failed fallback fabric stock summary lookup for BOM item', {
+                  itemId: item?.id,
+                  fabricName,
+                  error: nameOnlyError
+                });
+              } else if (nameOnlyRows && nameOnlyRows.length > 0) {
+                const fabricStock = nameOnlyRows[0] as any;
+                const available = Number(
+                  fabricStock?.total_available ?? fabricStock?.total_quantity ?? 0
+                );
+                if (!Number.isNaN(available)) {
+                  resolvedQuantity = available;
+                }
+                if (fabricStock?.unit) {
+                  resolvedUnit = fabricStock.unit;
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Unexpected error while resolving fabric stock summary for BOM item', {
+            itemId: item?.id,
+            error
+          });
+        }
+      }
+
+      return {
+        quantity: resolvedQuantity,
+        unit: resolvedUnit
+      };
+    };
+
     const processedItems = await Promise.all(
       bomItems.filter(item => {
         const isValid = item && item.id && (item.item_name || item.category);
@@ -90,6 +261,7 @@ export function BomList() {
         
         // Fetch image for the item
         let imageUrl = null;
+        const stockInfo = await fetchStockForBomItem(item);
         
         if (item.category === 'Fabric') {
           // Fetch fabric image
@@ -155,8 +327,8 @@ export function BomList() {
           category: item.category,
           required_qty: item.qty_total,
           required_unit: item.unit_of_measure,
-          in_stock: item.stock,
-          stock_unit: item.unit_of_measure,
+          in_stock: stockInfo.quantity,
+          stock_unit: stockInfo.unit,
           image_url: imageUrl || item.item?.image_url || item.item?.image || null
         };
       })

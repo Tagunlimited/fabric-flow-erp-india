@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ShoppingCart, Plus, Eye, Package, Clock, CheckCircle, Search, Filter, RefreshCw } from "lucide-react";
+import { ShoppingCart, Plus, Eye, Package, Clock, CheckCircle, Search, Filter, RefreshCw, Truck } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,6 +15,7 @@ import { ReadymadeOrderForm } from "@/components/orders/ReadymadeOrderForm";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { usePersistentTabState } from "@/hooks/usePersistentTabState";
 
 interface Order {
   id: string;
@@ -43,7 +44,10 @@ const ReadymadeOrdersPage = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [salesManagers, setSalesManagers] = useState<{ [key: string]: { id: string; full_name: string; avatar_url?: string } }>({});
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("list");
+  const { activeTab, setActiveTab } = usePersistentTabState({
+    pageKey: 'readymadeOrders',
+    defaultValue: 'list'
+  });
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
@@ -57,7 +61,6 @@ const ReadymadeOrdersPage = () => {
 
   useEffect(() => {
     if (location.state?.refreshOrders && activeTab === "list") {
-      console.log('ReadymadeOrdersPage: Navigation state indicates refresh needed');
       fetchOrders(true);
       navigate(location.pathname, { replace: true, state: {} });
     }
@@ -65,7 +68,6 @@ const ReadymadeOrdersPage = () => {
 
   const fetchOrders = async (forceRefresh = false) => {
     try {
-      console.log('ReadymadeOrdersPage: fetchOrders called', forceRefresh ? '(force refresh)' : '');
       setLoading(true);
       
       if (forceRefresh) {
@@ -84,7 +86,6 @@ const ReadymadeOrdersPage = () => {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      console.log('ReadymadeOrdersPage: Orders fetched:', data?.length || 0, 'orders');
       
       if (data && data.length > 0) {
         const salesManagerIds = (data as any[])
@@ -185,7 +186,7 @@ const ReadymadeOrdersPage = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
           <Card className="shadow-erp-md bg-blue-100 text-blue-900">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium opacity-90">
@@ -228,6 +229,22 @@ const ReadymadeOrdersPage = () => {
                   {orders.filter(o => o.status === 'confirmed').length}
                 </span>
                 <Package className="w-5 h-5 text-blue-700" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-erp-md bg-purple-100 text-purple-900">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium opacity-90">
+                Dispatched
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-bold">
+                  {orders.filter(o => o.status === 'dispatched').length}
+                </span>
+                <Truck className="w-5 h-5 text-purple-700" />
               </div>
             </CardContent>
           </Card>
@@ -428,10 +445,8 @@ const ReadymadeOrdersPage = () => {
           <TabsContent value="create" className="space-y-6">
             <ReadymadeOrderForm 
               onOrderCreated={async () => {
-                console.log('ReadymadeOrdersPage: onOrderCreated callback triggered');
                 setActiveTab("list");
                 setTimeout(async () => {
-                  console.log('ReadymadeOrdersPage: Fetching orders after delay');
                   await fetchOrders();
                 }, 100);
                 toast.success("Readymade order created successfully!");

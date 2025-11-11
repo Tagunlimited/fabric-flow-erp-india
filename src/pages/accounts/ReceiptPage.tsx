@@ -858,6 +858,7 @@ export default function ReceiptPage() {
                   onValueChange={setCustomerId}
                   onCustomerSelect={(c) => setCustomer((c as any) as Customer | null)}
                   placeholder="Search by phone, name, contact..."
+                  cacheKey="customerSearchSelect-receipt"
                 />
               </div>
 

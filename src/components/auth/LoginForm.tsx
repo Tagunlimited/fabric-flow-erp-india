@@ -60,14 +60,21 @@ export function LoginForm() {
 
         // Check if user is approved (skip for pre-configured admin)
         if (email !== 'ecom@tagunlimitedclothing.com') {
-          const { data: profile } = await supabase
+          const { data: profile, error: profileError } = await supabase
             .from('profiles')
             .select('status')
-            .eq('user_id', data.user.id)
+            .eq('user_id', data.user.id as any)
             .single();
 
-          if (profile?.status !== 'approved') {
-            throw new Error('Account pending admin approval');
+          if (profileError) {
+            throw new Error('Failed to fetch user profile');
+          }
+
+          // Type guard to ensure profile is not an error
+          if (profile && typeof profile === 'object' && 'status' in profile) {
+            if (profile.status !== 'approved') {
+              throw new Error('Account pending admin approval');
+            }
           }
         }
 
@@ -88,7 +95,7 @@ export function LoginForm() {
         <CardHeader className="text-center space-y-4">
           <div className="mx-auto">
             <img 
-              src="https://i.postimg.cc/D0hJxKtP/tag-black.png?auto=compress&cs=tinysrgb&w=200&h=200&fit=crop"
+              src="https://i.postimg.cc/902VYJy5/Group-1.png"
               alt="Scissors ERP" 
               className="w-25 h-12 mx-auto rounded-lg object-cover"
               onError={(e) => {
@@ -194,7 +201,7 @@ export function LoginForm() {
 
           <div className="mt-4 p-3 bg-muted rounded-lg">
             <p className="text-xs text-muted-foreground text-center">
-              Powered by: TECH PANDA
+              Powered by: BlackMatter Technologies
             </p>
           </div>
         </CardContent>

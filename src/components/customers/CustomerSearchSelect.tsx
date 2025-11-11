@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { supabase } from "@/integrations/supabase/client";
 import { calculateLifetimeValue, formatCurrency } from '@/lib/utils';
 import { CustomerForm } from './CustomerForm';
+import { usePageState } from "@/contexts/AppCacheContext";
 
 interface Customer {
   id: string;
@@ -33,6 +34,7 @@ interface CustomerSearchSelectProps {
   onCustomerSelect?: (customer: Customer | null) => void;
   placeholder?: string;
   onCreateCustomer?: (customer: Customer) => void;
+  cacheKey?: string;
 }
 
 export function CustomerSearchSelect({ 
@@ -40,15 +42,35 @@ export function CustomerSearchSelect({
   onValueChange, 
   onCustomerSelect,
   placeholder = "Select customer...",
-  onCreateCustomer
+  onCreateCustomer,
+  cacheKey = "customerSearchSelect"
 }: CustomerSearchSelectProps) {
-  const [open, setOpen] = useState(false);
+  const { state: dialogState, updateState: updateDialogState } = usePageState(cacheKey, {
+    open: false,
+    showCreateCustomer: false
+  });
+
+  const open = dialogState?.open ?? false;
+  const showCreateCustomer = dialogState?.showCreateCustomer ?? false;
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customerLifetimeValues, setCustomerLifetimeValues] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [showCreateCustomer, setShowCreateCustomer] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+
+  const setOpen = (value: boolean) => {
+    updateDialogState(prev => ({
+      ...(prev || { open: false, showCreateCustomer: false }),
+      open: value
+    }));
+  };
+
+  const setShowCreateCustomer = (value: boolean) => {
+    updateDialogState(prev => ({
+      ...(prev || { open: false, showCreateCustomer: false }),
+      showCreateCustomer: value
+    }));
+  };
 
   useEffect(() => {
     fetchCustomers();
@@ -138,8 +160,6 @@ export function CustomerSearchSelect({
       const cleanTerm = term.trim();
       const phoneSearchTerm = cleanTerm.replace(/[\s\-\(\)]/g, '');
       
-      console.log('Searching for:', cleanTerm, 'Phone search term:', phoneSearchTerm);
-      
       const { data, error } = await supabase
         .from('customers')
         .select('*')
@@ -148,11 +168,8 @@ export function CustomerSearchSelect({
         .limit(20);
 
       if (error) {
-        console.error('Search error:', error);
         throw error;
       }
-      
-      console.log('Search results:', data);
       setCustomers((data as unknown as Customer[]) || []);
     } catch (error) {
       console.error('Error searching customers:', error);
@@ -168,11 +185,15 @@ export function CustomerSearchSelect({
     onValueChange(customerId);
     onCustomerSelect?.(customer || null);
     setOpen(false);
+    setShowCreateCustomer(false);
   };
 
   const handleCreateCustomer = () => {
-    setShowCreateCustomer(true);
-    setOpen(false);
+    updateDialogState(prev => ({
+      ...(prev || { open: false, showCreateCustomer: false }),
+      showCreateCustomer: true,
+      open: false
+    }));
   };
 
   const handleCustomerCreated = (newCustomer: Customer) => {

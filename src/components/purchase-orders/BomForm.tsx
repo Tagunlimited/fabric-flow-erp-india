@@ -332,7 +332,7 @@ export function BomForm() {
           gsm: fabricItem.gsm || fabricItem.fabric?.gsm || '',
           quantity: fabricItem.quantity || 0
         }],
-        item_image_url: fabricItem.fabric?.image || null,
+        item_image_url: fabricItem.fabric?.image_url || fabricItem.fabric?.image || null,
         // Add fabric details for display
         fabric_name: fabricItem.fabric?.fabric_name || '',
         fabric_color: fabricItem.color || fabricItem.fabric?.color || '',
@@ -385,7 +385,8 @@ export function BomForm() {
     setFabricOptions((data || []).map((f: any) => ({ 
       id: f.id, 
       label: f.fabric_name, 
-      image_url: f.image || null,
+      image_url: f.image_url || f.image || null,
+      image: f.image || null,
       color: f.color,
       gsm: f.gsm,
       rate: f.rate
@@ -413,6 +414,7 @@ export function BomForm() {
         id: item.id, 
         label: item.item_name || 'Unknown Item', 
         image_url: item.image_url || item.image || null,
+        image: item.image || null,
         type: item.item_type || 'General',
         gst_rate: item.gst_rate || 18,
         uom: item.uom || 'PCS',
@@ -677,14 +679,15 @@ export function BomForm() {
            qty_total: item.qty_total,
            stock: item.stock,
            to_order: item.to_order,
-           item_category: item.category,
-           selected_item_type: item.item_type || item.category || '',
+            item_category: isFabric ? 'Fabric' : item.item_type || item.category || 'Item',
+            selected_item_type: isFabric ? 'fabric' : (item.item_type || item.category || ''),
            // Preserve fabric details for editing
            fabric_name: fabricName,
            fabric_color: fabricColor,
            fabric_gsm: fabricGsm,
            // Mark as prefilled in edit mode
-           is_prefilled: isEditMode && isFabric
+           is_prefilled: isEditMode && isFabric,
+           item_image_url: item.item_image_url || null
         };
         
         console.log('Created line item:', lineItem);
@@ -709,7 +712,7 @@ export function BomForm() {
               
               const exactResult = await supabase
                 .from('fabric_master')
-                .select('image')
+                .select('image, image_url')
                 .eq('fabric_name', item.fabric_name)
                 .eq('color', item.fabric_color || '')
                 .eq('gsm', item.fabric_gsm || '')
@@ -720,7 +723,7 @@ export function BomForm() {
                 console.log('Exact match failed, trying name-only match for:', item.fabric_name);
                 const partialResult = await supabase
                   .from('fabric_master')
-                  .select('image')
+                  .select('image, image_url')
                   .eq('fabric_name', item.fabric_name)
                   .single();
                 
@@ -733,31 +736,33 @@ export function BomForm() {
                 fabricData = exactResult.data;
               }
               
-              if (fabricData?.image) {
+              const resolvedImage = fabricData?.image_url || fabricData?.image || null;
+
+              if (resolvedImage) {
                 // Update the item with the fabric image URL
                 setItems(prevItems => 
                   prevItems.map(prevItem => 
                     prevItem.id === item.id 
-                      ? { ...prevItem, item_image_url: fabricData.image }
+                      ? { ...prevItem, item_image_url: resolvedImage }
                       : prevItem
                   )
                 );
-                console.log('Found fabric image for:', item.fabric_name, fabricData.image);
+                console.log('Found fabric image for:', item.fabric_name, resolvedImage);
               } else {
                 // Try to find image from loaded fabric options as fallback
                 const fabricFromOptions = fabricOptions.find(fabric => 
                   fabric.label.toLowerCase().includes(item.fabric_name.toLowerCase())
                 );
                 
-                if (fabricFromOptions?.image_url) {
+            if (fabricFromOptions?.image_url || (fabricFromOptions as any)?.image) {
                   setItems(prevItems => 
                     prevItems.map(prevItem => 
                       prevItem.id === item.id 
-                        ? { ...prevItem, item_image_url: fabricFromOptions.image_url }
+                    ? { ...prevItem, item_image_url: fabricFromOptions.image_url || (fabricFromOptions as any).image || null }
                         : prevItem
                     )
                   );
-                  console.log('Found fabric image from options for:', item.fabric_name, fabricFromOptions.image_url);
+              console.log('Found fabric image from options for:', item.fabric_name, fabricFromOptions.image_url || (fabricFromOptions as any).image);
                 } else {
                   console.log('No fabric image found for:', item.fabric_name, fabricError);
                 }
@@ -957,7 +962,7 @@ export function BomForm() {
       const updateData: any = {
         item_id: found.id, // Use found.id instead of selectedId
         item_name: label,
-        item_image_url: found.image_url || null,
+        item_image_url: found.image_url || found.image || null,
       };
 
       // For fabrics, add fabric-specific fields
@@ -965,6 +970,8 @@ export function BomForm() {
         updateData.fabric_name = found.label;
         updateData.fabric_color = found.color || '';
         updateData.fabric_gsm = found.gsm || '';
+        updateData.item_category = 'Fabric';
+        updateData.selected_item_type = 'fabric';
       }
 
       // For items, add item-specific fields from new schema
@@ -983,6 +990,7 @@ export function BomForm() {
         updateData.gst_rate = found.gst_rate;
         updateData.unit_of_measure = found.uom || 'PCS';
         updateData.item_category = found.type;
+        updateData.selected_item_type = found.type || 'item';
       }
 
       updateItem(index, updateData);
@@ -998,9 +1006,19 @@ export function BomForm() {
         selectedFabricName: fabricName,
         availableColors: colors,
         selectedColor: undefined,
-        availableGsm: undefined
+        availableGsm: undefined,
+        selectedGsm: undefined
       }
     }));
+
+    updateItem(index, {
+      item_id: '',
+      item_name: fabricName,
+      fabric_name: fabricName,
+      fabric_color: '',
+      fabric_gsm: '',
+      item_image_url: null
+    });
   };
 
   // Handle color selection for new fabrics
@@ -1017,6 +1035,12 @@ export function BomForm() {
         availableGsm: gsm
       }
     }));
+
+    updateItem(index, {
+      fabric_color: color,
+      fabric_gsm: '',
+      item_image_url: null
+    });
   };
 
   // Handle GSM selection for new fabrics
@@ -1024,15 +1048,25 @@ export function BomForm() {
     const state = fabricSelectionState[index];
     if (!state?.selectedFabricName || !state?.selectedColor) return;
 
+    setFabricSelectionState(prev => ({
+      ...prev,
+      [index]: {
+        ...prev[index],
+        selectedGsm: gsm
+      }
+    }));
+
     const fabric = getFabricByDetails(state.selectedFabricName, state.selectedColor, gsm);
     if (fabric) {
       updateItem(index, {
         item_id: fabric.id,
         item_name: fabric.label,
-        item_image_url: fabric.image_url || null,
+      item_image_url: fabric.image_url || fabric.image || null,
         fabric_name: fabric.label,
         fabric_color: fabric.color || '',
         fabric_gsm: fabric.gsm || '',
+      item_category: 'Fabric',
+      selected_item_type: 'fabric',
         qty_per_product: 0 // Reset to 0 for new fabric
       });
     }
@@ -1262,8 +1296,48 @@ export function BomForm() {
         throw new Error('Failed to get BOM ID after creation/update');
       }
 
-             // Prepare BOM items data
-       const bomItems = [];
+      const sanitizePayload = (payload: Record<string, any>, allowedKeys: string[]) => {
+        return allowedKeys.reduce((acc, key) => {
+          const value = payload[key];
+          if (value !== undefined) {
+            acc[key] = value;
+          }
+          return acc;
+        }, {} as Record<string, any>);
+      };
+
+      const bomRecordItemKeys = [
+        'bom_id',
+        'item_id',
+        'item_code',
+        'item_name',
+        'category',
+        'unit_of_measure',
+        'qty_per_product',
+        'qty_total',
+        'stock',
+        'to_order',
+        'item_image_url',
+        'fabric_name',
+        'fabric_color',
+        'fabric_gsm'
+      ];
+
+      const legacyBomItemKeys = [
+        'bom_id',
+        'item_id',
+        'item_code',
+        'item_name',
+        'category',
+        'quantity',
+        'unit',
+        'stock',
+        'to_order'
+      ];
+
+      // Prepare BOM items data
+      const bomItems: Record<string, any>[] = [];
+      const legacyBomItems: Record<string, any>[] = [];
        
        for (const item of items) {
          console.log('Processing item for BOM save:', {
@@ -1273,7 +1347,7 @@ export function BomForm() {
            item_code: item.item_code
          });
          
-         const base = {
+        const base = {
            bom_id: bomId,
            item_id: item.item_type === 'fabric' ? null : (item.item_id || null), // Set item_id to null for fabrics
            item_code: item.item_code || null,
@@ -1283,7 +1357,8 @@ export function BomForm() {
            qty_per_product: item.qty_per_product || 0,
            qty_total: item.qty_total || 0,
            stock: item.stock || 0,
-           to_order: item.to_order || 0,
+          to_order: item.to_order || 0,
+          item_image_url: item.item_image_url || null,
          };
 
          // For fabrics, use the main item data (not fabricSelections)
@@ -1316,23 +1391,63 @@ export function BomForm() {
               
               console.log('Saving fabric with details:', { fabricName, fabricColor, fabricGsm, fabricDisplayName });
               
-              bomItems.push({
+            const fabricPayload = sanitizePayload(
+              {
                 ...base,
                 item_name: fabricDisplayName,
                 qty_total: item.qty_total || 0,
                 to_order: item.to_order || 0,
-                // Add fabric-specific fields for better data integrity
-                fabric_name: fabricName,
-                fabric_color: fabricColor,
-                fabric_gsm: fabricGsm
-              });
+                fabric_name: fabricName || null,
+                fabric_color: fabricColor || null,
+                fabric_gsm: fabricGsm || null
+              },
+              bomRecordItemKeys
+            );
+
+            bomItems.push(fabricPayload);
+            legacyBomItems.push(
+              sanitizePayload(
+                {
+                  bom_id: fabricPayload.bom_id,
+                  item_id: fabricPayload.item_id,
+                  item_code: fabricPayload.item_code,
+                  item_name: fabricPayload.item_name,
+                  category: fabricPayload.category,
+                  quantity: fabricPayload.qty_total,
+                  unit: fabricPayload.unit_of_measure,
+                  stock: fabricPayload.stock,
+                  to_order: fabricPayload.to_order
+                },
+                legacyBomItemKeys
+              )
+            );
           } else {
-            // For items and products, use the main quantity
-            bomItems.push({
-              ...base,
-             qty_total: item.qty_total || 0,
-              to_order: item.to_order || 0
-            });
+            const itemPayload = sanitizePayload(
+              {
+                ...base,
+                qty_total: item.qty_total || 0,
+                to_order: item.to_order || 0
+              },
+              bomRecordItemKeys
+            );
+
+            bomItems.push(itemPayload);
+            legacyBomItems.push(
+              sanitizePayload(
+                {
+                  bom_id: itemPayload.bom_id,
+                  item_id: itemPayload.item_id,
+                  item_code: itemPayload.item_code,
+                  item_name: itemPayload.item_name,
+                  category: itemPayload.category,
+                  quantity: itemPayload.qty_total,
+                  unit: itemPayload.unit_of_measure,
+                  stock: itemPayload.stock,
+                  to_order: itemPayload.to_order
+                },
+                legacyBomItemKeys
+              )
+            );
           }
        }
 
@@ -1348,7 +1463,7 @@ export function BomForm() {
        }
        
        if (bomItems.length > 0) {
-        console.log('Attempting to save BOM items:', bomItems);
+         console.log('Attempting to save BOM items:', bomItems);
         console.log('BOM ID:', bomId);
         console.log('BOM Items count:', bomItems.length);
         console.log('First BOM item sample:', bomItems[0]);
@@ -1361,10 +1476,10 @@ export function BomForm() {
 
           if (result.error) {
             console.log('bom_record_items failed, trying bom_items...');
-            // Fallback to bom_items table
+            // Fallback to bom_items table with legacy-compatible payload
             result = await supabase
               .from('bom_items')
-              .insert(bomItems);
+              .insert(legacyBomItems);
               
             if (result.error) {
               console.error('Both table attempts failed:', result.error);
@@ -1578,7 +1693,11 @@ export function BomForm() {
                         {/* Fabric Name */}
                         <div>
                           <Label className="text-sm font-medium">Fabric</Label>
-                          {item.is_prefilled ? (
+                          {isReadOnly ? (
+                            <div className="text-sm font-medium">
+                              {item.fabric_name || fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName || 'N/A'}
+                            </div>
+                          ) : item.is_prefilled ? (
                             <div className="text-sm font-medium">
                               {item.fabric_name || 'N/A'}
                             </div>
@@ -1586,7 +1705,6 @@ export function BomForm() {
                             <Select
                               value={fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName || ''}
                               onValueChange={(value) => handleFabricNameSelection(getItemIndex(item.id), value)}
-                              disabled={isReadOnly}
                             >
                               <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Select Fabric" />
@@ -1600,47 +1718,55 @@ export function BomForm() {
                               </SelectContent>
                             </Select>
                           )}
-                          </div>
+                        </div>
 
                         {/* Color */}
                         <div>
                           <Label className="text-sm font-medium">Color</Label>
-                          {item.is_prefilled ? (
+                          {isReadOnly ? (
+                            <div className="text-sm">
+                              {item.fabric_color || fabricSelectionState[getItemIndex(item.id)]?.selectedColor || 'N/A'}
+                            </div>
+                          ) : item.is_prefilled ? (
                             <div className="text-sm">
                               {item.fabric_color || 'N/A'}
                             </div>
                           ) : (
-                              <Select
+                            <Select
                               value={fabricSelectionState[getItemIndex(item.id)]?.selectedColor || ''}
                               onValueChange={(value) => handleColorSelection(getItemIndex(item.id), value)}
-                              disabled={isReadOnly || !fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName}
-                              >
-                                <SelectTrigger className="w-full">
+                              disabled={!fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName}
+                            >
+                              <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Select Color" />
-                                </SelectTrigger>
+                              </SelectTrigger>
                               <SelectContent>
                                 {(fabricSelectionState[getItemIndex(item.id)]?.availableColors || []).map(color => (
                                   <SelectItem key={color} value={color}>
                                     {color}
-                                     </SelectItem>
+                                  </SelectItem>
                                 ))}
-                                 </SelectContent>
-                              </Select>
+                              </SelectContent>
+                            </Select>
                           )}
                         </div>
 
                         {/* GSM */}
                         <div>
                           <Label className="text-sm font-medium">Gsm</Label>
-                          {item.is_prefilled ? (
+                          {isReadOnly ? (
+                            <div className="text-sm">
+                              {item.fabric_gsm ? `${item.fabric_gsm} Gsm` : fabricSelectionState[getItemIndex(item.id)]?.selectedGsm ? `${fabricSelectionState[getItemIndex(item.id)]?.selectedGsm} Gsm` : 'N/A'}
+                            </div>
+                          ) : item.is_prefilled ? (
                             <div className="text-sm">
                               {item.fabric_gsm ? `${item.fabric_gsm} Gsm` : 'N/A'}
                             </div>
                           ) : (
                             <Select
-                              value={item.fabric_gsm || ''}
+                              value={item.fabric_gsm || fabricSelectionState[getItemIndex(item.id)]?.selectedGsm || ''}
                               onValueChange={(value) => handleGsmSelection(getItemIndex(item.id), value)}
-                              disabled={isReadOnly || !fabricSelectionState[getItemIndex(item.id)]?.selectedColor}
+                              disabled={!fabricSelectionState[getItemIndex(item.id)]?.selectedColor}
                             >
                               <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Select GSM" />
@@ -1654,7 +1780,7 @@ export function BomForm() {
                               </SelectContent>
                             </Select>
                           )}
-                          </div>
+                        </div>
 
                         {/* Qty/Pc or Pcs in 1 {uom} */}
                           <div>
