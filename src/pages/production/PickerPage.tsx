@@ -10,11 +10,13 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { Search, Users, Scissors, ShoppingCart, Shirt, Package, ClipboardList, Printer } from "lucide-react";
 import PickerQuantityDialog from "@/components/production/PickerQuantityDialog";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
 import { getBinsForProduct } from "@/utils/inventoryAdjustmentAPI";
+import type { BinInfo, BinSizeInfo } from "@/utils/inventoryAdjustmentAPI";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
+import { useCompanySettings } from "@/hooks/CompanySettingsContext";
 
 interface TailorListItem {
   id: string;
@@ -54,10 +56,23 @@ interface ReadymadeOrderItem {
   specifications: any;
 }
 
+interface ProductSizeVariant {
+  variant_id: string;
+  product_id?: string | null;
+  size?: string | null;
+  sku?: string | null;
+}
+
+interface SizeBinSelection {
+  bin: BinInfo;
+  detail: BinSizeInfo | null;
+}
+
 interface GroupedProduct {
   product_name: string;
   product_id?: string;
   product_master_id?: string;
+  product_class?: string | null;
   total_quantity: number;
   size_quantities: Record<string, number>;
   orders: Array<{
@@ -68,9 +83,11 @@ interface GroupedProduct {
     quantity: number;
   }>;
   image_url: string | null;
+  size_variants?: Record<string, ProductSizeVariant>;
 }
 
 export default function PickerPage() {
+  const { config: company } = useCompanySettings();
   const [tailors, setTailors] = useState<TailorListItem[]>([]);
   const [tailorSearch, setTailorSearch] = useState("");
   const [loadingTailors, setLoadingTailors] = useState(false);
@@ -104,9 +121,14 @@ export default function PickerPage() {
   // Picklist creation state
   const [binSelectionDialogOpen, setBinSelectionDialogOpen] = useState(false);
   const [picklistPreviewDialogOpen, setPicklistPreviewDialogOpen] = useState(false);
-  const [availableBins, setAvailableBins] = useState<Array<{ bin_id: string; bin_code: string; warehouse_name?: string; floor_number?: number; rack_code?: string; current_quantity: number }>>([]);
-  const [selectedBin, setSelectedBin] = useState<{ bin_id: string; bin_code: string } | null>(null);
-  const [picklistData, setPicklistData] = useState<{ product: GroupedProduct | null; order: ReadymadeOrder | null; bin: { bin_id: string; bin_code: string } | null }>({ product: null, order: null, bin: null });
+  const [availableBins, setAvailableBins] = useState<BinInfo[]>([]);
+  const [selectedBinsBySize, setSelectedBinsBySize] = useState<Record<string, SizeBinSelection>>({});
+  const [picklistData, setPicklistData] = useState<{
+    product: GroupedProduct | null;
+    order: ReadymadeOrder | null;
+    bin: { bin_id: string; bin_code: string } | null;
+    binsBySize: Record<string, SizeBinSelection> | null;
+  }>({ product: null, order: null, bin: null, binsBySize: null });
   const [loadingBins, setLoadingBins] = useState(false);
 
   useEffect(() => {
@@ -157,7 +179,7 @@ export default function PickerPage() {
           setReadymadeOrderItems(itemsByOrder);
           
           // Group products by product name
-          groupProductsByProductName(ordersData, itemsData);
+          await groupProductsByProductName(ordersData, itemsData);
         }
       }
     } catch (error) {
@@ -196,9 +218,68 @@ export default function PickerPage() {
     });
   };
 
-  const groupProductsByProductName = (orders: any[], items: any[]) => {
+  const normalizeSizeLabel = (value?: string | null): string => {
+    if (value === undefined || value === null) {
+      return "";
+    }
+    return value.toString().trim().toUpperCase();
+  };
+
+  const isUniversalSizeLabel = (normalizedValue: string): boolean => {
+    return ["", "UNIVERSAL", "ONE SIZE", "ONE-SIZE", "ONESIZE", "FREE SIZE", "FREESIZE", "OS"].includes(normalizedValue);
+  };
+
+  const findBinDetailForSize = (bin: BinInfo, sizeLabel: string): BinSizeInfo | null => {
+    if (!bin.size_details || bin.size_details.length === 0) {
+      return null;
+    }
+
+    const normalizedTarget = normalizeSizeLabel(sizeLabel);
+
+    const matchingDetail = bin.size_details.find((detail) => {
+      const normalizedDetail = normalizeSizeLabel(detail.size);
+      if (normalizedDetail === normalizedTarget) {
+        return true;
+      }
+      if (isUniversalSizeLabel(normalizedDetail) && isUniversalSizeLabel(normalizedTarget)) {
+        return true;
+      }
+      return false;
+    });
+
+    return matchingDetail || null;
+  };
+
+  const formatBinLocation = (bin: BinInfo): string => {
+    if (bin.path_label && bin.path_label.trim().length > 0) {
+      return bin.path_label;
+    }
+
+    const segments: string[] = [];
+    if (bin.warehouse_code) {
+      segments.push(`WH ${bin.warehouse_code}`);
+    } else if (bin.warehouse_name) {
+      segments.push(bin.warehouse_name);
+    }
+
+    if (bin.floor_code) {
+      segments.push(`Floor ${bin.floor_code}`);
+    } else if (typeof bin.floor_number !== 'undefined' && bin.floor_number !== null) {
+      segments.push(`Floor ${bin.floor_number}`);
+    }
+
+    if (bin.rack_code) {
+      segments.push(`Rack ${bin.rack_code}`);
+    }
+
+    segments.push(`Bin ${bin.bin_code}`);
+    return segments.join(' > ');
+  };
+
+  const groupProductsByProductName = async (orders: any[], items: any[]) => {
     const productMap: Record<string, GroupedProduct> = {};
     const ordersMap: Record<string, any> = {};
+    const classesToFetch = new Set<string>();
     
     // Create orders map for quick lookup
     orders.forEach((order: any) => {
@@ -211,6 +292,8 @@ export default function PickerPage() {
         : item.specifications || {};
       
       const productName = item.product_description || specs.product_name || 'Unknown Product';
+      const productClass = specs.class || null;
+      const productMasterId = specs.product_master_id || item.product_master_id || null;
       const order = ordersMap[item.order_id];
       
       if (!productMap[productName]) {
@@ -218,11 +301,19 @@ export default function PickerPage() {
           product_name: productName,
           product_id: specs.product_id,
           product_master_id: specs.product_master_id,
+          product_class: productClass,
           total_quantity: 0,
           size_quantities: {},
           orders: [],
           image_url: getOrderItemDisplayImage(item, { order_type: 'readymade' }),
         };
+      } else {
+        if (!productMap[productName].product_master_id && productMasterId) {
+          productMap[productName].product_master_id = productMasterId;
+        }
+        if (!productMap[productName].product_class && productClass) {
+          productMap[productName].product_class = productClass;
+        }
       }
 
       const sizes = specs.sizes_quantities || {};
@@ -254,6 +345,10 @@ export default function PickerPage() {
         size_quantities: orderSizeQuantities,
         quantity: orderQuantity,
       });
+
+      if (productClass) {
+        classesToFetch.add(productClass);
+      }
     });
 
     // Sort sizes in each product
@@ -265,6 +360,45 @@ export default function PickerPage() {
       });
       product.size_quantities = sortedSizeQuantities;
     });
+
+    if (classesToFetch.size > 0) {
+      try {
+        const { data: variantData, error: variantError } = await supabase
+          .from('product_master')
+          .select('id, product_id, class, size, sku, is_active')
+          .in('class', Array.from(classesToFetch));
+
+        if (variantError) {
+          console.error('Error fetching product variants for picklist:', variantError);
+        } else if (variantData) {
+          const variantMap = new Map<string, Record<string, ProductSizeVariant>>();
+          (variantData as any[]).forEach((variant) => {
+            const className = variant?.class;
+            if (!className) return;
+            if (!variantMap.has(className)) {
+              variantMap.set(className, {});
+            }
+            const sizeKey = (variant?.size || '').toString() || 'UNIVERSAL';
+            variantMap.get(className)![sizeKey] = {
+              variant_id: variant.id,
+              product_id: variant.product_id ?? variant.id,
+              size: variant.size,
+              sku: variant.sku,
+            };
+          });
+
+          Object.values(productMap).forEach((product) => {
+            if (!product.product_class) return;
+            const variants = variantMap.get(product.product_class);
+            if (variants) {
+              product.size_variants = variants;
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Unexpected error while fetching product variants:', error);
+      }
+    }
 
     setGroupedProducts(Object.values(productMap));
   };
@@ -279,17 +413,28 @@ export default function PickerPage() {
     
     if (type === 'product') {
       const product = data as GroupedProduct;
-      if (!product.product_master_id) {
-        toast.error('Product master ID not found. Cannot create picklist.');
+      const variantIds = product.size_variants 
+        ? Object.values(product.size_variants)
+            .map((variant) => variant.variant_id)
+            .filter((id): id is string => Boolean(id))
+        : [];
+      const baseProductId = product.product_master_id || variantIds[0];
+
+      if (!baseProductId) {
+        toast.error('Product metadata not found. Cannot create picklist.');
         return;
       }
       
-      setPicklistData({ product, order: null, bin: null });
+      setPicklistData({ product, order: null, bin: null, binsBySize: null });
+      setSelectedBinsBySize({});
       setLoadingBins(true);
       setBinSelectionDialogOpen(true);
       
       try {
-        const bins = await getBinsForProduct(product.product_master_id);
+        const bins = await getBinsForProduct(baseProductId, undefined, {
+          includeSizeBreakdown: true,
+          sizeVariantIds: variantIds.length > 0 ? variantIds : undefined,
+        });
         // Filter bins that have available inventory
         const binsWithInventory = bins.filter(bin => bin.current_quantity > 0);
         setAvailableBins(binsWithInventory);
@@ -313,20 +458,188 @@ export default function PickerPage() {
     }
   };
 
-  const handleBinSelect = (binId: string) => {
-    const bin = availableBins.find(b => b.bin_id === binId);
-    if (bin) {
-      setSelectedBin({ bin_id: bin.bin_id, bin_code: bin.bin_code });
+  const sizeBinOptions = useMemo(() => {
+    if (!picklistData.product) {
+      return {} as Record<string, { requiredQty: number; options: Array<{ bin: BinInfo; detail: BinSizeInfo }> }>;
     }
+
+    const result: Record<string, { requiredQty: number; options: Array<{ bin: BinInfo; detail: BinSizeInfo }> }> = {};
+    const sizeQuantities = picklistData.product.size_quantities || {};
+    const sortedSizes = sortSizes(Object.keys(sizeQuantities));
+
+    sortedSizes.forEach((sizeLabel) => {
+      const requiredQty = Number(sizeQuantities[sizeLabel] || 0);
+      if (requiredQty <= 0) {
+        return;
+      }
+
+      const options: Array<{ bin: BinInfo; detail: BinSizeInfo }> = [];
+
+      availableBins.forEach((bin) => {
+        const detail = findBinDetailForSize(bin, sizeLabel);
+        if (detail && detail.quantity > 0) {
+          options.push({ bin, detail });
+        } else if ((!bin.size_details || bin.size_details.length === 0) && bin.current_quantity > 0) {
+          options.push({
+            bin,
+            detail: {
+              item_id: "",
+              size: sizeLabel,
+              sku: undefined,
+              quantity: bin.current_quantity,
+            },
+          });
+        }
+      });
+
+      result[sizeLabel] = { requiredQty, options };
+    });
+
+    return result;
+  }, [availableBins, picklistData.product]);
+
+  const sizeList = useMemo(() => Object.keys(sizeBinOptions), [sizeBinOptions]);
+
+  const sizesWithoutOptions = useMemo(
+    () => sizeList.filter((size) => (sizeBinOptions[size]?.options.length || 0) === 0),
+    [sizeList, sizeBinOptions]
+  );
+
+  const allSizesSelected = useMemo(() => {
+    if (sizeList.length === 0) {
+      return false;
+    }
+    return sizeList.every((size) => Boolean(selectedBinsBySize[size]));
+  }, [sizeList, selectedBinsBySize]);
+
+  const picklistSizeEntries = useMemo(() => {
+    if (!picklistData.product) {
+      return [] as Array<{ size: string; requiredQty: number; selection: SizeBinSelection | null }>;
+    }
+    const sizes = sortSizes(Object.keys(picklistData.product.size_quantities));
+    return sizes.map((size) => ({
+      size,
+      requiredQty: Number(picklistData.product!.size_quantities[size] || 0),
+      selection: picklistData.binsBySize ? picklistData.binsBySize[size] || null : null,
+    }));
+  }, [picklistData.product, picklistData.binsBySize]);
+
+  const uniqueSelectedBins = useMemo(() => {
+    const map = new Map<string, BinInfo>();
+    picklistSizeEntries.forEach(({ selection }) => {
+      if (selection) {
+        map.set(selection.bin.bin_id, selection.bin);
+      }
+    });
+    return Array.from(map.values());
+  }, [picklistSizeEntries]);
+
+  const handleSizeBinSelect = (sizeLabel: string, binId: string) => {
+    const optionsForSize = sizeBinOptions[sizeLabel];
+    if (!optionsForSize) {
+      return;
+    }
+
+    const match = optionsForSize.options.find(option => option.bin.bin_id === binId);
+
+    setSelectedBinsBySize((prev) => {
+      const updated = { ...prev };
+      if (match) {
+        updated[sizeLabel] = {
+          bin: match.bin,
+          detail: match.detail,
+        };
+      } else {
+        delete updated[sizeLabel];
+      }
+      return updated;
+    });
+  };
+
+  const handleApplyBinToAllSizes = (sizeLabel: string) => {
+    const selection = selectedBinsBySize[sizeLabel];
+    if (!selection) {
+      return;
+    }
+
+    const binId = selection.bin.bin_id;
+    const nextSelections: Record<string, SizeBinSelection> = { ...selectedBinsBySize };
+    const insufficient: string[] = [];
+
+    Object.entries(sizeBinOptions).forEach(([size, { requiredQty, options }]) => {
+      const matchingOption = options.find(option => option.bin.bin_id === binId);
+      if (!matchingOption) {
+        insufficient.push(size);
+        return;
+      }
+
+      const availableQty = matchingOption.detail?.quantity ?? 0;
+      if (availableQty < requiredQty) {
+        insufficient.push(size);
+        return;
+      }
+
+      nextSelections[size] = {
+        bin: matchingOption.bin,
+        detail: matchingOption.detail,
+      };
+    });
+
+    if (insufficient.length > 0) {
+      toast.error(`Bin ${selection.bin.bin_code} cannot fulfil: ${insufficient.join(', ')}`);
+      return;
+    }
+
+    setSelectedBinsBySize(nextSelections);
   };
 
   const handleConfirmBinSelection = () => {
-    if (!selectedBin) {
-      toast.error('Please select a bin');
+    if (!picklistData.product) {
+      toast.error('Product context missing for picklist.');
       return;
     }
-    
-    setPicklistData(prev => ({ ...prev, bin: selectedBin }));
+
+    if (sizesWithoutOptions.length > 0) {
+      toast.error(`No bins available for sizes: ${sizesWithoutOptions.join(', ')}`);
+      return;
+    }
+
+    const sizeEntries = Object.entries(sizeBinOptions);
+    if (sizeEntries.length === 0) {
+      toast.error('No size requirements found for this product.');
+      return;
+    }
+
+    const missingSizes = sizeEntries
+      .filter(([size]) => !selectedBinsBySize[size])
+      .map(([size]) => size);
+
+    if (missingSizes.length > 0) {
+      toast.error(`Select bins for all sizes before confirming. Missing: ${missingSizes.join(', ')}`);
+      return;
+    }
+
+    const insufficientSizes = sizeEntries
+      .filter(([size, { requiredQty }]) => {
+        const selection = selectedBinsBySize[size];
+        if (!selection) return true;
+        const availableQty = selection.detail?.quantity ?? 0;
+        return availableQty < requiredQty;
+      })
+      .map(([size]) => size);
+
+    if (insufficientSizes.length > 0) {
+      toast.error(`Insufficient inventory for sizes: ${insufficientSizes.join(', ')}`);
+      return;
+    }
+
+    const firstSelection = selectedBinsBySize[sizeEntries[0][0]];
+
+    setPicklistData(prev => ({
+      ...prev,
+      bin: firstSelection ? { bin_id: firstSelection.bin.bin_id, bin_code: firstSelection.bin.bin_code } : null,
+      binsBySize: { ...selectedBinsBySize },
+    }));
     setBinSelectionDialogOpen(false);
     setPicklistPreviewDialogOpen(true);
   };
@@ -1070,48 +1383,126 @@ export default function PickerPage() {
         <Dialog open={binSelectionDialogOpen} onOpenChange={(open) => {
           setBinSelectionDialogOpen(open);
           if (!open) {
-            setSelectedBin(null);
+            setSelectedBinsBySize({});
             setAvailableBins([]);
           }
         }}>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Select Bin for Picklist</DialogTitle>
+              <DialogDescription className="text-sm text-muted-foreground">
+                Assign bins for each required size. Choose a bin that has sufficient on-hand quantity.
+              </DialogDescription>
             </DialogHeader>
             {loadingBins ? (
               <p className="text-sm text-muted-foreground py-4">Loading available bins...</p>
-            ) : availableBins.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4">No bins with available inventory found.</p>
+            ) : sizeList.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">
+                No size information available for this product. Please verify product metadata.
+              </p>
             ) : (
-              <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium mb-2 block">Select Bin:</label>
-                  <Select onValueChange={handleBinSelect}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Choose a bin..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableBins.map((bin) => (
-                        <SelectItem key={bin.bin_id} value={bin.bin_id}>
-                          <div className="flex items-center justify-between w-full">
-                            <span className="font-medium">{bin.bin_code}</span>
-                            <span className="text-xs text-muted-foreground ml-4">
-                              {bin.warehouse_name && `${bin.warehouse_name} - `}
-                              {bin.floor_number && `Floor ${bin.floor_number} - `}
-                              {bin.rack_code && `Rack ${bin.rack_code} - `}
-                              Qty: {bin.current_quantity}
-                            </span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              <div className="space-y-5">
+                <div className="rounded-md border border-slate-200 overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-slate-50">
+                        <TableHead className="w-24 sm:w-28 text-slate-900 font-semibold">Size</TableHead>
+                        <TableHead className="w-28 sm:w-32 text-slate-900 font-semibold text-center">Required Qty</TableHead>
+                        <TableHead className="text-slate-900 font-semibold">Select Bin</TableHead>
+                        <TableHead className="w-28 sm:w-32 text-slate-900 font-semibold text-center">Available</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sizeList.map((size) => {
+                        const { requiredQty, options } = sizeBinOptions[size];
+                        const selection = selectedBinsBySize[size];
+                        const selectedBinId = selection?.bin.bin_id ?? "";
+                        const availableQty = selection?.detail?.quantity ?? 0;
+                        const insufficient = selection ? availableQty < requiredQty : false;
+
+                        return (
+                          <TableRow key={size} className="align-top">
+                            <TableCell className="font-semibold text-slate-900">{size}</TableCell>
+                            <TableCell className="text-center text-slate-700 font-medium">{requiredQty}</TableCell>
+                            <TableCell>
+                              {options.length > 0 ? (
+                                <div className="space-y-2">
+                                  <Select
+                                    value={selectedBinId}
+                                    onValueChange={(value) => handleSizeBinSelect(size, value)}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Choose a bin..." />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {options.map(({ bin, detail }) => (
+                                        <SelectItem key={`${size}-${bin.bin_id}`} value={bin.bin_id}>
+                                          <div className="flex flex-col items-start gap-1 py-0.5">
+                                            <span className="font-medium">{bin.bin_code}</span>
+                                            <span className="text-xs text-muted-foreground">
+                                              {formatBinLocation(bin)}
+                                            </span>
+                                            <span className="text-xs text-muted-foreground">
+                                              Available: {detail.quantity}
+                                            </span>
+                                          </div>
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  {selection && (
+                                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
+                                      <div className="text-xs text-slate-600">
+                                        <div className="font-medium text-slate-700">{selection.bin.bin_code}</div>
+                                        <div>{formatBinLocation(selection.bin)}</div>
+                                      </div>
+                                      {sizeList.length > 1 && (
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="xs"
+                                          className="text-xs"
+                                          onClick={() => handleApplyBinToAllSizes(size)}
+                                        >
+                                          Use for all sizes
+                                        </Button>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="text-xs text-destructive bg-red-50 border border-red-200 rounded-md px-3 py-2">
+                                  No bins with this size available
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell className={`text-center font-semibold ${insufficient ? 'text-red-600' : 'text-slate-700'}`}>
+                              {selection ? availableQty : '--'}
+                              {insufficient && (
+                                <div className="text-xs font-medium">Short by {requiredQty - availableQty}</div>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
                 </div>
-                <div className="flex justify-end gap-2 pt-4">
+
+                {sizesWithoutOptions.length > 0 && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    Bins for the following sizes are not available: {sizesWithoutOptions.join(', ')}
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-2">
                   <Button variant="outline" onClick={() => setBinSelectionDialogOpen(false)}>
                     Cancel
                   </Button>
-                  <Button onClick={handleConfirmBinSelection} disabled={!selectedBin}>
+                  <Button
+                    onClick={handleConfirmBinSelection}
+                    disabled={!allSizesSelected || sizesWithoutOptions.length > 0}
+                  >
                     Confirm
                   </Button>
                 </div>
@@ -1124,8 +1515,7 @@ export default function PickerPage() {
         <Dialog open={picklistPreviewDialogOpen} onOpenChange={(open) => {
           setPicklistPreviewDialogOpen(open);
           if (!open) {
-            setPicklistData({ product: null, order: null, bin: null });
-            setSelectedBin(null);
+            setPicklistData({ product: null, order: null, bin: null, binsBySize: null });
           }
         }}>
           <DialogContent className="max-w-[95vw] sm:max-w-4xl lg:max-w-6xl max-h-[90vh] overflow-y-auto print:max-w-full print:max-h-full print:overflow-visible">
@@ -1146,6 +1536,19 @@ export default function PickerPage() {
                 .no-print {
                   display: none !important;
                 }
+                .print-content table {
+                  page-break-inside: auto;
+                }
+                .print-content thead {
+                  display: table-header-group;
+                }
+                .print-content tr {
+                  break-inside: avoid;
+                  page-break-inside: avoid;
+                }
+                .print-content .sticky {
+                  position: static !important;
+                }
               }
             `}</style>
             <DialogHeader className="no-print">
@@ -1161,15 +1564,59 @@ export default function PickerPage() {
                   Print Picklist
                 </Button>
               </div>
+              <DialogDescription className="text-sm text-muted-foreground">
+                Review the selected bins and size allocations before printing the picklist.
+              </DialogDescription>
             </DialogHeader>
-            {picklistData.product && picklistData.bin && (
-              <div className="space-y-4 print-content">
-                <div className="flex items-center justify-between pb-4 border-b">
+            {picklistData.product && picklistSizeEntries.length > 0 && (
+              <div className="space-y-5 print-content">
+                {/* Company Header with Logo */}
+                <div className="flex justify-between items-start border-b-2 border-slate-300 pb-4 mb-4 print:border-b-2 print:pb-3 print:mb-3">
+                  <div className="flex items-center gap-4">
+                    {(company as any)?.logo_url && (
+                      <img
+                        src={(company as any).logo_url}
+                        alt="Company Logo"
+                        className="w-20 h-20 sm:w-24 sm:h-24 object-contain print:w-20 print:h-20"
+                        style={{ maxWidth: '80px', maxHeight: '80px' }}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                    )}
+                    <div>
+                      <div className="text-xl font-bold text-slate-900 print:text-lg">
+                        {company?.company_name || 'Company Name'}
+                      </div>
+                      {company?.address && (
+                        <div className="text-xs text-slate-600 print:text-xs">
+                          {company.address}
+                        </div>
+                      )}
+                      <div className="text-xs text-slate-600 print:text-xs">
+                        {company?.gstin && `GSTIN: ${company.gstin}`}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-lg font-bold text-slate-900 print:text-base">PICKLIST</div>
+                    <div className="text-xs text-slate-600 print:text-xs">
+                      {new Date().toLocaleDateString('en-IN', { 
+                        day: '2-digit', 
+                        month: 'short', 
+                        year: 'numeric' 
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Product Summary */}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b print:pb-3 print:border-b">
                   <div className="flex items-center gap-4">
                     {picklistData.product.image_url && (
-                      <div className="w-20 h-20 sm:w-24 sm:h-24 flex-shrink-0 rounded-lg bg-gradient-to-br from-slate-100 to-slate-200 overflow-hidden relative shadow-sm">
-                        <img 
-                          src={picklistData.product.image_url} 
+                      <div className="w-20 h-20 sm:w-24 sm:h-24 flex-shrink-0 rounded-lg bg-gradient-to-br from-slate-100 to-slate-200 overflow-hidden relative shadow-sm print:w-16 print:h-16">
+                        <img
+                          src={picklistData.product.image_url}
                           alt={picklistData.product.product_name}
                           className="w-full h-full object-cover"
                           onError={(e) => {
@@ -1179,67 +1626,128 @@ export default function PickerPage() {
                       </div>
                     )}
                     <div>
-                      <div className="text-sm text-slate-600">
+                      <div className="text-base font-semibold text-slate-900 print:text-sm print:font-bold mb-1">
+                        {picklistData.product.product_name}
+                      </div>
+                      <div className="text-sm text-slate-600 print:text-xs">
                         Total Quantity: <span className="font-semibold text-slate-900">{picklistData.product.total_quantity}</span>
                       </div>
-                      <div className="text-sm text-slate-600">
+                      <div className="text-sm text-slate-600 print:text-xs">
                         Orders: <span className="font-semibold text-slate-900">{picklistData.product.orders.length}</span>
                       </div>
-                      <div className="text-sm text-slate-600">
-                        Bin: <span className="font-semibold text-slate-900">{picklistData.bin.bin_code}</span>
+                      <div className="text-sm text-slate-600 print:text-xs">
+                        Unique Bins:{' '}
+                        <span className="font-semibold text-slate-900">
+                          {uniqueSelectedBins.length > 0 ? uniqueSelectedBins.map((bin) => bin.bin_code).join(', ') : '—'}
+                        </span>
                       </div>
                     </div>
                   </div>
                 </div>
-                
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-slate-50">
-                        <TableHead className="font-semibold text-slate-900 sticky left-0 bg-slate-50 z-10">Order Number</TableHead>
-                        <TableHead className="font-semibold text-slate-900 sticky left-[200px] bg-slate-50 z-10">Bin</TableHead>
-                        {sortSizes(Object.keys(picklistData.product.size_quantities)).map((size) => (
-                          <TableHead key={size} className="font-semibold text-slate-900 text-center min-w-[80px]">
-                            {size}
+
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold text-slate-900 print:text-sm">Bin Allocations</div>
+                  <div className="overflow-x-auto rounded-md border border-slate-200 print:border-slate-300">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-slate-50 print:bg-slate-50">
+                          <TableHead className="text-slate-900 font-semibold w-24 sm:w-28 print:w-20">Size</TableHead>
+                          <TableHead className="text-slate-900 font-semibold text-center w-28 sm:w-32 print:w-24">Required Qty</TableHead>
+                          <TableHead className="text-slate-900 font-semibold print:min-w-[80px]">Bin</TableHead>
+                          <TableHead className="text-slate-900 font-semibold print:min-w-[200px]">Location</TableHead>
+                          <TableHead className="text-slate-900 font-semibold text-center w-28 sm:w-32 print:w-24">Available</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {picklistSizeEntries.map(({ size, requiredQty, selection }) => {
+                          const availableQty = selection?.detail?.quantity ?? 0;
+                          const insufficient = availableQty < requiredQty;
+                          return (
+                            <TableRow key={size} className="print:break-inside-avoid">
+                              <TableCell className="font-semibold text-slate-900 print:text-sm">{size}</TableCell>
+                              <TableCell className="text-center text-slate-700 font-medium print:text-sm">{requiredQty}</TableCell>
+                              <TableCell className="text-slate-800 font-medium print:text-sm">{selection?.bin.bin_code || '—'}</TableCell>
+                              <TableCell className="text-slate-600 text-sm print:text-xs">
+                                {selection ? formatBinLocation(selection.bin) : '—'}
+                              </TableCell>
+                              <TableCell className={`text-center font-semibold print:text-sm ${insufficient ? 'text-red-600' : 'text-slate-700'}`}>
+                                {selection ? availableQty : '—'}
+                                {insufficient && (
+                                  <div className="text-xs font-medium print:text-xs">
+                                    Short by {requiredQty - availableQty}
+                                  </div>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold text-slate-900 print:text-sm">Order Details</div>
+                  <div className="overflow-x-auto rounded-md border border-slate-200">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-slate-50">
+                          <TableHead className="font-semibold text-slate-900 sticky left-0 bg-slate-50 z-10 w-48 print:static print:bg-slate-50">
+                            Order Number
                           </TableHead>
-                        ))}
-                        <TableHead className="font-semibold text-slate-900 text-center bg-blue-50">Total</TableHead>
-                      </TableRow>
-                    </TableHeader>
+                          <TableHead className="font-semibold text-slate-900 sticky left-[192px] bg-slate-50 z-10 min-w-[180px] print:static print:bg-slate-50">
+                            Bin(s)
+                          </TableHead>
+                          {picklistSizeEntries.map(({ size }) => (
+                            <TableHead key={size} className="font-semibold text-slate-900 text-center min-w-[80px] print:min-w-[60px]">
+                              {size}
+                            </TableHead>
+                          ))}
+                          <TableHead className="font-semibold text-slate-900 text-center bg-blue-50 print:bg-blue-50">Total</TableHead>
+                        </TableRow>
+                      </TableHeader>
                     <TableBody>
                       {picklistData.product.orders.map((order) => {
-                        const rowTotal = Object.values(order.size_quantities).reduce((sum, qty) => sum + (Number(qty) || 0), 0);
-                        const sortedSizes = sortSizes(Object.keys(picklistData.product!.size_quantities));
+                        const rowTotal = Object.values(order.size_quantities).reduce(
+                          (sum, qty) => sum + (Number(qty) || 0),
+                          0
+                        );
+                        const binSummary = picklistSizeEntries
+                          .filter(({ size }) => (order.size_quantities[size] || 0) > 0)
+                          .map(({ size, selection }) => `${size}: ${selection?.bin.bin_code || '—'}`)
+                          .join(', ');
                         return (
-                          <TableRow key={order.order_id} className="hover:bg-slate-50/50">
-                            <TableCell className="font-medium text-slate-900 sticky left-0 bg-white z-10">
+                          <TableRow key={order.order_id} className="hover:bg-slate-50/50 print:hover:bg-transparent">
+                            <TableCell className="font-medium text-slate-900 sticky left-0 bg-white z-10 print:static print:bg-white">
                               {order.order_number}
                             </TableCell>
-                            <TableCell className="font-medium text-slate-900 sticky left-[200px] bg-white z-10">
-                              {picklistData.bin?.bin_code}
+                            <TableCell className="text-slate-800 sticky left-[192px] bg-white z-10 text-sm print:static print:bg-white">
+                              {binSummary || '—'}
                             </TableCell>
-                            {sortedSizes.map((size) => (
-                              <TableCell key={size} className="text-center">
+                            {picklistSizeEntries.map(({ size }) => (
+                              <TableCell key={size} className="text-center print:text-center">
                                 {order.size_quantities[size] || 0}
                               </TableCell>
                             ))}
-                            <TableCell className="text-center font-semibold bg-blue-50">
+                            <TableCell className="text-center font-semibold bg-blue-50 print:bg-blue-50">
                               {rowTotal}
                             </TableCell>
                           </TableRow>
                         );
                       })}
-                      {/* Column Totals Row */}
-                      <TableRow className="bg-slate-100 font-semibold">
-                        <TableCell className="font-semibold text-slate-900 sticky left-0 bg-slate-100 z-10">
+                      <TableRow className="bg-slate-100 font-semibold print:bg-slate-100">
+                        <TableCell className="font-semibold text-slate-900 sticky left-0 bg-slate-100 z-10 print:static print:bg-slate-100">
                           Total
                         </TableCell>
-                        <TableCell className="font-semibold text-slate-900 sticky left-[200px] bg-slate-100 z-10">
-                          {picklistData.bin?.bin_code}
+                        <TableCell className="font-semibold text-slate-900 sticky left-[192px] bg-slate-100 z-10 text-sm print:static print:bg-slate-100">
+                          {uniqueSelectedBins.length > 0
+                            ? uniqueSelectedBins.map((bin) => bin.bin_code).join(', ')
+                            : '—'}
                         </TableCell>
-                        {sortSizes(Object.keys(picklistData.product.size_quantities)).map((size) => {
-                          const colTotal = picklistData.product.orders.reduce((sum, order) => 
-                            sum + (Number(order.size_quantities[size]) || 0), 0
+                        {picklistSizeEntries.map(({ size }) => {
+                          const colTotal = picklistData.product!.orders.reduce(
+                            (sum, order) => sum + (Number(order.size_quantities[size]) || 0),
+                            0
                           );
                           return (
                             <TableCell key={size} className="text-center bg-blue-50">
@@ -1253,6 +1761,7 @@ export default function PickerPage() {
                       </TableRow>
                     </TableBody>
                   </Table>
+                  </div>
                 </div>
               </div>
             )}

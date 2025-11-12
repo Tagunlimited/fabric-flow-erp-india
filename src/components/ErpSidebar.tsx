@@ -86,8 +86,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       badge: currentPath === "/orders" ? "..." : pendingOrdersCount.toString(),
       badgeColor: "bg-manufacturing",
       children: [
-        { title: "Custom Orders", url: "/orders", icon: FileEdit },
-        { title: "Readymade Orders", url: "/orders/readymade", icon: Shirt }
+        { title: "Custom Orders", url: "/orders", icon: FileEdit }
+        // { title: "Readymade Orders", url: "/orders/readymade", icon: Shirt }
         // { title: "Stock Orders", url: "/stock-orders", icon: Shirt }
         
       ]
