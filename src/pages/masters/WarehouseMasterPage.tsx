@@ -3,7 +3,7 @@ import { WarehouseMaster } from "@/components/warehouse/WarehouseMaster";
 
 const WarehouseMasterPage = () => {
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <WarehouseMaster />
     </ErpLayout>
   );

@@ -25,7 +25,27 @@ import {
   Shirt,
   FileText,
   Image,
-  Warehouse
+  Warehouse,
+  UserPlus,
+  Contact,
+  DollarSign,
+  Receipt,
+  CreditCard,
+  Quote,
+  PackageCheck,
+  Boxes,
+  PackageSearch,
+  PackageX,
+  LayoutDashboard,
+  UserCheck,
+  UsersRound,
+  CheckSquare,
+  ClipboardCheck,
+  Hand,
+  Box,
+  FileEdit,
+  Wallet,
+  List
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -54,9 +74,9 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
     { title: "Dashboard", url: "/", icon: Home },
     {
       title: "CRM",
-      icon: Users,
+      icon: Contact,
       children: [
-        { title: "Create/View Customers", url: "/crm/customers", icon: Users },
+        { title: "Create/View Customers", url: "/crm/customers", icon: UserPlus },
       ]
     },
     {
@@ -66,20 +86,20 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       badge: currentPath === "/orders" ? "..." : pendingOrdersCount.toString(),
       badgeColor: "bg-manufacturing",
       children: [
-        { title: "Custom Orders", url: "/orders", icon: ShoppingCart },
-        { title: "Readymade Orders", url: "/orders/readymade", icon: ShoppingCart }
+        { title: "Custom Orders", url: "/orders", icon: FileEdit }
+        // { title: "Readymade Orders", url: "/orders/readymade", icon: Shirt }
         // { title: "Stock Orders", url: "/stock-orders", icon: Shirt }
         
       ]
     },
     {
       title: "Accounts",
-      icon: Calculator,
+      icon: DollarSign,
       children: [
-        { title: "View Quotation", url: "/accounts/quotations", icon: Calculator },
-        { title: "Create/View Invoices", url: "/accounts/invoices", icon: Calculator },
-        { title: "Receipts", url: "/accounts/receipts", icon: Calculator },
-        { title: "Payments", url: "/accounts/payments", icon: Calculator },
+        { title: "View Quotation", url: "/accounts/quotations", icon: Quote },
+        { title: "Create/View Invoices", url: "/accounts/invoices", icon: FileText },
+        { title: "Receipts", url: "/accounts/receipts", icon: Receipt },
+        { title: "Payments", url: "/accounts/payments", icon: CreditCard },
       ]
     },
     { title: "Design & Printing", url: "/design", icon: Palette },
@@ -87,36 +107,36 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       title: "Procurement",
       icon: ShoppingBag,
       children: [
-        { title: "Bills of Materials", url: "/bom", icon: ClipboardList },
-        { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingBag },
-        { title: "Goods Receipt Note", url: "/procurement/grn", icon: ClipboardList },
+        { title: "Bills of Materials", url: "/bom", icon: List },
+        { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingCart },
+        { title: "Goods Receipt Note", url: "/procurement/grn", icon: PackageCheck }
         // { title: "Return to Vendor", url: "/procurement/returns", icon: Truck },
-        { title: "Material Shortfall Alerts", url: "/procurement/alerts", icon: AlertTriangle }
+        // { title: "Material Shortfall Alerts", url: "/procurement/alerts", icon: AlertTriangle }
       ]
     },
     {
       title: "Inventory",
       icon: Package,
       children: [
-        { title: "Raw Material", url: "/warehouse/inventory", icon: Warehouse },
-        { title: "Product Inventory", url: "/inventory/products", icon: Package },
-        { title: "Inventory Adjustment", url: "/inventory/adjustment", icon: Package },
+        { title: "Raw Material", url: "/warehouse/inventory", icon: Boxes },
+        { title: "Product Inventory", url: "/inventory/products", icon: PackageSearch },
+        { title: "Inventory Adjustment", url: "/inventory/adjustment", icon: PackageX },
       ]
     },
     {
       title: "Production",
       icon: Factory,
       children: [
-        { title: "Production Dashboard", url: "/production", icon: Factory },
-        { title: "Assign Orders", url: "/production/assign-orders", icon: Users },
+        { title: "Production Dashboard", url: "/production", icon: LayoutDashboard },
+        { title: "Assign Orders", url: "/production/assign-orders", icon: UserCheck },
         { title: "Cutting Manager", url: "/production/cutting-manager", icon: Scissors },
-        { title: "Tailor Management", url: "/production/tailor-management", icon: Users }
+        { title: "Tailor Management", url: "/production/tailor-management", icon: UsersRound }
       ]
     },
     { title: "Quality Check", url: "/quality", icon: CheckCircle,
       children: [
-        { title: "Picker", url: "/production/picker", icon: Package },
-        { title: "QC", url: "/quality/checks", icon: CheckCircle },
+        { title: "Picker", url: "/production/picker", icon: Hand },
+        { title: "QC", url: "/quality/checks", icon: CheckSquare },
         { title: "Dispatch", url: "/quality/dispatch", icon: Truck }
       ]
      },
@@ -124,8 +144,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       title: "People",
       icon: Users,
       children: [
-        { title: "Dashboard", url: "/people", icon: BarChart3 },
-        { title: "Our People", url: "/people/employees", icon: Users },
+        { title: "Dashboard", url: "/people", icon: LayoutDashboard },
+        { title: "Our People", url: "/people/employees", icon: UsersRound },
         // { title: "Production Team", url: "/people/production-team", icon: Scissors },
         // { title: "Employee Recognition Programme", url: "/people/recognition", icon: Award },
         // { title: "Incentive Programme", url: "/people/incentives", icon: Award },
@@ -136,18 +156,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
     {
       title: "Masters",
       icon: Package,
-      children: [
-        { title: "Masters Dashboard", url: "/masters", icon: Package },
-        { title: "Product Master", url: "/masters/products", icon: Package },
-        { title: "Item Master", url: "/masters/items", icon: Package },
-        { title: "Product Categories", url: "/inventory/product-categories", icon: Package },
-        { title: "Fabric Master", url: "/inventory/fabrics", icon: Palette },
-        { title: "Size Master", url: "/inventory/size-types", icon: ClipboardList },
-        { title: "Warehouse Master", url: "/masters/warehouses", icon: Building },
-        { title: "Customer Type Master", url: "/masters/customer-types", icon: Users },
-        { title: "Supplier Master", url: "/masters/suppliers", icon: Truck },
-        { title: "Image Master", url: "/masters/images", icon: Image }
-      ]
+      url: "/masters"
     },
     {
       title: "User & Roles",
@@ -155,8 +164,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       adminOnly: true,
       children: [
        // { title: "Users", url: "/admin/users", icon: UserCog },
-        { title: "Employee Access", url: "/admin/employee-access", icon: Users },
-        { title: "Customer Access", url: "/admin/customer-access", icon: Users }
+        { title: "Employee Access", url: "/admin/employee-access", icon: UserCheck },
+        { title: "Customer Access", url: "/admin/customer-access", icon: UsersRound }
       ]
     },
     { title: "Reports", url: "/reports", icon: FileText },
@@ -170,14 +179,42 @@ interface SidebarItemComponentProps {
   collapsed: boolean;
   level?: number;
   onMobileClick?: () => void;
+  openMenuTitle?: string | null;
+  onMenuToggle?: (title: string | null) => void;
 }
 
-function SidebarItemComponent({ item, collapsed, level = 0, onMobileClick }: SidebarItemComponentProps) {
+function SidebarItemComponent({ item, collapsed, level = 0, onMobileClick, openMenuTitle, onMenuToggle }: SidebarItemComponentProps) {
   const location = useLocation();
   const currentPath = location.pathname;
   const hasChildrenInit = item.children && item.children.length > 0;
   const hasActiveChildInit = hasChildrenInit && item.children?.some(child => currentPath === child.url);
-  const [isOpen, setIsOpen] = useState(hasActiveChildInit);
+  
+  // For top-level menus (level 0), use controlled state from parent for accordion behavior
+  // For nested menus (level > 0), use local state
+  const isTopLevelMenu = level === 0 && hasChildrenInit;
+  const [localIsOpen, setLocalIsOpen] = useState(hasActiveChildInit);
+  
+  const isOpen = isTopLevelMenu 
+    ? (openMenuTitle === item.title)
+    : localIsOpen;
+  
+  const handleToggle = (open: boolean) => {
+    if (isTopLevelMenu && onMenuToggle) {
+      // If opening, set this menu as open (closes others)
+      // If closing, set to null
+      onMenuToggle(open ? item.title : null);
+    } else {
+      // For nested menus, use local state
+      setLocalIsOpen(open);
+    }
+  };
+  
+  // Update local state when route changes for nested menus
+  useEffect(() => {
+    if (!isTopLevelMenu && hasChildrenInit) {
+      setLocalIsOpen(hasActiveChildInit);
+    }
+  }, [currentPath, isTopLevelMenu, hasChildrenInit, hasActiveChildInit]);
 
   const hasChildren = item.children && item.children.length > 0;
   const isActive = item.url ? currentPath === item.url : false;
@@ -209,7 +246,7 @@ function SidebarItemComponent({ item, collapsed, level = 0, onMobileClick }: Sid
     
     const isMobile = typeof window !== 'undefined' && window.innerWidth < 1024;
     return (
-      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+      <Collapsible open={isOpen} onOpenChange={handleToggle}>
         {isMobile ? (
           <div
             className={cn(
@@ -285,6 +322,8 @@ function SidebarItemComponent({ item, collapsed, level = 0, onMobileClick }: Sid
               collapsed={collapsed} 
               level={level + 1} 
               onMobileClick={onMobileClick}
+              openMenuTitle={openMenuTitle}
+              onMenuToggle={onMenuToggle}
             />
           ))}
         </CollapsibleContent>
@@ -340,6 +379,9 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   const location = useLocation();
   const { config } = useCompanySettings();
   const { items: dynamicSidebarItems, loading: permissionsLoading, permissionsSetup } = useSidebarPermissions();
+  
+  // State to track which top-level menu is open (accordion behavior)
+  const [openMenuTitle, setOpenMenuTitle] = useState<string | null>(null);
   const [portalSettings, setPortalSettings] = useState<null | {
     can_view_orders: boolean;
     can_view_invoices: boolean;
@@ -427,7 +469,10 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   const iconMap: { [key: string]: any } = {
     Home, Users, ShoppingCart, Package, Factory, CheckCircle, Truck, BarChart3, 
     Settings, UserCog, Calculator, Palette, Building, ShoppingBag, ClipboardList, 
-    Award, AlertTriangle, Scissors, Shirt
+    Award, AlertTriangle, Scissors, Shirt, Contact, UserPlus, DollarSign, Receipt,
+    CreditCard, Quote, FileText, PackageCheck, Boxes, PackageSearch, PackageX,
+    LayoutDashboard, UserCheck, UsersRound, CheckSquare, ClipboardCheck, Hand,
+    Box, FileEdit, Wallet, List
   };
 
   // Convert dynamic sidebar items to the old format
@@ -498,6 +543,30 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
       .map(mapItem)
       .filter((x): x is SidebarItem => x !== null);
   }
+
+  // Initialize and update open menu based on current route
+  useEffect(() => {
+    const findMenuWithActiveChild = (items: SidebarItem[]): string | null => {
+      for (const item of items) {
+        if (item.children && item.children.length > 0) {
+          const hasActiveChild = item.children.some(child => 
+            child.url && location.pathname === child.url
+          );
+          if (hasActiveChild) {
+            return item.title;
+          }
+        }
+      }
+      return null;
+    };
+
+    const menuWithActiveChild = findMenuWithActiveChild(filteredItems);
+    
+    if (menuWithActiveChild !== openMenuTitle) {
+      setOpenMenuTitle(menuWithActiveChild);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
 
   const handleCollapsedChange = (newCollapsed: boolean) => {
     setCollapsed(newCollapsed);
@@ -607,6 +676,8 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
                 item={item} 
                 collapsed={collapsed}
                 onMobileClick={onMobileClose}
+                openMenuTitle={openMenuTitle}
+                onMenuToggle={setOpenMenuTitle}
               />
             ))
           )}

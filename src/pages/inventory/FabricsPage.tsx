@@ -3,7 +3,7 @@ import Fabrics from "./Fabrics";
 
 const FabricsPage = () => {
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <Fabrics />
     </ErpLayout>
   );

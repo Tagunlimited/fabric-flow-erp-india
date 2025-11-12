@@ -146,8 +146,8 @@ const CustomerDetailPage = () => {
 
   if (showEditForm) {
     return (
-      <ErpLayout>
-        <div className="space-y-6">
+      <ErpLayout fullPage>
+        <div className="space-y-6 p-6">
           <div className="flex items-center space-x-4">
             <Button variant="outline" onClick={() => setShowEditForm(false)}>
               <ArrowLeft className="w-4 h-4 mr-2" />

@@ -1376,7 +1376,7 @@ export function ProductMasterNew() {
               resetForm(false);
               setShowDialog(true);
             }}
-            className="bg-green-600 hover:bg-green-700 text-white"
+            className="bg-primary hover:bg-primary/90 text-primary-foreground"
           >
             <Plus className="w-4 h-4 mr-2" />
             Add Single Product
@@ -1385,7 +1385,7 @@ export function ProductMasterNew() {
       </div>
 
       {/* Dashboard Button */}
-      <Button className="w-full bg-green-600 hover:bg-green-700 text-white flex items-center gap-2">
+      <Button className="w-full bg-primary hover:bg-primary/90 text-primary-foreground flex items-center gap-2">
         <Grid3X3 className="w-4 h-4" />
         View Inventory Dashboard
       </Button>

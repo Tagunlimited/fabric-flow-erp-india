@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { CheckCircle, XCircle, Clock, Users, UserCheck, UserX, Plus, Edit, Trash2, Key, Mail, Phone, MapPin, Calendar, Briefcase, Settings, Eye, EyeOff, Lock, Unlock, ChevronDown, ChevronRight } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -48,6 +49,7 @@ interface UserProfile {
   department: string;
   status: string;
   created_at: string;
+  avatar_url?: string;
 }
 
 interface SidebarItem {
@@ -555,6 +557,38 @@ export function EmployeeAccessManagement() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const getAvatarUrl = (employee: Employee) => {
+    // First check if employee has avatar_url directly
+    if (employee.avatar_url) {
+      return employee.avatar_url;
+    }
+    
+    // Check if there's a profile with avatar_url for this employee
+    const profile = userProfiles.find(p => {
+      // Try to match by employee_id if profiles have it, or by name/email
+      return p.full_name === employee.full_name || 
+             (employee.personal_email && p.email === employee.personal_email);
+    });
+    
+    if (profile?.avatar_url) {
+      return profile.avatar_url;
+    }
+    
+    // Fallback to placeholder images
+    const avatars = [
+      'photo-1581092795360-fd1ca04f0952',
+      'photo-1485827404703-89b55fcc595e', 
+      'photo-1581091226825-a6a2a5aee158',
+      'photo-1501286353178-1ec881214838'
+    ];
+    const index = employee.full_name.charCodeAt(0) % avatars.length;
+    return `https://images.unsplash.com/${avatars[index]}?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=200&h=200&q=80`;
+  };
+
+  const getInitials = (name: string) => {
+    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
 
   const setupDefaultEmployeePermissions = async (userId: string) => {
@@ -1413,11 +1447,12 @@ export function EmployeeAccessManagement() {
                     <TableRow key={employee.id}>
                       <TableCell>
                         <div className="flex items-center space-x-3">
-                          <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
-                            <span className="text-sm font-medium text-primary">
-                              {employee.full_name.split(' ').map(n => n[0]).join('').toUpperCase()}
-                            </span>
-                          </div>
+                          <Avatar className="w-10 h-10">
+                            <AvatarImage src={getAvatarUrl(employee)} alt={employee.full_name} />
+                            <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
+                              {getInitials(employee.full_name)}
+                            </AvatarFallback>
+                          </Avatar>
                           <div>
                             <div className="font-medium">{employee.full_name}</div>
                             <div className="text-sm text-muted-foreground">{employee.employee_code}</div>

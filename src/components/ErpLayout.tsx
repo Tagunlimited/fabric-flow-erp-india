@@ -19,9 +19,10 @@ import { cn } from "@/lib/utils";
 
 interface ErpLayoutProps {
   children: React.ReactNode;
+  fullPage?: boolean;
 }
 
-export function ErpLayout({ children }: ErpLayoutProps) {
+export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
   const { user, profile, signOut, refreshProfile } = useAuth();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
@@ -277,8 +278,11 @@ export function ErpLayout({ children }: ErpLayoutProps) {
             </div>
           </div>
         </header>
-        {/* Main Content with proper spacing */}
-        <main className="flex-1 px-2 sm:px-6 py-4 sm:py-6 w-full overflow-x-auto overflow-y-auto">
+        {/* Main Content with proper spacing - no padding in fullPage mode to use full space */}
+        <main className={cn(
+          "flex-1 w-full overflow-x-auto overflow-y-auto",
+          fullPage ? "p-0" : "px-2 sm:px-6 py-4 sm:py-6"
+        )}>
           {children}
         </main>
       </div>

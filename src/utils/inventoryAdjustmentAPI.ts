@@ -10,14 +10,30 @@ export interface AdjustmentReason {
   updated_at: string;
 }
 
+export interface BinSizeInfo {
+  item_id: string;
+  sku?: string;
+  size?: string;
+  quantity: number;
+}
+
 export interface BinInfo {
   bin_id: string;
   bin_code: string;
   warehouse_name?: string;
+  warehouse_code?: string;
   floor_number?: number;
+  floor_code?: string | null;
   rack_code?: string;
   location_type?: string;
   current_quantity: number;
+  size_details?: BinSizeInfo[];
+  path_label?: string;
+}
+
+export interface GetBinsForProductOptions {
+  includeSizeBreakdown?: boolean;
+  sizeVariantIds?: string[];
 }
 
 export interface BinAdjustment {
@@ -167,8 +183,14 @@ export async function getProductStock(productId: string): Promise<number> {
 /**
  * Get all bins (even without inventory) and check inventory for a specific product
  */
-export async function getBinsForProduct(productId: string, itemCode?: string): Promise<BinInfo[]> {
+export async function getBinsForProduct(
+  productId: string,
+  itemCode?: string,
+  options: GetBinsForProductOptions = {}
+): Promise<BinInfo[]> {
   try {
+    const { includeSizeBreakdown = false, sizeVariantIds } = options;
+
     // First, get ALL active bins with their warehouse, floor, and rack relationships
     const { data: allBins, error: binsError } = await supabase
       .from('bins')
@@ -205,25 +227,86 @@ export async function getBinsForProduct(productId: string, itemCode?: string): P
     }
 
     // Now, get inventory quantities for this product from warehouse_inventory
-    const { data: inventoryData, error: inventoryError } = await supabase
+    let inventoryQuery = supabase
       .from('warehouse_inventory')
-      .select('bin_id, quantity')
-      .eq('item_type', 'PRODUCT')
-      .eq('item_id', productId);
+      .select('bin_id, quantity, item_id, item_code')
+      .eq('item_type', 'PRODUCT');
+
+    if (sizeVariantIds && sizeVariantIds.length > 0) {
+      inventoryQuery = inventoryQuery.in('item_id', sizeVariantIds);
+    } else {
+      inventoryQuery = inventoryQuery.eq('item_id', productId);
+    }
+
+    if (itemCode) {
+      inventoryQuery = inventoryQuery.eq('item_code', itemCode);
+    }
+
+    const { data: inventoryData, error: inventoryError } = await inventoryQuery;
 
     if (inventoryError) {
       console.error('Error fetching inventory:', inventoryError);
       // Continue anyway - we'll just show 0 for all bins
     }
 
+    const sizeDetailsMap = new Map<string, BinSizeInfo[]>();
+
     // Create a map of bin_id to total quantity
     const inventoryMap = new Map<string, number>();
+    const inventoryItemIds = new Set<string>();
     if (inventoryData && inventoryData.length > 0) {
       inventoryData.forEach((item: any) => {
         const binId = item.bin_id;
-        const quantity = parseFloat(item.quantity || '0');
+        const quantity = Number(item.quantity) || 0;
         const currentQty = inventoryMap.get(binId) || 0;
         inventoryMap.set(binId, currentQty + quantity);
+        if (includeSizeBreakdown) {
+          if (item.item_id) {
+            inventoryItemIds.add(item.item_id);
+          }
+        }
+      });
+    }
+
+    let productMetaMap = new Map<string, { size?: string | null; sku?: string | null; class?: string | null }>();
+    if (includeSizeBreakdown && inventoryItemIds.size > 0) {
+      const { data: productVariants, error: variantsError } = await supabase
+        .from('product_master')
+        .select('id, sku, size, class')
+        .in('id', Array.from(inventoryItemIds));
+
+      if (variantsError) {
+        console.error('Error fetching product metadata for bins:', variantsError);
+      } else if (productVariants) {
+        productVariants.forEach((variant: any) => {
+          if (variant?.id) {
+            productMetaMap.set(variant.id, {
+              size: variant.size,
+              sku: variant.sku,
+              class: variant.class,
+            });
+          }
+        });
+      }
+    }
+
+    if (includeSizeBreakdown && inventoryData && inventoryData.length > 0) {
+      inventoryData.forEach((item: any) => {
+        if (!item?.bin_id) return;
+        const quantity = Number(item.quantity) || 0;
+        if (quantity <= 0) return;
+
+        const meta = productMetaMap.get(item.item_id);
+        const detail: BinSizeInfo = {
+          item_id: item.item_id,
+          sku: item.item_code || meta?.sku || undefined,
+          size: meta?.size || undefined,
+          quantity,
+        };
+
+        const existing = sizeDetailsMap.get(item.bin_id) || [];
+        existing.push(detail);
+        sizeDetailsMap.set(item.bin_id, existing);
       });
     }
 
@@ -245,15 +328,42 @@ export async function getBinsForProduct(productId: string, itemCode?: string): P
 
         // Get quantity for this bin (0 if no inventory)
         const currentQuantity = inventoryMap.get(bin.id) || 0;
+        const pathSegments: string[] = [];
+
+        const warehouseCode = warehouse?.code;
+        const warehouseName = warehouse?.name;
+        if (warehouseCode) {
+          pathSegments.push(`WH ${warehouseCode}`);
+        } else if (warehouseName) {
+          pathSegments.push(warehouseName);
+        }
+
+        if (floor?.floor_code) {
+          pathSegments.push(`Floor ${floor.floor_code}`);
+        } else if (typeof floor?.floor_number !== 'undefined' && floor.floor_number !== null) {
+          pathSegments.push(`Floor ${floor.floor_number}`);
+        }
+
+        if (rack?.rack_code) {
+          pathSegments.push(`Rack ${rack.rack_code}`);
+        }
+
+        if (bin.bin_code) {
+          pathSegments.push(`Bin ${bin.bin_code}`);
+        }
 
         return {
           bin_id: bin.id,
           bin_code: bin.bin_code || 'Unknown',
+          warehouse_code: warehouse?.code,
           warehouse_name: warehouse?.name,
           floor_number: floor?.floor_number,
+          floor_code: floor?.floor_code ?? null,
           rack_code: rack?.rack_code,
           location_type: bin.location_type,
-          current_quantity: currentQuantity
+          current_quantity: currentQuantity,
+          size_details: includeSizeBreakdown ? (sizeDetailsMap.get(bin.id) || []) : undefined,
+          path_label: pathSegments.join(' > ')
         };
       });
 

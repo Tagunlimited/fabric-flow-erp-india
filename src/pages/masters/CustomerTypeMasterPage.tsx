@@ -3,7 +3,7 @@ import { CustomerTypeMaster } from "@/components/masters/CustomerTypeMaster";
 
 const CustomerTypeMasterPage = () => {
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <CustomerTypeMaster />
     </ErpLayout>
   );

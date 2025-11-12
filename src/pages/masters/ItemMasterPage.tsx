@@ -3,7 +3,7 @@ import { ItemMaster } from "@/components/masters/ItemMaster";
 
 const ItemMasterPage = () => {
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <ItemMaster />
     </ErpLayout>
   );

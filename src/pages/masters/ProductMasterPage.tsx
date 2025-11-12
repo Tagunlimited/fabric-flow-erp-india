@@ -3,7 +3,7 @@ import { ProductMasterNew } from "@/components/masters/ProductMasterNew";
 
 const ProductMasterPage = () => {
   return (
-    <ErpLayout>
+    <ErpLayout fullPage>
       <ProductMasterNew />
     </ErpLayout>
   );

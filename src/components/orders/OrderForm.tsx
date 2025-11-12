@@ -25,28 +25,30 @@ import { usePageState } from '@/contexts/AppCacheContext';
 interface Customer {
   id: string;
   company_name: string;
-  contact_person: string;
-  email: string;
-  phone: string;
-  address: string;
-  city: string;
-  state: string;
-  pincode: string;
-  gstin: string;
-  pan: string;
+  contact_person?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  gstin?: string;
+  pan?: string;
 }
 
 interface ProductCategory {
   id: string;
   category_name: string;
-  category_image_url: string;
-  fabrics: string[];
+  category_image_url?: string;
+  fabrics?: string[];
 }
 
 interface SizeType {
   id: string;
   size_name: string;
   available_sizes: string[];
+  created_at?: string;
+  updated_at?: string;
 }
 
 interface FabricMaster {
@@ -73,9 +75,9 @@ interface FabricMaster {
 
 interface Employee {
   id: string;
-  employee_code: string;
+  employee_code?: string;
   full_name: string;
-  department: string;
+  department?: string;
   avatar_url?: string;
 }
 
@@ -509,22 +511,22 @@ const getSelectedFabricVariant = (productIndex: number) => {
         supabase.from('branding_types').select('*').order('name')
       ]);
 
-      if (customersRes.data) setCustomers(customersRes.data);
-      if (categoriesRes.data) setProductCategories(categoriesRes.data);
-      if (sizeTypesRes.data) setSizeTypes(sizeTypesRes.data);
+      if (customersRes.data) setCustomers(customersRes.data as any);
+      if (categoriesRes.data) setProductCategories(categoriesRes.data as any);
+      if (sizeTypesRes.data) setSizeTypes(sizeTypesRes.data as any);
       if (fabricsRes.data) setFabrics(fabricsRes.data as any);
       if (employeesRes.data) {
         console.log('Employees fetched:', employeesRes.data);
         // Filter employees to only show those from Sales Department
-        const salesEmployees = employeesRes.data.filter(emp => 
+        const salesEmployees = (employeesRes.data as any[]).filter((emp: any) => 
           emp.department && emp.department.toLowerCase().includes('sales')
         );
         console.log('Sales employees filtered:', salesEmployees);
-        setEmployees(salesEmployees);
+        setEmployees(salesEmployees as any);
       } else {
         console.log('No employees found or error:', employeesRes.error);
       }
-      if (brandingTypesRes.data) setBrandingTypes(brandingTypesRes.data);
+      if (brandingTypesRes.data) setBrandingTypes(brandingTypesRes.data as any);
     } catch (error) {
       console.error('Error fetching data:', error);
       toast.error('Failed to fetch form data');
@@ -543,12 +545,14 @@ const getSelectedFabricVariant = (productIndex: number) => {
       if (error) throw error;
 
       let nextSequence = 1;
-      if (data && data.length > 0) {
-        const lastOrderNumber = data[0].order_number;
-        // Extract sequence number from formats like "TUC/25-26/JUL/342" or "ORD001"
-        const match = lastOrderNumber.match(/(\d+)$/);
-        if (match) {
-          nextSequence = parseInt(match[1]) + 1;
+      if (data && data.length > 0 && data[0]) {
+        const lastOrderNumber = (data[0] as any).order_number;
+        if (lastOrderNumber) {
+          // Extract sequence number from formats like "TUC/25-26/JUL/342" or "ORD001"
+          const match = lastOrderNumber.match(/(\d+)$/);
+          if (match) {
+            nextSequence = parseInt(match[1]) + 1;
+          }
         }
       }
 
@@ -573,7 +577,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
   const handleCustomerSelect = (customerId: string) => {
     const customer = customers.find(c => c.id === customerId);
-    setSelectedCustomer(customer || null);
+    setSelectedCustomer(customer as any || null);
     setFormData(prev => ({ ...prev, customer_id: customerId }));
   };
 
@@ -996,7 +1000,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
       // First, let's test if we can create a simple order without items
       const { data: orderResult, error: orderError } = await supabase
         .from('orders')
-        .insert(orderData)
+        .insert(orderData as any)
         .select()
         .single();
 
@@ -1042,10 +1046,10 @@ const getSelectedFabricVariant = (productIndex: number) => {
         const itemTotal = totalQuantity * product.price;
         
         // Upload images for this product
-        const uploadedImages = await uploadOrderImages(orderResult.id, productIndex, product);
+        const uploadedImages = await uploadOrderImages((orderResult as any).id, productIndex, product);
         
         const orderItemData = {
-          order_id: orderResult.id,
+          order_id: (orderResult as any).id,
           // product_id: null, // Removed since it might be causing issues
           quantity: totalQuantity,
           unit_price: Number(product.price),
@@ -1074,7 +1078,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
         
         const { error: itemError } = await supabase
           .from('order_items')
-          .insert(orderItemData);
+          .insert(orderItemData as any);
 
         if (itemError) {
           console.error('Order item insertion error:', itemError);
@@ -1196,7 +1200,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                     <CustomerSearchSelect
                       value={formData.customer_id}
                       onValueChange={handleCustomerSelect}
-                      onCustomerSelect={(customer) => setSelectedCustomer(customer)}
+                      onCustomerSelect={(customer) => setSelectedCustomer(customer as any)}
                       placeholder="Search by name, phone, contact person..."
                       cacheKey="customerSearchSelect-customOrder"
                     />
@@ -2283,7 +2287,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
       {/* Size Type Selector Popup */}
       <SizeTypeSelector
-        sizeTypes={sizeTypes}
+        sizeTypes={sizeTypes as any}
         selectedSizeTypeId={formData.products[currentProductIndex]?.size_type_id || ''}
         onSelect={(sizeTypeId) => handleSizeTypeSelect(currentProductIndex, sizeTypeId)}
         open={sizeTypeSelectorOpen}

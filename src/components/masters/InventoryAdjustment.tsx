@@ -1330,7 +1330,7 @@ export function InventoryAdjustment() {
               <Button
                 onClick={handleSave}
                 disabled={saving || items.length === 0}
-                className="bg-green-600 hover:bg-green-700"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground"
                 size="lg"
               >
                 <Save className="w-4 h-4 mr-2" />
