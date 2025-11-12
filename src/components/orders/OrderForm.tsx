@@ -535,43 +535,47 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
   const generateOrderNumber = async () => {
     try {
-      // Get the latest order number to determine the next sequence
+      const now = new Date();
+      const year = now.getFullYear().toString().slice(-2);
+      const nextYear = (now.getFullYear() + 1).toString().slice(-2);
+      const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+      const pattern = `TUC/${year}-${nextYear}/${month}/`;
+      
+      // Get all order numbers with the current month/year pattern
       const { data, error } = await supabase
         .from('orders')
         .select('order_number')
-        .order('created_at', { ascending: false })
-        .limit(1);
+        .like('order_number', `${pattern}%`)
+        .order('order_number', { ascending: false });
 
       if (error) throw error;
 
       let nextSequence = 1;
-      if (data && data.length > 0 && data[0]) {
-        const lastOrderNumber = (data[0] as any).order_number;
-        if (lastOrderNumber) {
-          // Extract sequence number from formats like "TUC/25-26/JUL/342" or "ORD001"
-          const match = lastOrderNumber.match(/(\d+)$/);
-          if (match) {
-            nextSequence = parseInt(match[1]) + 1;
-          }
+      if (data && data.length > 0) {
+        // Find the maximum sequence number for this month
+        const sequences = data
+          .map(order => {
+            const match = (order as any).order_number.match(/(\d+)$/);
+            return match ? parseInt(match[1]) : 0;
+          })
+          .filter(seq => !isNaN(seq));
+        
+        if (sequences.length > 0) {
+          nextSequence = Math.max(...sequences) + 1;
         }
       }
 
-      const now = new Date();
-      const year = now.getFullYear().toString().slice(-2);
-      const nextYear = (now.getFullYear() + 1).toString().slice(-2);
-      const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
       const sequence = nextSequence.toString().padStart(3, '0');
-      
-      return `TUC/${year}-${nextYear}/${month}/${sequence}`;
+      return `${pattern}${sequence}`;
     } catch (error) {
       console.error('Error generating order number:', error);
-      // Fallback to random if sequence generation fails
+      // Fallback to timestamp-based unique number if sequence generation fails
       const now = new Date();
       const year = now.getFullYear().toString().slice(-2);
       const nextYear = (now.getFullYear() + 1).toString().slice(-2);
       const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-      const sequence = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-      return `TUC/${year}-${nextYear}/${month}/${sequence}`;
+      const timestamp = Date.now().toString().slice(-6); // Last 6 digits of timestamp
+      return `TUC/${year}-${nextYear}/${month}/${timestamp}`;
     }
   };
 
@@ -953,7 +957,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
     setLoading(true);
 
     try {
-      const orderNumber = await generateOrderNumber();
       const { subtotal, gstAmount, additionalChargesTotal, grandTotal, balance } = calculateTotals();
 
       // Validate required fields
@@ -977,40 +980,63 @@ const getSelectedFabricVariant = (productIndex: number) => {
         return;
       }
 
-      const orderData = {
-        order_number: orderNumber,
-        order_date: (formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)).toISOString(),
-        expected_delivery_date: (formData.expected_delivery_date instanceof Date ? formData.expected_delivery_date : new Date(formData.expected_delivery_date)).toISOString(),
-        customer_id: formData.customer_id,
-        sales_manager: formData.sales_manager,
-        total_amount: Number(subtotal),
-        tax_amount: Number(gstAmount),
-        final_amount: Number(grandTotal),
-        advance_amount: Number(formData.advance_amount),
-        balance_amount: Number(balance),
-        gst_rate: Number(formData.gst_rate),
-        payment_channel: formData.payment_channel || null,
-        reference_id: formData.reference_id || null,
-        status: 'pending' as const,
-        notes: ''
-      };
-
-      console.log('Inserting order data:', orderData);
+      // Retry mechanism for order number generation and insertion
+      let orderResult: any = null;
+      let maxRetries = 3;
       
-      // First, let's test if we can create a simple order without items
-      const { data: orderResult, error: orderError } = await supabase
-        .from('orders')
-        .insert(orderData as any)
-        .select()
-        .single();
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const orderNumber = await generateOrderNumber();
+          
+          const orderData = {
+            order_number: orderNumber,
+            order_date: (formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)).toISOString(),
+            expected_delivery_date: (formData.expected_delivery_date instanceof Date ? formData.expected_delivery_date : new Date(formData.expected_delivery_date)).toISOString(),
+            customer_id: formData.customer_id,
+            sales_manager: formData.sales_manager,
+            total_amount: Number(subtotal),
+            tax_amount: Number(gstAmount),
+            final_amount: Number(grandTotal),
+            advance_amount: Number(formData.advance_amount),
+            balance_amount: Number(balance),
+            gst_rate: Number(formData.gst_rate),
+            payment_channel: formData.payment_channel || null,
+            reference_id: formData.reference_id || null,
+            status: 'pending' as const,
+            notes: ''
+          };
 
-      if (orderError) {
-        console.error('Order creation error:', orderError);
-        console.error('Order data that failed:', JSON.stringify(orderData, null, 2));
-        throw orderError;
+          console.log(`Attempt ${attempt + 1}: Inserting order data:`, orderData);
+          
+          const { data, error: orderError } = await supabase
+            .from('orders')
+            .insert(orderData as any)
+            .select()
+            .single();
+
+          if (orderError) {
+            // If it's a duplicate key error, retry with a new order number
+            if (orderError.code === '23505' && attempt < maxRetries - 1) {
+              console.warn(`Duplicate order number detected on attempt ${attempt + 1}, retrying...`);
+              await new Promise(resolve => setTimeout(resolve, 100)); // Small delay before retry
+              continue;
+            }
+            throw orderError;
+          }
+
+          orderResult = data;
+          console.log('Order created successfully:', orderResult);
+          break; // Success, exit the retry loop
+        } catch (retryError: any) {
+          if (attempt === maxRetries - 1) {
+            throw retryError; // Last attempt failed, throw the error
+          }
+        }
       }
 
-      console.log('Order created successfully:', orderResult);
+      if (!orderResult) {
+        throw new Error('Failed to create order after multiple attempts');
+      }
 
       // Insert order items with uploaded images
       for (let productIndex = 0; productIndex < formData.products.length; productIndex++) {
