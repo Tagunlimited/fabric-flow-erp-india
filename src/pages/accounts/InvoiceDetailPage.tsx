@@ -89,6 +89,8 @@ export default function InvoiceDetailPage() {
   const [salesManager, setSalesManager] = useState<SalesManager | null>(null);
   const [dispatchItems, setDispatchItems] = useState<Array<{size_name: string; quantity: number}>>([]);
   const [isInvoiceId, setIsInvoiceId] = useState(false);
+  const [receipts, setReceipts] = useState<any[]>([]);
+  const [totalPaid, setTotalPaid] = useState(0);
 
   useEffect(() => {
     if (id) fetchData(id);
@@ -216,6 +218,19 @@ export default function InvoiceDetailPage() {
         setDispatchItems(itemsList);
       }
 
+      // Fetch receipts/payments for this order
+      const { data: receiptsData } = await supabase
+        .from('receipts')
+        .select('*')
+        .or(`reference_id.eq.${orderId},reference_number.eq.${orderData.order_number}`)
+        .order('entry_date', { ascending: false });
+      
+      if (receiptsData) {
+        setReceipts(receiptsData);
+        const paid = receiptsData.reduce((sum, receipt) => sum + Number(receipt.amount || 0), 0);
+        setTotalPaid(paid);
+      }
+
     } catch (error) {
       console.error('Error fetching data:', error);
       toast.error('Failed to fetch order data');
@@ -228,29 +243,68 @@ export default function InvoiceDetailPage() {
     if (!printRef.current) return;
 
     try {
-      const canvas = await html2canvas(printRef.current);
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF();
-      const imgWidth = 210;
-      const pageHeight = 295;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      // Show loading toast
+      toast.loading('Generating PDF...');
+      
+      // Small delay to ensure UI updates
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // Optimize html2canvas settings to match print output exactly
+      const canvas = await html2canvas(printRef.current, {
+        scale: 2, // Lower scale for smaller file and faster generation
+        useCORS: true,
+        logging: false,
+        imageTimeout: 0,
+        backgroundColor: '#ffffff',
+        width: 794, // A4 width in pixels at 96 DPI (210mm)
+        windowWidth: 794,
+        removeContainer: true, // Clean up faster
+        async: true, // Async rendering for better performance
+      });
+      
+      // Use JPEG with compression for smaller file size
+      const imgData = canvas.toDataURL('image/jpeg', 0.8); // 80% quality
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      
+      // A4 dimensions in mm - MATCH PRINT MARGINS EXACTLY
+      const pdfWidth = 210;
+      const pdfHeight = 297;
+      const marginLeft = 15; // Same as @page margin
+      const marginRight = 15; // Same as @page margin
+      const marginTop = 10; // Same as @page margin
+      const marginBottom = 10; // Same as @page margin
+      
+      // Calculate content area (excluding margins)
+      const contentWidth = pdfWidth - marginLeft - marginRight; // 180mm
+      const contentHeight = pdfHeight - marginTop - marginBottom; // 277mm
+      
+      // Calculate image dimensions to fit content area
+      const imgWidth = contentWidth;
+      const imgHeight = (canvas.height * contentWidth) / canvas.width;
+      
       let heightLeft = imgHeight;
+      let yPosition = marginTop;
 
-      let position = 0;
+      // Add first page with proper margins (matching print)
+      pdf.addImage(imgData, 'JPEG', marginLeft, yPosition, imgWidth, Math.min(imgHeight, contentHeight));
+      heightLeft -= contentHeight;
 
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-
-      while (heightLeft >= 0) {
-        position = heightLeft - imgHeight;
+      // Add additional pages if content is longer
+      while (heightLeft > 0) {
         pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
+        yPosition = marginTop - (imgHeight - heightLeft);
+        pdf.addImage(imgData, 'JPEG', marginLeft, yPosition, imgWidth, imgHeight);
+        heightLeft -= contentHeight;
       }
 
       pdf.save(`invoice-${invoiceNumber}.pdf`);
+      
+      // Dismiss loading and show success
+      toast.dismiss();
+      toast.success('PDF generated successfully!');
     } catch (error) {
       console.error('Error generating PDF:', error);
+      toast.dismiss();
       toast.error('Failed to generate PDF');
     }
   };
@@ -349,219 +403,277 @@ export default function InvoiceDetailPage() {
   return (
     <ErpLayout>
       <div className="space-y-6">
-        {/* Back Button */}
-        <div className="flex items-center">
+        {/* Back Button and Actions - Hidden when printing */}
+        <div className="print:hidden flex items-center justify-between">
           <Button variant="outline" onClick={() => navigate('/accounts/invoices')}>
             <ArrowLeft className="w-4 h-4 mr-2" /> Back to Invoices
           </Button>
+          
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => window.print()}>
+              <Printer className="w-4 h-4 mr-1" /> Print
+            </Button>
+            
+            <Button variant="outline" onClick={handlePrint}>
+              <Download className="w-4 h-4 mr-1" /> Export PDF
+            </Button>
+            
+            <Button
+              variant="outline"
+              onClick={() => navigate('/accounts/invoices')}
+            >
+              <Eye className="w-4 h-4 mr-1" /> View All Invoices
+            </Button>
+            
+            {!isInvoiceId && (
+              <Button onClick={handleCreateInvoice} className="bg-blue-600 hover:bg-blue-700">
+                <FileText className="w-4 h-4 mr-1" /> Create Invoice
+              </Button>
+            )}
+          </div>
         </div>
 
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Invoice for Order #{order.order_number}</CardTitle>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => window.print()}>
-                  <Printer className="w-4 h-4 mr-1" /> Print
-                </Button>
-                
-                <Button variant="outline" onClick={handlePrint}>
-                  <Download className="w-4 h-4 mr-1" /> Export PDF
-                </Button>
-                
-                <Button
-                  variant="outline"
-                  onClick={() => navigate('/accounts/invoices')}
-                >
-                  <Eye className="w-4 h-4 mr-1" /> View All Invoices
-                </Button>
-                
-                {!isInvoiceId && (
-                  <Button onClick={handleCreateInvoice} className="bg-blue-600 hover:bg-blue-700">
-                    <FileText className="w-4 h-4 mr-1" /> Create Invoice
-                  </Button>
-                )}
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {/* Print View */}
-            <div ref={printRef} className="bg-white p-8">
-              <div className="max-w-4xl mx-auto">
-                {/* Company Header */}
-                <div className="text-center mb-8">
-                  <h1 className="text-3xl font-bold">{company?.company_name || 'Company Name'}</h1>
-                  <p className="text-muted-foreground">{company?.address || 'Company Address'}</p>
-                  <p className="text-muted-foreground">
-                    {company?.city || 'City'}, {company?.state || 'State'} - {company?.pincode || 'Pincode'}
-                  </p>
-                  <p className="text-muted-foreground">GSTIN: {company?.gstin || 'GSTIN'}</p>
-                </div>
-
-                {/* Invoice Header */}
-                <div className="flex justify-between items-start mb-8">
-                  <div>
-                    <h2 className="text-2xl font-bold">INVOICE</h2>
-                    <p className="text-muted-foreground">Invoice #: {invoiceNumber}</p>
-                    <p className="text-muted-foreground">Date: {formatDateIndian(new Date().toISOString())}</p>
-                    <p className="text-muted-foreground">Due Date: {formatDateIndian(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString())}</p>
-                  </div>
-                  <div className="text-right">
-                    <h3 className="font-semibold">Bill To:</h3>
-                    <p className="text-sm">{customer.company_name}</p>
-                    <p className="text-sm">{customer.contact_person}</p>
-                    <p className="text-sm">{customer.address}</p>
-                    <p className="text-sm">
-                      {customer.city}, {customer.state} - {customer.pincode}
-                    </p>
-                    <p className="text-sm">GSTIN: {customer.gstin}</p>
-                  </div>
-                </div>
-
-                {/* Order Reference */}
-                <div className="mb-6">
-                  <p className="text-sm">
-                    <strong>Order Reference:</strong> {order.order_number}
-                  </p>
-                  <p className="text-sm">
-                    <strong>Order Date:</strong> {formatDateIndian(order.order_date)}
-                  </p>
-                  {salesManager && (
-                    <p className="text-sm">
-                      <strong>Sales Manager:</strong> {salesManager.full_name}
-                    </p>
+        {/* Print View - Full width for A4 */}
+        <div ref={printRef} className="bg-white p-8 print:px-5 print:py-4 print:m-0 print:w-full print:max-w-none" style={{ width: '210mm', maxWidth: '210mm' }}>
+          <div className="print:max-w-none max-w-4xl mx-auto print:mx-0 print:w-full print:p-0" style={{ maxWidth: '100%' }}>
+                {/* Company Header - Compact left-aligned */}
+                <div className="flex items-start gap-3 mb-3 pb-2 border-b-2 border-gray-300">
+                  {/* Company Logo */}
+                  {company?.logo_url && (
+                    <div className="flex-shrink-0">
+                      <img 
+                        src={company.logo_url} 
+                        alt={company.company_name} 
+                        className="h-12 w-auto object-contain"
+                        style={{ maxWidth: '50px' }}
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    </div>
                   )}
+                  {/* Company Details */}
+                  <div className="flex-1">
+                    <h1 className="text-lg font-bold mb-1">{company?.company_name || 'Company Name'}</h1>
+                    <p className="text-xs text-gray-700 leading-relaxed break-words">{company?.address || 'Company Address'}</p>
+                    <p className="text-xs text-gray-700 leading-relaxed">
+                      {company?.city || 'City'}, {company?.state || 'State'} - {company?.pincode || 'Pincode'}
+                    </p>
+                    <p className="text-xs text-gray-700 font-medium mt-0.5">GSTIN: {company?.gstin || 'GSTIN'}</p>
+                  </div>
                 </div>
 
-                {/* Dispatched Items */}
+                {/* Invoice Header - Compact */}
+                <div className="flex justify-between items-start mb-4 gap-4">
+                  <div className="flex-1 max-w-[55%]">
+                    <h2 className="text-2xl font-bold mb-2">INVOICE</h2>
+                    <div className="space-y-0.5">
+                      <p className="text-xs text-gray-700"><span className="font-semibold">Invoice #:</span> {invoiceNumber}</p>
+                      <p className="text-xs text-gray-700"><span className="font-semibold">Date:</span> {formatDateIndian(new Date().toISOString())}</p>
+                      <p className="text-xs text-gray-700"><span className="font-semibold">Due Date:</span> {formatDateIndian(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString())}</p>
+                      <p className="text-xs text-gray-700 break-words">
+                        <span className="font-semibold">Order Ref:</span> {order.order_number} | <span className="font-semibold">Date:</span> {formatDateIndian(order.order_date)}
+                      </p>
+                      {salesManager && (
+                        <p className="text-xs text-gray-700">
+                          <span className="font-semibold">Sales Manager:</span> {salesManager.full_name}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right flex-1 max-w-[40%]">
+                    <h3 className="font-bold text-sm mb-1 border-b pb-1">Bill To:</h3>
+                    <div className="space-y-0.5 mt-1">
+                      <p className="text-xs font-semibold break-words">{customer.company_name}</p>
+                      <p className="text-xs text-gray-700 break-words">{customer.contact_person}</p>
+                      <p className="text-xs text-gray-700 break-words leading-relaxed">{customer.address}</p>
+                      <p className="text-xs text-gray-700">
+                        {customer.city}, {customer.state} - {customer.pincode}
+                      </p>
+                      <p className="text-xs text-gray-700 font-medium">GSTIN: {customer.gstin}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Dispatched Items - Compact */}
                 {dispatchItems.length > 0 && (
-                  <div className="mb-6">
-                    <h3 className="font-semibold mb-2">Dispatched Items:</h3>
-                    <div className="grid grid-cols-4 gap-4">
+                  <div className="mb-3 pb-2 border-b">
+                    <h3 className="text-sm font-semibold mb-2">Dispatched Items:</h3>
+                    <div className="grid grid-cols-8 gap-1.5" style={{ gridAutoFlow: 'dense' }}>
                       {dispatchItems.map((item, index) => (
-                        <div key={index} className="border rounded p-2 text-center">
-                          <div className="text-sm font-medium">{item.size_name}</div>
-                          <div className="text-lg font-bold">{item.quantity}</div>
-                          <div className="text-xs text-gray-500">pieces</div>
+                        <div key={index} className="border border-gray-300 rounded p-1.5 text-center bg-gray-50">
+                          <div className="text-xs font-semibold text-gray-700">{item.size_name}</div>
+                          <div className="text-base font-bold text-gray-900">{item.quantity}</div>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Order Items Table */}
-                <div className="mb-6">
-                  <table className="w-full border-collapse border border-gray-300">
+                {/* Order Items Table - Compact with proper column widths */}
+                <div className="mb-4">
+                  <table className="w-full border-collapse border border-gray-300 text-sm" style={{ tableLayout: 'fixed' }}>
+                    <colgroup>
+                      <col style={{ width: '20%' }} />
+                      <col style={{ width: '40%' }} />
+                      <col style={{ width: '10%' }} />
+                      <col style={{ width: '15%' }} />
+                      <col style={{ width: '15%' }} />
+                    </colgroup>
                     <thead>
                       <tr className="bg-gray-50">
-                        <th className="border border-gray-300 px-4 py-2 text-left">Item</th>
-                        <th className="border border-gray-300 px-4 py-2 text-left">Description</th>
-                        <th className="border border-gray-300 px-4 py-2 text-center">Qty</th>
-                        <th className="border border-gray-300 px-4 py-2 text-right">Rate</th>
-                        <th className="border border-gray-300 px-4 py-2 text-right">Amount</th>
+                        <th className="border border-gray-300 px-2 py-1 text-left text-xs font-semibold">Item</th>
+                        <th className="border border-gray-300 px-2 py-1 text-left text-xs font-semibold">Description</th>
+                        <th className="border border-gray-300 px-2 py-1 text-center text-xs font-semibold">Qty</th>
+                        <th className="border border-gray-300 px-2 py-1 text-right text-xs font-semibold">Rate</th>
+                        <th className="border border-gray-300 px-2 py-1 text-right text-xs font-semibold">Amount</th>
                       </tr>
                     </thead>
                     <tbody>
                       {orderItems.map((item, index) => (
                         <tr key={index}>
-                          <td className="border border-gray-300 px-4 py-2">
-                            <div className="flex items-start gap-3">
+                          <td className="border border-gray-300 px-2 py-1 align-top">
+                            <div className="flex items-center gap-2">
                               {(() => {
                                 const displayImage = getOrderItemDisplayImage(item, order);
                                 return displayImage ? (
                                   <img
                                     src={displayImage}
                                     alt="Product"
-                                    className="w-16 h-16 object-cover rounded flex-shrink-0"
+                                    className="w-10 h-10 object-cover rounded flex-shrink-0"
                                   />
                                 ) : null;
                               })()}
-                              <div className="flex-1">
+                              <div className="flex-1 text-xs font-medium break-words">
                                 {productCategories[item.product_category_id]?.category_name || 'N/A'}
                               </div>
                             </div>
                           </td>
-                          <td className="border border-gray-300 px-4 py-2">
-                            {item.product_description}
-                            {item.color && <div className="text-sm text-gray-600">Color: {item.color}</div>}
-                            {item.gsm && <div className="text-sm text-gray-600">GSM: {item.gsm}</div>}
-                            {fabrics[item.fabric_id] && (
-                              <div className="text-sm text-gray-600">Fabric: {fabrics[item.fabric_id].name}</div>
-                            )}
+                          <td className="border border-gray-300 px-2 py-1 text-xs align-top">
+                            <div className="break-words">
+                              <div className="font-medium mb-0.5">{item.product_description}</div>
+                              {item.color && <div className="text-gray-600">Color: {item.color}</div>}
+                              {item.gsm && <div className="text-gray-600">GSM: {item.gsm}</div>}
+                              {fabrics[item.fabric_id] && (
+                                <div className="text-gray-600">Fabric: {fabrics[item.fabric_id].name}</div>
+                              )}
+                            </div>
                           </td>
-                          <td className="border border-gray-300 px-4 py-2 text-center">{item.quantity}</td>
-                          <td className="border border-gray-300 px-4 py-2 text-right">{formatCurrency(item.unit_price)}</td>
-                          <td className="border border-gray-300 px-4 py-2 text-right">{formatCurrency(item.total_price)}</td>
+                          <td className="border border-gray-300 px-2 py-1 text-center text-xs align-top font-medium">{item.quantity}</td>
+                          <td className="border border-gray-300 px-2 py-1 text-right text-xs align-top font-medium whitespace-nowrap">{formatCurrency(item.unit_price)}</td>
+                          <td className="border border-gray-300 px-2 py-1 text-right text-xs align-top font-semibold whitespace-nowrap">{formatCurrency(item.total_price)}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
 
-                {/* Totals */}
+                {/* Totals - Compact */}
                 <div className="flex justify-end">
-                  <div className="w-80">
-                    <div className="flex justify-between py-2">
+                  <div className="w-64">
+                    <div className="flex justify-between py-1 text-sm">
                       <span>Subtotal:</span>
                       <span>{formatCurrency(subtotal)}</span>
                     </div>
-                    <div className="flex justify-between py-2">
+                    <div className="flex justify-between py-1 text-sm">
                       <span>GST ({gstRate}%):</span>
                       <span>{formatCurrency(gstAmount)}</span>
                     </div>
                     {additionalChargesTotal > 0 && (
-                      <div className="flex justify-between py-2">
+                      <div className="flex justify-between py-1 text-sm">
                         <span>Additional Charges:</span>
                         <span>{formatCurrency(additionalChargesTotal)}</span>
                       </div>
                     )}
-                    <div className="flex justify-between py-2 border-t font-bold text-lg">
+                    <div className="flex justify-between py-1 border-t font-bold text-base">
                       <span>Total:</span>
                       <span>{formatCurrency(grandTotal)}</span>
                     </div>
+                    
+                    {/* Payment Records Section */}
+                    {receipts.length > 0 && (
+                      <>
+                        <div className="mt-2 pt-2 border-t">
+                          <div className="text-xs font-semibold mb-1">Payment Records:</div>
+                          {receipts.map((receipt, idx) => (
+                            <div key={receipt.id} className="flex justify-between py-0.5 text-xs text-muted-foreground">
+                              <span>
+                                {formatDateIndian(receipt.entry_date)} - {receipt.payment_mode}
+                              </span>
+                              <span className="text-green-600 font-medium">{formatCurrency(receipt.amount)}</span>
+                            </div>
+                          ))}
+                          <div className="flex justify-between py-1 mt-1 border-t text-sm font-semibold">
+                            <span>Total Paid:</span>
+                            <span className="text-green-600">{formatCurrency(totalPaid)}</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                    
+                    {/* Balance/Fully Paid Status */}
+                    {(() => {
+                      const balance = grandTotal - totalPaid;
+                      if (balance > 0) {
+                        return (
+                          <div className="flex justify-between py-1 border-t font-bold text-base text-red-600">
+                            <span>Balance Payable:</span>
+                            <span>{formatCurrency(balance)}</span>
+                          </div>
+                        );
+                      } else {
+                        return (
+                          <div className="flex items-center justify-center py-2 mt-1 border-t bg-green-50 rounded">
+                            <span className="text-green-600 text-sm font-bold flex items-center gap-1">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                              </svg>
+                              Fully Paid
+                            </span>
+                          </div>
+                        );
+                      }
+                    })()}
                   </div>
                 </div>
 
-                {/* Authorized Signatory Section */}
-                <div className="mt-12 pt-6 border-t">
+                {/* Authorized Signatory Section - Compact */}
+                <div className="mt-6 pt-4 border-t">
                   <div className="flex justify-between items-end">
                     {/* Customer Signature */}
                     <div className="text-center">
-                      <div className="border-b border-gray-400 w-40 mb-2"></div>
-                      <div className="text-sm text-gray-600">Customer Signature</div>
+                      <div className="border-b border-gray-400 w-32 mb-1"></div>
+                      <div className="text-xs text-gray-600">Customer Signature</div>
                     </div>
                     
                     {/* Company Authorized Signatory */}
                     <div className="text-center">
-                      <div className="mb-3">
+                      <div className="mb-2">
                         {company?.authorized_signatory_url ? (
                           <img 
                             src={company.authorized_signatory_url} 
                             alt="Authorized Signatory" 
-                            className="w-20 h-16 object-contain mx-auto"
+                            className="w-16 h-12 object-contain mx-auto"
                           />
                         ) : (
-                          <div className="w-20 h-16 border border-gray-300 mx-auto flex items-center justify-center">
-                            <span className="text-xs text-gray-400">Signature</span>
+                          <div className="w-16 h-12 border border-gray-300 mx-auto flex items-center justify-center">
+                            <span className="text-xs text-gray-400">Sign</span>
                           </div>
                         )}
                       </div>
-                      <div className="border-b border-gray-400 w-40 mb-2"></div>
-                      <div className="text-sm text-gray-600">Authorized Signatory</div>
-                      <div className="text-xs text-gray-500 mt-1">{company?.company_name || 'Company Name'}</div>
+                      <div className="border-b border-gray-400 w-32 mb-1"></div>
+                      <div className="text-xs text-gray-600">Authorized Signatory</div>
+                      <div className="text-xs text-gray-500">{company?.company_name || 'Company Name'}</div>
                     </div>
                   </div>
                 </div>
 
-                {/* Footer */}
-                <div className="mt-8 text-center text-sm text-muted-foreground">
+                {/* Footer - Compact */}
+                <div className="mt-4 text-center text-xs text-muted-foreground">
                   <p>Thank you for your business!</p>
-                  <p className="mt-2">Payment due within 30 days</p>
                 </div>
               </div>
             </div>
-          </CardContent>
-        </Card>
       </div>
     </ErpLayout>
   );

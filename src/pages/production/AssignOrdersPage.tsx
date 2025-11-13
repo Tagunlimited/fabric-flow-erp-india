@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { SortableTableHeader } from "@/components/ui/sortable-table-header";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -66,6 +67,8 @@ const AssignOrdersPage = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
+  const [sortField, setSortField] = useState<string>('dueDate');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
   // Initialize with empty array - data will be loaded from backend
   const [assignments, setAssignments] = useState<OrderAssignment[]>([]);
@@ -519,7 +522,41 @@ const AssignOrdersPage = () => {
   };
 
   // Filter assignments for "Order Assignments" tab (orders that need assignment)
-  const assignmentsNeedingWork = assignments.filter(assignment => {
+  // Sort handler
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  // Generic sort function
+  const sortAssignments = (assignments: OrderAssignment[]) => {
+    return [...assignments].sort((a, b) => {
+      let aVal: any = a[sortField as keyof OrderAssignment];
+      let bVal: any = b[sortField as keyof OrderAssignment];
+      
+      // Handle date fields
+      if (sortField === 'dueDate' || sortField === 'assignedDate' || sortField === 'cuttingWorkDate') {
+        aVal = new Date(aVal || 0).getTime();
+        bVal = new Date(bVal || 0).getTime();
+      }
+      
+      // Handle string fields
+      if (typeof aVal === 'string') {
+        aVal = aVal.toLowerCase();
+        bVal = (bVal || '').toLowerCase();
+      }
+      
+      if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
+      if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+  };
+
+  const assignmentsNeedingWork = sortAssignments(assignments.filter(assignment => {
     const matchesSearch = assignment.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          assignment.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          assignment.productName.toLowerCase().includes(searchTerm.toLowerCase());
@@ -528,10 +565,10 @@ const AssignOrdersPage = () => {
     const needsAssignment = isOrderNeedsAssignment(assignment);
     
     return matchesSearch && matchesStatus && matchesPriority && needsAssignment;
-  });
+  }));
 
   // Filter assignments for "Assigned Orders" tab (fully assigned orders)
-  const fullyAssignedOrders = assignments.filter(assignment => {
+  const fullyAssignedOrders = sortAssignments(assignments.filter(assignment => {
     const matchesSearch = assignment.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          assignment.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          assignment.productName.toLowerCase().includes(searchTerm.toLowerCase());
@@ -540,7 +577,7 @@ const AssignOrdersPage = () => {
     const isFullyAssigned = isOrderFullyAssigned(assignment);
     
     return matchesSearch && matchesStatus && matchesPriority && isFullyAssigned;
-  });
+  }));
 
   // Legacy filteredAssignments (kept for backward compatibility)
   const filteredAssignments = assignmentsNeedingWork;
@@ -956,15 +993,15 @@ const AssignOrdersPage = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Order #</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Product</TableHead>
-                        <TableHead>Quantity</TableHead>
+                        <SortableTableHeader label="Order #" field="orderNumber" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Customer" field="customerName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Product" field="productName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Quantity" field="quantity" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <TableHead>Cutting Master</TableHead>
                         <TableHead>Stitching Price</TableHead>
-                        <TableHead>Due Date</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Priority</TableHead>
+                        <SortableTableHeader label="Due Date" field="dueDate" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Status" field="status" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Priority" field="priority" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <TableHead>Material Status</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
@@ -1150,15 +1187,15 @@ const AssignOrdersPage = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Order #</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Product</TableHead>
-                        <TableHead>Quantity</TableHead>
+                        <SortableTableHeader label="Order #" field="orderNumber" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Customer" field="customerName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Product" field="productName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Quantity" field="quantity" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <TableHead>Cutting Master</TableHead>
                         <TableHead>Stitching Price</TableHead>
-                        <TableHead>Due Date</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Priority</TableHead>
+                        <SortableTableHeader label="Due Date" field="dueDate" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Status" field="status" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Priority" field="priority" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <TableHead>Material Status</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>

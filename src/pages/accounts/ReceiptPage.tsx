@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
@@ -90,6 +91,9 @@ export default function ReceiptPage() {
   const [editVerifiedBy, setEditVerifiedBy] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [editDate, setEditDate] = useState<Date>(new Date());
+  
+  // Credit order state
+  const [isCreditOrder, setIsCreditOrder] = useState(false);
 
   // When customerId changes, load basic customer details
   useEffect(() => {
@@ -246,8 +250,8 @@ export default function ReceiptPage() {
     return () => clearTimeout(t);
   }, [customer, refSearch]);
 
-  const handleGenerate = async () => {
-    if (!selected || !amount) {
+  const handleGenerate = async (isCredit: boolean = false) => {
+    if (!selected || (!amount && !isCredit)) {
       toast.error('Please select an order and enter amount');
       return;
     }
@@ -287,16 +291,18 @@ export default function ReceiptPage() {
           }
 
           const totalExistingReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount), 0);
-          const totalWithNewReceipt = totalExistingReceipts + Number(amount);
+          const totalWithNewReceipt = totalExistingReceipts + Number(amount || 0);
 
           console.log('Receipt validation:', {
             totalExistingReceipts,
-            newAmount: Number(amount),
+            newAmount: Number(amount || 0),
             totalWithNewReceipt,
-            orderAmount: Number(order.final_amount)
+            orderAmount: Number(order.final_amount),
+            isCredit
           });
 
-          if (totalWithNewReceipt > Number(order.final_amount)) {
+          // Skip overpayment validation for credit orders (₹0 amount)
+          if (!isCredit && totalWithNewReceipt > Number(order.final_amount)) {
             toast.error(`Total receipts (${formatCurrency(totalWithNewReceipt)}) cannot exceed order amount (${formatCurrency(Number(order.final_amount))})`);
             return;
           }
@@ -315,12 +321,12 @@ export default function ReceiptPage() {
         reference_number: selected.number,
         reference_id: selected.id,
         customer_id: customer?.id,
-        amount: Number(amount),
-        payment_mode: paymentMode,
-        payment_type: paymentType,
-        reference_txn_id: referenceId || null,
-        verified_by: verifiedBy || null,
-        notes: notes || null,
+        amount: isCredit ? 0 : Number(amount),
+        payment_mode: isCredit ? 'Credit' : paymentMode,
+        payment_type: isCredit ? 'Credit' : paymentType,
+        reference_txn_id: isCredit ? null : (referenceId || null),
+        verified_by: isCredit ? null : (verifiedBy || null),
+        notes: isCredit ? 'Credit order - Payment pending' : (notes || null),
         entry_date: date.toISOString()
       };
 
@@ -429,8 +435,8 @@ export default function ReceiptPage() {
         }
       }
 
-      // Update customer pending amount if available
-      if (customer?.id) {
+      // Update customer pending amount if available (skip for credit orders)
+      if (customer?.id && !isCredit) {
         console.log('Updating customer pending amount...');
         const { data: customerData, error: customerError } = await supabase
           .from('customers')
@@ -455,10 +461,14 @@ export default function ReceiptPage() {
         }
       }
 
-      toast.success(`Receipt ${newReceipt.receipt_number} generated successfully`);
+      if (isCredit) {
+        toast.success(`Credit order created successfully! Order can now proceed to production. Receipt: ${newReceipt.receipt_number}`);
+      } else {
+        toast.success(`Receipt ${newReceipt.receipt_number} generated successfully`);
+      }
       
       // Store the amount before clearing the form
-      setReceiptAmount(Number(amount));
+      setReceiptAmount(isCredit ? 0 : Number(amount));
       setReceiptReference(selected.number);
       
       setReceiptNumber(newReceipt.receipt_number);
@@ -816,11 +826,21 @@ export default function ReceiptPage() {
                         {txns.map((r) => (
                           <tr key={r.id} className="hover:bg-muted/30 cursor-pointer" onClick={async () => { await handleOpenReceipt(r); }}>
                             <td className="p-2 border">{formatDateIndian(r.created_at)}</td>
-                            <td className="p-2 border font-medium">{r.receipt_number}</td>
+                            <td className="p-2 border font-medium">
+                              {r.receipt_number}
+                              {(r.payment_mode === 'Credit' || r.payment_type === 'Credit' || Number(r.amount) === 0) && (
+                                <Badge className="ml-2 bg-orange-100 text-orange-700 border-orange-300">CREDIT</Badge>
+                              )}
+                            </td>
                             <td className="p-2 border">{r.customers?.company_name || r.customer_name || '-'}</td>
                             <td className="p-2 border">{r.reference_number}</td>
                             <td className="p-2 border uppercase">{r.reference_type}</td>
-                            <td className="p-2 border text-right">{formatCurrency(Number(r.amount))}</td>
+                            <td className="p-2 border text-right">
+                              {formatCurrency(Number(r.amount))}
+                              {Number(r.amount) === 0 && (
+                                <span className="text-xs text-orange-600 ml-1">(Pending)</span>
+                              )}
+                            </td>
                             <td className="p-2 border">{r.payment_mode}</td>
                             <td className="p-2 border space-x-2">
                               <Button variant="outline" size="sm" onClick={async (e) => { e.stopPropagation(); await handleEditReceipt(r); }}>Edit</Button>
@@ -940,6 +960,7 @@ export default function ReceiptPage() {
                     <SelectItem value="Partial">Partial</SelectItem>
                     <SelectItem value="Full">Full</SelectItem>
                     <SelectItem value="Balance">Balance</SelectItem>
+                    <SelectItem value="Credit">Credit</SelectItem>
                     <SelectItem value="Refund">Refund</SelectItem>
                   </SelectContent>
                 </Select>
@@ -963,7 +984,20 @@ export default function ReceiptPage() {
             </div>
 
                 <div className="flex justify-end gap-2">
-                  <Button onClick={handleGenerate} disabled={!selected || !amount || generatingReceipt}>Generate Receipt</Button>
+                  <Button 
+                    onClick={() => handleGenerate(true)} 
+                    disabled={!selected || generatingReceipt}
+                    variant="outline"
+                    className="border-orange-500 text-orange-600 hover:bg-orange-50"
+                  >
+                    Credit Order (₹0)
+                  </Button>
+                  <Button 
+                    onClick={() => handleGenerate(false)} 
+                    disabled={!selected || !amount || generatingReceipt}
+                  >
+                    Generate Receipt
+                  </Button>
                 </div>
               </CardContent>
             </Card>
@@ -1128,6 +1162,7 @@ export default function ReceiptPage() {
                       <SelectItem value="Partial">Partial</SelectItem>
                       <SelectItem value="Full">Full</SelectItem>
                       <SelectItem value="Balance">Balance</SelectItem>
+                      <SelectItem value="Credit">Credit</SelectItem>
                       <SelectItem value="Refund">Refund</SelectItem>
                     </SelectContent>
                   </Select>

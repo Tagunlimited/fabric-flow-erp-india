@@ -492,7 +492,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
       size_type_id: '',
       sizes_quantities: {},
       branding_items: [
-        { branding_type: '', placement: '', measurement: '' },
         { branding_type: '', placement: '', measurement: '' }
       ],
       gst_rate: 18, // default
@@ -1855,72 +1854,10 @@ const getSelectedFabricVariant = (productIndex: number) => {
                         </div>
                       </div>
 
-                      {/* Mockup Images Gallery */}
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium">Mockup Images</Label>
-                        <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
-                          <input
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            onChange={(e) => {
-                              const files = Array.from(e.target.files || []);
-                              handleImageUpload(productIndex, 'mockup', files);
-                            }}
-                            className="hidden"
-                            id={`mockup-images-${productIndex}`}
-                          />
-                          <label htmlFor={`mockup-images-${productIndex}`} className="cursor-pointer block">
-                            <Image className="w-8 h-8 mx-auto mb-2 text-primary" />
-                            <p className="text-sm font-medium text-foreground">Upload Mockup Images</p>
-                            <p className="text-xs text-muted-foreground">Up to 5 images • Click thumbnails to view</p>
-                          </label>
-                          
-                          {product.mockup_images.length > 0 && (
-                            <div className="mt-4">
-                              <Badge variant="secondary" className="bg-primary/20 text-primary mb-3">
-                                {product.mockup_images.length} file(s) selected
-                              </Badge>
-                              
-                              {/* Main Image Display */}
-                              <div className="mb-3 p-2 border-2 border-primary/30 rounded-lg bg-white">
-                                <img 
-                                  src={getMainImage(productIndex, 'mockup') || URL.createObjectURL(product.mockup_images[0])} 
-                                  alt="Main Mockup"
-                                  className="w-full h-64 object-contain rounded cursor-pointer hover:scale-105 transition-transform duration-200"
-                                />
-                                <p className="text-center text-sm text-muted-foreground mt-2">Click to see full view</p>
-                              </div>
-                              
-                              {/* Thumbnail Gallery */}
-                              <div className="flex gap-2 overflow-x-auto pb-2">
-                                {product.mockup_images.map((file, idx) => (
-                                  <div 
-                                    key={idx} 
-                                    className="flex-shrink-0 cursor-pointer hover:scale-105 transition-transform duration-200"
-                                    onClick={() => handleImageClick(productIndex, 'mockup', URL.createObjectURL(file))}
-                                  >
-                                    <img 
-                                      src={URL.createObjectURL(file)} 
-                                      alt={`Mockup ${idx + 1}`}
-                                      className={`w-16 h-16 object-cover rounded border-2 ${
-                                        getMainImage(productIndex, 'mockup') === URL.createObjectURL(file) 
-                                          ? 'border-primary' 
-                                          : 'border-gray-200'
-                                      }`}
-                                    />
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
+                      {/* Attachments Gallery - Moved from below */}
                       <div className="space-y-3">
                         <Label className="text-sm font-medium">Attachments</Label>
-                        <div className="border-2 border-dashed border-primary/30 rounded-lg p-6 text-center hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
+                        <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
                           <input
                             type="file"
                             multiple
@@ -1937,31 +1874,28 @@ const getSelectedFabricVariant = (productIndex: number) => {
                             id={`attachments-${productIndex}`}
                           />
                           <label htmlFor={`attachments-${productIndex}`} className="cursor-pointer block">
-                            <Upload className="w-10 h-10 mx-auto mb-3 text-primary" />
+                            <Upload className="w-8 h-8 mx-auto mb-2 text-primary" />
                             <p className="text-sm font-medium text-foreground">Upload Attachments</p>
-                            <p className="text-xs text-muted-foreground mt-1">Any file type • PDF, DOC, etc.</p>
-                            {product.attachments.length > 0 && (
-                              <div className="mt-3">
-                                <Badge variant="secondary" className="bg-primary/20 text-primary">
-                                  {product.attachments.length} file(s) selected
-                                </Badge>
-                                <div className="mt-2 max-h-20 overflow-y-auto">
-                                  {product.attachments.slice(0, 3).map((file, idx) => (
-                                    <div key={idx} className="text-xs text-muted-foreground truncate bg-muted/50 rounded px-2 py-1 mt-1">
-                                      {file.name}
-                                    </div>
-                                  ))}
-                                  {product.attachments.length > 3 && (
-                                    <p className="text-xs text-muted-foreground mt-1">
-                                      +{product.attachments.length - 3} more files
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                            )}
+                            <p className="text-xs text-muted-foreground">Any file type • PDF, DOC, etc.</p>
                           </label>
+                          
+                          {product.attachments.length > 0 && (
+                            <div className="mt-4">
+                              <Badge variant="secondary" className="bg-primary/20 text-primary mb-3">
+                                {product.attachments.length} file(s) selected
+                              </Badge>
+                              <div className="max-h-32 overflow-y-auto space-y-1">
+                                {product.attachments.map((file, idx) => (
+                                  <div key={idx} className="text-xs text-muted-foreground truncate bg-muted/50 rounded px-2 py-1">
+                                    {file.name}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
+                    </div>
                     {/* Removed extra closing div to fix JSX tag mismatch */}
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2041,7 +1975,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                         <div key={brandingIndex} className="border-2 border-primary/30 rounded-lg p-5 space-y-4 bg-gradient-to-br from-primary/5 to-primary/10 hover:border-primary/40 transition-colors shadow-sm">
                           <div className="flex justify-between items-center">
                             <h4 className="font-semibold text-foreground">Branding {brandingIndex + 1}</h4>
-                            {product.branding_items.length > 2 && (
+                            {product.branding_items.length > 1 && (
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -2099,6 +2033,68 @@ const getSelectedFabricVariant = (productIndex: number) => {
                           </div>
                         </div>
                       ))}
+                    </div>
+
+                    {/* Mockup Images Gallery - Moved from above */}
+                    <div className="space-y-3">
+                      <Label className="text-sm font-medium">Mockup Images</Label>
+                      <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(e) => {
+                            const files = Array.from(e.target.files || []);
+                            handleImageUpload(productIndex, 'mockup', files);
+                          }}
+                          className="hidden"
+                          id={`mockup-images-${productIndex}`}
+                        />
+                        <label htmlFor={`mockup-images-${productIndex}`} className="cursor-pointer block">
+                          <Image className="w-8 h-8 mx-auto mb-2 text-primary" />
+                          <p className="text-sm font-medium text-foreground">Upload Mockup Images</p>
+                          <p className="text-xs text-muted-foreground">Up to 5 images • Click thumbnails to view</p>
+                        </label>
+                        
+                        {product.mockup_images.length > 0 && (
+                          <div className="mt-4">
+                            <Badge variant="secondary" className="bg-primary/20 text-primary mb-3">
+                              {product.mockup_images.length} file(s) selected
+                            </Badge>
+                            
+                            {/* Main Image Display */}
+                            <div className="mb-3 p-2 border-2 border-primary/30 rounded-lg bg-white">
+                              <img 
+                                src={getMainImage(productIndex, 'mockup') || URL.createObjectURL(product.mockup_images[0])} 
+                                alt="Main Mockup"
+                                className="w-full h-64 object-contain rounded cursor-pointer hover:scale-105 transition-transform duration-200"
+                              />
+                              <p className="text-center text-sm text-muted-foreground mt-2">Click to see full view</p>
+                            </div>
+                            
+                            {/* Thumbnail Gallery */}
+                            <div className="flex gap-2 overflow-x-auto pb-2">
+                              {product.mockup_images.map((file, idx) => (
+                                <div 
+                                  key={idx} 
+                                  className="flex-shrink-0 cursor-pointer hover:scale-105 transition-transform duration-200"
+                                  onClick={() => handleImageClick(productIndex, 'mockup', URL.createObjectURL(file))}
+                                >
+                                  <img 
+                                    src={URL.createObjectURL(file)} 
+                                    alt={`Mockup ${idx + 1}`}
+                                    className={`w-16 h-16 object-cover rounded border-2 ${
+                                      getMainImage(productIndex, 'mockup') === URL.createObjectURL(file) 
+                                        ? 'border-primary' 
+                                        : 'border-gray-200'
+                                    }`}
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                   </CardContent>
