@@ -988,6 +988,16 @@ const getSelectedFabricVariant = (productIndex: number) => {
         try {
           const orderNumber = await generateOrderNumber();
           
+          // Check if any product has mockup images uploaded
+          // User requirement: ONLY mockup images trigger status change, reference images not required
+          const hasMockupImages = formData.products.some(product => 
+            product.mockup_images && product.mockup_images.length > 0
+          );
+          
+          // Set initial status: 'designing_done' if mockup images exist, otherwise 'pending'
+          const initialStatus: 'designing_done' | 'pending' = hasMockupImages ? 'designing_done' : 'pending';
+          console.log(`Setting initial order status to '${initialStatus}' (has mockup images: ${hasMockupImages})`);
+          
           const orderData = {
             order_number: orderNumber,
             order_date: (formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)).toISOString(),
@@ -1002,7 +1012,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
             gst_rate: Number(formData.gst_rate),
             payment_channel: formData.payment_channel || null,
             reference_id: formData.reference_id || null,
-            status: 'pending' as const,
+            status: initialStatus,
             notes: ''
           };
 
@@ -1455,19 +1465,19 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
   {/* Right Column - 2 Rows × 2 Columns each */}
   <div className="lg:col-span-8 grid grid-cols-1 gap-6">
-    {/* Row 1 - Fabric, Color, and GSM */}
+    {/* Row 1 - Product, Color, and GSM */}
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-      {/* Fabric - Only show when product category is selected */}
+      {/* Product - Only show when product category is selected */}
       {product.product_category_id && (
         <div>
-          <Label className="text-base font-semibold text-gray-700 mb-2 block">Fabric</Label>
+          <Label className="text-base font-semibold text-gray-700 mb-2 block">Product</Label>
           <Select
             value={product.fabric_base_id || product.fabric_id}
             onValueChange={(value) => handleFabricSelect(productIndex, value)}
             disabled={false}
           >
             <SelectTrigger>
-              <SelectValue placeholder="Select fabric" />
+              <SelectValue placeholder="Select product" />
             </SelectTrigger>
             <SelectContent>
               {getFilteredFabricNames(productIndex).map((fabric) => (
@@ -1659,17 +1669,18 @@ const getSelectedFabricVariant = (productIndex: number) => {
                   <div className="text-sm font-semibold text-gray-900 truncate" title={customization.partName}>
                     {customization.partName}
                   </div>
-                  {customization.partType === 'dropdown' && (
+                  {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
                     <div className="text-xs text-gray-600 truncate mt-1" title={customization.selectedAddonName}>
                       {customization.selectedAddonName}
                     </div>
                   )}
-                  {customization.partType === 'number' && customization.quantity !== undefined && (
+                  {/* Only show quantity for number type parts, never for dropdown */}
+                  {customization.partType !== 'dropdown' && customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
                     <div className="text-xs text-gray-600 mt-1">
                       Qty: {customization.quantity}
                     </div>
                   )}
-                  {customization.priceImpact && customization.priceImpact !== 0 && (
+                  {customization.priceImpact !== undefined && customization.priceImpact !== null && customization.priceImpact !== 0 && (
                     <div className="text-xs font-medium text-green-600 mt-1">
                       ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
                     </div>

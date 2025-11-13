@@ -2351,17 +2351,18 @@ export default function OrderDetailPage() {
                                                   <div className="font-medium text-xs truncate" title={customization.partName}>
                                                     {customization.partName}
                                                   </div>
-                                                  {customization.partType === 'dropdown' && (
+                                                  {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
                                                     <div className="text-xs text-muted-foreground truncate" title={customization.selectedAddonName}>
                                                       {customization.selectedAddonName}
                                                     </div>
                                                   )}
-                                                  {customization.partType === 'number' && (
+                                                  {/* Only show quantity for number type parts, never for dropdown */}
+                                                  {customization.partType !== 'dropdown' && customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
                                                     <div className="text-xs text-muted-foreground">
                                                       Qty: {customization.quantity}
                                                     </div>
                                                   )}
-                                                  {!shouldHideSections && customization.priceImpact && customization.priceImpact !== 0 && (
+                                                  {!shouldHideSections && customization.priceImpact !== undefined && customization.priceImpact !== null && customization.priceImpact !== 0 && (
                                                     <div className="text-xs font-medium text-green-600">
                                                       ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
                                                     </div>
@@ -2586,10 +2587,11 @@ export default function OrderDetailPage() {
                                                    )}
                                                    <div className="flex-1 min-w-0">
                                                      <div className="font-medium truncate">{customization.partName}</div>
-                                                     {customization.partType === 'dropdown' && (
+                                                     {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
                                                        <div className="text-gray-600 truncate">{customization.selectedAddonName}</div>
                                                      )}
-                                                     {customization.partType === 'number' && (
+                                                     {/* Only show quantity for number type parts, never for dropdown */}
+                                                     {customization.partType !== 'dropdown' && customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
                                                        <div className="text-gray-600">Qty: {customization.quantity}</div>
                                                      )}
                                                    </div>
