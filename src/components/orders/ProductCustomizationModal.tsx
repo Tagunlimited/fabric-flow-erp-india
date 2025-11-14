@@ -522,19 +522,33 @@ export function ProductCustomizationModal({
                                         toast.error('This option is already added');
                                         return;
                                       }
-                                      setSelectedAddon(addon.id);
-                                      // Small delay to show selection feedback before adding
-                                      setTimeout(() => {
-                                        handleAddCustomization();
-                                      }, 100);
+                                      
+                                      // Add customization immediately on single click
+                                      const newCustomization: Customization = {
+                                        partId: part.id,
+                                        partName: part.part_name,
+                                        partType: 'dropdown',
+                                        selectedAddonId: addon.id,
+                                        selectedAddonName: addon.addon_name,
+                                        selectedAddonImageUrl: addon.image_url || undefined,
+                                        selectedAddonImageAltText: addon.image_alt_text || undefined,
+                                        priceImpact: addon.price_adjustment
+                                        // Note: quantity is intentionally NOT set for dropdown type parts
+                                      };
+
+                                      setCustomizations([...customizations, newCustomization]);
+                                      
+                                      // Reset selection
+                                      setSelectedPart('');
+                                      setSelectedAddon('');
+                                      
+                                      toast.success('Option added successfully');
                                     }}
                                     disabled={isAlreadyAdded}
                                     className={`p-4 border-2 rounded-lg text-left transition-all duration-200 ${
                                       isAlreadyAdded
-                                        ? 'border-green-500 bg-green-50 opacity-75 cursor-not-allowed'
-                                        : selectedAddon === addon.id
-                                        ? 'border-blue-500 bg-blue-50 shadow-md'
-                                        : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+                                        ? 'border-green-500 bg-green-50'
+                                        : 'border-gray-200 hover:border-blue-300 hover:shadow-sm hover:bg-blue-50'
                                     }`}
                                   >
                                     <div className="flex items-start gap-3">
@@ -581,15 +595,13 @@ export function ProductCustomizationModal({
                                       {/* Selection Indicator */}
                                       <div className="flex-shrink-0 mt-1">
                                         {isAlreadyAdded ? (
-                                          <div className="w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
-                                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                          <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center shadow-md">
+                                            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                                             </svg>
                                           </div>
                                         ) : (
-                                          <div className={`w-3 h-3 rounded-full ${
-                                            selectedAddon === addon.id ? 'bg-blue-500' : 'bg-gray-300'
-                                          }`} />
+                                          <div className="w-6 h-6 rounded-full border-2 border-gray-300" />
                                         )}
                                       </div>
                                     </div>
@@ -766,20 +778,21 @@ export function ProductCustomizationModal({
                         )}
                         <div className="flex-1 min-w-0">
                           <div className="text-base font-semibold text-gray-900">{customization.partName}</div>
-                          {customization.partType === 'dropdown' && selectedAddon && (
+                          {customization.partType === 'dropdown' && (
                             <div className="text-sm text-gray-600 mt-1">
-                              {selectedAddon.addon_name}
-                              {selectedAddon.image_alt_text && (
+                              {selectedAddon ? selectedAddon.addon_name : customization.selectedAddonName}
+                              {selectedAddon?.image_alt_text && (
                                 <span className="ml-2 text-xs text-gray-500">({selectedAddon.image_alt_text})</span>
                               )}
                             </div>
                           )}
-                          {customization.partType === 'number' && customization.quantity !== undefined && (
+                          {/* Only show quantity for number type parts, never for dropdown */}
+                          {customization.partType !== 'dropdown' && customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
                             <div className="text-sm text-gray-600 mt-1">
                             Quantity: {customization.quantity}
                           </div>
                         )}
-                        {customization.priceImpact && customization.priceImpact !== 0 && (
+                          {customization.priceImpact !== undefined && customization.priceImpact !== null && customization.priceImpact !== 0 && (
                             <Badge variant={customization.priceImpact > 0 ? 'default' : 'secondary'} className="mt-2 text-xs">
                             ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
                           </Badge>

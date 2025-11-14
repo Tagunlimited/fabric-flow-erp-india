@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { SortableTableHeader } from "@/components/ui/sortable-table-header";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
@@ -124,6 +125,8 @@ const CuttingManagerPage = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
+  const [sortField, setSortField] = useState<string>('dueDate');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
   // Initialize with empty array - data will be loaded from backend
   const [cuttingJobs, setCuttingJobs] = useState<CuttingJob[]>([]);
@@ -669,11 +672,45 @@ const CuttingManagerPage = () => {
     return isFullyCut && hasBatchAssignments;
   };
 
+  // Sort handler
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  // Generic sort function
+  const sortJobs = (jobs: CuttingJob[]) => {
+    return [...jobs].sort((a, b) => {
+      let aVal: any = a[sortField as keyof CuttingJob];
+      let bVal: any = b[sortField as keyof CuttingJob];
+      
+      // Handle date fields
+      if (sortField === 'dueDate' || sortField === 'startDate') {
+        aVal = new Date(aVal || 0).getTime();
+        bVal = new Date(bVal || 0).getTime();
+      }
+      
+      // Handle string fields
+      if (typeof aVal === 'string') {
+        aVal = aVal.toLowerCase();
+        bVal = (bVal || '').toLowerCase();
+      }
+      
+      if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
+      if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+  };
+
   // Separate jobs into active and completed
   const activeJobs = cuttingJobs.filter(job => !isJobCompleted(job));
   const completedJobs = cuttingJobs.filter(job => isJobCompleted(job));
 
-  const filteredActiveJobs = activeJobs.filter(job => {
+  const filteredActiveJobs = sortJobs(activeJobs.filter(job => {
     const matchesSearch = job.jobNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          job.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          job.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -682,9 +719,9 @@ const CuttingManagerPage = () => {
     const matchesPriority = priorityFilter === "all" || job.priority === priorityFilter;
     
     return matchesSearch && matchesStatus && matchesPriority;
-  });
+  }));
 
-  const filteredCompletedJobs = completedJobs.filter(job => {
+  const filteredCompletedJobs = sortJobs(completedJobs.filter(job => {
     const matchesSearch = job.jobNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          job.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          job.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -693,7 +730,7 @@ const CuttingManagerPage = () => {
     const matchesPriority = priorityFilter === "all" || job.priority === priorityFilter;
     
     return matchesSearch && matchesStatus && matchesPriority;
-  });
+  }));
 
   // Calculate stats after activeJobs and completedJobs are defined
   const stats = {
@@ -899,15 +936,15 @@ const CuttingManagerPage = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Job #</TableHead>
-                        <TableHead>Order #</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Product</TableHead>
+                        <SortableTableHeader label="Job #" field="jobNumber" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Order #" field="orderNumber" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Customer" field="customerName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Product" field="productName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <TableHead>Progress</TableHead>
                         <TableHead>Cutting Master</TableHead>
                         <TableHead>Assigned Batch</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Due Date</TableHead>
+                        <SortableTableHeader label="Status" field="status" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Due Date" field="dueDate" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -1149,14 +1186,14 @@ const CuttingManagerPage = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Job #</TableHead>
-                        <TableHead>Order #</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Product</TableHead>
+                        <SortableTableHeader label="Job #" field="jobNumber" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Order #" field="orderNumber" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Customer" field="customerName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
+                        <SortableTableHeader label="Product" field="productName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <TableHead>Progress</TableHead>
                         <TableHead>Cutting Master</TableHead>
                         <TableHead>Assigned Batches</TableHead>
-                        <TableHead>Completion Date</TableHead>
+                        <SortableTableHeader label="Completion Date" field="dueDate" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>

@@ -86,6 +86,25 @@ interface GroupedProduct {
   size_variants?: Record<string, ProductSizeVariant>;
 }
 
+// Helper function to sort size distributions in proper order
+const sortSizeDistributions = (sizes: any[]) => {
+  const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 
+    '20', '22', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44', '46', '48', '50',
+    '0-2 Yrs', '3-4 Yrs', '5-6 Yrs', '7-8 Yrs', '9-10 Yrs', '11-12 Yrs', '13-14 Yrs', '15-16 Yrs'];
+  
+  return [...sizes].sort((a, b) => {
+    const indexA = sizeOrder.indexOf(a.size_name);
+    const indexB = sizeOrder.indexOf(b.size_name);
+    
+    if (indexA !== -1 && indexB !== -1) {
+      return indexA - indexB;
+    }
+    if (indexA !== -1) return -1;
+    if (indexB !== -1) return 1;
+    return (a.size_name || '').localeCompare(b.size_name || '');
+  });
+};
+
 export default function PickerPage() {
   const { config: company } = useCompanySettings();
   const [tailors, setTailors] = useState<TailorListItem[]>([]);
@@ -101,6 +120,7 @@ export default function PickerPage() {
     orderNumber: string;
     customerName?: string;
     sizeDistributions: { size_name: string; quantity: number }[];
+    productImage?: string;
   } | null>(null);
   const [rejectedOpen, setRejectedOpen] = useState(false);
   const [rejectedOrderNumber, setRejectedOrderNumber] = useState("");
@@ -877,13 +897,40 @@ export default function PickerPage() {
       }
 
       const orderIds = Array.from(new Set((rows || []).map((r: any) => r.order_id).filter(Boolean)));
-      let ordersMap: Record<string, { order_number?: string; customer_id?: string }> = {};
+      let ordersMap: Record<string, { order_number?: string; customer_id?: string; mockup_image?: string; category_image?: string }> = {};
       if (orderIds.length > 0) {
         const { data: orders } = await (supabase as any)
           .from('orders')
           .select('id, order_number, customer_id')
           .in('id', orderIds as any);
         (orders || []).forEach((o: any) => { ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id }; });
+        
+        // Fetch order items to get product images (mockup or category)
+        const { data: orderItems } = await (supabase as any)
+          .from('order_items')
+          .select('order_id, specifications, category_image_url')
+          .in('order_id', orderIds as any);
+        
+        (orderItems || []).forEach((item: any) => {
+          if (!ordersMap[item.order_id]) return;
+          
+          // Try to get mockup image from specifications
+          let mockupImage = null;
+          try {
+            const specs = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
+            if (specs?.mockup_images && Array.isArray(specs.mockup_images) && specs.mockup_images.length > 0) {
+              mockupImage = specs.mockup_images[0];
+            }
+          } catch {}
+          
+          // Set mockup image if available, otherwise use category image
+          if (mockupImage && !ordersMap[item.order_id].mockup_image) {
+            ordersMap[item.order_id].mockup_image = mockupImage;
+          }
+          if (item.category_image_url && !ordersMap[item.order_id].category_image) {
+            ordersMap[item.order_id].category_image = item.category_image_url;
+          }
+        });
       }
       const customerIds = Array.from(new Set(Object.values(ordersMap).map(o => o.customer_id).filter(Boolean)));
       let customersMap: Record<string, string> = {};
@@ -900,6 +947,8 @@ export default function PickerPage() {
         order_id: r.order_id,
         order_number: ordersMap[r.order_id]?.order_number,
         customer_name: customersMap[ordersMap[r.order_id]?.customer_id || ''],
+        mockup_image: ordersMap[r.order_id]?.mockup_image,
+        category_image: ordersMap[r.order_id]?.category_image,
         assignment_date: r.assignment_date,
         total_quantity: Number(r.total_quantity || 0),
         picked_quantity: Number(pickedByAssignment[r.assignment_id] || 0),
@@ -927,6 +976,7 @@ export default function PickerPage() {
       orderNumber: assignment.order_number,
       customerName: assignment.customer_name,
       sizeDistributions: assignment.size_distributions || [],
+      productImage: assignment.mockup_image || assignment.category_image,
     });
     setPickerOpen(true);
   };
@@ -1048,29 +1098,46 @@ export default function PickerPage() {
                       ) : batchOrders.length === 0 ? (
                         <p className="text-sm sm:text-base text-muted-foreground">No pending orders for this batch.</p>
                       ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                           {batchOrders.map((o) => (
-                            <Card key={o.assignment_id} className="border hover:shadow-md transition cursor-pointer" onClick={() => openPickerForAssignment(o)}>
-                              <CardContent className="pt-4 sm:pt-5 p-4 sm:p-6">
-                                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0">
-                                  <div className="min-w-0 flex-1">
-                                    <div className="font-semibold text-sm sm:text-base truncate">Order #{o.order_number}</div>
-                                    <div className="text-xs text-muted-foreground truncate">{o.customer_name}</div>
+                            <Card key={o.assignment_id} className="border hover:shadow-lg transition cursor-pointer" onClick={() => openPickerForAssignment(o)}>
+                              <CardContent className="pt-5 p-5 sm:p-6">
+                                <div className="flex gap-4">
+                                  {/* Product Image */}
+                                  {(o.mockup_image || o.category_image) && (
+                                    <div className="flex-shrink-0">
+                                      <img 
+                                        src={o.mockup_image || o.category_image} 
+                                        alt="Product"
+                                        className="w-20 h-20 sm:w-24 sm:h-24 object-cover rounded-lg border-2 border-gray-200"
+                                        onError={(e) => {
+                                          e.currentTarget.style.display = 'none';
+                                        }}
+                                      />
                                   </div>
-                                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                                  )}
+                                  
+                                  {/* Order Details */}
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-semibold text-sm sm:text-base truncate">Order #{o.order_number}</div>
+                                    <div className="text-xs text-muted-foreground truncate mt-1">{o.customer_name}</div>
+                                    
+                                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mt-2">
                                     <Badge className="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">Qty: {o.total_quantity}</Badge>
                                     <Badge className="bg-green-100 text-green-800 text-xs px-2 py-0.5">Picked: {o.picked_quantity}</Badge>
                                     {o.rejected_quantity > 0 && (
                                       <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 cursor-pointer" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rej: {o.rejected_quantity}</Badge>
                                     )}
                                   </div>
-                                </div>
+                                    
                                 <div className="mt-2 text-xs text-muted-foreground line-clamp-2">
                                   {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 ? (
-                                    <span>Sizes: {o.size_distributions.map((sd: any) => `${sd.size_name}:${sd.quantity}`).join(', ')}</span>
+                              <span className="font-medium">Sizes: {sortSizeDistributions(o.size_distributions).map((sd: any) => `${sd.size_name}:${sd.quantity}`).join(', ')}</span>
                                   ) : (
                                     <span>No sizes</span>
                                   )}
+                          </div>
+                                  </div>
                                 </div>
                               </CardContent>
                             </Card>
@@ -1279,29 +1346,46 @@ export default function PickerPage() {
             ) : batchOrders.length === 0 ? (
               <p className="text-sm sm:text-base text-muted-foreground">No pending orders for this batch.</p>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                 {batchOrders.map((o) => (
-                  <Card key={o.assignment_id} className="border hover:shadow-md transition cursor-pointer" onClick={() => { setOrdersDialogOpen(false); openPickerForAssignment(o); }}>
-                    <CardContent className="pt-4 sm:pt-5 p-4 sm:p-6">
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0">
-                        <div className="min-w-0 flex-1">
-                          <div className="font-semibold text-sm sm:text-base truncate">Order #{o.order_number}</div>
-                          <div className="text-xs text-muted-foreground truncate">{o.customer_name}</div>
+                  <Card key={o.assignment_id} className="border hover:shadow-lg transition cursor-pointer" onClick={() => { setOrdersDialogOpen(false); openPickerForAssignment(o); }}>
+                    <CardContent className="pt-5 p-5 sm:p-6">
+                      <div className="flex gap-4">
+                        {/* Product Image */}
+                        {(o.mockup_image || o.category_image) && (
+                          <div className="flex-shrink-0">
+                            <img 
+                              src={o.mockup_image || o.category_image} 
+                              alt="Product"
+                              className="w-24 h-24 sm:w-28 sm:h-28 object-cover rounded-lg border-2 border-gray-200"
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none';
+                              }}
+                            />
                         </div>
-                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                          <Badge className="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">Qty: {o.total_quantity}</Badge>
-                          <Badge className="bg-green-100 text-green-800 text-xs px-2 py-0.5">Picked: {o.picked_quantity}</Badge>
+                        )}
+                        
+                        {/* Order Details */}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-base sm:text-lg truncate">Order #{o.order_number}</div>
+                          <div className="text-sm text-muted-foreground truncate mt-1">{o.customer_name}</div>
+                          
+                          <div className="flex flex-wrap items-center gap-2 mt-3">
+                            <Badge className="bg-purple-100 text-purple-800 text-sm px-3 py-1">Qty: {o.total_quantity}</Badge>
+                            <Badge className="bg-green-100 text-green-800 text-sm px-3 py-1">Picked: {o.picked_quantity}</Badge>
                           {o.rejected_quantity > 0 && (
-                            <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 cursor-pointer" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rej: {o.rejected_quantity}</Badge>
+                              <Badge className="bg-red-100 text-red-800 text-sm px-3 py-1 cursor-pointer" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rej: {o.rejected_quantity}</Badge>
                           )}
                         </div>
-                      </div>
-                      <div className="mt-2 text-xs text-muted-foreground line-clamp-2">
+                          
+                          <div className="mt-3 text-sm text-muted-foreground">
                         {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 ? (
-                          <span>Sizes: {o.size_distributions.map((sd: any) => `${sd.size_name}:${sd.quantity}`).join(', ')}</span>
+                              <span className="font-medium">Sizes: {sortSizeDistributions(o.size_distributions).map((sd: any) => `${sd.size_name}:${sd.quantity}`).join(', ')}</span>
                         ) : (
                           <span>No sizes</span>
                         )}
+                          </div>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
@@ -1376,6 +1460,7 @@ export default function PickerPage() {
             orderNumber={pickerContext.orderNumber}
             customerName={pickerContext.customerName}
             sizeDistributions={pickerContext.sizeDistributions}
+            productImage={pickerContext.productImage}
           />
         )}
 

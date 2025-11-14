@@ -26,6 +26,7 @@ interface Order {
   has_invoice?: boolean;
   invoice_id?: string;
   invoice_number?: string;
+  is_credit?: boolean; // Flag to indicate if order has credit receipt
 }
 
 export default function InvoicePage() {
@@ -52,7 +53,42 @@ export default function InvoicePage() {
         .order('created_at', { ascending: false });
 
       if (ordersError) throw ordersError;
-      const list: Order[] = (ordersData as any) || [];
+      let list: Order[] = (ordersData as any) || [];
+      
+      // Also fetch orders that are "ready to dispatch" (all approved items dispatched)
+      // These might have different statuses but should still show in invoices
+      try {
+        // Get all orders that have dispatch records (challans)
+        const { data: dispatchOrders } = await supabase
+          .from('dispatch_orders')
+          .select('order_id')
+          .in('status', ['pending', 'packed', 'shipped', 'delivered'] as any);
+        
+        if (dispatchOrders && dispatchOrders.length > 0) {
+          // Get unique order IDs from dispatch orders
+          const dispatchOrderIds = Array.from(new Set(
+            dispatchOrders.map((d: any) => d.order_id).filter(Boolean)
+          ));
+          
+          // Fetch these orders if not already in list
+          const existingIds = new Set(list.map(o => o.id));
+          const missingIds = dispatchOrderIds.filter((id: string) => !existingIds.has(id));
+          
+          if (missingIds.length > 0) {
+            const { data: readyOrders } = await supabase
+              .from('orders')
+              .select(`*, customer:customers(company_name)`)
+              .in('id', missingIds as any)
+              .order('created_at', { ascending: false });
+            
+            if (readyOrders) {
+              list = [...list, ...(readyOrders as any[])];
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching ready to dispatch orders:', error);
+      }
 
       // Get all invoices for these orders
       const orderIds = list.map(o => o.id);
@@ -69,6 +105,53 @@ export default function InvoicePage() {
           invoice_number: invoice.invoice_number
         };
       });
+
+      // Check for credit receipts (receipts with amount 0 and payment_type/mode = 'Credit')
+      const creditOrderIds = new Set<string>();
+      try {
+        // Fetch receipts by reference_id (order_id)
+        if (orderIds.length > 0) {
+          const { data: receiptsById } = await supabase
+            .from('receipts')
+            .select('reference_id, reference_number, amount, payment_type, payment_mode')
+            .eq('reference_type', 'order')
+            .in('reference_id', orderIds as any);
+          
+          if (receiptsById) {
+            receiptsById.forEach((receipt: any) => {
+              const isCredit = (Number(receipt.amount || 0) === 0) && 
+                              (receipt.payment_type === 'Credit' || receipt.payment_mode === 'Credit');
+              if (isCredit && receipt.reference_id) {
+                creditOrderIds.add(receipt.reference_id);
+              }
+            });
+          }
+        }
+        
+        // Also check by reference_number (order_number)
+        const orderNumbers = list.map(o => o.order_number).filter(Boolean);
+        if (orderNumbers.length > 0) {
+          const { data: receiptsByNumber } = await supabase
+            .from('receipts')
+            .select('reference_id, reference_number, amount, payment_type, payment_mode')
+            .in('reference_number', orderNumbers as any);
+          
+          if (receiptsByNumber) {
+            receiptsByNumber.forEach((receipt: any) => {
+              const isCredit = (Number(receipt.amount || 0) === 0) && 
+                              (receipt.payment_type === 'Credit' || receipt.payment_mode === 'Credit');
+              if (isCredit && receipt.reference_number) {
+                const matchingOrder = list.find(o => o.order_number === receipt.reference_number);
+                if (matchingOrder) {
+                  creditOrderIds.add(matchingOrder.id);
+                }
+              }
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching credit receipts:', error);
+      }
 
       // Get dispatched quantities and invoice status for each order
       const ordersWithData = await Promise.all(
@@ -113,6 +196,7 @@ export default function InvoicePage() {
               has_invoice: !!invoice,
               invoice_id: invoice?.id,
               invoice_number: invoice?.invoice_number,
+              is_credit: creditOrderIds.has(order.id),
             };
           } catch (error) {
             console.error('Error fetching data for order:', order.id, error);
@@ -123,6 +207,7 @@ export default function InvoicePage() {
               has_invoice: !!invoiceMap[order.id],
               invoice_id: invoiceMap[order.id]?.id,
               invoice_number: invoiceMap[order.id]?.invoice_number,
+              is_credit: creditOrderIds.has(order.id),
             };
           }
         })
@@ -232,10 +317,13 @@ export default function InvoicePage() {
   const renderOrderRow = (order: Order) => (
     <TableRow key={order.id}>
       <TableCell>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span>{order.order_number}</span>
           {order.order_type === 'readymade' && (
             <Badge variant="outline" className="text-xs">Readymade</Badge>
+          )}
+          {order.is_credit && (
+            <Badge className="bg-orange-100 text-orange-800 text-xs font-semibold">CREDIT</Badge>
           )}
         </div>
       </TableCell>
@@ -243,7 +331,7 @@ export default function InvoicePage() {
       <TableCell>{new Date(order.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}</TableCell>
       <TableCell>
         <Badge className={getStatusColor(order.status)}>
-          {order.status === 'dispatched' ? 'Fully Dispatched' : 
+          {order.status === 'dispatched' ? 'Ready to Dispatch' : 
            order.status === 'partial_dispatched' ? 'Partially Dispatched' :
            order.status === 'completed' ? 'Completed' : order.status}
         </Badge>

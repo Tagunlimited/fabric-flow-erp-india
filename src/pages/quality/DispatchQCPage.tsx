@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Search } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 interface OrderCard {
   order_id: string;
@@ -23,6 +24,58 @@ interface OrderCard {
   hasPendingChallan?: boolean; // Flag to track if order has a pending challan that needs to be marked as shipped
 }
 
+// Helper function to sort sizes in a logical order
+const sortSizes = (sizes: Array<{ size_name: string; [key: string]: any }>) => {
+  const sizeOrder: { [key: string]: number } = {
+    'xxs': 1, '2xs': 1,
+    'xs': 2,
+    's': 3, 'small': 3,
+    'm': 4, 'medium': 4,
+    'l': 5, 'large': 5,
+    'xl': 6,
+    'xxl': 7, '2xl': 7,
+    'xxxl': 8, '3xl': 8,
+    'xxxxl': 9, '4xl': 9,
+    'xxxxxl': 10, '5xl': 10
+  };
+
+  return [...sizes].sort((a, b) => {
+    const sizeA = a.size_name.toLowerCase().trim();
+    const sizeB = b.size_name.toLowerCase().trim();
+
+    // Check for standard sizes
+    const orderA = sizeOrder[sizeA];
+    const orderB = sizeOrder[sizeB];
+
+    if (orderA !== undefined && orderB !== undefined) {
+      return orderA - orderB;
+    }
+    if (orderA !== undefined) return -1;
+    if (orderB !== undefined) return 1;
+
+    // Check for numeric sizes
+    const numA = parseFloat(sizeA);
+    const numB = parseFloat(sizeB);
+    if (!isNaN(numA) && !isNaN(numB)) {
+      return numA - numB;
+    }
+    if (!isNaN(numA)) return -1;
+    if (!isNaN(numB)) return 1;
+
+    // Age ranges (e.g., "2-3Y", "4-5Y")
+    const agePatternA = sizeA.match(/^(\d+)-(\d+)y?$/i);
+    const agePatternB = sizeB.match(/^(\d+)-(\d+)y?$/i);
+    if (agePatternA && agePatternB) {
+      const avgA = (parseInt(agePatternA[1]) + parseInt(agePatternA[2])) / 2;
+      const avgB = (parseInt(agePatternB[1]) + parseInt(agePatternB[2])) / 2;
+      return avgA - avgB;
+    }
+
+    // Alphabetical fallback
+    return sizeA.localeCompare(sizeB);
+  });
+};
+
 export default function DispatchQCPage() {
   const [orders, setOrders] = useState<OrderCard[]>([]);
   const [loading, setLoading] = useState(false);
@@ -31,7 +84,7 @@ export default function DispatchQCPage() {
 
   // Dispatch modal state
   const [dispatchOpen, setDispatchOpen] = useState(false);
-  const [dispatchTarget, setDispatchTarget] = useState<{ order_id: string; order_number: string; customer_name?: string } | null>(null);
+  const [dispatchTarget, setDispatchTarget] = useState<{ order_id: string; order_number: string; customer_name?: string; image_url?: string } | null>(null);
   const [courierName, setCourierName] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
   const [dispatchNote, setDispatchNote] = useState("");
@@ -339,7 +392,7 @@ export default function DispatchQCPage() {
     });
   }, [filtered]);
 
-  const fullyDispatchedOrders = useMemo(() => {
+  const readyToDispatchOrders = useMemo(() => {
     return filtered.filter(o => {
       // Check if there's no remaining quantity to dispatch
       const remainingQuantity = o.approved_quantity - (o.dispatched_quantity || 0);
@@ -387,7 +440,7 @@ export default function DispatchQCPage() {
   const [sizeRows, setSizeRows] = useState<Array<{ size_name: string; approved: number; dispatched: number; to_dispatch: number }>>([]);
   const [isReadymadeOrder, setIsReadymadeOrder] = useState(false);
   const openDispatchDialog = async (o: OrderCard & { is_readymade?: boolean }) => {
-    setDispatchTarget({ order_id: o.order_id, order_number: o.order_number, customer_name: o.customer_name });
+    setDispatchTarget({ order_id: o.order_id, order_number: o.order_number, customer_name: o.customer_name, image_url: o.image_url });
     setCourierName("");
     setTrackingNumber("");
     setDispatchNote("");
@@ -486,17 +539,20 @@ export default function DispatchQCPage() {
         (disp || []).forEach((r: any) => {
           const k = r.size_name as string; dispatchedMap[k] = (dispatchedMap[k] || 0) + Number(r.quantity || 0);
         });
-        const sizes = Array.from(new Set([...Object.keys(approvedMap), ...Object.keys(dispatchedMap)])).sort();
+        const sizes = Array.from(new Set([...Object.keys(approvedMap), ...Object.keys(dispatchedMap)]));
         const rows = sizes.map(size => {
           const approved = Number(approvedMap[size] || 0);
           const dispatched = Number(dispatchedMap[size] || 0);
           const to_dispatch = Math.max(0, approved - dispatched);
           return { size_name: size, approved, dispatched, to_dispatch };
         }).filter(r => r.to_dispatch > 0);
-        setSizeRows(rows);
+        
+        // Sort sizes in logical order (S, M, L, XL, 2XL, etc.)
+        const sortedRows = sortSizes(rows);
+        setSizeRows(sortedRows);
         // Pre-fill dispatch quantities with remaining to dispatch so Generate Challan works immediately
         const prefill: Record<string, number> = {};
-        rows.forEach(r => { prefill[r.size_name] = Number(r.to_dispatch || 0); });
+        sortedRows.forEach(r => { prefill[r.size_name] = Number(r.to_dispatch || 0); });
         setDispatchQtyBySize(prefill);
       } catch {
         setSizeRows([]);
@@ -763,8 +819,31 @@ export default function DispatchQCPage() {
         console.error('Error loading dispatch items:', error);
       }
     } else if (order.order_id) {
-      // For fully dispatched orders, load all dispatch items for this order
+      // For ready to dispatch orders, load all dispatch items for this order
       try {
+        // First, try to find the latest dispatch order (challan) for this order
+        const { data: dispatchOrders } = await (supabase as any)
+          .from('dispatch_orders')
+          .select('id, dispatch_number, dispatch_date, courier_name, tracking_number, status')
+          .eq('order_id', order.order_id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        
+        // If we found a dispatch order, add its details to selectedOrder
+        if (dispatchOrders) {
+          setSelectedOrder({
+            ...order,
+            id: dispatchOrders.id,
+            dispatch_number: dispatchOrders.dispatch_number,
+            dispatch_date: dispatchOrders.dispatch_date,
+            courier_name: dispatchOrders.courier_name,
+            tracking_number: dispatchOrders.tracking_number,
+            dispatch_status: dispatchOrders.status
+          });
+        }
+        
+        // Load all dispatch items for this order
         const { data, error } = await (supabase as any)
           .from('dispatch_order_items')
           .select('size_name, quantity')
@@ -836,20 +915,32 @@ export default function DispatchQCPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {pendingOrders.map((o) => (
                   <Card key={o.order_id} className="border hover:shadow-md transition cursor-pointer" onClick={() => openDispatchDialog(o)}>
-                    <CardContent className="pt-5">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-start gap-3">
-                          <img src={o.image_url || '/placeholder.svg'} alt={o.order_number} className="w-12 h-12 rounded object-cover border" />
-                          <div>
-                            <div className="font-semibold">Order #{o.order_number}</div>
-                            <div className="text-xs text-muted-foreground">{o.customer_name}</div>
+                    <CardContent className="pt-6 pb-6">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex items-start gap-4">
+                          {/* Product Image - Larger and more prominent */}
+                          <div className="flex-shrink-0">
+                            <img 
+                              src={o.image_url || '/placeholder.svg'} 
+                              alt={o.order_number} 
+                              className="w-24 h-24 rounded-lg object-cover border-2 border-gray-200 shadow-sm"
+                              onError={(e) => {
+                                const target = e.currentTarget;
+                                target.src = '/placeholder.svg';
+                                target.onerror = null;
+                              }}
+                            />
                           </div>
+                          <div className="flex-1">
+                            <div className="font-semibold text-base">Order #{o.order_number}</div>
+                            <div className="text-sm text-muted-foreground mt-1">{o.customer_name}</div>
                         </div>
-                        <div className="flex items-center gap-2 flex-wrap justify-end">
-                          <Badge className="bg-blue-100 text-blue-800">Approved: {o.approved_quantity}</Badge>
-                          <Badge className="bg-green-100 text-green-800">Picked: {o.picked_quantity}</Badge>
-                          <Badge className="bg-orange-100 text-orange-800">Dispatched: {o.dispatched_quantity || 0}</Badge>
-                          <Badge className="bg-purple-100 text-purple-800">Remaining: {o.approved_quantity - (o.dispatched_quantity || 0)}</Badge>
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                          <Badge className="bg-blue-100 text-blue-800 text-xs px-2.5 py-1">Approved: {o.approved_quantity}</Badge>
+                          <Badge className="bg-green-100 text-green-800 text-xs px-2.5 py-1">Picked: {o.picked_quantity}</Badge>
+                          <Badge className="bg-orange-100 text-orange-800 text-xs px-2.5 py-1">Dispatched: {o.dispatched_quantity || 0}</Badge>
+                          <Badge className="bg-purple-100 text-purple-800 text-xs px-2.5 py-1">Remaining: {o.approved_quantity - (o.dispatched_quantity || 0)}</Badge>
                         </div>
                       </div>
                     </CardContent>
@@ -860,31 +951,43 @@ export default function DispatchQCPage() {
           </TabsContent>
 
           <TabsContent value="completed">
-            {completed.length === 0 && fullyDispatchedOrders.length === 0 ? (
+            {completed.length === 0 && readyToDispatchOrders.length === 0 ? (
               <p className="text-muted-foreground">No completed dispatch orders.</p>
             ) : (
               <div className="space-y-4">
-                {/* Fully Dispatched Orders (from QC approved) */}
-                {fullyDispatchedOrders.length > 0 && (
+                {/* Ready to Dispatch Orders (from QC approved) */}
+                {readyToDispatchOrders.length > 0 && (
                   <div>
-                    <h3 className="text-lg font-semibold mb-3">Fully Dispatched Orders</h3>
+                    <h3 className="text-lg font-semibold mb-3">Ready to Dispatch Orders</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {fullyDispatchedOrders.map((o) => (
+                      {readyToDispatchOrders.map((o) => (
                         <Card key={o.order_id} className="border hover:shadow-md transition cursor-pointer" onClick={() => openDetailsModal(o)}>
-                          <CardContent className="pt-5">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-start gap-3">
-                                <img src={o.image_url || '/placeholder.svg'} alt={o.order_number} className="w-12 h-12 rounded object-cover border" />
-                                <div>
-                                  <div className="font-semibold">Order #{o.order_number}</div>
-                                  <div className="text-xs text-muted-foreground">{o.customer_name}</div>
+                          <CardContent className="pt-6 pb-6">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex items-start gap-4">
+                                {/* Product Image - Larger */}
+                                <div className="flex-shrink-0">
+                                  <img 
+                                    src={o.image_url || '/placeholder.svg'} 
+                                    alt={o.order_number} 
+                                    className="w-20 h-20 rounded-lg object-cover border-2 border-gray-200 shadow-sm"
+                                    onError={(e) => {
+                                      const target = e.currentTarget;
+                                      target.src = '/placeholder.svg';
+                                      target.onerror = null;
+                                    }}
+                                  />
                                 </div>
-                              </div>
-                              <Badge className="bg-green-100 text-green-800">Fully Dispatched</Badge>
-                            </div>
+                                <div className="flex-1">
+                                  <div className="font-semibold text-base">Order #{o.order_number}</div>
+                                  <div className="text-sm text-muted-foreground mt-1">{o.customer_name}</div>
                             <div className="mt-2 text-xs text-muted-foreground">
                               <div>Approved: {o.approved_quantity}</div>
                               <div>Dispatched: {o.dispatched_quantity || 0}</div>
+                                  </div>
+                                </div>
+                              </div>
+                              <Badge className="bg-green-100 text-green-800 text-xs px-2.5 py-1 h-fit">Ready to Dispatch</Badge>
                             </div>
                           </CardContent>
                         </Card>
@@ -934,7 +1037,27 @@ export default function DispatchQCPage() {
             <DialogTitle>Mark as Dispatched</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="text-sm text-muted-foreground">Order #{dispatchTarget?.order_number} {dispatchTarget?.customer_name ? `• ${dispatchTarget.customer_name}` : ''}</div>
+            {/* Order info with product image */}
+            <div className="flex items-center gap-4 pb-3 border-b">
+              {dispatchTarget?.image_url && (
+                <div className="flex-shrink-0">
+                  <img 
+                    src={dispatchTarget.image_url} 
+                    alt="Product" 
+                    className="w-20 h-20 rounded-lg object-cover border-2 border-gray-200 shadow-sm"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                    }}
+                  />
+                </div>
+              )}
+              <div className="flex-1">
+                <div className="font-semibold text-base">Order #{dispatchTarget?.order_number}</div>
+                {dispatchTarget?.customer_name && (
+                  <div className="text-sm text-muted-foreground mt-1">{dispatchTarget.customer_name}</div>
+                )}
+              </div>
+            </div>
             <div className="border rounded p-3">
               <div className="text-xs font-medium mb-2">Remaining Pcs to Dispatch</div>
               {sizeRows.length === 0 ? (
@@ -1081,17 +1204,38 @@ export default function DispatchQCPage() {
                 <Button variant="outline" onClick={() => setDetailsOpen(false)}>
                   Close
                 </Button>
-                {selectedOrder.dispatch_number && (
+                {(selectedOrder.dispatch_number || selectedOrder.id || selectedOrder.order_id) && (
                   <Button 
-                    onClick={() => {
-                      // Find the dispatch order ID and open challan
-                      if (selectedOrder.id) {
-                        window.open(`/dispatch/challan/${selectedOrder.id}`, '_blank');
+                    onClick={async () => {
+                      // Open challan using dispatch order ID
+                      const dispatchId = selectedOrder.id || selectedOrder.dispatch_order_id;
+                      if (dispatchId) {
+                        window.open(`/dispatch/challan/${dispatchId}`, '_blank');
+                      } else if (selectedOrder.order_id) {
+                        // If no dispatch ID, try to find the latest dispatch order
+                        try {
+                          const { data: dispatchOrder } = await (supabase as any)
+                            .from('dispatch_orders')
+                            .select('id')
+                            .eq('order_id', selectedOrder.order_id)
+                            .order('created_at', { ascending: false })
+                            .limit(1)
+                            .maybeSingle();
+                          
+                          if (dispatchOrder?.id) {
+                            window.open(`/dispatch/challan/${dispatchOrder.id}`, '_blank');
+                          } else {
+                            toast.error('No delivery challan found for this order');
+                          }
+                        } catch (error) {
+                          console.error('Error finding dispatch order:', error);
+                          toast.error('Error loading delivery challan');
+                        }
                       }
                     }}
                     className="bg-blue-600 hover:bg-blue-700"
                   >
-                    View Challan
+                    View/Print Challan
                   </Button>
                 )}
               </div>

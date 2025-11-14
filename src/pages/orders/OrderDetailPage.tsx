@@ -20,7 +20,9 @@ import {
   Share,
   Send,
   ChevronDown,
-  Trash2
+  Trash2,
+  Receipt,
+  ScrollText
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -1879,43 +1881,41 @@ export default function OrderDetailPage() {
           
           <div className="flex items-center space-x-2">
             <div className="flex items-center space-x-3">
-              <div className="flex items-center space-x-2">
-                <Label htmlFor="status-select" className="text-sm font-medium">Status:</Label>
-                <Select 
-                  value={order.status} 
-                  onValueChange={handleStatusChange}
-                >
-                  <SelectTrigger className="w-48">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="confirmed">Confirmed</SelectItem>
-                    <SelectItem value="designing_done">Designing Done</SelectItem>
-                    <SelectItem value="under_procurement">Under Procurement</SelectItem>
-                    <SelectItem value="in_production">In Production</SelectItem>
-                    <SelectItem value="under_cutting">Under Cutting</SelectItem>
-                    <SelectItem value="under_stitching">Under Stitching</SelectItem>
-                    <SelectItem value="under_qc">Under QC</SelectItem>
-                    <SelectItem value="quality_check">Quality Check</SelectItem>
-                    <SelectItem value="ready_for_dispatch">Ready for Dispatch</SelectItem>
-                    <SelectItem value="rework">Rework</SelectItem>
-                    <SelectItem value="partial_dispatched">Partial Dispatched</SelectItem>
-                    <SelectItem value="dispatched">Dispatched</SelectItem>
-                    <SelectItem value="completed" className="text-green-600 font-semibold">✅ Completed</SelectItem>
-                    <SelectItem value="cancelled" className="text-red-600">Cancelled</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
               <Badge className={getStatusColor(order.status)}>
                 {order.status.replace('_', ' ').toUpperCase()}
               </Badge>
             </div>
             
-            <div className="flex space-x-2">
-              {/* <Button variant="outline" onClick={openEditDialog}>
-                Edit
-              </Button> */}
+            <div className="flex flex-wrap gap-2">
+              {/* View Quotation Button */}
+              <Button 
+                variant="outline" 
+                onClick={() => navigate(`/accounts/quotations/${order.id}`)}
+              >
+                <ScrollText className="w-4 h-4 mr-2" />
+                View Quotation
+              </Button>
+              
+              {/* Create Receipt Button */}
+              <Button 
+                variant="outline" 
+                onClick={() => navigate('/accounts/receipts', {
+                  state: {
+                    prefill: {
+                      type: 'order',
+                      id: order.id,
+                      number: order.order_number,
+                      date: order.order_date,
+                      customer_id: order.customer_id,
+                      amount: order.final_amount,
+                    },
+                    tab: 'create'
+                  }
+                })}
+              >
+                <Receipt className="w-4 h-4 mr-2" />
+                Create Receipt
+              </Button>
               
               {order.status !== 'completed' && order.status !== 'cancelled' && (
                 <Button 
@@ -1927,15 +1927,26 @@ export default function OrderDetailPage() {
                 </Button>
               )}
               
-              <Button variant="outline" onClick={handlePrint}>
+              {/* Print/Export Dropdown */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline">
+                    <Printer className="w-4 h-4 mr-1" />
+                    Print/Export
+                    <ChevronDown className="w-3 h-3 ml-1" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print
-              </Button>
-              
-              <Button variant="outline" onClick={handleExportPDF}>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleExportPDF}>
                 <Download className="w-4 h-4 mr-2" />
                 Export PDF
-              </Button>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               
               <AlertDialog>
                 <AlertDialogTrigger asChild>
@@ -1972,56 +1983,41 @@ export default function OrderDetailPage() {
                 </AlertDialogContent>
               </AlertDialog>
 
-              {/* Enhanced Email Dropdown */}
+              {/* Share Dropdown (Email + WhatsApp) */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline">
-                    <Mail className="w-4 h-4 mr-1" />
-                    Email
+                    <Share className="w-4 h-4 mr-1" />
+                    Share
                     <ChevronDown className="w-3 h-3 ml-1" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuLabel>Send via Email</DropdownMenuLabel>
+                  <DropdownMenuLabel>Share Order</DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   
+                  {/* Email Options */}
                   <DropdownMenuItem onClick={handleSendOrderEmail}>
-                    <Send className="w-4 h-4 mr-2" />
-                    Send Order Details
-                    <span className="ml-auto text-xs text-muted-foreground">Summary</span>
+                    <Mail className="w-4 h-4 mr-2" />
+                    Email Order Summary
                   </DropdownMenuItem>
                   
                   <DropdownMenuItem onClick={handleSendOrderPDFEmail}>
-                    <FileText className="w-4 h-4 mr-2" />
-                    Send with PDF
-                    <span className="ml-auto text-xs text-muted-foreground">Detailed</span>
+                    <Mail className="w-4 h-4 mr-2" />
+                    Email with PDF
                   </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              
-              {/* Enhanced WhatsApp Dropdown */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline">
-                    <MessageCircle className="w-4 h-4 mr-1" />
-                    WhatsApp
-                    <ChevronDown className="w-3 h-3 ml-1" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuLabel>Send via WhatsApp</DropdownMenuLabel>
+                  
                   <DropdownMenuSeparator />
                   
+                  {/* WhatsApp Options */}
                   <DropdownMenuItem onClick={handleShareOrderSummary}>
-                    <Share className="w-4 h-4 mr-2" />
-                    Share Order Summary
-                    <span className="ml-auto text-xs text-muted-foreground">Quick</span>
+                    <MessageCircle className="w-4 h-4 mr-2" />
+                    WhatsApp Summary
                   </DropdownMenuItem>
                   
                   <DropdownMenuItem onClick={handleShareOrderPDF}>
-                    <FileText className="w-4 h-4 mr-2" />
-                    Share PDF
-                    <span className="ml-auto text-xs text-muted-foreground">Detailed</span>
+                    <MessageCircle className="w-4 h-4 mr-2" />
+                    WhatsApp PDF
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -2351,17 +2347,18 @@ export default function OrderDetailPage() {
                                                   <div className="font-medium text-xs truncate" title={customization.partName}>
                                                     {customization.partName}
                                                   </div>
-                                                  {customization.partType === 'dropdown' && (
+                                                  {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
                                                     <div className="text-xs text-muted-foreground truncate" title={customization.selectedAddonName}>
                                                       {customization.selectedAddonName}
                                                     </div>
                                                   )}
-                                                  {customization.partType === 'number' && (
+                                                  {/* Only show quantity for number type parts, never for dropdown */}
+                                                  {customization.partType !== 'dropdown' && customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
                                                     <div className="text-xs text-muted-foreground">
                                                       Qty: {customization.quantity}
                                                     </div>
                                                   )}
-                                                  {!shouldHideSections && customization.priceImpact && customization.priceImpact !== 0 && (
+                                                  {!shouldHideSections && customization.priceImpact !== undefined && customization.priceImpact !== null && customization.priceImpact !== 0 && (
                                                     <div className="text-xs font-medium text-green-600">
                                                       ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
                                                     </div>
@@ -2586,10 +2583,11 @@ export default function OrderDetailPage() {
                                                    )}
                                                    <div className="flex-1 min-w-0">
                                                      <div className="font-medium truncate">{customization.partName}</div>
-                                                     {customization.partType === 'dropdown' && (
+                                                     {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
                                                        <div className="text-gray-600 truncate">{customization.selectedAddonName}</div>
                                                      )}
-                                                     {customization.partType === 'number' && (
+                                                     {/* Only show quantity for number type parts, never for dropdown */}
+                                                     {customization.partType !== 'dropdown' && customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
                                                        <div className="text-gray-600">Qty: {customization.quantity}</div>
                                                      )}
                                                    </div>

@@ -19,6 +19,7 @@ interface PickerQuantityDialogProps {
   orderNumber: string;
   customerName?: string;
   sizeDistributions: SizeItem[];
+  productImage?: string;
 }
 
 export default function PickerQuantityDialog({
@@ -29,12 +30,36 @@ export default function PickerQuantityDialog({
   orderNumber,
   customerName,
   sizeDistributions,
+  productImage,
 }: PickerQuantityDialogProps) {
   const { toast } = useToast();
   const [pickedBySize, setPickedBySize] = useState<Record<string, number>>({}); // existing picked
   const [rejectedBySize, setRejectedBySize] = useState<Record<string, number>>({}); // existing QC rejected
   const [addBySize, setAddBySize] = useState<Record<string, number>>({}); // increment to add
   const [saving, setSaving] = useState(false);
+
+  // Define size order for proper sorting
+  const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 
+    '20', '22', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44', '46', '48', '50',
+    '0-2 Yrs', '3-4 Yrs', '5-6 Yrs', '7-8 Yrs', '9-10 Yrs', '11-12 Yrs', '13-14 Yrs', '15-16 Yrs'];
+  
+  // Sort size distributions in proper order
+  const sortedSizeDistributions = useMemo(() => {
+    return [...(sizeDistributions || [])].sort((a, b) => {
+      const indexA = sizeOrder.indexOf(a.size_name);
+      const indexB = sizeOrder.indexOf(b.size_name);
+      
+      // If both sizes are in the order array, sort by their position
+      if (indexA !== -1 && indexB !== -1) {
+        return indexA - indexB;
+      }
+      // If only one is in the order array, prioritize it
+      if (indexA !== -1) return -1;
+      if (indexB !== -1) return 1;
+      // Otherwise, sort alphabetically
+      return a.size_name.localeCompare(b.size_name);
+    });
+  }, [sizeDistributions]);
 
   useEffect(() => {
     const loadPicked = async () => {
@@ -210,6 +235,20 @@ export default function PickerQuantityDialog({
           <DialogTitle>Pick quantities for order {orderNumber}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
+          {/* Product Image Display */}
+          {productImage && (
+            <div className="flex justify-center">
+              <img 
+                src={productImage} 
+                alt="Product"
+                className="w-40 h-40 object-cover rounded-lg border-2 border-primary shadow-md"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                }}
+              />
+            </div>
+          )}
+          
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span>Customer:</span>
             <span className="font-medium text-foreground">{customerName || '-'}</span>
@@ -222,7 +261,7 @@ export default function PickerQuantityDialog({
             )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {(sizeDistributions || []).map((s) => {
+            {sortedSizeDistributions.map((s) => {
               const assigned = getAssigned(s.size_name);
               const picked = getPicked(s.size_name);
               const rejected = getRejected(s.size_name);

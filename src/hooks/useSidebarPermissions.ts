@@ -78,7 +78,8 @@ export function useSidebarPermissions() {
           *,
           sidebar_item:sidebar_items(*)
         `)
-        .eq('user_id', user.id as any);
+        .eq('user_id', user.id as any)
+        .eq('is_override', true as any);
 
       if (userPermsError) {
         console.error('Error fetching user permissions:', userPermsError);
@@ -91,77 +92,88 @@ export function useSidebarPermissions() {
         return;
       }
 
-      // Get role-based sidebar permissions
-      // First, get the role ID from the roles table
-      let rolePermissions = null;
-      let rolePermsError = null;
+      // Check if user has any explicit user-specific permissions (overrides)
+      const hasUserOverrides = userPermissions && userPermissions.length > 0;
+
+      // If user has explicit overrides, ONLY use those (ignore role permissions)
+      // This ensures that when admin grants specific permissions, only those are shown
+      let effectivePermissions = new Map();
       
-      if ((profile as any)?.role) {
-        const { data: roleData, error: roleError } = await supabase
-          .from('roles')
-          .select('id')
-          .eq('name', (profile as any).role)
-          .single();
-          
-        if (roleData && !roleError) {
-          const { data: rolePerms, error: rolePermsErr } = await supabase
-            .from('role_sidebar_permissions')
-            .select(`
-              *,
-              sidebar_item:sidebar_items(*)
-            `)
-            .eq('role_id', (roleData as any).id as any);
+      if (hasUserOverrides) {
+        // User has explicit permissions - ONLY show those, ignore role permissions
+        console.log('User has explicit permissions - using only user-specific permissions');
+        console.log('User permissions count:', userPermissions?.length);
+        (userPermissions as any)?.forEach((perm: any) => {
+          if (perm.sidebar_item && perm.can_view) {
+            console.log('Adding permission:', perm.sidebar_item.title, perm.sidebar_item.url, 'Parent:', perm.sidebar_item.parent_id);
+            effectivePermissions.set(perm.sidebar_item.id, {
+              ...perm.sidebar_item,
+              can_view: perm.can_view,
+              can_edit: perm.can_edit,
+              permission_source: 'user'
+            });
+          }
+        });
+        console.log('Effective permissions after user overrides:', effectivePermissions.size);
+      } else {
+        // No user overrides - use role-based permissions
+        // Get role-based sidebar permissions
+        // First, get the role ID from the roles table
+        let rolePermissions = null;
+        let rolePermsError = null;
+        
+        if ((profile as any)?.role) {
+          const { data: roleData, error: roleError } = await supabase
+            .from('roles')
+            .select('id')
+            .eq('name', (profile as any).role)
+            .single();
             
-          rolePermissions = rolePerms;
-          rolePermsError = rolePermsErr;
+          if (roleData && !roleError) {
+            const { data: rolePerms, error: rolePermsErr } = await supabase
+              .from('role_sidebar_permissions')
+              .select(`
+                *,
+                sidebar_item:sidebar_items(*)
+              `)
+              .eq('role_id', (roleData as any).id as any);
+              
+            rolePermissions = rolePerms;
+            rolePermsError = rolePermsErr;
+          } else {
+            console.log('No role found for:', (profile as any).role);
+            // If no role found, just continue without role permissions
+            rolePermissions = [];
+            rolePermsError = null;
+          }
         } else {
-          console.log('No role found for:', (profile as any).role);
-          // If no role found, just continue without role permissions
           rolePermissions = [];
           rolePermsError = null;
         }
-      } else {
-        rolePermissions = [];
-        rolePermsError = null;
-      }
 
-      if (rolePermsError) {
-        console.error('Error fetching role permissions:', rolePermsError);
-        setPermissions(prev => ({ 
-          ...prev, 
-          loading: false, 
-          error: 'Failed to fetch role permissions',
-          permissionsSetup: false
-        }));
-        return;
-      }
-
-      // Combine permissions: user overrides take precedence over role permissions
-      const effectivePermissions = new Map();
-      
-      // First, add role permissions
-      (rolePermissions as any)?.forEach((perm: any) => {
-        if (perm.sidebar_item) {
-          effectivePermissions.set(perm.sidebar_item.id, {
-            ...perm.sidebar_item,
-            can_view: perm.can_view,
-            can_edit: perm.can_edit,
-            permission_source: 'role'
-          });
+        if (rolePermsError) {
+          console.error('Error fetching role permissions:', rolePermsError);
+          setPermissions(prev => ({ 
+            ...prev, 
+            loading: false, 
+            error: 'Failed to fetch role permissions',
+            permissionsSetup: false
+          }));
+          return;
         }
-      });
 
-      // Then, override with user-specific permissions
-      (userPermissions as any)?.forEach((perm: any) => {
-        if (perm.sidebar_item) {
-          effectivePermissions.set(perm.sidebar_item.id, {
-            ...perm.sidebar_item,
-            can_view: perm.can_view,
-            can_edit: perm.can_edit,
-            permission_source: 'user'
-          });
-        }
-      });
+        // Use only role permissions
+        (rolePermissions as any)?.forEach((perm: any) => {
+          if (perm.sidebar_item && perm.can_view) {
+            effectivePermissions.set(perm.sidebar_item.id, {
+              ...perm.sidebar_item,
+              can_view: perm.can_view,
+              can_edit: perm.can_edit,
+              permission_source: 'role'
+            });
+          }
+        });
+      }
 
       // If no permissions found, check if this is because no permissions are set up at all
       // or if the user simply has no access to any items
@@ -286,17 +298,67 @@ export function useSidebarPermissions() {
         }
       });
       
-      // Second pass: organize hierarchy for items that can be viewed
+      // Second pass: ensure parent items are included even if they don't have explicit permissions
+      // This is needed when a child has permission but parent doesn't have explicit permission
+      effectivePermissions.forEach((item, id) => {
+        if (item.can_view && item.parent_id) {
+          // Check if parent exists in permissions
+          const parentInPermissions = effectivePermissions.get(item.parent_id);
+          if (!parentInPermissions || !parentInPermissions.can_view) {
+            // Parent not in permissions, need to fetch it from sidebar_items
+            // We'll handle this by ensuring parent is added to itemsMap
+            // For now, we'll fetch all sidebar items to get parent details
+          }
+        }
+      });
+      
+      // Fetch all sidebar items to get parent details for hierarchy
+      const { data: allSidebarItems } = await supabase
+        .from('sidebar_items')
+        .select('*')
+        .eq('is_active', true as any);
+      
+      // Third pass: add parent items to map if they're not already there but have children with permissions
+      if (allSidebarItems) {
+        allSidebarItems.forEach((parentItem: any) => {
+          // Check if this parent has any children with permissions
+          const hasChildWithPermission = Array.from(effectivePermissions.values()).some(
+            (permItem: any) => permItem.parent_id === parentItem.id && permItem.can_view
+          );
+          
+          if (hasChildWithPermission && !itemsMap.has(parentItem.id)) {
+            // Add parent to map even if it doesn't have explicit permission
+            itemsMap.set(parentItem.id, {
+              ...parentItem,
+              can_view: true, // Allow parent to be shown if it has children
+              can_edit: false,
+              children: []
+            });
+          }
+        });
+      }
+      
+      // Fourth pass: organize hierarchy for items that can be viewed
       effectivePermissions.forEach((item, id) => {
         if (item.can_view) {
           if (item.parent_id) {
             const parent = itemsMap.get(item.parent_id);
             if (parent) {
               parent.children?.push(itemsMap.get(id)!);
+            } else {
+              // Parent not in map, add as root for now
+              rootItems.push(itemsMap.get(id)!);
             }
           } else {
             rootItems.push(itemsMap.get(id)!);
           }
+        }
+      });
+      
+      // Also add parent items that are in the map but not yet in rootItems
+      itemsMap.forEach((item, id) => {
+        if (!item.parent_id && !rootItems.find(r => r.id === id)) {
+          rootItems.push(item);
         }
       });
 
@@ -310,18 +372,21 @@ export function useSidebarPermissions() {
           }));
       };
 
-      // Debug logging only when there are issues
-      if (effectivePermissions.size === 0 && (profile as any)?.role !== 'admin') {
-        console.log('🔍 Sidebar permissions debug:', {
-          userRole: (profile as any)?.role,
-          userPermissionsCount: userPermissions?.length || 0,
-          rolePermissionsCount: rolePermissions?.length || 0,
-          effectivePermissionsCount: effectivePermissions.size
-        });
-      }
+      const finalItems = sortItems(rootItems);
+      
+      // Debug logging
+      console.log('🔍 Sidebar permissions final result:', {
+        userRole: (profile as any)?.role,
+        userPermissionsCount: userPermissions?.length || 0,
+        effectivePermissionsCount: effectivePermissions.size,
+        itemsMapSize: itemsMap.size,
+        rootItemsCount: rootItems.length,
+        finalItemsCount: finalItems.length,
+        finalItems: finalItems.map(item => ({ title: item.title, url: item.url, childrenCount: item.children?.length || 0 }))
+      });
 
       setPermissions({
-        items: sortItems(rootItems),
+        items: finalItems,
         loading: false,
         error: null,
         permissionsSetup: true
