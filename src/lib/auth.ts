@@ -63,13 +63,26 @@ export const authService = {
     return user as AuthUser;
   },
 
-  // Get user profile
-  async getUserProfile(userId: string): Promise<UserProfile | null> {
+  // Get user profile with improved error handling and retry logic
+  async getUserProfile(userId: string, retryCount = 0): Promise<UserProfile | null> {
+    const maxRetries = 2;
+    const retryDelay = Math.min(1000 * Math.pow(2, retryCount), 3000); // Exponential backoff, max 3s
+    
     try {
-      console.log('Fetching profile for user:', userId);
+      console.log(`Fetching profile for user: ${userId} (attempt ${retryCount + 1}/${maxRetries + 1})`);
       
-      // First check if we can access the profiles table at all
-      // If RLS policies are causing recursion, this will fail gracefully
+      // Validate session before attempting fetch
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session) {
+        console.warn('No valid session, attempting to refresh...');
+        const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError || !refreshed.session) {
+          console.error('Session refresh failed:', refreshError);
+          return null;
+        }
+      }
+      
+      // Fetch profile
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
@@ -78,36 +91,46 @@ export const authService = {
 
       if (error) {
         console.error('Profile fetch error:', error);
-        // Handle JWT expired errors - try to refresh session
-        if (error.code === '401' || error.message?.includes('JWT') || error.message?.includes('expired') || error.message?.includes('unauthorized')) {
-          console.log('JWT expired, attempting to refresh session...');
+        
+        // Handle JWT expired/unauthorized errors
+        if (error.code === '401' || error.code === 'PGRST301' || 
+            error.message?.includes('JWT') || error.message?.includes('expired') || 
+            error.message?.includes('unauthorized') || error.message?.includes('Invalid API key')) {
+          console.log('Authentication error, attempting to refresh session...');
           try {
             const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
             if (refreshError || !refreshed.session) {
               console.error('Session refresh failed:', refreshError);
               return null;
             }
-            // Retry the profile fetch after refresh
-            const { data: retryData, error: retryError } = await supabase
-              .from('profiles')
-              .select('*')
-              .eq('user_id', userId)
-              .maybeSingle();
-            if (retryError) {
-              console.error('Profile fetch still failing after refresh:', retryError);
-              return null;
+            // Retry after refresh with exponential backoff
+            if (retryCount < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+              return this.getUserProfile(userId, retryCount + 1);
             }
-            return retryData;
+            return null;
           } catch (refreshErr) {
             console.error('Error during session refresh:', refreshErr);
             return null;
           }
         }
+        
         // Handle RLS policy recursion errors
-        if (error.code === '42P17' || error.message.includes('infinite recursion') || error.message.includes('policy')) {
+        if (error.code === '42P17' || error.message?.includes('infinite recursion') || 
+            error.message?.includes('policy') || error.message?.includes('recursive')) {
           console.warn('RLS policy recursion detected, skipping profile fetch');
           return null;
         }
+        
+        // Handle network/timeout errors with retry
+        if ((error.message?.includes('network') || error.message?.includes('timeout') || 
+             error.message?.includes('fetch')) && retryCount < maxRetries) {
+          console.log(`Network error, retrying in ${retryDelay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          return this.getUserProfile(userId, retryCount + 1);
+        }
+        
+        // For other errors, throw to be caught by outer catch
         throw error;
       }
       
@@ -124,18 +147,39 @@ export const authService = {
             );
             console.log('Profile created successfully:', newProfile);
             return newProfile;
-          } catch (createError) {
+          } catch (createError: any) {
             console.warn('Failed to create profile:', createError);
+            // If profile creation fails due to duplicate, try fetching again
+            if (createError.message?.includes('duplicate') || createError.code === '23505') {
+              if (retryCount < maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
+                return this.getUserProfile(userId, retryCount + 1);
+              }
+            }
             return null;
           }
         }
+        return null;
       }
       
       console.log('Profile fetched successfully:', data);
       return data;
     } catch (error: any) {
-      // Catch any other errors and return null to prevent app crashes
-      console.warn('Profile fetch failed, continuing without profile:', error.message);
+      console.warn(`Profile fetch failed (attempt ${retryCount + 1}):`, error?.message || 'Unknown error');
+      
+      // Retry on network errors or first attempt
+      if (retryCount < maxRetries && (
+        error?.message?.includes('network') || 
+        error?.message?.includes('timeout') ||
+        error?.message?.includes('fetch') ||
+        retryCount === 0
+      )) {
+        console.log(`Retrying profile fetch in ${retryDelay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        return this.getUserProfile(userId, retryCount + 1);
+      }
+      
+      // Return null to prevent app crashes
       return null;
     }
   },

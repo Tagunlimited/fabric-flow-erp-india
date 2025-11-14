@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
+import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { CheckCircle, XCircle, Clock, Users, UserCheck, UserX, Plus, Edit, Trash2, Key, Mail, Phone, MapPin, Calendar, Briefcase, Settings, Eye, EyeOff, Lock, Unlock, ChevronDown, ChevronRight } from 'lucide-react';
@@ -78,6 +79,7 @@ export function EmployeeAccessManagement() {
   const [userProfiles, setUserProfiles] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [grantAccessSource, setGrantAccessSource] = useState<'row' | 'header' | null>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [newUserData, setNewUserData] = useState({
     email: '',
@@ -85,6 +87,11 @@ export function EmployeeAccessManagement() {
     confirmPassword: ''
   });
   const [processingUser, setProcessingUser] = useState<string | null>(null);
+  const [resetPasswordUserId, setResetPasswordUserId] = useState<string | null>(null);
+  const [resetPasswordData, setResetPasswordData] = useState({
+    password: '',
+    confirmPassword: ''
+  });
 
   const [sidebarItems, setSidebarItems] = useState<SidebarItem[]>([]);
   const [userSidebarPermissions, setUserSidebarPermissions] = useState<UserSidebarPermission[]>([]);
@@ -676,39 +683,61 @@ export function EmployeeAccessManagement() {
           throw new Error('Admin session not found. Please log in again.');
         }
         
-        // Create user account using a temporary signup approach
-        // We'll use a different method to avoid auto-login
-        const signupResult = await supabase.auth.signUp({
-          email: newUserData.email,
-          password: newUserData.password,
-          options: {
-            data: {
+        // Try to use admin API first (if available)
+        try {
+          const adminResult = await supabase.auth.admin.createUser({
+            email: newUserData.email,
+            password: newUserData.password,
+            email_confirm: true,
+            user_metadata: {
               full_name: selectedEmployee.full_name,
               phone: selectedEmployee.personal_phone,
               department: selectedEmployee.department,
-              created_by_admin: true // Flag to indicate admin-created account
-            },
-            emailRedirectTo: `${window.location.origin}/login`
+              created_by_admin: true
+            }
+          });
+          
+          if (adminResult.error) {
+            throw adminResult.error;
           }
-        });
-        authData = signupResult.data;
-        authError = signupResult.error;
-        
-        // Immediately sign out the new user and restore admin session
-        if (authData?.user) {
-          await supabase.auth.signOut();
-          // Restore admin session
-          if (currentSession?.session) {
-            await supabase.auth.setSession(currentSession.session);
+          
+          authData = adminResult.data;
+          authError = null;
+        } catch (adminError: any) {
+          // Fallback to signup if admin API not available
+          console.warn('Admin API not available, using signup:', adminError);
+          const signupResult = await supabase.auth.signUp({
+            email: newUserData.email,
+            password: newUserData.password,
+            options: {
+              data: {
+                full_name: selectedEmployee.full_name,
+                phone: selectedEmployee.personal_phone,
+                department: selectedEmployee.department,
+                created_by_admin: true
+              },
+              emailRedirectTo: `${window.location.origin}/login`
+            }
+          });
+          authData = signupResult.data;
+          authError = signupResult.error;
+          
+          // Immediately sign out the new user and restore admin session
+          if (authData?.user) {
+            await supabase.auth.signOut();
+            // Restore admin session
+            if (currentSession?.session) {
+              await supabase.auth.setSession(currentSession.session);
+            }
           }
         }
         
         if (authError) {
           throw new Error(`Account creation failed: ${authError.message}`);
         }
-      } catch (signupError) {
+      } catch (signupError: any) {
         console.error('Signup failed:', signupError);
-        throw new Error('Unable to create user account. Please try again or contact your system administrator.');
+        throw new Error(signupError.message || 'Unable to create user account. Please try again or contact your system administrator.');
       }
 
       // Handle the result after restoring admin session
@@ -771,18 +800,37 @@ export function EmployeeAccessManagement() {
         // Set up default permissions for the new employee
         await setupDefaultEmployeePermissions(authData.user.id);
 
-        // Check if user needs email confirmation
-        const needsEmailConfirmation = !authData.user?.email_confirmed_at;
-        if (needsEmailConfirmation) {
-          toast.success('Employee user account created! They will receive an email confirmation link to activate their account.');
-        } else {
-          toast.success('Employee user account created successfully! They can login immediately with the provided credentials.');
+        // Send welcome email with credentials
+        try {
+          // Use Supabase's email service to send welcome email
+          // Note: This requires email templates to be configured in Supabase dashboard
+          const { error: emailError } = await supabase.functions.invoke('send-welcome-email', {
+            body: {
+              email: newUserData.email,
+              password: newUserData.password,
+              full_name: selectedEmployee.full_name,
+              employee_name: selectedEmployee.full_name
+            }
+          });
+          
+          if (emailError) {
+            console.warn('Failed to send welcome email:', emailError);
+            // Don't fail the entire operation if email fails
+            toast.success(`Employee account created! Email: ${newUserData.email}, Password: [provided during creation]. Welcome email may not have been sent.`);
+          } else {
+            toast.success('Employee account created successfully! Welcome email with credentials has been sent.');
+          }
+        } catch (emailErr) {
+          // If email function doesn't exist or fails, just show success message
+          console.warn('Email sending not available:', emailErr);
+          toast.success(`Employee account created successfully! Email: ${newUserData.email}. They can login immediately with the provided credentials.`);
         }
       } else {
         throw new Error('User creation failed - no user data returned');
       }
 
       setShowCreateForm(false);
+      setGrantAccessSource(null);
       setNewUserData({ email: '', password: '', confirmPassword: '' });
       setSelectedEmployee(null);
       await fetchData();
@@ -870,48 +918,121 @@ export function EmployeeAccessManagement() {
       };
 
       const item = findItemWithParent(sidebarItems);
+      const existingPermission = getUserSidebarPermission(userId, sidebarItemId);
       
-      // Update the selected item
-      const updates = [
-        supabase
+      // If unchecking (canView: false) and permission exists, delete it
+      if (!canView && existingPermission) {
+        const { error: deleteError } = await supabase
           .from('user_sidebar_permissions')
-          .upsert({
+          .delete()
+          .eq('user_id', userId as any)
+          .eq('sidebar_item_id', sidebarItemId as any)
+          .eq('is_override', true as any);
+        
+        if (deleteError) {
+          throw deleteError;
+        }
+        
+        toast.success('Permission removed successfully');
+        await fetchData();
+        return;
+      }
+      
+      // If checking (canView: true), upsert the permission
+      if (canView) {
+        // First, try to delete any existing permission for this user/item combination
+        // This handles cases where there might be a record with is_override=false or true
+        const { error: deleteError } = await supabase
+          .from('user_sidebar_permissions')
+          .delete()
+          .eq('user_id', userId as any)
+          .eq('sidebar_item_id', sidebarItemId as any);
+        
+        // Log delete error but don't fail - it might not exist
+        if (deleteError && !deleteError.message?.includes('No rows')) {
+          console.warn('Error deleting existing permission:', deleteError);
+        }
+
+        // Insert the new permission
+        const { error: insertError } = await supabase
+          .from('user_sidebar_permissions')
+          .insert({
             user_id: userId,
             sidebar_item_id: sidebarItemId,
-            can_view: canView,
+            can_view: true,
             can_edit: canEdit,
             is_override: true
-          } as any)
-      ];
+          } as any);
 
-      // If granting access to a child item, also grant access to its parent
-      if (item && item.parent_id && canView) {
-        console.log(`Auto-granting access to parent for ${item.title}`);
-        updates.push(
-          supabase
+        if (insertError) {
+          // If insert fails due to conflict, try update instead
+          if (insertError.code === '23505' || insertError.message?.includes('duplicate') || insertError.message?.includes('unique')) {
+            const { error: updateError } = await supabase
+              .from('user_sidebar_permissions')
+              .update({
+                can_view: true,
+                can_edit: canEdit,
+                is_override: true
+              } as any)
+              .eq('user_id', userId as any)
+              .eq('sidebar_item_id', sidebarItemId as any);
+            
+            if (updateError) {
+              throw updateError;
+            }
+          } else {
+            throw insertError;
+          }
+        }
+
+        // If granting access to a child item, also grant access to its parent
+        if (item && item.parent_id) {
+          console.log(`Auto-granting access to parent for ${item.title}`);
+          // Delete any existing parent permission first
+          await supabase
             .from('user_sidebar_permissions')
-            .upsert({
+            .delete()
+            .eq('user_id', userId as any)
+            .eq('sidebar_item_id', item.parent_id as any);
+          
+          // Insert parent permission
+          const { error: parentInsertError } = await supabase
+            .from('user_sidebar_permissions')
+            .insert({
               user_id: userId,
               sidebar_item_id: item.parent_id,
               can_view: true,
               can_edit: false,
               is_override: true
-            } as any)
-        );
-      }
-
-      // Execute all updates
-      const results = await Promise.all(updates);
-      
-      // Check for errors
-      for (const result of results) {
-        if (result.error) {
-          throw result.error;
+            } as any);
+          
+          if (parentInsertError) {
+            // If insert fails due to conflict, try update instead
+            if (parentInsertError.code === '23505' || parentInsertError.message?.includes('duplicate') || parentInsertError.message?.includes('unique')) {
+              const { error: parentUpdateError } = await supabase
+                .from('user_sidebar_permissions')
+                .update({
+                  can_view: true,
+                  can_edit: false,
+                  is_override: true
+                } as any)
+                .eq('user_id', userId as any)
+                .eq('sidebar_item_id', item.parent_id as any);
+              
+              if (parentUpdateError) {
+                console.error('Error updating parent permission:', parentUpdateError);
+                // Don't throw - parent permission is secondary
+              }
+            } else {
+              console.error('Error inserting parent permission:', parentInsertError);
+              // Don't throw - parent permission is secondary
+            }
+          }
         }
+        
+        toast.success('Permission granted! Parent menu access also granted.');
+        await fetchData();
       }
-      
-      toast.success(canView ? 'Permission granted! Parent menu access also granted.' : 'Permission updated successfully');
-      await fetchData();
     } catch (error) {
       console.error('Error updating sidebar permission:', error);
       toast.error('Failed to update sidebar permission');
@@ -937,12 +1058,13 @@ export function EmployeeAccessManagement() {
 
   const getUserSidebarPermission = (userId: string, sidebarItemId: string) => {
     return userSidebarPermissions.find(
-      perm => perm.user_id === userId && perm.sidebar_item_id === sidebarItemId
+      perm => perm.user_id === userId && perm.sidebar_item_id === sidebarItemId && perm.is_override
     );
   };
 
   const renderSidebarItem = (item: SidebarItem, userId: string, level = 0) => {
     const permission = getUserSidebarPermission(userId, item.id);
+    // Only show checked if explicit user override exists (is_override: true)
     let canView = permission?.can_view ?? false;
     const canEdit = permission?.can_edit ?? false;
 
@@ -1000,7 +1122,11 @@ export function EmployeeAccessManagement() {
         {/* Render children recursively */}
         {item.children && item.children.length > 0 && (
           <div className="space-y-1">
-            {item.children.map(child => renderSidebarItem(child, userId, level + 1))}
+            {item.children.map(child => (
+              <React.Fragment key={child.id}>
+                {renderSidebarItem(child, userId, level + 1)}
+              </React.Fragment>
+            ))}
           </div>
         )}
       </>
@@ -1258,9 +1384,15 @@ export function EmployeeAccessManagement() {
                   🎭 Check Available Roles
                 </Button>
               </div> */}
-              <Dialog open={showCreateForm} onOpenChange={setShowCreateForm}>
+              <Dialog open={showCreateForm} onOpenChange={(open) => {
+                setShowCreateForm(open);
+                if (!open) {
+                  setGrantAccessSource(null);
+                  setSelectedEmployee(null);
+                }
+              }}>
                 <DialogTrigger asChild>
-                  <Button>
+                  <Button onClick={() => setGrantAccessSource('header')}>
                     <Plus className="w-4 h-4 mr-2" />
                     Create User Account
                   </Button>
@@ -1268,34 +1400,36 @@ export function EmployeeAccessManagement() {
                 <DialogContent className="max-w-md">
                   <DialogHeader>
                     <DialogTitle>Create User Account for Employee</DialogTitle>
-                    <p className="text-sm text-muted-foreground">
+                    <DialogDescription>
                       Create a system account for this employee with login credentials
-                    </p>
+                    </DialogDescription>
                   </DialogHeader>
                   <form onSubmit={handleCreateUser} className="space-y-4">
-                    <div className="space-y-2">
-                      <Label>Select Employee</Label>
-                      <Select onValueChange={(employeeId) => {
-                        const employee = employees.find(emp => emp.id === employeeId);
-                        setSelectedEmployee(employee || null);
-                        if (employee?.personal_email) {
-                          setNewUserData(prev => ({ ...prev, email: employee.personal_email }));
-                        }
-                      }}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Choose an employee" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {employees
-                            .filter(emp => getUserStatus(emp).status === 'no-access')
-                            .map((employee) => (
-                              <SelectItem key={employee.id} value={employee.id}>
-                                {employee.full_name} - {employee.department}
-                              </SelectItem>
-                            ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    {grantAccessSource === 'header' && (
+                      <div className="space-y-2">
+                        <Label>Select Employee</Label>
+                        <Select onValueChange={(employeeId) => {
+                          const employee = employees.find(emp => emp.id === employeeId);
+                          setSelectedEmployee(employee || null);
+                          if (employee?.personal_email) {
+                            setNewUserData(prev => ({ ...prev, email: employee.personal_email }));
+                          }
+                        }}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Choose an employee" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {employees
+                              .filter(emp => getUserStatus(emp).status === 'no-access')
+                              .map((employee) => (
+                                <SelectItem key={employee.id} value={employee.id}>
+                                  {employee.full_name} - {employee.department}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
 
                     {selectedEmployee && (
                       <div className="p-3 bg-muted rounded-lg space-y-2">
@@ -1508,6 +1642,7 @@ export function EmployeeAccessManagement() {
                                   password: '',
                                   confirmPassword: ''
                                 });
+                                setGrantAccessSource('row');
                                 setShowCreateForm(true);
                               }}
                             >
@@ -1523,6 +1658,18 @@ export function EmployeeAccessManagement() {
                               >
                                 <Settings className="w-4 h-4 mr-1" />
                                 Permissions
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setResetPasswordUserId(accessStatus.profile!.user_id);
+                                  setResetPasswordData({ password: '', confirmPassword: '' });
+                                }}
+                                disabled={processingUser === accessStatus.profile!.user_id}
+                              >
+                                <Key className="w-4 h-4 mr-1" />
+                                Reset Password
                               </Button>
                               <Button
                                 variant="ghost"
@@ -1557,9 +1704,9 @@ export function EmployeeAccessManagement() {
                 </span>
               )}
             </DialogTitle>
-            <p className="text-sm text-muted-foreground">
+            <DialogDescription>
               Configure which sidebar options this employee can access. These permissions override role-based permissions.
-            </p>
+            </DialogDescription>
           </DialogHeader>
           
           {showSidebarPermissions && (
@@ -1747,6 +1894,115 @@ export function EmployeeAccessManagement() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Password Reset Dialog */}
+      <Dialog open={!!resetPasswordUserId} onOpenChange={(open) => {
+        if (!open) {
+          setResetPasswordUserId(null);
+          setResetPasswordData({ password: '', confirmPassword: '' });
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reset Employee Password</DialogTitle>
+            <DialogDescription>
+              Set a new password for this employee. They will need to use this password to login.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            if (resetPasswordData.password !== resetPasswordData.confirmPassword) {
+              toast.error('Passwords do not match');
+              return;
+            }
+            if (resetPasswordData.password.length < 6) {
+              toast.error('Password must be at least 6 characters long');
+              return;
+            }
+            
+            try {
+              setProcessingUser(resetPasswordUserId!);
+              const { data, error } = await supabase.functions.invoke('reset-employee-password', {
+                body: {
+                  userId: resetPasswordUserId,
+                  newPassword: resetPasswordData.password
+                }
+              });
+              
+              if (error) {
+                // Check if function doesn't exist or isn't deployed
+                if (error.message?.includes('Edge Function') || error.message?.includes('not found') || error.message?.includes('CORS')) {
+                  toast.error('Password reset function is not deployed. Please deploy the reset-employee-password edge function first.');
+                  console.error('Edge function not found. Deploy it using: supabase functions deploy reset-employee-password');
+                } else {
+                  throw error;
+                }
+                return;
+              }
+              
+              if (data?.success) {
+                toast.success('Password reset successfully!');
+                setResetPasswordUserId(null);
+                setResetPasswordData({ password: '', confirmPassword: '' });
+              } else {
+                throw new Error(data?.error || 'Failed to reset password');
+              }
+            } catch (error: any) {
+              console.error('Error resetting password:', error);
+              if (error.message?.includes('Edge Function') || error.message?.includes('CORS')) {
+                toast.error('Password reset function is not available. Please contact your administrator to deploy the function.');
+              } else {
+                toast.error(error.message || 'Failed to reset password');
+              }
+            } finally {
+              setProcessingUser(null);
+            }
+          }} className="space-y-4">
+            <div className="space-y-2">
+              <Label>New Password *</Label>
+              <Input
+                type="password"
+                value={resetPasswordData.password}
+                onChange={(e) => setResetPasswordData(prev => ({ ...prev, password: e.target.value }))}
+                placeholder="Enter new password"
+                required
+                minLength={6}
+              />
+            </div>
+            
+            <div className="space-y-2">
+              <Label>Confirm Password *</Label>
+              <Input
+                type="password"
+                value={resetPasswordData.confirmPassword}
+                onChange={(e) => setResetPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                placeholder="Confirm new password"
+                required
+                minLength={6}
+              />
+            </div>
+            
+            <div className="flex justify-end space-x-2 pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setResetPasswordUserId(null);
+                  setResetPasswordData({ password: '', confirmPassword: '' });
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={processingUser === resetPasswordUserId}
+              >
+                {processingUser === resetPasswordUserId ? 'Resetting...' : 'Reset Password'}
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

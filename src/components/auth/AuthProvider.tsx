@@ -102,12 +102,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
           }
         }
         
-        // Retry once if it's a network error or first attempt
-        if (retryCount === 0) {
-          console.log('Retrying profile refresh...');
-          setTimeout(() => refreshProfile(1), 1000);
+        // Retry with exponential backoff (max 2 retries)
+        if (retryCount < 2) {
+          const retryDelay = Math.min(1000 * Math.pow(2, retryCount), 3000);
+          console.log(`Retrying profile refresh in ${retryDelay}ms (attempt ${retryCount + 1}/2)...`);
+          setTimeout(() => refreshProfile(retryCount + 1), retryDelay);
         } else {
-          // Create a minimal profile object to prevent UI issues
+          // Create a minimal profile object to prevent UI issues after all retries failed
           const fallbackProfile = {
             id: user.id,
             user_id: user.id,
@@ -118,7 +119,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           };
-          console.log('Using fallback profile:', fallbackProfile);
+          console.log('Using fallback profile after all retries failed:', fallbackProfile);
           setProfile(fallbackProfile as any);
         }
       } finally {

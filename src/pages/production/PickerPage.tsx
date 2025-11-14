@@ -1114,7 +1114,7 @@ export default function PickerPage() {
                                           e.currentTarget.style.display = 'none';
                                         }}
                                       />
-                                    </div>
+                                  </div>
                                   )}
                                   
                                   {/* Order Details */}
@@ -1123,19 +1123,19 @@ export default function PickerPage() {
                                     <div className="text-xs text-muted-foreground truncate mt-1">{o.customer_name}</div>
                                     
                                     <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mt-2">
-                                      <Badge className="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">Qty: {o.total_quantity}</Badge>
-                                      <Badge className="bg-green-100 text-green-800 text-xs px-2 py-0.5">Picked: {o.picked_quantity}</Badge>
-                                      {o.rejected_quantity > 0 && (
-                                        <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 cursor-pointer" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rej: {o.rejected_quantity}</Badge>
-                                      )}
-                                    </div>
+                                    <Badge className="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">Qty: {o.total_quantity}</Badge>
+                                    <Badge className="bg-green-100 text-green-800 text-xs px-2 py-0.5">Picked: {o.picked_quantity}</Badge>
+                                    {o.rejected_quantity > 0 && (
+                                      <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 cursor-pointer" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rej: {o.rejected_quantity}</Badge>
+                                    )}
+                                  </div>
                                     
-                          <div className="mt-2 text-xs text-muted-foreground line-clamp-2">
-                            {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 ? (
+                                <div className="mt-2 text-xs text-muted-foreground line-clamp-2">
+                                  {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 ? (
                               <span className="font-medium">Sizes: {sortSizeDistributions(o.size_distributions).map((sd: any) => `${sd.size_name}:${sd.quantity}`).join(', ')}</span>
-                            ) : (
-                              <span>No sizes</span>
-                            )}
+                                  ) : (
+                                    <span>No sizes</span>
+                                  )}
                           </div>
                                   </div>
                                 </div>
@@ -1362,7 +1362,7 @@ export default function PickerPage() {
                                 e.currentTarget.style.display = 'none';
                               }}
                             />
-                          </div>
+                        </div>
                         )}
                         
                         {/* Order Details */}
@@ -1373,17 +1373,17 @@ export default function PickerPage() {
                           <div className="flex flex-wrap items-center gap-2 mt-3">
                             <Badge className="bg-purple-100 text-purple-800 text-sm px-3 py-1">Qty: {o.total_quantity}</Badge>
                             <Badge className="bg-green-100 text-green-800 text-sm px-3 py-1">Picked: {o.picked_quantity}</Badge>
-                            {o.rejected_quantity > 0 && (
+                          {o.rejected_quantity > 0 && (
                               <Badge className="bg-red-100 text-red-800 text-sm px-3 py-1 cursor-pointer" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rej: {o.rejected_quantity}</Badge>
-                            )}
-                          </div>
+                          )}
+                        </div>
                           
                           <div className="mt-3 text-sm text-muted-foreground">
-                            {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 ? (
+                        {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 ? (
                               <span className="font-medium">Sizes: {sortSizeDistributions(o.size_distributions).map((sd: any) => `${sd.size_name}:${sd.quantity}`).join(', ')}</span>
-                            ) : (
-                              <span>No sizes</span>
-                            )}
+                        ) : (
+                          <span>No sizes</span>
+                        )}
                           </div>
                         </div>
                       </div>

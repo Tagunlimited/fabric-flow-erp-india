@@ -996,45 +996,45 @@ const getSelectedFabricVariant = (productIndex: number) => {
           // Set initial status: 'designing_done' if mockup images exist, otherwise 'pending'
           const initialStatus: 'designing_done' | 'pending' = hasMockupImages ? 'designing_done' : 'pending';
           console.log(`Setting initial order status to '${initialStatus}' (has mockup images: ${hasMockupImages})`);
-          
-          const orderData = {
-            order_number: orderNumber,
-            order_date: (formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)).toISOString(),
-            expected_delivery_date: (formData.expected_delivery_date instanceof Date ? formData.expected_delivery_date : new Date(formData.expected_delivery_date)).toISOString(),
-            customer_id: formData.customer_id,
-            sales_manager: formData.sales_manager,
-            total_amount: Number(subtotal),
-            tax_amount: Number(gstAmount),
-            final_amount: Number(grandTotal),
-            advance_amount: Number(formData.advance_amount),
-            balance_amount: Number(balance),
-            gst_rate: Number(formData.gst_rate),
-            payment_channel: formData.payment_channel || null,
-            reference_id: formData.reference_id || null,
+
+      const orderData = {
+        order_number: orderNumber,
+        order_date: (formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)).toISOString(),
+        expected_delivery_date: (formData.expected_delivery_date instanceof Date ? formData.expected_delivery_date : new Date(formData.expected_delivery_date)).toISOString(),
+        customer_id: formData.customer_id,
+        sales_manager: formData.sales_manager,
+        total_amount: Number(subtotal),
+        tax_amount: Number(gstAmount),
+        final_amount: Number(grandTotal),
+        advance_amount: Number(formData.advance_amount),
+        balance_amount: Number(balance),
+        gst_rate: Number(formData.gst_rate),
+        payment_channel: formData.payment_channel || null,
+        reference_id: formData.reference_id || null,
             status: initialStatus,
-            notes: ''
-          };
+        notes: ''
+      };
 
           console.log(`Attempt ${attempt + 1}: Inserting order data:`, orderData);
-          
+      
           const { data, error: orderError } = await supabase
-            .from('orders')
-            .insert(orderData as any)
-            .select()
-            .single();
+        .from('orders')
+        .insert(orderData as any)
+        .select()
+        .single();
 
-          if (orderError) {
+      if (orderError) {
             // If it's a duplicate key error, retry with a new order number
             if (orderError.code === '23505' && attempt < maxRetries - 1) {
               console.warn(`Duplicate order number detected on attempt ${attempt + 1}, retrying...`);
               await new Promise(resolve => setTimeout(resolve, 100)); // Small delay before retry
               continue;
             }
-            throw orderError;
-          }
+        throw orderError;
+      }
 
           orderResult = data;
-          console.log('Order created successfully:', orderResult);
+      console.log('Order created successfully:', orderResult);
           break; // Success, exit the retry loop
         } catch (retryError: any) {
           if (attempt === maxRetries - 1) {
@@ -1879,23 +1879,23 @@ const getSelectedFabricVariant = (productIndex: number) => {
                             <p className="text-xs text-muted-foreground">Any file type • PDF, DOC, etc.</p>
                           </label>
                           
-                          {product.attachments.length > 0 && (
+                            {product.attachments.length > 0 && (
                             <div className="mt-4">
                               <Badge variant="secondary" className="bg-primary/20 text-primary mb-3">
-                                {product.attachments.length} file(s) selected
-                              </Badge>
+                                  {product.attachments.length} file(s) selected
+                                </Badge>
                               <div className="max-h-32 overflow-y-auto space-y-1">
                                 {product.attachments.map((file, idx) => (
                                   <div key={idx} className="text-xs text-muted-foreground truncate bg-muted/50 rounded px-2 py-1">
-                                    {file.name}
-                                  </div>
-                                ))}
+                                      {file.name}
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            )}
+                        </div>
                         </div>
                       </div>
-                    </div>
                     {/* Removed extra closing div to fix JSX tag mismatch */}
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -408,30 +408,30 @@ export default function InvoiceDetailPage() {
           <Button variant="outline" onClick={() => navigate('/accounts/invoices')}>
             <ArrowLeft className="w-4 h-4 mr-2" /> Back to Invoices
           </Button>
-          
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => window.print()}>
-              <Printer className="w-4 h-4 mr-1" /> Print
-            </Button>
-            
-            <Button variant="outline" onClick={handlePrint}>
-              <Download className="w-4 h-4 mr-1" /> Export PDF
-            </Button>
-            
-            <Button
-              variant="outline"
-              onClick={() => navigate('/accounts/invoices')}
-            >
-              <Eye className="w-4 h-4 mr-1" /> View All Invoices
-            </Button>
-            
-            {!isInvoiceId && (
-              <Button onClick={handleCreateInvoice} className="bg-blue-600 hover:bg-blue-700">
-                <FileText className="w-4 h-4 mr-1" /> Create Invoice
-              </Button>
-            )}
-          </div>
-        </div>
+
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => window.print()}>
+                  <Printer className="w-4 h-4 mr-1" /> Print
+                </Button>
+                
+                <Button variant="outline" onClick={handlePrint}>
+                  <Download className="w-4 h-4 mr-1" /> Export PDF
+                </Button>
+                
+                <Button
+                  variant="outline"
+                  onClick={() => navigate('/accounts/invoices')}
+                >
+                  <Eye className="w-4 h-4 mr-1" /> View All Invoices
+                </Button>
+                
+                {!isInvoiceId && (
+                  <Button onClick={handleCreateInvoice} className="bg-blue-600 hover:bg-blue-700">
+                    <FileText className="w-4 h-4 mr-1" /> Create Invoice
+                  </Button>
+                )}
+              </div>
+                </div>
 
         {/* Print View - Full width for A4 */}
         <div ref={printRef} className="bg-white p-8 print:px-5 print:py-4 print:m-0 print:w-full print:max-w-none" style={{ width: '210mm', maxWidth: '210mm' }}>
@@ -450,7 +450,7 @@ export default function InvoiceDetailPage() {
                           e.currentTarget.style.display = 'none';
                         }}
                       />
-                    </div>
+                  </div>
                   )}
                   {/* Company Details */}
                   <div className="flex-1">
@@ -473,12 +473,12 @@ export default function InvoiceDetailPage() {
                       <p className="text-xs text-gray-700"><span className="font-semibold">Due Date:</span> {formatDateIndian(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString())}</p>
                       <p className="text-xs text-gray-700 break-words">
                         <span className="font-semibold">Order Ref:</span> {order.order_number} | <span className="font-semibold">Date:</span> {formatDateIndian(order.order_date)}
-                      </p>
-                      {salesManager && (
+                  </p>
+                  {salesManager && (
                         <p className="text-xs text-gray-700">
                           <span className="font-semibold">Sales Manager:</span> {salesManager.full_name}
-                        </p>
-                      )}
+                    </p>
+                  )}
                     </div>
                   </div>
                   <div className="text-right flex-1 max-w-[40%]">
@@ -554,9 +554,9 @@ export default function InvoiceDetailPage() {
                               <div className="font-medium mb-0.5">{item.product_description}</div>
                               {item.color && <div className="text-gray-600">Color: {item.color}</div>}
                               {item.gsm && <div className="text-gray-600">GSM: {item.gsm}</div>}
-                              {fabrics[item.fabric_id] && (
+                            {fabrics[item.fabric_id] && (
                                 <div className="text-gray-600">Fabric: {fabrics[item.fabric_id].name}</div>
-                              )}
+                            )}
                             </div>
                           </td>
                           <td className="border border-gray-300 px-2 py-1 text-center text-xs align-top font-medium">{item.quantity}</td>

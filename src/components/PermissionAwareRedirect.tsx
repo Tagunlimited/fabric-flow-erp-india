@@ -43,14 +43,31 @@ export function PermissionAwareRedirect() {
     }
 
     // Find the first available page for the user
-    const firstAvailableItem = sidebarItems.find(item => item.url);
+    // First try to find a root-level item with URL
+    let firstAvailableItem = sidebarItems.find(item => item.url);
+    
+    // If no root item with URL, search in children recursively
+    if (!firstAvailableItem) {
+      const findFirstWithUrl = (items: typeof sidebarItems): typeof sidebarItems[0] | undefined => {
+        for (const item of items) {
+          if (item.url) return item;
+          if (item.children) {
+            const found = findFirstWithUrl(item.children);
+            if (found) return found;
+          }
+        }
+        return undefined;
+      };
+      firstAvailableItem = findFirstWithUrl(sidebarItems);
+    }
     
     if (firstAvailableItem?.url) {
       console.log('✅ Redirecting to first available page:', firstAvailableItem.title, firstAvailableItem.url);
       hasRedirected.current = true;
       navigate(firstAvailableItem.url, { replace: true });
     } else {
-      console.log('⚠️ No available pages found, staying on dashboard');
+      console.log('⚠️ No available pages found. Sidebar items:', sidebarItems);
+      console.log('⚠️ Sidebar items count:', sidebarItems.length);
       hasRedirected.current = true;
     }
   }, [loading, permissionsSetup, sidebarItems, navigate, profile?.role, location.pathname]);

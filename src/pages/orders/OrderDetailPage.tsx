@@ -1938,12 +1938,12 @@ export default function OrderDetailPage() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48">
                   <DropdownMenuItem onClick={handlePrint}>
-                    <Printer className="w-4 h-4 mr-2" />
-                    Print
+                <Printer className="w-4 h-4 mr-2" />
+                Print
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={handleExportPDF}>
-                    <Download className="w-4 h-4 mr-2" />
-                    Export PDF
+                <Download className="w-4 h-4 mr-2" />
+                Export PDF
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

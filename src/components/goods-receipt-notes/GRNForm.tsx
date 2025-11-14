@@ -723,6 +723,24 @@ const GRNForm = () => {
     }
   }, [purchaseOrders, suppliers, supabase]);
 
+  // Auto-select PO from URL query parameter (must be after handlePOSelect is defined)
+  useEffect(() => {
+    const poIdFromUrl = searchParams.get('po');
+    
+    // Only auto-select if:
+    // 1. This is a new GRN
+    // 2. There's a PO ID in the URL
+    // 3. Purchase orders have been loaded
+    // 4. PO hasn't been selected yet
+    if (isNew && poIdFromUrl && purchaseOrders.length > 0 && !grn.po_id) {
+      const poExists = purchaseOrders.find(po => po.id === poIdFromUrl);
+      if (poExists) {
+        // Use the existing handlePOSelect function which fetches all item details
+        handlePOSelect(poIdFromUrl);
+      }
+    }
+  }, [isNew, searchParams, purchaseOrders, grn.po_id, handlePOSelect]);
+
   // Update received quantity
   const updateReceivedQuantity = useCallback((index: number, quantity: number) => {
     setGrnItems(prev => {

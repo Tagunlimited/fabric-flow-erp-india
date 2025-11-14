@@ -464,7 +464,7 @@ export default function ReceiptPage() {
       if (isCredit) {
         toast.success(`Credit order created successfully! Order can now proceed to production. Receipt: ${newReceipt.receipt_number}`);
       } else {
-        toast.success(`Receipt ${newReceipt.receipt_number} generated successfully`);
+      toast.success(`Receipt ${newReceipt.receipt_number} generated successfully`);
       }
       
       // Store the amount before clearing the form

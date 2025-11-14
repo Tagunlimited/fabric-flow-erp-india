@@ -789,15 +789,15 @@ export function ProductCustomizationModal({
                           {/* Only show quantity for number type parts, never for dropdown */}
                           {customization.partType !== 'dropdown' && customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
                             <div className="text-sm text-gray-600 mt-1">
-                              Quantity: {customization.quantity}
-                            </div>
-                          )}
+                            Quantity: {customization.quantity}
+                          </div>
+                        )}
                           {customization.priceImpact !== undefined && customization.priceImpact !== null && customization.priceImpact !== 0 && (
                             <Badge variant={customization.priceImpact > 0 ? 'default' : 'secondary'} className="mt-2 text-xs">
-                              ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
-                            </Badge>
-                          )}
-                        </div>
+                            ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
+                          </Badge>
+                        )}
+                      </div>
                       <Button
                         variant="outline"
                         size="sm"
