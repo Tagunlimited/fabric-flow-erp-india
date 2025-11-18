@@ -95,9 +95,9 @@ export function LoginForm() {
         <CardHeader className="text-center space-y-4">
           <div className="mx-auto">
             <img 
-              src="https://i.postimg.cc/902VYJy5/Group-1.png"
+              src="https://i.postimg.cc/4NKq0Rq5/tag-logo-pdf-pdf-(1000-x-1000-px).png"
               alt="Scissors ERP" 
-              className="w-25 h-12 mx-auto rounded-lg object-cover"
+              className="w-45 h-36 mx-auto rounded-lg object-cover"
               onError={(e) => {
                 (e.target as HTMLImageElement).src = '/placeholder.svg';
               }}

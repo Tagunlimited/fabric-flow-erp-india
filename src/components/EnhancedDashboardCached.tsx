@@ -155,11 +155,28 @@ function EnhancedDashboardContent() {
   }, [dashboardSettings, viewMode, saveState]);
 
   // Auto-refresh based on settings
+  // DISABLED: Auto-refresh on visibility change to prevent form resets
+  // Forms should remain open when switching tabs
   useEffect(() => {
     if (!dashboardSettings.refreshInterval) return;
 
+    // DISABLED: Don't auto-refresh when tab becomes visible
+    // This was causing forms to reset when switching tabs
+    // const interval = setInterval(() => {
+    //   if (document.visibilityState === 'visible') {
+    //     refetchDashboard();
+    //     refetchDept();
+    //     refetchActivities();
+    //   }
+    // }, dashboardSettings.refreshInterval * 1000);
+
+    // return () => clearInterval(interval);
+    
+    // Only refresh based on time interval, NOT on visibility changes
     const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
+      // Only refresh if user is actively on the page (not just visible)
+      // This prevents refresh when switching tabs
+      if (document.hasFocus() && document.visibilityState === 'visible') {
         refetchDashboard();
         refetchDept();
         refetchActivities();

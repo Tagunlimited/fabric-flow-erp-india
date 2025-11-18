@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/components/auth/AuthProvider';
 
@@ -19,6 +19,7 @@ export interface SidebarPermissions {
   loading: boolean;
   error: string | null;
   permissionsSetup: boolean; // Whether permissions system is properly set up
+  isAdmin: boolean; // Whether the current user is an admin
 }
 
 export function useSidebarPermissions() {
@@ -26,16 +27,44 @@ export function useSidebarPermissions() {
     items: [],
     loading: true,
     error: null,
-    permissionsSetup: false
+    permissionsSetup: false,
+    isAdmin: false
   });
   
   const { user } = useAuth();
 
-  const fetchUserSidebarPermissions = async () => {
+  // Complete cache system to prevent re-fetching on tab switch
+  const initialLoadRef = useRef<boolean>(false);
+  const lastUserIdRef = useRef<string | null>(null);
+  const isFetchingRef = useRef<boolean>(false);
+  const permissionsCacheRef = useRef<{
+    userId: string | null;
+    timestamp: number;
+    data: SidebarPermissions | null;
+  }>({ userId: null, timestamp: 0, data: null });
+
+  const fetchUserSidebarPermissions = async (forceRefresh = false) => {
     if (!user) {
-      setPermissions({ items: [], loading: false, error: 'No user', permissionsSetup: false });
+      setPermissions({ items: [], loading: false, error: 'No user', permissionsSetup: false, isAdmin: false });
+      initialLoadRef.current = false;
+      lastUserIdRef.current = null;
+      isFetchingRef.current = false;
       return;
     }
+    
+    // Prevent duplicate fetches for the same user (unless forced)
+    if (!forceRefresh && lastUserIdRef.current === user.id && initialLoadRef.current) {
+      console.log('⏭️ Skipping permissions fetch - already loaded for user:', user.id);
+      return;
+    }
+    
+    // Prevent concurrent fetches
+    if (isFetchingRef.current) {
+      console.log('⏭️ Skipping permissions fetch - already in progress');
+      return;
+    }
+    
+    isFetchingRef.current = true;
 
     try {
       setPermissions(prev => ({ ...prev, loading: true, error: null }));
@@ -53,20 +82,23 @@ export function useSidebarPermissions() {
           ...prev, 
           loading: false, 
           error: 'Failed to fetch user profile',
-          permissionsSetup: false
+          permissionsSetup: false,
+          isAdmin: false
         }));
         return;
       }
 
       // If user is admin, bypass all permission checks and return empty array
       // The sidebar will use static items for admin users
+      // IMPORTANT: Set permissionsSetup to false so PermissionAwareRedirect bypasses the check
       if ((profile as any)?.role === 'admin') {
         console.log('👑 Admin user - bypassing permission system');
         setPermissions({
           items: [],
           loading: false,
           error: null,
-          permissionsSetup: true
+          permissionsSetup: false, // Set to false so redirect logic bypasses permission check
+          isAdmin: true
         });
         return;
       }
@@ -87,7 +119,8 @@ export function useSidebarPermissions() {
           ...prev, 
           loading: false, 
           error: 'Failed to fetch user permissions',
-          permissionsSetup: false
+          permissionsSetup: false,
+          isAdmin: false
         }));
         return;
       }
@@ -117,62 +150,63 @@ export function useSidebarPermissions() {
         console.log('Effective permissions after user overrides:', effectivePermissions.size);
       } else {
         // No user overrides - use role-based permissions
-        // Get role-based sidebar permissions
-        // First, get the role ID from the roles table
-        let rolePermissions = null;
-        let rolePermsError = null;
-        
-        if ((profile as any)?.role) {
-          const { data: roleData, error: roleError } = await supabase
-            .from('roles')
-            .select('id')
-            .eq('name', (profile as any).role)
-            .single();
+      // Get role-based sidebar permissions
+      // First, get the role ID from the roles table
+      let rolePermissions = null;
+      let rolePermsError = null;
+      
+      if ((profile as any)?.role) {
+        const { data: roleData, error: roleError } = await supabase
+          .from('roles')
+          .select('id')
+          .eq('name', (profile as any).role)
+          .single();
+          
+        if (roleData && !roleError) {
+          const { data: rolePerms, error: rolePermsErr } = await supabase
+            .from('role_sidebar_permissions')
+            .select(`
+              *,
+              sidebar_item:sidebar_items(*)
+            `)
+            .eq('role_id', (roleData as any).id as any);
             
-          if (roleData && !roleError) {
-            const { data: rolePerms, error: rolePermsErr } = await supabase
-              .from('role_sidebar_permissions')
-              .select(`
-                *,
-                sidebar_item:sidebar_items(*)
-              `)
-              .eq('role_id', (roleData as any).id as any);
-              
-            rolePermissions = rolePerms;
-            rolePermsError = rolePermsErr;
-          } else {
-            console.log('No role found for:', (profile as any).role);
-            // If no role found, just continue without role permissions
-            rolePermissions = [];
-            rolePermsError = null;
-          }
+          rolePermissions = rolePerms;
+          rolePermsError = rolePermsErr;
         } else {
+          console.log('No role found for:', (profile as any).role);
+          // If no role found, just continue without role permissions
           rolePermissions = [];
           rolePermsError = null;
         }
+      } else {
+        rolePermissions = [];
+        rolePermsError = null;
+      }
 
-        if (rolePermsError) {
-          console.error('Error fetching role permissions:', rolePermsError);
-          setPermissions(prev => ({ 
-            ...prev, 
-            loading: false, 
-            error: 'Failed to fetch role permissions',
-            permissionsSetup: false
-          }));
-          return;
-        }
+      if (rolePermsError) {
+        console.error('Error fetching role permissions:', rolePermsError);
+        setPermissions(prev => ({ 
+          ...prev, 
+          loading: false, 
+          error: 'Failed to fetch role permissions',
+          permissionsSetup: false,
+          isAdmin: false
+        }));
+        return;
+      }
 
         // Use only role permissions
-        (rolePermissions as any)?.forEach((perm: any) => {
+      (rolePermissions as any)?.forEach((perm: any) => {
           if (perm.sidebar_item && perm.can_view) {
-            effectivePermissions.set(perm.sidebar_item.id, {
-              ...perm.sidebar_item,
-              can_view: perm.can_view,
-              can_edit: perm.can_edit,
-              permission_source: 'role'
-            });
-          }
-        });
+          effectivePermissions.set(perm.sidebar_item.id, {
+            ...perm.sidebar_item,
+            can_view: perm.can_view,
+            can_edit: perm.can_edit,
+            permission_source: 'role'
+          });
+        }
+      });
       }
 
       // If no permissions found, check if this is because no permissions are set up at all
@@ -191,7 +225,8 @@ export function useSidebarPermissions() {
             ...prev, 
             loading: false, 
             error: 'Failed to check sidebar items',
-            permissionsSetup: false
+            permissionsSetup: false,
+            isAdmin: false
           }));
           return;
         }
@@ -215,7 +250,8 @@ export function useSidebarPermissions() {
                 items: [],
                 loading: false,
                 error: 'Failed to fetch sidebar items',
-                permissionsSetup: true
+                permissionsSetup: false, // Admin should bypass permission check
+                isAdmin: true
               });
               return;
             }
@@ -258,7 +294,8 @@ export function useSidebarPermissions() {
               items: sortItems(rootItems),
               loading: false,
               error: null,
-              permissionsSetup: true
+              permissionsSetup: true,
+              isAdmin: true
             });
             return;
           } else {
@@ -267,7 +304,8 @@ export function useSidebarPermissions() {
               items: [],
               loading: false,
               error: null,
-              permissionsSetup: true
+              permissionsSetup: true,
+              isAdmin: false
             });
             return;
           }
@@ -278,7 +316,8 @@ export function useSidebarPermissions() {
             items: [],
             loading: false,
             error: null,
-            permissionsSetup: false
+            permissionsSetup: false,
+            isAdmin: false
           });
           return;
         }
@@ -376,8 +415,8 @@ export function useSidebarPermissions() {
       
       // Debug logging
       console.log('🔍 Sidebar permissions final result:', {
-        userRole: (profile as any)?.role,
-        userPermissionsCount: userPermissions?.length || 0,
+          userRole: (profile as any)?.role,
+          userPermissionsCount: userPermissions?.length || 0,
         effectivePermissionsCount: effectivePermissions.size,
         itemsMapSize: itemsMap.size,
         rootItemsCount: rootItems.length,
@@ -385,12 +424,24 @@ export function useSidebarPermissions() {
         finalItems: finalItems.map(item => ({ title: item.title, url: item.url, childrenCount: item.children?.length || 0 }))
       });
 
-      setPermissions({
+      const permissionsData: SidebarPermissions = {
         items: finalItems,
         loading: false,
         error: null,
-        permissionsSetup: true
-      });
+        permissionsSetup: true,
+        isAdmin: false
+      };
+      
+      setPermissions(permissionsData);
+      
+      // Mark as fetched for this user - complete cache with timestamp
+      initialLoadRef.current = true;
+      lastUserIdRef.current = user.id;
+      permissionsCacheRef.current = {
+        userId: user.id,
+        timestamp: Date.now(),
+        data: permissionsData
+      };
 
     } catch (error) {
       console.error('Error in useSidebarPermissions:', error);
@@ -398,20 +449,78 @@ export function useSidebarPermissions() {
         ...prev, 
         loading: false, 
         error: 'An unexpected error occurred',
-        permissionsSetup: false
+        permissionsSetup: false,
+        isAdmin: false
       }));
+    } finally {
+      isFetchingRef.current = false;
     }
   };
 
+  // COMPLETE CACHE IMPLEMENTATION: Prevent ALL re-fetches on tab switch
+  // Only fetch permissions ONCE per user session, never re-fetch on tab switch
   useEffect(() => {
-    if (user?.id) {
-      console.log('🔄 useSidebarPermissions useEffect triggered, user.id:', user?.id);
+    // Skip if no valid user
+    if (!user?.id) {
+      // Clear cache if user logs out
+      initialLoadRef.current = false;
+      lastUserIdRef.current = null;
+      isFetchingRef.current = false;
+      permissionsCacheRef.current = { userId: null, timestamp: 0, data: null };
+      setPermissions({ items: [], loading: false, error: 'No user', permissionsSetup: false, isAdmin: false });
+      return;
+    }
+    
+    const isSameUser = lastUserIdRef.current === user.id;
+    const alreadyLoaded = initialLoadRef.current;
+    const cache = permissionsCacheRef.current;
+    
+    // Check if we have valid cached data (within 5 minutes)
+    const cacheValid = cache.userId === user.id && 
+                      cache.data && 
+                      Date.now() - cache.timestamp < 5 * 60 * 1000; // 5 min cache
+    
+    // If we have valid cache, use it instead of fetching
+    if (cacheValid) {
+      console.log('💾 Using cached permissions for user:', user.id, {
+        cacheAge: Math.round((Date.now() - cache.timestamp) / 1000) + 's'
+      });
+      setPermissions(cache.data!);
+      initialLoadRef.current = true;
+      lastUserIdRef.current = user.id;
+      return;
+    }
+    
+    // If we already loaded permissions for this same user, skip completely
+    // This prevents ANY re-fetching when switching tabs
+    if (alreadyLoaded && isSameUser) {
+      console.log('⏭️ Skipping permissions fetch - already loaded for user:', user.id);
+      return;
+    }
+    
+    // Only fetch if:
+    // 1. First time loading (initialLoadRef is false), OR
+    // 2. User actually changed (different user ID)
+    const isFirstLoad = !alreadyLoaded;
+    const userChanged = !isSameUser;
+    
+    if (isFirstLoad || userChanged) {
+      console.log('🔄 Fetching permissions for user:', user.id, {
+        firstLoad: isFirstLoad,
+        userChanged: userChanged,
+        previousUser: lastUserIdRef.current
+      });
+      
+      // Update last user ID to prevent duplicate calls for same user
+      // But don't mark as loaded until fetch succeeds
+      lastUserIdRef.current = user.id;
+      
       fetchUserSidebarPermissions();
     }
-  }, [user?.id]);
+  }, [user?.id]); // ONLY depend on user.id - no other dependencies
 
   return {
     ...permissions,
-    refetch: fetchUserSidebarPermissions
+    refetch: () => fetchUserSidebarPermissions(true) // Allow forced refresh when explicitly called
   };
 }

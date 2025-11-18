@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,19 +29,87 @@ import {
   Palette
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { format } from "date-fns";
 
 export default function ProfileSettingsPage() {
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile, refreshProfile, profileLoading } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const formInitializedRef = useRef(false);
+  const lastProfileIdRef = useRef<string | null>(null);
   const [formData, setFormData] = useState({
-    full_name: profile?.full_name || '',
-    email: profile?.email || user?.email || '',
-    phone: profile?.phone || '',
-    department: profile?.department || '',
-    role: profile?.role || 'sales',
-    avatar_url: (profile as any)?.avatar_url || ''
+    full_name: '',
+    email: user?.email || '',
+    phone: '',
+    department: '',
+    role: 'sales',
+    avatar_url: ''
   });
+
+  // Reset refs when user changes
+  useEffect(() => {
+    if (user?.id) {
+      const currentUserId = user.id;
+      if (lastProfileIdRef.current && lastProfileIdRef.current !== currentUserId) {
+        console.log('User changed, resetting form initialization');
+        formInitializedRef.current = false;
+        lastProfileIdRef.current = null;
+      }
+    }
+  }, [user?.id]);
+
+  // Load profile data on mount if not already loaded
+  useEffect(() => {
+    if (user && !profile && !profileLoading) {
+      console.log('Profile not loaded, refreshing...');
+      refreshProfile().catch(err => {
+        console.error('Error refreshing profile:', err);
+      });
+    }
+  }, [user, profile, profileLoading, refreshProfile]);
+
+  // Update formData when profile changes (e.g., after save or page refresh)
+  useEffect(() => {
+    if (profile) {
+      const profileId = profile.id || profile.user_id;
+      const profileChanged = lastProfileIdRef.current !== profileId;
+      
+      // Always update if profile changed or form hasn't been initialized
+      if (profileChanged || !formInitializedRef.current) {
+        console.log('Profile loaded, updating form data:', profile, {
+          profileId,
+          previousId: lastProfileIdRef.current,
+          profileChanged,
+          formInitialized: formInitializedRef.current
+        });
+        
+        const newData = {
+          full_name: profile.full_name || '',
+          email: profile.email || user?.email || '',
+          phone: profile.phone || '',
+          department: profile.department || '',
+          role: profile.role || 'sales',
+          avatar_url: profile?.avatar_url || ''
+        };
+        
+        console.log('Setting form data to:', newData);
+        setFormData(newData);
+        lastProfileIdRef.current = profileId;
+        formInitializedRef.current = true;
+      } else {
+        console.log('Profile unchanged, skipping form data update');
+      }
+    } else if (user && !profile && !profileLoading) {
+      // If user exists but profile hasn't loaded yet, initialize with user data only
+      if (!formInitializedRef.current) {
+        console.log('Profile not loaded yet, initializing with user email only');
+        setFormData(prev => ({
+          ...prev,
+          email: user.email || prev.email
+        }));
+      }
+    }
+  }, [profile, user?.email, user, profileLoading]);
 
   // Mock rewards and recognition data
   const [rewards] = useState([
@@ -53,13 +121,74 @@ export default function ProfileSettingsPage() {
   };
 
   const handleAvatarUpload = async (url: string) => {
+    if (!user) return;
+    try {
+      console.log('🔄 Updating avatar in database:', { userId: user.id, avatarUrl: url });
+      
+      // Update avatar_url in database
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({
+          avatar_url: url
+        } as any)
+        .eq('user_id', user.id as any)
+        .select(); // Select to verify the update
+      
+      if (error) {
+        console.error('❌ Database update error:', error);
+        throw error;
+      }
+      
+      console.log('✅ Avatar updated in database:', data);
+      
+      // Verify the update by fetching the profile
+      const { data: verifyData, error: verifyError } = await supabase
+        .from('profiles')
+        .select('avatar_url')
+        .eq('user_id', user.id as any)
+        .single();
+      
+      if (verifyError) {
+        console.error('❌ Verification error:', verifyError);
+      } else {
+        console.log('✅ Verified avatar in database:', verifyData);
+      }
+      
+      // Update local form data
     setFormData(prev => ({ ...prev, avatar_url: url }));
+      
+      // Force refresh profile to get updated data
+      await refreshProfile();
     toast.success('Avatar uploaded successfully');
+    } catch (error: any) {
+      console.error('❌ Avatar upload error:', error);
+      toast.error('Failed to upload avatar: ' + (error.message || 'Unknown error'));
+    }
   };
 
   const handleAvatarDelete = async () => {
+    if (!user) return;
+    try {
+      // Update avatar_url in database
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          avatar_url: null
+        } as any)
+        .eq('user_id', user.id as any);
+      
+      if (error) throw error;
+      
+      // Update local form data
     setFormData(prev => ({ ...prev, avatar_url: '' }));
+      
+      // Force refresh profile to get updated data
+      await refreshProfile();
     toast.success('Avatar deleted successfully');
+    } catch (error: any) {
+      console.error('Avatar delete error:', error);
+      toast.error('Failed to delete avatar: ' + (error.message || 'Unknown error'));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -68,7 +197,24 @@ export default function ProfileSettingsPage() {
 
     setLoading(true);
     try {
-      const { error } = await supabase
+      console.log('🔄 Saving profile data:', { userId: user.id, formData });
+      
+      // First check if profile exists
+      const { data: existingProfile, error: checkError } = await supabase
+        .from('profiles')
+        .select('id, avatar_url')
+        .eq('user_id', user.id)
+        .single();
+      
+      if (checkError && checkError.code !== 'PGRST116') { // PGRST116 = no rows returned
+        console.error('❌ Error checking profile:', checkError);
+        throw checkError;
+      }
+      
+      console.log('📋 Existing profile:', existingProfile);
+      
+      // Update profile
+      const { data, error } = await supabase
         .from('profiles')
         .update({
           full_name: formData.full_name,
@@ -77,18 +223,52 @@ export default function ProfileSettingsPage() {
           role: formData.role as any,
           avatar_url: formData.avatar_url
         })
-        .eq('user_id', user.id);
-
-      if (error) throw error;
+        .eq('user_id', user.id)
+        .select(); // Select to verify the update
+      
+      if (error) {
+        console.error('❌ Database update error:', error);
+        throw error;
+      }
+      
+      console.log('✅ Profile updated in database:', data);
+      
+      // Verify the update
+      const { data: verifyData, error: verifyError } = await supabase
+        .from('profiles')
+        .select('avatar_url, full_name, phone, department, role')
+        .eq('user_id', user.id)
+        .single();
+      
+      if (verifyError) {
+        console.error('❌ Verification error:', verifyError);
+      } else {
+        console.log('✅ Verified profile in database:', verifyData);
+      }
 
       await refreshProfile();
       toast.success('Profile updated successfully!');
     } catch (error: any) {
+      console.error('❌ Profile update error:', error);
       toast.error(error.message || 'Failed to update profile');
     } finally {
       setLoading(false);
     }
   };
+
+  // Show loading state while profile is being loaded
+  if (profileLoading && !profile) {
+    return (
+      <div className="max-w-7xl mx-auto space-y-8 p-6">
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+            <p className="text-muted-foreground">Loading profile...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto space-y-8 p-6">

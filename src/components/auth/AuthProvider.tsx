@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { authService, UserProfile } from '@/lib/auth';
@@ -32,6 +32,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
+  
+  // Prevent unnecessary state updates - cache user ID to detect actual changes
+  const lastUserIdRef = useRef<string | null>(null);
+  const authInitializedRef = useRef(false);
 
   // Helper: check if login expired
   const isLoginExpired = () => {
@@ -70,8 +74,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         console.log(`Attempting to refresh profile (attempt ${retryCount + 1})`);
         const userProfile = await authService.getUserProfile(user.id);
+        
+        if (userProfile) {
+          console.log('✅ Profile refreshed successfully:', userProfile);
+          console.log('📸 Avatar URL in profile:', userProfile.avatar_url);
         setProfile(userProfile);
-        console.log('Profile refreshed successfully:', userProfile);
+        } else {
+          console.warn('⚠️ getUserProfile returned null, keeping existing profile if available');
+          // Don't set profile to null if we already have one - preserve existing data
+          if (!profile) {
+            console.warn('⚠️ No existing profile, setting to null');
+            setProfile(null);
+          } else {
+            console.log('✅ Preserving existing profile data:', profile);
+          }
+        }
       } catch (error: any) {
         console.warn('Profile refresh failed:', error?.message || 'Unknown error');
         
@@ -109,6 +126,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           setTimeout(() => refreshProfile(retryCount + 1), retryDelay);
         } else {
           // Create a minimal profile object to prevent UI issues after all retries failed
+          // IMPORTANT: Try to preserve existing avatar_url if profile was previously loaded
           const fallbackProfile = {
             id: user.id,
             user_id: user.id,
@@ -116,10 +134,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
             email: user.email || '',
             role: 'user',
             status: 'active',
+            avatar_url: profile?.avatar_url || undefined, // Preserve existing avatar if available
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           };
-          console.log('Using fallback profile after all retries failed:', fallbackProfile);
+          console.warn('⚠️ Using fallback profile after all retries failed:', fallbackProfile);
           setProfile(fallbackProfile as any);
         }
       } finally {
@@ -157,8 +176,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
               return;
             }
             if (refreshed.session?.user) {
+              const refreshedUserId = refreshed.session.user.id;
+              // Only update if user ID changed
+              if (lastUserIdRef.current !== refreshedUserId) {
+                lastUserIdRef.current = refreshedUserId;
               setUser(refreshed.session.user);
               await refreshProfile();
+              } else {
+                console.log('⏭️ Skipping session refresh - same user already loaded');
+              }
               setLoading(false);
               return;
             }
@@ -194,48 +220,98 @@ export function AuthProvider({ children }: AuthProviderProps) {
           signOut();
           return;
         }
+        // Only update if user ID actually changed OR if profile is not loaded yet
+        if (lastUserIdRef.current !== user.id || !profile) {
+          if (lastUserIdRef.current !== user.id) {
+            lastUserIdRef.current = user.id;
         setUser(user);
-        refreshProfile();
+          }
+          await refreshProfile(); // Await profile load before setting loading to false
+          setLoading(false);
+        } else {
+          console.log('⏭️ Skipping initial session - same user already loaded with profile');
+          setLoading(false);
+        }
       } else {
+        lastUserIdRef.current = null;
         setUser(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
-    // Listen for auth changes
+    // Listen for auth changes - with guards to prevent unnecessary updates
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state change:', event, session?.user?.id);
+      const currentUserId = session?.user?.id || null;
+      const userIdChanged = lastUserIdRef.current !== currentUserId;
+      
+      console.log('Auth state change:', event, currentUserId, {
+        userIdChanged,
+        previousUserId: lastUserIdRef.current
+      });
       
       if (event === 'SIGNED_OUT') {
+        lastUserIdRef.current = null;
         setUser(null);
         setProfile(null);
         setLoading(false);
         localStorage.removeItem('login_timestamp');
       } else if (event === 'SIGNED_IN' && session?.user) {
+        // Only update if user actually changed
+        if (userIdChanged) {
         localStorage.setItem('login_timestamp', Date.now().toString());
+          lastUserIdRef.current = currentUserId;
         setUser(session.user);
         await refreshProfile();
         setLoading(false);
+        } else {
+          console.log('⏭️ Skipping SIGNED_IN - same user, already loaded');
+        }
+      } else if (event === 'INITIAL_SESSION' && session?.user) {
+        // DISABLED: Don't auto-refresh profile on INITIAL_SESSION
+        // This event fires on tab switch and was causing form resets
+        // Only update user if it actually changed
+        if (userIdChanged && !authInitializedRef.current) {
+          console.log('Initial session detected - setting user without refresh');
+          lastUserIdRef.current = currentUserId;
+          setUser(session.user);
+          authInitializedRef.current = true;
+        } else {
+          console.log('⏭️ Skipping INITIAL_SESSION - already initialized');
+        }
       } else if (event === 'TOKEN_REFRESHED' && session?.user) {
-        console.log('Token refreshed successfully');
+        // DISABLED: Don't auto-refresh profile on token refresh
+        // Only update user if ID changed (shouldn't happen, but guard anyway)
+        if (userIdChanged) {
+          console.log('Token refreshed - user ID changed, updating user');
+          lastUserIdRef.current = currentUserId;
         setUser(session.user);
-        // Refresh profile after token refresh
-        await refreshProfile();
+        } else {
+          console.log('⏭️ Skipping TOKEN_REFRESHED - same user, no update needed');
+        }
       } else if (event === 'USER_UPDATED' && session?.user) {
+        // Only update if user ID changed
+        if (userIdChanged) {
+          lastUserIdRef.current = currentUserId;
         setUser(session.user);
+        } else {
+          console.log('⏭️ Skipping USER_UPDATED - same user, no update needed');
+        }
       }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
-    if (user) {
-      refreshProfile();
-    }
-  }, [user]);
+  // DISABLED: Auto-refresh profile on user change
+  // This was causing form resets when switching tabs
+  // Profile is already refreshed on SIGNED_IN event, which is sufficient
+  // useEffect(() => {
+  //   if (user) {
+  //     refreshProfile();
+  //   }
+  // }, [user]);
 
   // On every mount, check for expiry and auto logout if needed
   useEffect(() => {

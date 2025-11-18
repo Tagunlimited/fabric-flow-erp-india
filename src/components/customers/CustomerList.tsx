@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -17,6 +18,7 @@ import { OrderForm } from '../orders/OrderForm';
 import { ReadymadeOrderForm } from '../orders/ReadymadeOrderForm';
 import { calculateLifetimeValue, formatCurrency } from '@/lib/utils';
 import * as XLSX from 'xlsx';
+import { useFormPersistence } from '@/contexts/FormPersistenceContext';
 
 interface Customer {
   id: string;
@@ -46,7 +48,14 @@ export function CustomerList() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState('all');
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
+  const { saveFormData, getFormData, hasFormData } = useFormPersistence();
+  const location = useLocation();
+  const isInitialMount = useRef(true);
+  const lastPathname = useRef(location.pathname);
+  
+  // Persist form visibility state to prevent reset on tab switch
+  // BUT: Don't auto-restore on direct navigation - only on tab switch
+  const [showForm, setShowFormState] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [bulkFile, setBulkFile] = useState<File | null>(null);
@@ -59,6 +68,18 @@ export function CustomerList() {
   const navigate = useNavigate();
   const { toast } = useToast();
 
+  // Wrapper to persist showForm state
+  const setShowForm = (value: boolean, explicitlyClosed: boolean = false) => {
+    setShowFormState(value);
+    saveFormData('customerList_showForm', value);
+    if (explicitlyClosed) {
+      saveFormData('customerList_formClosed', true);
+    } else if (value) {
+      // If opening form, clear the "explicitly closed" flag
+      saveFormData('customerList_formClosed', false);
+    }
+  };
+
   useEffect(() => {
     fetchCustomers();
   }, []);
@@ -66,6 +87,73 @@ export function CustomerList() {
   useEffect(() => {
     filterCustomers();
   }, [customers, searchTerm, selectedType]);
+
+  // Track route changes to detect direct navigation vs tab switch
+  useEffect(() => {
+    const pathnameChanged = lastPathname.current !== location.pathname;
+    if (pathnameChanged) {
+      // Direct navigation occurred - reset form state
+      isInitialMount.current = true;
+      lastPathname.current = location.pathname;
+      // Clear form state on direct navigation to show list
+      if (location.pathname === '/crm/customers') {
+        setShowFormState(false);
+        saveFormData('customerList_showForm', false);
+      }
+    }
+  }, [location.pathname, saveFormData]);
+
+  // Sync form visibility state with persistence (for cross-tab synchronization ONLY)
+  // This should only restore form on tab switch, not on direct navigation
+  useEffect(() => {
+    // Skip on initial mount or direct navigation
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    const checkFormState = () => {
+      const wasFormOpen = getFormData('customerList_showForm') === true;
+      const wasExplicitlyClosed = getFormData('customerList_formClosed') === true;
+      const hasFormDataValue = hasFormData('customerForm');
+      
+      // Only restore on tab switch, not on direct navigation
+      // If form should be open but isn't, restore it (only if not explicitly closed)
+      if (!wasExplicitlyClosed && (wasFormOpen || hasFormDataValue) && !showForm) {
+        setShowFormState(true);
+      }
+      // If form should be closed but is open, close it (only if explicitly closed)
+      else if (wasExplicitlyClosed && showForm) {
+        setShowFormState(false);
+      }
+    };
+
+    // Listen for storage events (cross-tab sync) - this indicates tab switch
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'formPersistence' && event.newValue) {
+        // This is a tab switch - restore form state
+        checkFormState();
+      }
+    };
+
+    // Also listen for visibility changes (user switching back to this tab)
+    const handleVisibilityChange = () => {
+      // Only restore if page becomes visible AND it's not a direct navigation
+      if (document.visibilityState === 'visible' && !isInitialMount.current) {
+        // Small delay to ensure we're not in the middle of a navigation
+        setTimeout(() => {
+          checkFormState();
+        }, 100);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [getFormData, hasFormData, showForm]);
 
   const fetchCustomers = async () => {
     try {
@@ -219,14 +307,20 @@ export function CustomerList() {
   };
 
   const handleFormSave = (customer: Customer) => {
-    setShowForm(false);
+    setShowForm(false, true); // Explicitly closed via save
     setEditingCustomer(null);
+    // Clear form data after successful save
+    saveFormData('customerForm', null);
+    saveFormData('customerList_formClosed', false); // Reset closed flag
     fetchCustomers();
   };
 
   const handleFormCancel = () => {
-    setShowForm(false);
+    setShowForm(false, true); // Explicitly closed via cancel
     setEditingCustomer(null);
+    // Note: We don't clear form data on cancel in case user wants to come back
+    // The "Clear Saved Data" button in the form will handle that
+    // But we mark it as explicitly closed so it doesn't auto-restore on tab switch
   };
 
   const exportCustomers = async () => {

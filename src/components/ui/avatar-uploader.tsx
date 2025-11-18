@@ -122,7 +122,8 @@ export function AvatarUploader({ currentUrl, onUpload, onDelete, userId, userNam
         <div className="relative group cursor-pointer">
           <Avatar className={getSizeClasses()}>
             <AvatarImage 
-              src={currentUrl} 
+              key={currentUrl || 'no-avatar'} // Force re-render when URL changes
+              src={currentUrl || undefined} // Use undefined instead of empty string to prevent premature fallback
               alt={userName} 
               onError={(e) => {
                 console.log('Avatar image failed to load:', currentUrl);

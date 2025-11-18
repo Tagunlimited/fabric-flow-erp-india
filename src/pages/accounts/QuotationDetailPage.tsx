@@ -100,26 +100,30 @@ export default function QuotationDetailPage() {
       const { data: orderData, error: orderError } = await supabase
         .from('orders')
         .select('*')
-        .eq('id', orderId)
+        .eq('id', orderId as any)
         .single();
       if (orderError) throw orderError;
-      setOrder(orderData);
+      if (!orderData) throw new Error('Order not found');
+      setOrder(orderData as unknown as Order);
       // Fetch customer
       const { data: customerData, error: customerError } = await supabase
         .from('customers')
         .select('*')
-        .eq('id', orderData.customer_id)
+        .eq('id', (orderData as any).customer_id)
         .single();
       if (customerError) throw customerError;
-      setCustomer(customerData);
+      if (!customerData) throw new Error('Customer not found');
+      setCustomer(customerData as unknown as Customer);
       // Fetch sales manager name if available
-      if (orderData.sales_manager) {
+      if ((orderData as any).sales_manager) {
         const { data: salesManagerData } = await supabase
           .from('employees')
           .select('id, full_name')
-          .eq('id', orderData.sales_manager)
+          .eq('id', (orderData as any).sales_manager)
           .single();
-        setSalesManager(salesManagerData);
+        if (salesManagerData) {
+          setSalesManager(salesManagerData as SalesManager);
+        }
       } else {
         setSalesManager(null);
       }
@@ -127,21 +131,24 @@ export default function QuotationDetailPage() {
       const { data: itemsData, error: itemsError } = await supabase
         .from('order_items')
         .select('*, mockup_images, specifications, category_image_url')
-        .eq('order_id', orderId);
+        .eq('order_id', orderId as any);
       if (itemsError) throw itemsError;
-      setOrderItems(itemsData || []);
+      setOrderItems((itemsData || []) as unknown as OrderItem[]);
       // Fetch product categories and fabrics for items
       if (itemsData && itemsData.length > 0) {
-        const fabricIds = itemsData.map(item => item.fabric_id).filter(Boolean);
-        const categoryIds = itemsData.map(item => item.product_category_id).filter(Boolean);
+        const typedItems = itemsData as unknown as OrderItem[];
+        const fabricIds = typedItems.map(item => item.fabric_id).filter(Boolean) as string[];
+        const categoryIds = typedItems.map(item => item.product_category_id).filter(Boolean) as string[];
         if (fabricIds.length > 0) {
           const { data: fabricsData } = await supabase
             .from('fabric_master')
             .select('id, fabric_name')
-            .in('id', fabricIds);
-          if (fabricsData) {
-            const fabricsMap = fabricsData.reduce((acc, fabric) => {
+            .in('id', fabricIds as any);
+          if (fabricsData && Array.isArray(fabricsData)) {
+            const fabricsMap = fabricsData.reduce((acc, fabric: any) => {
+              if (fabric && fabric.id && fabric.fabric_name) {
               acc[fabric.id] = { ...fabric, name: fabric.fabric_name };
+              }
               return acc;
             }, {} as { [key: string]: Fabric });
             setFabrics(fabricsMap);
@@ -151,10 +158,12 @@ export default function QuotationDetailPage() {
           const { data: categoriesData } = await supabase
             .from('product_categories')
             .select('id, category_name')
-            .in('id', categoryIds);
-          if (categoriesData) {
-            const categoriesMap = categoriesData.reduce((acc, category) => {
-              acc[category.id] = category;
+            .in('id', categoryIds as any);
+          if (categoriesData && Array.isArray(categoriesData)) {
+            const categoriesMap = categoriesData.reduce((acc, category: any) => {
+              if (category && category.id) {
+                acc[category.id] = category as ProductCategory;
+              }
               return acc;
             }, {} as { [key: string]: ProductCategory });
             setProductCategories(categoriesMap);
@@ -191,7 +200,7 @@ export default function QuotationDetailPage() {
       .limit(1);
     let nextSeq = 1;
     if (data && data.length > 0) {
-      const lastNum = data[0].quotation_number;
+      const lastNum = (data[0] as any)?.quotation_number;
       const match = lastNum.match(/(\d+)$/);
       if (match) nextSeq = parseInt(match[1]) + 1;
     }
@@ -224,6 +233,22 @@ export default function QuotationDetailPage() {
   }
 
   // Helper: number to words
+  // Helper function to format company name with proper spacing
+  const formatCompanyName = (name: string | undefined): string => {
+    if (!name) return 'Our Company';
+    let formatted = name;
+    // Add space between lowercase and uppercase (e.g., "Tagunlimited" -> "Tag unlimited")
+    formatted = formatted.replace(/([a-z])([A-Z])/g, '$1 $2');
+    // Add space between uppercase letter followed by lowercase and another uppercase (e.g., "TagUnlimited" -> "Tag Unlimited")
+    formatted = formatted.replace(/([A-Z][a-z]+)([A-Z])/g, '$1 $2');
+    // Capitalize first letter of each word for proper formatting
+    formatted = formatted.split(' ').map(word => {
+      if (word.length === 0) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    }).join(' ');
+    return formatted.trim();
+  };
+
   function numberToWords(num: number): string {
     const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
     const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
@@ -253,50 +278,195 @@ export default function QuotationDetailPage() {
     return result + ' Only/-';
   }
 
-  // Enhanced PDF Export with proper A4 sizing
+  // Enhanced PDF Export with proper A4 sizing - uses same format as print
   const handleExportPDF = async () => {
-    if (!printRef.current) return;
+    if (!printRef.current) {
+      toast.error('Print reference not available');
+      return;
+    }
+    
+    const element = printRef.current;
+    const originalStyles = {
+      position: element.style.position,
+      left: element.style.left,
+      top: element.style.top,
+      visibility: element.style.visibility,
+      display: element.style.display,
+      height: element.style.height,
+      width: element.style.width,
+      maxWidth: element.style.maxWidth,
+      zIndex: element.style.zIndex,
+    };
+    
+    // Store original class list to restore later
+    const originalClasses = element.className;
+    
     try {
-      toast.info('Generating PDF...');
+      toast.loading('Generating PDF...');
       
-      const canvas = await html2canvas(printRef.current, { 
+      // Remove print-only class temporarily (it has display: none !important)
+      element.className = element.className.replace('print-only', '').trim();
+      
+      // Temporarily make element visible but off-screen for html2canvas
+      // Position off-screen to avoid showing preview on screen
+      element.style.position = 'fixed';
+      element.style.left = '-9999px';
+      element.style.top = '0';
+      element.style.visibility = 'visible';
+      element.style.display = 'block';
+      element.style.height = 'auto';
+      element.style.width = '210mm';
+      element.style.maxWidth = '210mm';
+      element.style.zIndex = '9999';
+      element.style.opacity = '1';
+      element.style.pointerEvents = 'none'; // Prevent interaction but keep visible
+      
+      // Also ensure parent container doesn't hide it
+      let parentOriginalDisplay = '';
+      if (element.parentElement) {
+        const parent = element.parentElement;
+        parentOriginalDisplay = parent.style.display;
+        parent.style.display = 'block';
+        parent.style.visibility = 'visible';
+      }
+      
+      // Wait for browser to apply styles and render
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      // Check dimensions after making visible
+      if (element.offsetWidth === 0 || element.offsetHeight === 0) {
+        console.warn('Element dimensions after making visible:', { 
+          width: element.offsetWidth, 
+          height: element.offsetHeight,
+          scrollWidth: element.scrollWidth,
+          scrollHeight: element.scrollHeight,
+          computedDisplay: window.getComputedStyle(element).display,
+          computedVisibility: window.getComputedStyle(element).visibility
+        });
+        
+        // Force dimensions if still zero
+        if (element.scrollWidth > 0 && element.scrollHeight > 0) {
+          element.style.width = `${element.scrollWidth}px`;
+          element.style.height = `${element.scrollHeight}px`;
+        } else {
+          // Last resort: set explicit dimensions
+          element.style.width = '794px'; // A4 width in pixels at 96 DPI
+          element.style.height = 'auto';
+        }
+        
+        // Wait again after forcing dimensions
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      // Optimize html2canvas settings to match print output exactly
+      const canvas = await html2canvas(element, {
         scale: 2, 
         useCORS: true,
+        logging: false,
+        imageTimeout: 0,
         backgroundColor: '#ffffff',
-        width: printRef.current.scrollWidth,
-        height: printRef.current.scrollHeight,
-        logging: false
+        removeContainer: false,
+        width: element.scrollWidth || element.offsetWidth || 794,
+        height: element.scrollHeight || element.offsetHeight || 1123,
+        windowWidth: element.scrollWidth || element.offsetWidth || 794,
+        windowHeight: element.scrollHeight || element.offsetHeight || 1123,
       });
       
-      const imgData = canvas.toDataURL('image/png');
+      // Restore parent styles if changed
+      if (element.parentElement && parentOriginalDisplay) {
+        element.parentElement.style.display = parentOriginalDisplay;
+        element.parentElement.style.visibility = '';
+      }
+      
+      if (!canvas) {
+        throw new Error('Failed to generate canvas');
+      }
+      
+      // Log canvas dimensions for debugging
+      console.log('Canvas dimensions:', { width: canvas.width, height: canvas.height });
+      
+      // Validate canvas dimensions
+      if (canvas.width <= 0 || canvas.height <= 0) {
+        console.error('Canvas has invalid dimensions:', { width: canvas.width, height: canvas.height });
+        throw new Error(`Invalid canvas dimensions: ${canvas.width}x${canvas.height}`);
+      }
+      
+      if (!isFinite(canvas.width) || !isFinite(canvas.height)) {
+        console.error('Canvas dimensions are not finite:', { width: canvas.width, height: canvas.height });
+        throw new Error(`Canvas dimensions are not finite: ${canvas.width}x${canvas.height}`);
+      }
+      
+      // Use JPEG with compression for smaller file size
+      const imgData = canvas.toDataURL('image/jpeg', 0.8); // 80% quality
       const pdf = new jsPDF('p', 'mm', 'a4');
       
-      // A4 dimensions in mm
+      // A4 dimensions in mm (explicit values)
       const pdfWidth = 210;
       const pdfHeight = 297;
-      const margin = 0; // No margin since we added padding in the content
       
-      // Calculate dimensions
-      const imgWidth = canvas.width;
-      const imgHeight = canvas.height;
-      const ratio = Math.min(
-        (pdfWidth - 2 * margin) / (imgWidth / 2), // Divide by 2 because scale is 2
-        (pdfHeight - 2 * margin) / (imgHeight / 2)
-      );
+      // Reduced PDF margins for better fit
+      const marginLeft = 2;
+      const marginRight = 2;
+      const marginTop = 2;
+      const marginBottom = 2;
       
-      const finalWidth = (imgWidth / 2) * ratio;
-      const finalHeight = (imgHeight / 2) * ratio;
+      // Calculate available content area
+      const contentWidth = pdfWidth - marginLeft - marginRight; // 200mm
+      const contentHeight = pdfHeight - marginTop - marginBottom; // 287mm
       
-      // Center the content
-      const x = (pdfWidth - finalWidth) / 2;
-      const y = (pdfHeight - finalHeight) / 2;
+      // Calculate aspect ratio of canvas
+      const canvasAspect = canvas.width / Math.max(canvas.height, 1);
       
-      pdf.addImage(imgData, 'PNG', x, y, finalWidth, finalHeight);
+      // Calculate output dimensions to fit content area while maintaining aspect ratio
+      let outWidth = contentWidth;
+      let outHeight = outWidth / canvasAspect;
+      
+      // If height exceeds available space, scale down
+      if (outHeight > contentHeight) {
+        outHeight = contentHeight;
+        outWidth = outHeight * canvasAspect;
+      }
+      
+      // Center the image both horizontally and vertically
+      const x = marginLeft + (contentWidth - outWidth) / 2;
+      const y = marginTop + (contentHeight - outHeight) / 2;
+      
+      // Validate all values are finite and positive
+      if (!isFinite(x) || !isFinite(y) || !isFinite(outWidth) || !isFinite(outHeight) ||
+          x < 0 || y < 0 || outWidth <= 0 || outHeight <= 0) {
+        console.error('Invalid PDF coordinates:', { x, y, outWidth, outHeight, canvas: { width: canvas.width, height: canvas.height } });
+        throw new Error('Invalid PDF coordinates calculated');
+      }
+      
+      // Add image to PDF - single page (most quotations fit on one page)
+      // If content is taller than one page, it will be scaled to fit
+      pdf.addImage(imgData, 'JPEG', x, y, outWidth, outHeight);
+
       pdf.save(`Quotation-${quotationNumber}.pdf`);
+      
+      // Dismiss loading and show success
+      toast.dismiss();
       toast.success('PDF exported successfully');
     } catch (error) {
       console.error('PDF export error:', error);
+      toast.dismiss();
       toast.error('Failed to export PDF');
+    } finally {
+      // Restore original styles and classes to hide element again
+      if (element) {
+        element.className = originalClasses; // Restore original classes (including print-only)
+        element.style.position = originalStyles.position || '';
+        element.style.left = originalStyles.left || '';
+        element.style.top = originalStyles.top || '';
+        element.style.visibility = originalStyles.visibility || '';
+        element.style.display = originalStyles.display || '';
+        element.style.height = originalStyles.height || '';
+        element.style.width = originalStyles.width || '';
+        element.style.maxWidth = originalStyles.maxWidth || '';
+        element.style.zIndex = originalStyles.zIndex || '';
+        element.style.opacity = '';
+        element.style.pointerEvents = '';
+      }
     }
   };
 
@@ -732,6 +902,146 @@ export default function QuotationDetailPage() {
             </div>
           </CardHeader>
           <CardContent>
+            {/* Print Styles - Outside printRef to prevent CSS from showing in preview */}
+            {/* These styles match PDF export exactly - same format as screen view, not compact */}
+            <style>{`
+              /* Print-only styles - hide everything except quotation content */
+              /* Match PDF export: 3mm margins on all sides */
+              @page { 
+                size: A4 portrait; 
+                margin: 3mm 3mm 3mm 3mm; 
+              }
+              
+              @media print {
+                /* Hide all non-print elements */
+                body * { visibility: hidden !important; }
+                #quotation-print, #quotation-print * { 
+                  visibility: visible !important; 
+                }
+                #quotation-print { 
+                  position: absolute !important; 
+                  left: 0 !important; 
+                  top: 0 !important; 
+                  width: 100% !important;
+                  max-width: 100% !important;
+                  height: auto !important;
+                  /* Match PDF export: 3mm padding (same as PDF margins) */
+                  padding: 3mm !important; 
+                  margin: 0 !important;
+                  /* Reduced font size for A4 fit */
+                  font-size: 12px !important;
+                  line-height: 1.4 !important;
+                  background: white !important;
+                  page-break-inside: avoid !important;
+                  page-break-after: avoid !important;
+                  /* Ensure content fits within page margins */
+                  box-sizing: border-box !important;
+                }
+                
+                /* Hide header, navigation, buttons, etc. */
+                header, nav, .header, .navigation, .print\\:hidden, 
+                button, .btn, [role="button"], .card-header, .card-footer,
+                .flex.gap-2, .dropdown-menu, .dropdown-content,
+                .screen-only { 
+                  display: none !important; 
+                }
+                
+                /* Show print view */
+                .print-only { 
+                  display: block !important; 
+                  visibility: visible !important;
+                  position: absolute !important;
+                  left: 0 !important;
+                  top: 0 !important;
+                }
+                
+                /* Reduced spacing for A4 fit */
+                #quotation-print .mb-6 { margin-bottom: 12px !important; }
+                #quotation-print .mb-4 { margin-bottom: 10px !important; }
+                #quotation-print .mb-3 { margin-bottom: 8px !important; }
+                #quotation-print .mb-2 { margin-bottom: 4px !important; }
+                #quotation-print .mt-6 { margin-top: 12px !important; }
+                #quotation-print .mt-4 { margin-top: 10px !important; }
+                #quotation-print .mt-3 { margin-top: 8px !important; }
+                #quotation-print .mt-2 { margin-top: 4px !important; }
+                #quotation-print .pt-4 { padding-top: 10px !important; }
+                #quotation-print .pt-3 { padding-top: 8px !important; }
+                #quotation-print .pt-2 { padding-top: 4px !important; }
+                #quotation-print .pb-4 { padding-bottom: 10px !important; }
+                #quotation-print .pb-3 { padding-bottom: 8px !important; }
+                #quotation-print .pb-2 { padding-bottom: 4px !important; }
+                #quotation-print .p-4 { padding: 10px !important; }
+                #quotation-print .p-6 { padding: 12px !important; }
+                #quotation-print .p-3 { padding: 8px !important; }
+                #quotation-print .p-2 { padding: 6px !important; }
+                
+                /* Reduced table styling for A4 fit */
+                #quotation-print table { 
+                  font-size: 12px !important;
+                  border-collapse: collapse !important;
+                  width: 100% !important;
+                  margin: 8px 0 !important;
+                }
+                #quotation-print table th, 
+                #quotation-print table td { 
+                  padding: 6px 10px !important; 
+                  border: 1px solid #000 !important;
+                  font-size: 12px !important;
+                  line-height: 1.3 !important; 
+                  vertical-align: top !important;
+                }
+                #quotation-print table td {
+                  min-height: 35px !important;
+                }
+                
+                /* Reduced text sizes for A4 fit */
+                #quotation-print h1 { font-size: 20px !important; margin: 6px 0 !important; }
+                #quotation-print h2 { font-size: 24px !important; margin: 6px 0 !important; }
+                #quotation-print h3 { font-size: 16px !important; margin: 6px 0 !important; }
+                #quotation-print .text-2xl { font-size: 20px !important; }
+                #quotation-print .text-3xl { font-size: 24px !important; }
+                #quotation-print .text-lg { font-size: 16px !important; }
+                #quotation-print .text-base { font-size: 14px !important; }
+                #quotation-print .text-sm { font-size: 12px !important; }
+                #quotation-print .text-xs { font-size: 10px !important; }
+                
+                /* Reduced image sizes for A4 fit */
+                #quotation-print img { 
+                  max-width: 90px !important; 
+                  max-height: 90px !important; 
+                }
+                #quotation-print .w-28 { width: 90px !important; }
+                #quotation-print .h-28 { height: 90px !important; }
+                #quotation-print .w-16 { width: 50px !important; }
+                #quotation-print .h-16 { height: 50px !important; }
+                #quotation-print .w-44 { width: 140px !important; }
+                #quotation-print .h-36 { height: 115px !important; }
+                
+                /* Reduced borders and spacing for A4 fit */
+                #quotation-print .border-b-2 { border-bottom-width: 2px !important; padding-bottom: 8px !important; }
+                #quotation-print .border-t-2 { border-top-width: 2px !important; padding-top: 8px !important; }
+                #quotation-print .space-x-4 > * + * { margin-left: 10px !important; }
+                #quotation-print .space-y-2 > * + * { margin-top: 4px !important; }
+                #quotation-print .space-y-0\.5 > * + * { margin-top: 2px !important; }
+                #quotation-print .gap-4 { gap: 10px !important; }
+                #quotation-print .gap-3 { gap: 8px !important; }
+                
+                /* Prevent page breaks */
+                #quotation-print { page-break-inside: avoid !important; }
+                #quotation-print table { page-break-inside: auto !important; }
+                #quotation-print thead { display: table-header-group; }
+                #quotation-print tr { break-inside: avoid; page-break-inside: avoid; }
+              }
+              
+              /* Screen-only styles - hide print view on screen */
+              @media screen {
+                .print-only { 
+                  display: none !important; 
+                  visibility: hidden !important;
+                }
+              }
+            `}</style>
+
             {/* Screen View - Hidden when printing */}
             <div className="screen-only bg-white p-6 rounded-lg shadow-sm">
               <div className="max-w-4xl mx-auto">
@@ -746,12 +1056,14 @@ export default function QuotationDetailPage() {
                       />
                     )}
                     <div>
-                      <h1 className="text-2xl font-bold text-gray-800">{(company as any)?.company_name || 'Company Name'}</h1>
-                      <p className="text-sm text-gray-600">{(company as any)?.address || 'Company Address'}</p>
+                      <h1 className="text-2xl font-bold text-gray-800">{formatCompanyName(company?.company_name)}</h1>
+                      <p className="text-sm text-gray-600">{company?.address || 'Company Address'}</p>
+                      {company?.contact_email && <p className="text-sm text-gray-600">Email: {company.contact_email}</p>}
+                      {company?.contact_phone && <p className="text-sm text-gray-600">Phone: {company.contact_phone}</p>}
                       <p className="text-sm text-gray-600">
-                        {(company as any)?.city || 'City'}, {(company as any)?.state || 'State'} - {(company as any)?.pincode || 'Pincode'}
+                        {company?.city || 'City'}, {company?.state || 'State'} - {company?.pincode || 'Pincode'}
                       </p>
-                      <p className="text-sm text-gray-600">GSTIN: {(company as any)?.gstin || 'GSTIN'}</p>
+                      {company?.gstin && <p className="text-sm text-gray-600">GSTIN: {company.gstin}</p>}
                     </div>
                   </div>
                   <div className="text-right">
@@ -762,29 +1074,33 @@ export default function QuotationDetailPage() {
                   </div>
                 </div>
 
-                {/* Customer Information */}
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Bill To:</h3>
-                  <div className="bg-gray-50 p-4 rounded">
-                    <p className="font-semibold text-gray-800">{customer?.company_name || 'Customer Name'}</p>
-                    <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
-                    <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
-                    <p className="text-sm text-gray-600">
-                      {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
-                    </p>
-                    <p className="text-sm text-gray-600">GSTIN: {customer?.gstin || 'GSTIN'}</p>
+                {/* Customer Information and Order Details - Side by Side */}
+                <div className="mb-6 grid grid-cols-2 gap-4">
+                  {/* Customer Information */}
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-800 mb-2">Bill To:</h3>
+                    <div className="bg-gray-50 p-4 rounded">
+                      <p className="font-semibold text-gray-800">{customer?.company_name || 'Customer Name'}</p>
+                      <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
+                      <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
+                      <p className="text-sm text-gray-600">
+                        {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
+                      </p>
+                      <p className="text-sm text-gray-600">GSTIN: {customer?.gstin || 'GSTIN'}</p>
+                    </div>
                   </div>
-                </div>
 
-                {/* Order Information */}
-                <div className="mb-6">
-                  <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded">
-                    <div><strong>Order Number:</strong> {order?.order_number || 'N/A'}</div>
-                    <div><strong>Order Date:</strong> {order?.order_date ? new Date(order.order_date).toLocaleDateString('en-IN') : 'N/A'}</div>
-                    <div><strong>Expected Delivery:</strong> {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
-                    <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
-                    <div><strong>Status:</strong> <span className="capitalize">{order?.status?.replace('_', ' ') || 'N/A'}</span></div>
-                    <div><strong>Payment Terms:</strong> {(order as any).payment_channel || 'As per agreement'}</div>
+                  {/* Order Information */}
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-800 mb-2">Order Details:</h3>
+                    <div className="bg-gray-50 p-4 rounded space-y-2">
+                      <div><strong>Order Number:</strong> {order?.order_number || 'N/A'}</div>
+                      <div><strong>Order Date:</strong> {order?.order_date ? new Date(order.order_date).toLocaleDateString('en-IN') : 'N/A'}</div>
+                      <div><strong>Expected Delivery:</strong> {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
+                      <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
+                      <div><strong>Status:</strong> <span className="capitalize">{order?.status?.replace('_', ' ') || 'N/A'}</span></div>
+                      <div><strong>Payment Terms:</strong> {(order as any).payment_channel || 'As per agreement'}</div>
+                    </div>
                   </div>
                 </div>
 
@@ -926,27 +1242,27 @@ export default function QuotationDetailPage() {
                   </div>
                   
                   {/* Amount in Words */}
-                  <div className="mt-4 p-3 bg-gray-100 border border-gray-400">
+                  <div className="mt-3 p-2 bg-gray-100 border border-gray-400">
                     <div className="text-sm text-gray-600">Amount in words:</div>
                     <div className="font-bold">INR {numberToWords(Math.round(order?.final_amount || 0))}</div>
                   </div>
                 </div>
 
                 {/* Terms and Conditions */}
-                <div className="mt-6 border-t border-gray-400 pt-4">
+                <div className="mt-4 border-t border-gray-400 pt-3">
                   <h3 className="text-sm font-bold text-gray-800 mb-2">Terms & Conditions:</h3>
-                  <div className="grid grid-cols-3 gap-4 text-sm">
-                    <div className="space-y-1">
+                  <div className="grid grid-cols-3 gap-3 text-sm">
+                    <div className="space-y-0.5">
                       <div>• Payment: 50% advance, 50% on delivery</div>
                       <div>• Delivery: {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : '15-20 working days'}</div>
                       <div>• Prices inclusive of GST</div>
                     </div>
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       <div>• Subject to change without notice</div>
                       <div>• Quality as per industry standards</div>
                       <div>• Return policy as per guidelines</div>
                     </div>
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       <div>• Installation & training included</div>
                       <div>• Warranty: 1 year from delivery</div>
                       <div>• Support: 9am–6pm, Mon–Sat</div>
@@ -955,7 +1271,7 @@ export default function QuotationDetailPage() {
                 </div>
 
                 {/* Authorized Signatory Section */}
-                <div className="mt-8 pt-4 border-t border-gray-400">
+                <div className="mt-4 pt-3 border-t border-gray-400">
                   <div className="flex justify-between items-end">
                     {/* Customer Signature */}
                     <div className="text-center">
@@ -965,7 +1281,7 @@ export default function QuotationDetailPage() {
                     
                     {/* Company Authorized Signatory */}
                     <div className="text-center">
-                      <div className="mb-3">
+                      <div className="mb-2">
                         {company?.authorized_signatory_url ? (
                           <img 
                             src={company.authorized_signatory_url} 
@@ -980,217 +1296,109 @@ export default function QuotationDetailPage() {
                       </div>
                       <div className="border-b border-gray-400 w-40 mb-2"></div>
                       <div className="text-sm text-gray-600">Authorized Signatory</div>
-                      <div className="text-xs text-gray-500 mt-1">{company?.company_name || 'Company Name'}</div>
+                      <div className="text-xs text-gray-500 mt-1">{formatCompanyName(company?.company_name)}</div>
                     </div>
                   </div>
-                </div>
-
-                {/* Footer */}
-                <div className="mt-6 pt-3 border-t border-gray-400 text-right text-sm text-gray-600">
-                  <div>Generated: {new Date().toLocaleDateString('en-IN')}</div>
+                  
+                  {/* Footer - Inline with signature section */}
+                  <div className="mt-3 pt-2 border-t border-gray-400 text-right text-xs text-gray-600">
+                    <div>Generated: {new Date().toLocaleDateString('en-IN')}</div>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Print View - Only visible when printing */}
+            {/* Print View - Always rendered but hidden visually, visible for PDF export and print */}
+            {/* This element is used for both print and PDF export - format matches exactly */}
+            {/* Same 3mm padding as PDF export margins, same width (210mm A4), same styling */}
             <div
               id="quotation-print"
               ref={printRef}
               className="bg-white print-only"
-              style={{ padding: '10mm', width: '210mm', margin: '0 auto', fontSize: '9px', lineHeight: '1.2' }}
+              style={{
+                padding: '3mm',
+                width: '210mm',
+                maxWidth: '210mm',
+                margin: '0',
+                position: 'absolute',
+                left: '0',
+                top: '0',
+                boxSizing: 'border-box'
+              }}
             >
-              <style>{`
-                /* Print-only styles - hide everything except quotation content */
-                @page { 
-                  size: A4; 
-                  margin: 8mm; 
-                }
-                
-                @media print {
-                  /* Hide all non-print elements */
-                  body * { visibility: hidden; }
-                  #quotation-print, #quotation-print * { visibility: visible; }
-                  #quotation-print { 
-                    position: absolute; 
-                    left: 0; 
-                    top: 0; 
-                    width: 100% !important;
-                    height: 100% !important;
-                    padding: 8mm !important; 
-                    margin: 0 !important;
-                    font-size: 11px !important;
-                    line-height: 1.3 !important;
-                    background: white !important;
-                  }
-                  
-                  /* Hide header, navigation, buttons, etc. */
-                  header, nav, .header, .navigation, .print\\:hidden, 
-                  button, .btn, [role="button"], .card-header, .card-footer,
-                  .flex.gap-2, .dropdown-menu, .dropdown-content { 
-                    display: none !important; 
-                  }
-                  
-                  /* Reasonable spacing for readability */
-                  #quotation-print .mb-6 { margin-bottom: 12px !important; }
-                  #quotation-print .mb-4 { margin-bottom: 8px !important; }
-                  #quotation-print .mb-3 { margin-bottom: 6px !important; }
-                  #quotation-print .mb-2 { margin-bottom: 4px !important; }
-                  #quotation-print .mt-6 { margin-top: 12px !important; }
-                  #quotation-print .mt-4 { margin-top: 8px !important; }
-                  #quotation-print .mt-3 { margin-top: 6px !important; }
-                  #quotation-print .mt-2 { margin-top: 4px !important; }
-                  #quotation-print .pt-4 { padding-top: 8px !important; }
-                  #quotation-print .pt-3 { padding-top: 6px !important; }
-                  #quotation-print .pt-2 { padding-top: 4px !important; }
-                  #quotation-print .pb-4 { padding-bottom: 8px !important; }
-                  #quotation-print .pb-3 { padding-bottom: 6px !important; }
-                  #quotation-print .pb-2 { padding-bottom: 4px !important; }
-                  
-                  /* Readable table styling */
-                  #quotation-print table { 
-                    font-size: 10px !important;
-                    border-collapse: collapse !important;
-                    width: 100% !important;
-                  }
-                  #quotation-print table th, 
-                  #quotation-print table td { 
-                    padding: 3px 4px !important; 
-                    border: 1px solid #000 !important;
-                    font-size: 10px !important;
-                    line-height: 1.2 !important; 
-                  }
-                  
-                  /* Readable text sizes */
-                  #quotation-print h1 { font-size: 18px !important; margin: 4px 0 !important; }
-                  #quotation-print h2 { font-size: 16px !important; margin: 3px 0 !important; }
-                  #quotation-print h3 { font-size: 14px !important; margin: 2px 0 !important; }
-                  #quotation-print .text-lg { font-size: 14px !important; }
-                  #quotation-print .text-base { font-size: 12px !important; }
-                  #quotation-print .text-sm { font-size: 10px !important; }
-                  #quotation-print .text-xs { font-size: 9px !important; }
-                  #quotation-print .text-\[10px\] { font-size: 9px !important; }
-                  #quotation-print .text-\[9px\] { font-size: 8px !important; }
-                  
-                  /* Larger image sizes for print */
-                  #quotation-print img { 
-                    max-width: 50px !important; 
-                    max-height: 50px !important; 
-                  }
-                  #quotation-print .w-16 { width: 30px !important; }
-                  #quotation-print .h-16 { height: 30px !important; }
-                  #quotation-print .w-20 { width: 40px !important; }
-                  #quotation-print .h-20 { height: 40px !important; }
-                  #quotation-print .w-24 { width: 60px !important; }
-                  #quotation-print .h-24 { height: 60px !important; }
-                  #quotation-print .w-28 { width: 70px !important; }
-                  #quotation-print .h-28 { height: 70px !important; }
-                  #quotation-print .w-32 { width: 80px !important; }
-                  #quotation-print .h-32 { height: 80px !important; }
-                  #quotation-print .w-36 { width: 90px !important; }
-                  #quotation-print .h-36 { height: 90px !important; }
-                  #quotation-print .w-40 { width: 100px !important; }
-                  #quotation-print .h-32 { height: 80px !important; }
-                  #quotation-print .w-44 { width: 110px !important; }
-                  #quotation-print .h-36 { height: 90px !important; }
-                  
-                  /* Prevent page breaks */
-                  .avoid-break { break-inside: avoid; page-break-inside: avoid; }
-                  #quotation-print table { page-break-inside: auto; }
-                  #quotation-print thead { display: table-header-group; }
-                  #quotation-print tr { break-inside: avoid; page-break-inside: avoid; }
-                }
-                
-                /* Screen-only styles */
-                @media screen {
-                  .print-only { display: none; }
-                }
-                
-                /* Hide screen view when printing */
-                @media print {
-                  .screen-only { display: none !important; }
-                }
-              `}</style>
+              <div style={{ maxWidth: '100%' }}>
               {/* Company Header with Logo */}
               <div className="flex justify-between items-start border-b-2 border-gray-800 pb-4 mb-6">
                 <div className="flex items-center space-x-4">
-                  {(company as any)?.logo_url && (
+                    {company?.logo_url && (
                     <img 
-                      src={(company as any).logo_url} 
+                        src={company.logo_url} 
                       alt="Company Logo" 
-                      className="w-36 h-36 object-contain"
+                        className="w-28 h-28 object-contain"
                     />
                   )}
                   <div>
-                    <h1 className="text-2xl font-bold text-gray-800 mb-1">{company?.company_name || 'Our Company'}</h1>
-                    <div className="text-sm text-gray-600">
-                      {company?.address} | Email: {(company as any)?.email} | Phone: {(company as any)?.phone}
-                      {company?.gstin && <span> | GSTIN: {company?.gstin}</span>}
+                      <h1 className="text-2xl font-bold text-gray-800">{formatCompanyName(company?.company_name)}</h1>
+                      <p className="text-sm text-gray-600">{company?.address || 'Company Address'}</p>
+                      {company?.contact_email && <p className="text-sm text-gray-600">Email: {company.contact_email}</p>}
+                      {company?.contact_phone && <p className="text-sm text-gray-600">Phone: {company.contact_phone}</p>}
+                      <p className="text-sm text-gray-600">
+                        {company?.city || 'City'}, {company?.state || 'State'} - {company?.pincode || 'Pincode'}
+                      </p>
+                      {company?.gstin && <p className="text-sm text-gray-600">GSTIN: {company.gstin}</p>}
+                  </div>
+                </div>
+                <div className="text-right">
+                    <h2 className="text-3xl font-bold text-gray-800">QUOTATION</h2>
+                    <p className="text-sm text-gray-600">Quotation #: {quotationNumber}</p>
+                    <p className="text-sm text-gray-600">Date: {order?.order_date ? new Date(order.order_date).toLocaleDateString('en-IN') : new Date().toLocaleDateString('en-IN')}</p>
+                    <p className="text-sm text-gray-600">Valid Until: {order?.order_date ? new Date(new Date(order.order_date).getTime() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN') : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN')}</p>
+                </div>
+              </div>
+
+                {/* Customer Information and Order Details - Side by Side */}
+                <div className="mb-6 grid grid-cols-2 gap-4">
+                  {/* Customer Information */}
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-800 mb-2">Bill To:</h3>
+                    <div className="bg-gray-50 p-4 rounded">
+                      <p className="font-semibold text-gray-800">{customer?.company_name || 'Customer Name'}</p>
+                      <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
+                      <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
+                      <p className="text-sm text-gray-600">
+                        {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
+                      </p>
+                      {customer?.gstin && <p className="text-sm text-gray-600">GSTIN: {customer.gstin}</p>}
+                    </div>
+                  </div>
+
+                  {/* Order Information */}
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-800 mb-2">Order Details:</h3>
+                    <div className="bg-gray-50 p-4 rounded space-y-2">
+                      <div><strong>Order Number:</strong> {order?.order_number || 'N/A'}</div>
+                      <div><strong>Order Date:</strong> {order?.order_date ? new Date(order.order_date).toLocaleDateString('en-IN') : 'N/A'}</div>
+                      <div><strong>Expected Delivery:</strong> {(order as any)?.expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
+                      <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
+                      <div><strong>Status:</strong> <span className="capitalize">{order?.status?.replace('_', ' ') || 'N/A'}</span></div>
+                      <div><strong>Payment Terms:</strong> {(order as any)?.payment_channel || 'As per agreement'}</div>
                     </div>
                   </div>
                 </div>
-                <div className="text-right">
-                  <div className="bg-primary text-white px-4 py-2 rounded">
-                    <h2 className="text-xl font-bold">QUOTATION</h2>
-                  </div>
-                </div>
-              </div>
 
-              {/* Document Details and Total */}
-              <div className="flex justify-between items-start mb-3">
-                <div className="space-y-1">
-                  <div><strong>Quotation #:</strong> {quotationNumber}</div>
-                  <div><strong>Date:</strong> {new Date(order.order_date).toLocaleDateString('en-IN')}</div>
-                  <div><strong>Valid Until:</strong> {new Date(new Date(order.order_date).getTime() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN')}</div>
-                </div>
-                <div className="text-right">
-                  <div className="border-2 border-gray-800 p-3 bg-gray-50">
-                    <div className="font-bold text-lg">{formatCurrency(grandTotal)}</div>
-                    <div className="text-sm text-gray-600">Total Amount</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Customer and Order Information */}
-              <div className="grid grid-cols-2 gap-6 mb-4">
-                {/* Customer Details */}
-                <div>
-                  <h3 className="text-base font-bold text-gray-800 mb-2 border-b border-gray-400 pb-1">Bill To:</h3>
-                  <div className="space-y-1 text-xs">
-                    <div className="font-semibold text-sm">{customer.company_name}</div>
-                    <div>{customer.contact_person}</div>
-                    <div>{customer.address}</div>
-                    <div>{customer.city}, {customer.state} - {customer.pincode}</div>
-                    <div><strong>Phone:</strong> {customer.phone}</div>
-                    <div><strong>Email:</strong> {customer.email}</div>
-                    {customer.gstin && <div><strong>GSTIN:</strong> {customer.gstin}</div>}
-                  </div>
-                </div>
-
-                {/* Order Details */}
-                <div>
-                  <h3 className="text-base font-bold text-gray-800 mb-2 border-b border-gray-400 pb-1">Order Details:</h3>
-                  <div className="space-y-1 text-xs">
-                    <div><strong>Order Number:</strong> {order.order_number}</div>
-                    <div><strong>Order Date:</strong> {new Date(order.order_date).toLocaleDateString('en-IN')}</div>
-                    <div><strong>Expected Delivery:</strong> {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
-                    <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
-                    <div><strong>Status:</strong> <span className="capitalize">{order.status.replace('_', ' ')}</span></div>
-                    <div><strong>Payment Terms:</strong> {(order as any).payment_channel || 'As per agreement'}</div>
-                  </div>
-                </div>
-              </div>
               {/* Order Summary Table */}
-              <div className="mb-3 avoid-break">
-                <h3 className="text-base font-bold text-gray-800 mb-2 border-b border-gray-400 pb-1">ORDER SUMMARY</h3>
-                <table className="w-full border-collapse border border-gray-400 text-xs">
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-3">ORDER SUMMARY</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse border border-gray-400 text-sm">
                     <thead>
                     <tr className="bg-gray-100">
-                       <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '50%' }}>Product Details</th>
-                       <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '10%' }}>Qty</th>
-                      <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '15%' }}>Rate</th>
-                      <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '15%' }}>Amount</th>
-                      <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '10%' }}>GST</th>
-                      <th className="border border-gray-400 px-1 py-1 text-left font-semibold" style={{ width: '10%' }}>Total</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Product Details</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Qty</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Rate</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Amount</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">GST</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Total</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1198,38 +1406,55 @@ export default function QuotationDetailPage() {
                         const amount = item.quantity * item.unit_price;
                       const gstRate = (item as any).gst_rate ?? 
                                      ((item.specifications as any)?.gst_rate) ?? 
-                                     (order.gst_rate ?? 0);
+                                         (order?.gst_rate ?? 0);
                         const gstAmt = (amount * gstRate) / 100;
                         const total = amount + gstAmt;
                         
                         // Parse specifications for readymade orders
-                        const specs = typeof item.specifications === 'string' 
+                          let specs: any = {};
+                          try {
+                            specs = typeof item.specifications === 'string' 
                           ? JSON.parse(item.specifications) 
                           : item.specifications || {};
+                          } catch (e) {
+                            specs = item.specifications || {};
+                          }
                         
                         const isReadymade = order?.order_type === 'readymade';
                         
                         return (
                           <tr key={item.id}>
-                          <td className="border border-gray-400 px-1 py-1 align-top">
+                              <td className="border border-gray-400 px-3 py-2">
+                                <div className="flex items-start gap-3">
+                                  {(() => {
+                                    const displayImage = getOrderItemDisplayImage(item, order);
+                                    return displayImage ? (
+                                      <img
+                                        src={displayImage}
+                                        alt="Product"
+                                        className="w-16 h-16 object-cover rounded flex-shrink-0"
+                                      />
+                                    ) : null;
+                                  })()}
+                                  <div className="flex-1">
                             {isReadymade ? (
                               <>
-                                <div className="font-semibold text-xs">{specs.product_name || item.product_description}</div>
-                                <div className="text-xs text-gray-600">
+                                        <div className="font-semibold">{specs.product_name || item.product_description}</div>
+                                        <div className="text-sm text-gray-600">
                                   {specs.class && <span>Class: {specs.class}</span>}
-                                  {specs.color && <span className="ml-1">Color: {specs.color}</span>}
-                                  {specs.category && <span className="ml-1">Category: {specs.category}</span>}
+                                          {specs.color && <span className="ml-2">Color: {specs.color}</span>}
+                                          {specs.category && <span className="ml-2">Category: {specs.category}</span>}
                                 </div>
                                 {specs.sizes_quantities && typeof specs.sizes_quantities === 'object' && Object.keys(specs.sizes_quantities).length > 0 && (
-                                  <div className="text-xs text-gray-600">
+                                          <div className="text-sm text-gray-600 mt-1">
                                     Size-wise: {sortSizes(specs.sizes_quantities)
                                       .map(([size, qty]) => `${size}(${qty})`)
                                       .join(', ')}
                                   </div>
                                 )}
                                 {specs.branding_items && Array.isArray(specs.branding_items) && specs.branding_items.length > 0 && (
-                                  <div className="text-xs text-gray-600">
-                                    Branding: {specs.branding_items.map((b: any) => 
+                                          <div className="text-sm text-gray-600 mt-1">
+                                            Branding: {specs.branding_items.map((b: any, i: number) => 
                                       `${b.branding_type}${b.placement ? ` (${b.placement})` : ''}`
                                     ).join(', ')}
                                   </div>
@@ -1237,13 +1462,13 @@ export default function QuotationDetailPage() {
                               </>
                             ) : (
                               <>
-                                <div className="font-semibold text-xs">{item.product_description}</div>
-                                <div className="text-xs text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
-                                <div className="text-xs text-gray-600">
+                                        <div className="text-sm text-gray-600 font-semibold">
                                   {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
                                 </div>
+                                        <div className="font-semibold">{item.product_description}</div>
+                                        <div className="text-sm text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
                                 {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
-                                  <div className="text-xs text-gray-600">
+                                          <div className="text-sm text-gray-600">
                                     Sizes: {sortSizes(item.sizes_quantities)
                                       .map(([size, qty]) => `${size}(${qty})`)
                                         .join(', ')}
@@ -1251,99 +1476,81 @@ export default function QuotationDetailPage() {
                                 )}
                               </>
                             )}
+                                  </div>
+                                </div>
                           </td>
-                          <td className="border border-gray-400 px-1 py-1 align-top text-center">
-                            <div className="font-semibold text-xs">{item.quantity}</div>
-                            <div className="text-xs">Pcs</div>
+                              <td className="border border-gray-400 px-3 py-2 text-center">
+                                <div className="font-semibold">{item.quantity}</div>
+                                <div className="text-sm">Pcs</div>
                           </td>
-                          <td className="border border-gray-400 px-1 py-1 align-top text-right text-xs">{formatCurrency(item.unit_price)}</td>
-                          <td className="border border-gray-400 px-1 py-1 align-top text-right text-xs">{formatCurrency(amount)}</td>
-                          <td className="border border-gray-400 px-1 py-1 align-top text-center">
-                            <div className="text-xs">{gstRate}%</div>
-                            <div className="text-xs">{formatCurrency(gstAmt)}</div>
+                              <td className="border border-gray-400 px-3 py-2 text-right">{formatCurrency(item.unit_price)}</td>
+                              <td className="border border-gray-400 px-3 py-2 text-right">{formatCurrency(amount)}</td>
+                              <td className="border border-gray-400 px-3 py-2 text-center">
+                                <div className="text-sm">{gstRate}%</div>
+                                <div className="text-sm">{formatCurrency(gstAmt)}</div>
                             </td>
-                          <td className="border border-gray-400 px-1 py-1 align-top text-right font-semibold text-xs">{formatCurrency(total)}</td>
+                              <td className="border border-gray-400 px-3 py-2 text-right font-semibold">{formatCurrency(total)}</td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
-              {/* Additional Charges Section (if any) */}
-              {additionalCharges.length > 0 && (
-                <div className="mb-3 avoid-break">
-                  <h3 className="text-lg font-bold text-gray-800 mb-3 border-b border-gray-400 pb-1">Additional Charges</h3>
-                  <table className="w-full border-collapse border border-gray-400 text-xs">
-                    <thead>
-                      <tr className="bg-gray-100">
-                        <th className="border border-gray-400 px-2 py-1 text-left font-semibold">Particular</th>
-                        <th className="border border-gray-400 px-2 py-1 text-left font-semibold">Rate</th>
-                        <th className="border border-gray-400 px-2 py-1 text-left font-semibold">GST %</th>
-                        <th className="border border-gray-400 px-2 py-1 text-left font-semibold">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {additionalCharges.map((charge, idx) => (
-                          <tr key={idx}>
-                          <td className="border border-gray-400 px-2 py-1">{charge.particular}</td>
-                          <td className="border border-gray-400 px-2 py-1 text-right">{charge.rate}</td>
-                          <td className="border border-gray-400 px-2 py-1 text-center">{charge.gst_percentage}%</td>
-                          <td className="border border-gray-400 px-2 py-1 text-right">{formatCurrency(charge.amount_incl_gst)}</td>
-                          </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 </div>
-              )}
+
               {/* Totals Summary */}
-              <div className="mt-3 border-t-2 border-gray-800 pt-2 avoid-break">
+                <div className="mt-6 border-t-2 border-gray-800 pt-4">
                 <div className="flex justify-end">
-                  <div className="w-72 space-y-0.5">
-                    <div className="flex justify-between text-xs">
+                    <div className="w-80 space-y-2">
+                      <div className="flex justify-between">
                       <span>Subtotal:</span>
-                      <span>{formatCurrency(subtotal)}</span>
+                        <span>{formatCurrency(orderItems.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0))}</span>
                     </div>
-                    <div className="flex justify-between text-xs">
+                      <div className="flex justify-between">
                       <span>GST Total:</span>
-                      <span>{formatCurrency(gstTotal)}</span>
+                        <span>{formatCurrency(orderItems.reduce((sum, item) => {
+                          const amount = item.quantity * item.unit_price;
+                          const gstRate = (item as any).gst_rate ?? ((item.specifications as any)?.gst_rate) ?? (order?.gst_rate ?? 0);
+                          return sum + (amount * gstRate) / 100;
+                        }, 0))}</span>
                     </div>
                     {additionalChargesTotal > 0 && (
-                      <div className="flex justify-between text-xs">
+                        <div className="flex justify-between">
                         <span>Additional Charges:</span>
                         <span>{formatCurrency(additionalChargesTotal)}</span>
                       </div>
                     )}
-                    <div className="border-t border-gray-400 pt-1 mt-1">
-                      <div className="flex justify-between text-base font-bold">
+                      <div className="border-t border-gray-400 pt-2">
+                        <div className="flex justify-between text-lg font-bold">
                         <span>GRAND TOTAL:</span>
-                        <span>{formatCurrency(grandTotal)}</span>
+                          <span>{formatCurrency(order?.final_amount || grandTotal)}</span>
                       </div>
                     </div>
                   </div>
                 </div>
                 
                 {/* Amount in Words */}
-                <div className="mt-2 p-1.5 bg-gray-100 border border-gray-400">
-                  <div className="text-xs text-gray-600">Amount in words:</div>
-                  <div className="font-bold text-xs">INR {numberToWords(Math.round(grandTotal))}</div>
+                  <div className="mt-3 p-2 bg-gray-100 border border-gray-400">
+                    <div className="text-sm text-gray-600">Amount in words:</div>
+                    <div className="font-bold">INR {numberToWords(Math.round(order?.final_amount || grandTotal))}</div>
                 </div>
               </div>
 
               {/* Terms and Conditions */}
-              <div className="mt-3 border-t border-gray-400 pt-2 avoid-break">
-                <h3 className="text-xs font-bold text-gray-800 mb-1">Terms & Conditions:</h3>
-                <div className="grid grid-cols-3 gap-3 text-[10px] leading-tight">
-                  <div className="space-y-0.5">
+                <div className="mt-4 border-t border-gray-400 pt-3">
+                  <h3 className="text-sm font-bold text-gray-800 mb-2">Terms & Conditions:</h3>
+                  <div className="grid grid-cols-3 gap-3 text-sm">
+                    <div className="space-y-0.5">
                     <div>• Payment: 50% advance, 50% on delivery</div>
-                    <div>• Delivery: {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : '15-20 working days'}</div>
+                      <div>• Delivery: {(order as any)?.expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : '15-20 working days'}</div>
                     <div>• Prices inclusive of GST</div>
                   </div>
-                  <div className="space-y-0.5">
+                    <div className="space-y-0.5">
                     <div>• Subject to change without notice</div>
                     <div>• Quality as per industry standards</div>
                     <div>• Return policy as per guidelines</div>
                   </div>
-                  <div className="space-y-0.5">
+                    <div className="space-y-0.5">
                     <div>• Installation & training included</div>
                     <div>• Warranty: 1 year from delivery</div>
                     <div>• Support: 9am–6pm, Mon–Sat</div>
@@ -1352,17 +1559,17 @@ export default function QuotationDetailPage() {
               </div>
 
               {/* Authorized Signatory Section */}
-              <div className="mt-6 pt-3 border-t border-gray-400 avoid-break">
+                <div className="mt-4 pt-3 border-t border-gray-400">
                 <div className="flex justify-between items-end">
                   {/* Customer Signature */}
                   <div className="text-center">
-                    <div className="border-b border-gray-400 w-32 mb-1"></div>
-                    <div className="text-[10px] text-gray-600">Customer Signature</div>
+                      <div className="border-b border-gray-400 w-40 mb-2"></div>
+                      <div className="text-sm text-gray-600">Customer Signature</div>
                   </div>
                   
                   {/* Company Authorized Signatory */}
                   <div className="text-center">
-                    <div className="mb-2">
+                      <div className="mb-2">
                       {company?.authorized_signatory_url ? (
                         <img 
                           src={company.authorized_signatory_url} 
@@ -1371,21 +1578,21 @@ export default function QuotationDetailPage() {
                         />
                       ) : (
                         <div className="w-44 h-36 border border-gray-300 mx-auto flex items-center justify-center">
-                          <span className="text-[16px] text-gray-400">Signature</span>
+                            <span className="text-lg text-gray-400">Signature</span>
                         </div>
                       )}
                     </div>
-                    <div className="border-b border-gray-400 w-32 mb-1"></div>
-                    <div className="text-[10px] text-gray-600">Authorized Signatory</div>
-                    <div className="text-[9px] text-gray-500 mt-1">{company?.company_name || 'Company Name'}</div>
+                      <div className="border-b border-gray-400 w-40 mb-2"></div>
+                      <div className="text-sm text-gray-600">Authorized Signatory</div>
+                      <div className="text-xs text-gray-500 mt-1">{formatCompanyName(company?.company_name)}</div>
                   </div>
                 </div>
-              </div>
-
-              {/* Footer (minimal) */}
-              <div className="mt-3 pt-2 border-t border-gray-400 text-right text-[10px] text-gray-600">
+                
+                {/* Footer - Inline with signature section */}
+                <div className="mt-3 pt-2 border-t border-gray-400 text-right text-xs text-gray-600">
                 <div>Generated: {new Date().toLocaleDateString('en-IN')}</div>
-                {/* <div>Contact: {(company as any)?.phone || ''}</div> */}
+                </div>
+              </div>
               </div>
             </div>
           </CardContent>

@@ -6,7 +6,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 export function PermissionAwareRedirect() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { items: sidebarItems, loading, permissionsSetup } = useSidebarPermissions();
+  const { items: sidebarItems, loading, permissionsSetup, isAdmin } = useSidebarPermissions();
   const { profile } = useAuth();
   const hasRedirected = useRef(false);
 
@@ -27,7 +27,8 @@ export function PermissionAwareRedirect() {
     }
 
     // For admin users, always show dashboard first
-    if (profile?.role === 'admin') {
+    // Check both profile role and isAdmin flag from permissions
+    if (profile?.role === 'admin' || isAdmin) {
       console.log('👑 Admin user - showing dashboard');
       hasRedirected.current = true;
       navigate('/dashboard', { replace: true });
@@ -35,7 +36,8 @@ export function PermissionAwareRedirect() {
     }
 
     // If user has no sidebar items (no permissions), show empty state
-    if (sidebarItems.length === 0) {
+    // BUT only if permissions are actually set up (not for admin users)
+    if (sidebarItems.length === 0 && permissionsSetup) {
       console.log('🚫 User has no permissions, showing empty state');
       hasRedirected.current = true;
       // You could redirect to a "no access" page here
@@ -70,7 +72,7 @@ export function PermissionAwareRedirect() {
       console.log('⚠️ Sidebar items count:', sidebarItems.length);
       hasRedirected.current = true;
     }
-  }, [loading, permissionsSetup, sidebarItems, navigate, profile?.role, location.pathname]);
+  }, [loading, permissionsSetup, sidebarItems, navigate, profile?.role, isAdmin, location.pathname]);
 
   // Show loading while determining where to redirect
   if (loading) {
@@ -85,7 +87,8 @@ export function PermissionAwareRedirect() {
   }
 
   // If permissions are set up but user has no access, show no access message
-  if (permissionsSetup && sidebarItems.length === 0) {
+  // BUT NOT for admin users - they should always have access
+  if (permissionsSetup && sidebarItems.length === 0 && !isAdmin && profile?.role !== 'admin') {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">

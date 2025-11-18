@@ -80,7 +80,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
       const { data, error } = await supabase
         .from('customer_types')
         .select('id, name')
-        .eq('is_active', true)
+        .eq('is_active', true as any)
         .order('name');
 
       if (error) {
@@ -91,7 +91,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
         return;
       }
 
-      setCustomerTypes(data || []);
+      setCustomerTypes((data || []) as CustomerType[]);
     } catch (error) {
       console.error('Error fetching customer types:', error);
       // Fallback customer types
@@ -160,18 +160,19 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
       // Find the customer type ID from the selected name
       const selectedCustomerType = customerTypes.find(type => type.name === formData.customer_types);
       
+      // Create customerData without customer_types field
+      const { customer_types, ...formDataWithoutTypes } = formData;
       const customerData = {
-        ...formData,
+        ...formDataWithoutTypes,
         customer_type: selectedCustomerType?.id || null
       };
-      delete customerData.customer_types;
 
       let result;
       if (customer) {
         // Update existing customer
         result = await supabase
           .from('customers')
-          .update(customerData)
+          .update(customerData as any)
           .eq('id', customer.id)
           .select()
           .single();
@@ -179,7 +180,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
         // Create new customer
         result = await supabase
           .from('customers')
-          .insert(customerData)
+          .insert(customerData as any)
           .select()
           .single();
       }
@@ -230,7 +231,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
               type="button" 
               variant="outline" 
               size="sm"
-              onClick={() => navigate(-1)}
+              onClick={() => navigate('/crm/customers')}
               className="flex items-center gap-2"
             >
               <ArrowLeft className="w-4 h-4" />

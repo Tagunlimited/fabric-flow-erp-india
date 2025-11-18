@@ -18,6 +18,7 @@ export interface UserProfile {
   phone?: string;
   department?: string;
   status: string;
+  avatar_url?: string;
   created_at: string;
   updated_at: string;
 }
@@ -82,10 +83,10 @@ export const authService = {
         }
       }
       
-      // Fetch profile
+      // Fetch profile - explicitly include avatar_url
       const { data, error } = await supabase
         .from('profiles')
-        .select('*')
+        .select('id, user_id, full_name, email, role, phone, department, status, avatar_url, created_at, updated_at')
         .eq('user_id', userId)
         .maybeSingle();
 
