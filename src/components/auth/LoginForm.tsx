@@ -79,7 +79,13 @@ export function LoginForm() {
         }
 
         toast.success('Login successful!');
-        navigate('/');
+        
+        // Use window.location.href for reliable navigation after login
+        // This ensures a full page reload which properly initializes auth state
+        // and avoids race conditions with React Router navigation
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 500); // Small delay to ensure toast is visible
       }
     } catch (err: any) {
       setError(err.message || 'Login failed');

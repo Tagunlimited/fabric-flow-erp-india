@@ -109,14 +109,30 @@ export const authService = {
       
       // Fetch profile - explicitly include avatar_url
       // Use maybeSingle() which returns null if no row found (doesn't throw error)
-      const { data, error } = await supabase
+      // Add timeout to the query itself
+      const queryPromise = supabase
         .from('profiles')
         .select('id, user_id, full_name, email, role, phone, department, status, avatar_url, created_at, updated_at')
         .eq('user_id', userId)
         .maybeSingle();
+      
+      const queryTimeout = new Promise<{ data: null, error: { message: string, code?: string } }>((resolve) => {
+        setTimeout(() => {
+          resolve({ data: null, error: { message: 'Query timeout', code: 'TIMEOUT' } });
+        }, 2500); // 2.5 seconds timeout for the query itself
+      });
+      
+      const result = await Promise.race([queryPromise, queryTimeout]);
+      const { data, error } = result;
 
-      // FIX: Handle "No rows found" as a normal case, not an error
+      // FIX: Handle "No rows found" and timeout as normal cases, not errors
       if (error) {
+        // Handle query timeout - return null to allow fallback profile
+        if (error.code === 'TIMEOUT' || error.message?.includes('timeout') || error.message?.includes('Query timeout')) {
+          console.log('ℹ️ Profile query timed out - will use fallback profile');
+          return null; // Return null to trigger fallback
+        }
+        
         // PGRST116 = "No rows found" - this is normal if profile doesn't exist
         if (error.code === 'PGRST116' || error.message?.includes('No rows found')) {
           console.log('ℹ️ No profile found for user (this is normal if profile not created yet)');
