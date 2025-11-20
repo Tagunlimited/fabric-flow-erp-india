@@ -494,30 +494,305 @@ export default function ReceiptPage() {
     }
   };
 
+  const handlePrint = async () => {
+    if (!printRef.current) return;
+    
+    try {
+      // Wait for images to load before printing
+      const images = printRef.current.querySelectorAll('img');
+      const imagePromises = Array.from(images).map((img) => {
+        return new Promise((resolve) => {
+          if (img.complete) {
+            resolve(true);
+          } else {
+            img.onload = () => resolve(true);
+            img.onerror = () => resolve(true); // Resolve even if image fails
+          }
+        });
+      });
+      await Promise.all(imagePromises);
+      
+      // Create a print window with the exact same content and styling as PDF export
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) {
+        toast.error('Please allow popups to print');
+        return;
+      }
+
+      const printContent = printRef.current.innerHTML;
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Receipt ${receiptNumber}</title>
+            <meta charset="utf-8">
+            <style>
+              @page { 
+                size: A5 landscape; 
+                margin: 3mm; 
+              }
+              * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+              }
+              body { 
+                font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; 
+                margin: 0; 
+                padding: 0; 
+                color: #000;
+                background: #fff;
+              }
+              .bg-white {
+                background-color: #fff;
+              }
+              .flex {
+                display: flex;
+              }
+              .justify-between {
+                justify-content: space-between;
+              }
+              .items-start {
+                align-items: flex-start;
+              }
+              .items-center {
+                align-items: center;
+              }
+              .items-end {
+                align-items: flex-end;
+              }
+              .text-right {
+                text-align: right;
+              }
+              .border-b {
+                border-bottom: 1px solid #e5e7eb;
+              }
+              .border {
+                border: 1px solid #e5e7eb;
+              }
+              .rounded {
+                border-radius: 0.25rem;
+              }
+              .grid {
+                display: grid;
+              }
+              .grid-cols-2 {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+              }
+              .gap-3 {
+                gap: 0.75rem;
+              }
+              .gap-4 {
+                gap: 1rem;
+              }
+              .pb-3 {
+                padding-bottom: 0.75rem;
+              }
+              .mb-3 {
+                margin-bottom: 0.75rem;
+              }
+              .mb-4 {
+                margin-bottom: 1rem;
+              }
+              .mt-2 {
+                margin-top: 0.5rem;
+              }
+              .mt-4 {
+                margin-top: 1rem;
+              }
+              .mt-8 {
+                margin-top: 2rem;
+              }
+              .p-3 {
+                padding: 0.75rem;
+              }
+              .p-4 {
+                padding: 1rem;
+              }
+              .space-y-1 > * + * {
+                margin-top: 0.25rem;
+              }
+              .text-2xl {
+                font-size: 1.5rem;
+                line-height: 2rem;
+              }
+              .text-xl {
+                font-size: 1.25rem;
+                line-height: 1.75rem;
+              }
+              .text-lg {
+                font-size: 1.125rem;
+                line-height: 1.75rem;
+              }
+              .text-base {
+                font-size: 1rem;
+                line-height: 1.5rem;
+              }
+              .text-sm {
+                font-size: 0.875rem;
+                line-height: 1.25rem;
+              }
+              .text-xs {
+                font-size: 0.75rem;
+                line-height: 1rem;
+              }
+              .font-bold {
+                font-weight: 700;
+              }
+              .font-semibold {
+                font-weight: 600;
+              }
+              .font-medium {
+                font-weight: 500;
+              }
+              .text-muted-foreground {
+                color: #6b7280;
+              }
+              .object-contain {
+                object-fit: contain;
+              }
+              .mx-auto {
+                margin-left: auto;
+                margin-right: auto;
+              }
+              .w-12 {
+                width: 3rem;
+              }
+              .w-16 {
+                width: 4rem;
+              }
+              .h-12 {
+                height: 3rem;
+              }
+              .h-16 {
+                height: 4rem;
+              }
+              .max-w-32 {
+                max-width: 8rem;
+              }
+              .max-h-16 {
+                max-height: 4rem;
+              }
+              .w-40 {
+                width: 10rem;
+              }
+              .receipt-print-container { 
+                width: 210mm; 
+                min-height: 148mm; 
+                padding: 3mm; 
+                margin: 0 auto;
+                background: #fff;
+              }
+              img {
+                max-width: 100%;
+                height: auto;
+              }
+            </style>
+          </head>
+          <body>
+            ${printContent}
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+      
+      // Wait for window to fully load before printing
+      printWindow.onload = () => {
+        setTimeout(() => {
+          printWindow.focus();
+          printWindow.print();
+          // Don't close immediately - let user interact with print dialog
+          // Window will close when print dialog is dismissed
+        }, 100);
+      };
+      
+      // Fallback if onload doesn't fire
+      setTimeout(() => {
+        if (printWindow.document.readyState === 'complete') {
+          printWindow.focus();
+          printWindow.print();
+        }
+      }, 500);
+    } catch (error) {
+      console.error('Error printing:', error);
+      toast.error('Failed to print receipt');
+    }
+  };
+
   const handleExportPDF = async () => {
     if (!printRef.current) return;
     try {
-      const canvas = await html2canvas(printRef.current, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
-      const imgData = canvas.toDataURL('image/png');
+      toast.loading('Generating PDF...');
+      
+      // Wait for images to load
+      const images = printRef.current.querySelectorAll('img');
+      const imagePromises = Array.from(images).map((img) => {
+        return new Promise((resolve) => {
+          if (img.complete) {
+            resolve(true);
+          } else {
+            img.onload = () => resolve(true);
+            img.onerror = () => resolve(true);
+          }
+        });
+      });
+      await Promise.all(imagePromises);
+      
+      // Capture with higher scale for quality, but compress later
+      const canvas = await html2canvas(printRef.current, { 
+        scale: 2, 
+        useCORS: true, 
+        backgroundColor: '#ffffff',
+        logging: false
+      });
+      
+      // Use JPEG with compression for smaller file size
+      const imgData = canvas.toDataURL('image/jpeg', 0.85);
+      
       const pdf = new jsPDF('l', 'mm', 'a5'); // A5 landscape
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      const margin = 10;
+      const pdfWidth = pdf.internal.pageSize.getWidth(); // 210mm for A5 landscape
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // 148mm for A5 landscape
+      
+      // Reduced margins for more content space
+      const margin = 3;
       const targetWidth = pdfWidth - margin * 2;
       const targetHeight = pdfHeight - margin * 2;
+      
       const imgAspect = canvas.width / canvas.height;
       let outWidth = targetWidth;
       let outHeight = outWidth / imgAspect;
+      
       if (outHeight > targetHeight) {
         outHeight = targetHeight;
         outWidth = outHeight * imgAspect;
       }
-      const x = (pdfWidth - outWidth) / 2;
-      const y = (pdfHeight - outHeight) / 2;
-      pdf.addImage(imgData, 'PNG', x, y, outWidth, outHeight);
-      pdf.save(`Receipt-${selected?.number}.pdf`);
+      
+      const x = margin;
+      const y = margin;
+      
+      pdf.addImage(imgData, 'JPEG', x, y, outWidth, outHeight);
+      
+      // Compress PDF if needed
+      let pdfBlob = pdf.output('blob');
+      if (pdfBlob.size > 200 * 1024) {
+        // If still too large, reduce image quality further
+        const imgDataCompressed = canvas.toDataURL('image/jpeg', 0.75);
+        const pdfCompressed = new jsPDF('l', 'mm', 'a5');
+        pdfCompressed.addImage(imgDataCompressed, 'JPEG', x, y, outWidth, outHeight);
+        pdfBlob = pdfCompressed.output('blob');
+      }
+      
+      // Save the PDF
+      const url = URL.createObjectURL(pdfBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Receipt-${receiptNumber || selected?.number || 'receipt'}.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+      
       toast.success('Receipt PDF exported');
     } catch (e) {
+      console.error('Error exporting PDF:', e);
       toast.error('Failed to export PDF');
     }
   };
@@ -1011,35 +1286,53 @@ export default function ReceiptPage() {
               <DialogTitle>Receipt Preview — {receiptNumber}</DialogTitle>
             </DialogHeader>
             <div className="flex justify-end gap-2 mb-2">
-              <Button variant="outline" onClick={() => window.print()}><Printer className="w-4 h-4 mr-1" /> Print</Button>
+              <Button variant="outline" onClick={handlePrint}><Printer className="w-4 h-4 mr-1" /> Print</Button>
               <Button variant="outline" onClick={handleExportPDF}><Download className="w-4 h-4 mr-1" /> Export PDF</Button>
             </div>
-            <div ref={printRef} className="bg-white" style={{ width: '210mm', minHeight: '148mm', padding: '10mm', margin: '0 auto' }}>
+            <div ref={printRef} className="bg-white receipt-print-container" style={{ width: '210mm', minHeight: '148mm', padding: '3mm', margin: '0 auto' }}>
               <style>{`
-                @page { size: A5 landscape; margin: 10mm; }
+                @page { 
+                  size: A5 landscape; 
+                  margin: 3mm; 
+                }
                 @media print {
-                  #receipt-print { width: 210mm !important; min-height: 148mm !important; }
+                  body * {
+                    visibility: hidden;
+                  }
+                  .receipt-print-container,
+                  .receipt-print-container * {
+                    visibility: visible;
+                  }
+                  .receipt-print-container {
+                    position: absolute;
+                    left: 0;
+                    top: 0;
+                    width: 210mm !important;
+                    min-height: 148mm !important;
+                    padding: 3mm !important;
+                    margin: 0 !important;
+                  }
                 }
               `}</style>
               {/* Company header */}
               <div className="flex justify-between items-start border-b pb-3 mb-3">
                 <div className="flex items-center gap-3">
                   {(company as any)?.logo_url && (
-                    <img src={(company as any).logo_url} alt="Logo" className="w-12 h-12 object-contain" />
+                    <img src={(company as any).logo_url} alt="Logo" className="w-16 h-16 object-contain" />
                   )}
                   <div>
-                    <div className="text-xl font-bold">{company?.company_name || 'Our Company'}</div>
-                    <div className="text-xs text-muted-foreground">{company?.address}</div>
+                    <div className="text-2xl font-bold">{company?.company_name || 'Our Company'}</div>
+                    <div className="text-sm text-muted-foreground">{company?.address}</div>
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-lg font-bold">RECEIPT</div>
-                  <div className="text-xs text-muted-foreground">{formatDateIndian(date)}</div>
+                  <div className="text-2xl font-bold">RECEIPT</div>
+                  <div className="text-sm text-muted-foreground">{formatDateIndian(date)}</div>
                 </div>
               </div>
 
               {/* Receipt meta */}
-              <div className="grid grid-cols-2 gap-4 text-xs mb-3">
+              <div className="grid grid-cols-2 gap-4 text-sm mb-3">
                 <div className="space-y-1">
                   <div><span className="font-medium">Receipt No.:</span> {receiptNumber}</div>
                   <div><span className="font-medium">Reference:</span> {receiptReference}</div>
@@ -1055,16 +1348,16 @@ export default function ReceiptPage() {
               </div>
 
               {/* Acknowledgement */}
-              <div className="border rounded p-3 text-sm">
+              <div className="border rounded p-4 text-base">
                 Received a sum of <span className="font-semibold">{formatCurrency(receiptAmount)}</span> from
                 {' '}<span className="font-semibold">{customer?.company_name || 'Customer'}</span> towards
                 {' '}<span className="font-semibold">{paymentType}</span> against reference
                 {' '}<span className="font-semibold">{receiptReference}</span>.
-                {notes && <div className="mt-1 text-xs text-muted-foreground">Note: {notes}</div>}
+                {notes && <div className="mt-2 text-sm text-muted-foreground">Note: {notes}</div>}
               </div>
 
               {/* Footer */}
-              <div className="flex justify-between items-end mt-8 text-xs">
+              <div className="flex justify-between items-end mt-8 text-sm">
                 <div>
                   <div className="text-muted-foreground">Generated on {formatDateIndian(new Date())}</div>
                 </div>
@@ -1081,7 +1374,7 @@ export default function ReceiptPage() {
                   )}
                   <div className="mt-4">
                     <div className="border-b w-40 mx-auto"></div>
-                    <div className="font-bold text-sm mt-2">Authorized Signatory</div>
+                    <div className="font-bold text-base mt-2">Authorized Signatory</div>
                   </div>
                 </div>
               </div>

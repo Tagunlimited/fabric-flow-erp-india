@@ -77,26 +77,34 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
 
   const fetchCustomerTypes = async () => {
     try {
-      const { data, error } = await supabase
-        .from('customer_types')
+      // Use type assertion since customer_types table exists but may not be in generated types
+      const { data, error } = await (supabase
+        .from('customer_types' as any)
         .select('id, name')
-        .eq('is_active', true as any)
-        .order('name');
+        .eq('is_active', true)
+        .order('name') as any);
 
       if (error) {
         console.error('Error fetching customer types:', error);
         // Fallback customer types
         const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
-        setCustomerTypes(types.map((name, id) => ({ id, name })));
+        setCustomerTypes(types.map((name, id) => ({ id: id + 1, name })));
         return;
       }
 
-      setCustomerTypes((data || []) as CustomerType[]);
+      // Type guard to ensure data is valid
+      if (data && Array.isArray(data)) {
+        setCustomerTypes(data as CustomerType[]);
+      } else {
+        // Fallback if data is invalid
+        const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
+        setCustomerTypes(types.map((name, id) => ({ id: id + 1, name })));
+      }
     } catch (error) {
       console.error('Error fetching customer types:', error);
       // Fallback customer types
       const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
-      setCustomerTypes(types.map((name, id) => ({ id, name })));
+      setCustomerTypes(types.map((name, id) => ({ id: id + 1, name })));
     }
   };
 

@@ -122,7 +122,7 @@ export function AvatarUploader({ currentUrl, onUpload, onDelete, userId, userNam
         <div className="relative group cursor-pointer">
           <Avatar className={getSizeClasses()}>
             <AvatarImage 
-              key={currentUrl || 'no-avatar'} // Force re-render when URL changes
+              key={`${userId}-${currentUrl || 'no-avatar'}`} // Force re-render when user or URL changes
               src={currentUrl || undefined} // Use undefined instead of empty string to prevent premature fallback
               alt={userName} 
               onError={(e) => {

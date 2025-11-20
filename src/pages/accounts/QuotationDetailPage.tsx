@@ -140,10 +140,11 @@ export default function QuotationDetailPage() {
         const fabricIds = typedItems.map(item => item.fabric_id).filter(Boolean) as string[];
         const categoryIds = typedItems.map(item => item.product_category_id).filter(Boolean) as string[];
         if (fabricIds.length > 0) {
-          const { data: fabricsData } = await supabase
-            .from('fabric_master')
+          // Use type assertion since fabric_master table exists but may not be in generated types
+          const { data: fabricsData } = await (supabase
+            .from('fabric_master' as any)
             .select('id, fabric_name')
-            .in('id', fabricIds as any);
+            .in('id', fabricIds) as any);
           if (fabricsData && Array.isArray(fabricsData)) {
             const fabricsMap = fabricsData.reduce((acc, fabric: any) => {
               if (fabric && fabric.id && fabric.fabric_name) {
@@ -1076,30 +1077,30 @@ export default function QuotationDetailPage() {
 
                 {/* Customer Information and Order Details - Side by Side */}
                 <div className="mb-6 grid grid-cols-2 gap-4">
-                  {/* Customer Information */}
+                {/* Customer Information */}
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-800 mb-2">Bill To:</h3>
-                    <div className="bg-gray-50 p-4 rounded">
-                      <p className="font-semibold text-gray-800">{customer?.company_name || 'Customer Name'}</p>
-                      <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
-                      <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
-                      <p className="text-sm text-gray-600">
-                        {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
-                      </p>
-                      <p className="text-sm text-gray-600">GSTIN: {customer?.gstin || 'GSTIN'}</p>
-                    </div>
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Bill To:</h3>
+                  <div className="bg-gray-50 p-4 rounded">
+                    <p className="font-semibold text-gray-800">{customer?.company_name || 'Customer Name'}</p>
+                    <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
+                    <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
+                    <p className="text-sm text-gray-600">
+                      {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
+                    </p>
+                    <p className="text-sm text-gray-600">GSTIN: {customer?.gstin || 'GSTIN'}</p>
                   </div>
+                </div>
 
-                  {/* Order Information */}
+                {/* Order Information */}
                   <div>
                     <h3 className="text-lg font-semibold text-gray-800 mb-2">Order Details:</h3>
                     <div className="bg-gray-50 p-4 rounded space-y-2">
-                      <div><strong>Order Number:</strong> {order?.order_number || 'N/A'}</div>
-                      <div><strong>Order Date:</strong> {order?.order_date ? new Date(order.order_date).toLocaleDateString('en-IN') : 'N/A'}</div>
-                      <div><strong>Expected Delivery:</strong> {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
-                      <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
-                      <div><strong>Status:</strong> <span className="capitalize">{order?.status?.replace('_', ' ') || 'N/A'}</span></div>
-                      <div><strong>Payment Terms:</strong> {(order as any).payment_channel || 'As per agreement'}</div>
+                    <div><strong>Order Number:</strong> {order?.order_number || 'N/A'}</div>
+                    <div><strong>Order Date:</strong> {order?.order_date ? new Date(order.order_date).toLocaleDateString('en-IN') : 'N/A'}</div>
+                    <div><strong>Expected Delivery:</strong> {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
+                    <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
+                    <div><strong>Status:</strong> <span className="capitalize">{order?.status?.replace('_', ' ') || 'N/A'}</span></div>
+                    <div><strong>Payment Terms:</strong> {(order as any).payment_channel || 'As per agreement'}</div>
                     </div>
                   </div>
                 </div>
@@ -1297,12 +1298,12 @@ export default function QuotationDetailPage() {
                       <div className="border-b border-gray-400 w-40 mb-2"></div>
                       <div className="text-sm text-gray-600">Authorized Signatory</div>
                       <div className="text-xs text-gray-500 mt-1">{formatCompanyName(company?.company_name)}</div>
-                    </div>
                   </div>
-                  
+                </div>
+
                   {/* Footer - Inline with signature section */}
                   <div className="mt-3 pt-2 border-t border-gray-400 text-right text-xs text-gray-600">
-                    <div>Generated: {new Date().toLocaleDateString('en-IN')}</div>
+                  <div>Generated: {new Date().toLocaleDateString('en-IN')}</div>
                   </div>
                 </div>
               </div>
@@ -1359,7 +1360,7 @@ export default function QuotationDetailPage() {
                 {/* Customer Information and Order Details - Side by Side */}
                 <div className="mb-6 grid grid-cols-2 gap-4">
                   {/* Customer Information */}
-                  <div>
+                <div>
                     <h3 className="text-lg font-semibold text-gray-800 mb-2">Bill To:</h3>
                     <div className="bg-gray-50 p-4 rounded">
                       <p className="font-semibold text-gray-800">{customer?.company_name || 'Customer Name'}</p>
@@ -1369,22 +1370,22 @@ export default function QuotationDetailPage() {
                         {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
                       </p>
                       {customer?.gstin && <p className="text-sm text-gray-600">GSTIN: {customer.gstin}</p>}
-                    </div>
                   </div>
+                </div>
 
                   {/* Order Information */}
-                  <div>
+                <div>
                     <h3 className="text-lg font-semibold text-gray-800 mb-2">Order Details:</h3>
                     <div className="bg-gray-50 p-4 rounded space-y-2">
                       <div><strong>Order Number:</strong> {order?.order_number || 'N/A'}</div>
                       <div><strong>Order Date:</strong> {order?.order_date ? new Date(order.order_date).toLocaleDateString('en-IN') : 'N/A'}</div>
                       <div><strong>Expected Delivery:</strong> {(order as any)?.expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
-                      <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
+                    <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
                       <div><strong>Status:</strong> <span className="capitalize">{order?.status?.replace('_', ' ') || 'N/A'}</span></div>
                       <div><strong>Payment Terms:</strong> {(order as any)?.payment_channel || 'As per agreement'}</div>
-                    </div>
                   </div>
                 </div>
+              </div>
 
               {/* Order Summary Table */}
                 <div className="mb-6">
@@ -1540,17 +1541,17 @@ export default function QuotationDetailPage() {
                 <div className="mt-4 border-t border-gray-400 pt-3">
                   <h3 className="text-sm font-bold text-gray-800 mb-2">Terms & Conditions:</h3>
                   <div className="grid grid-cols-3 gap-3 text-sm">
-                    <div className="space-y-0.5">
+                  <div className="space-y-0.5">
                     <div>• Payment: 50% advance, 50% on delivery</div>
                       <div>• Delivery: {(order as any)?.expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : '15-20 working days'}</div>
                     <div>• Prices inclusive of GST</div>
                   </div>
-                    <div className="space-y-0.5">
+                  <div className="space-y-0.5">
                     <div>• Subject to change without notice</div>
                     <div>• Quality as per industry standards</div>
                     <div>• Return policy as per guidelines</div>
                   </div>
-                    <div className="space-y-0.5">
+                  <div className="space-y-0.5">
                     <div>• Installation & training included</div>
                     <div>• Warranty: 1 year from delivery</div>
                     <div>• Support: 9am–6pm, Mon–Sat</div>
@@ -1569,7 +1570,7 @@ export default function QuotationDetailPage() {
                   
                   {/* Company Authorized Signatory */}
                   <div className="text-center">
-                      <div className="mb-2">
+                    <div className="mb-2">
                       {company?.authorized_signatory_url ? (
                         <img 
                           src={company.authorized_signatory_url} 
@@ -1585,9 +1586,9 @@ export default function QuotationDetailPage() {
                       <div className="border-b border-gray-400 w-40 mb-2"></div>
                       <div className="text-sm text-gray-600">Authorized Signatory</div>
                       <div className="text-xs text-gray-500 mt-1">{formatCompanyName(company?.company_name)}</div>
-                  </div>
                 </div>
-                
+              </div>
+
                 {/* Footer - Inline with signature section */}
                 <div className="mt-3 pt-2 border-t border-gray-400 text-right text-xs text-gray-600">
                 <div>Generated: {new Date().toLocaleDateString('en-IN')}</div>

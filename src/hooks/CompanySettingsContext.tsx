@@ -85,12 +85,22 @@ export const CompanySettingsProvider: React.FC<{ children: React.ReactNode }> = 
 
   // Load config from database only when user is authenticated
   useEffect(() => {
+    // Timeout: if auth loading takes more than 15 seconds, proceed anyway
+    const authTimeout = setTimeout(() => {
+      if (authLoading) {
+        console.warn('⚠️ Auth loading timeout in CompanySettingsContext, proceeding with default config');
+        setLoading(false);
+      }
+    }, 15000);
+
     if (!authLoading && user) {
       loadCompanyConfig();
     } else if (!authLoading && !user) {
       // If not authenticated, just use default config
       setLoading(false);
     }
+
+    return () => clearTimeout(authTimeout);
   }, [user, authLoading]);
 
   const loadCompanyConfig = async () => {
@@ -120,14 +130,14 @@ export const CompanySettingsProvider: React.FC<{ children: React.ReactNode }> = 
         return;
       }
 
-      if (data) {
-        setConfig(data);
+      if (data && !('error' in data)) {
+        setConfig(data as CompanyConfig);
       } else {
         // If no config exists, create a default one only if user is authenticated
         if (user) {
           const { data: newConfig, error: createError } = await supabase
             .from('company_settings')
-            .insert([defaultConfig])
+            .insert([defaultConfig] as any)
             .select()
             .single();
 
@@ -141,8 +151,8 @@ export const CompanySettingsProvider: React.FC<{ children: React.ReactNode }> = 
             return;
           }
 
-          if (newConfig) {
-            setConfig(newConfig);
+          if (newConfig && !('error' in newConfig)) {
+            setConfig(newConfig as CompanyConfig);
           }
         } else {
           setConfig(defaultConfig);
@@ -160,7 +170,7 @@ export const CompanySettingsProvider: React.FC<{ children: React.ReactNode }> = 
     try {
       const { error } = await supabase
         .from('company_settings')
-        .upsert([newConfig], { onConflict: 'id' });
+        .upsert([newConfig] as any, { onConflict: 'id' });
 
       if (error) {
         console.error('Error saving company config:', error);
