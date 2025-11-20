@@ -410,6 +410,28 @@ const CuttingManagerPage = () => {
           console.error('Failed to load cutting masters:', e);
         }
 
+        // Fetch employee avatar URLs for cutting masters
+        const cuttingMasterIds = Array.from(new Set([
+          ...Object.values(cuttingMastersByOrder).flat().map((cm: any) => cm.cutting_master_id).filter(Boolean),
+          ...Object.values(map).map((r: any) => r.cutting_master_id).filter(Boolean)
+        ]));
+        let employeeAvatars: Record<string, string> = {};
+        if (cuttingMasterIds.length > 0) {
+          try {
+            const { data: employees } = await supabase
+              .from('employees' as any)
+              .select('id, avatar_url')
+              .in('id', cuttingMasterIds as any);
+            (employees || []).forEach((emp: any) => {
+              if (emp?.id && emp?.avatar_url) {
+                employeeAvatars[emp.id] = emp.avatar_url;
+              }
+            });
+          } catch (e) {
+            console.error('Failed to load employee avatars:', e);
+          }
+        }
+
         // Fetch orders first (simplified query)
         const { data: orders, error: ordersError } = await supabase
           .from('orders' as any)
