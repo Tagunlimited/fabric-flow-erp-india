@@ -85,6 +85,7 @@ import { CompanySettingsProvider } from "@/hooks/CompanySettingsContext";
 import EmployeeAccessManagementPage from "./pages/admin/EmployeeAccessManagement";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
 import { useEffect } from "react";
+import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
 import { ErpLayout } from "@/components/ErpLayout";
 
 function useDynamicFavicon() {
@@ -661,6 +662,7 @@ const App = () => {
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </BrowserRouter>
+            <PWAInstallPrompt />
             </TooltipProvider>
           </GlobalFormPersistenceProvider>
         </FormPersistenceProvider>

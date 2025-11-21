@@ -1,6 +1,6 @@
 import { ErpSidebar } from "@/components/ErpSidebar";
 import { Button } from "@/components/ui/button";
-import { Search, User, LogOut, Sun, Moon, Bell, Settings, Menu } from "lucide-react";
+import { Search, User, LogOut, Sun, Moon, Bell, Settings, Menu, Download } from "lucide-react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { FloatingNotification } from "@/components/notifications/FloatingNotification";
@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { cn } from "@/lib/utils";
+import { showInstallPrompt, isAppInstalled, isInstallPromptAvailable, getInstallPromptStatus } from '@/utils/pwaInstall';
 
 interface ErpLayoutProps {
   children: React.ReactNode;
@@ -34,6 +35,8 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
   const [lastScrollY, setLastScrollY] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [canInstall, setCanInstall] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(false);
   const { config, loading: companySettingsLoading } = useCompanySettings();
   const headerLogo = config?.header_logo_url || config?.logo_url || 'https://i.postimg.cc/D0hJxKtP/tag-black.png';
   
@@ -62,6 +65,43 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, [lastScrollY]);
+
+  // Check PWA install status
+  useEffect(() => {
+    const checkInstallStatus = () => {
+      const status = getInstallPromptStatus();
+      setCanInstall(status.available);
+      setIsInstalled(status.installed);
+    };
+
+    checkInstallStatus();
+
+    // Listen for install prompt availability
+    const handleInstallAvailable = () => {
+      checkInstallStatus();
+    };
+
+    // Listen for app installed
+    const handleInstalled = () => {
+      setIsInstalled(true);
+      setCanInstall(false);
+    };
+
+    window.addEventListener('pwa-install-available', handleInstallAvailable);
+    window.addEventListener('pwa-installed', handleInstalled);
+
+    return () => {
+      window.removeEventListener('pwa-install-available', handleInstallAvailable);
+      window.removeEventListener('pwa-installed', handleInstalled);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    const accepted = await showInstallPrompt();
+    if (accepted) {
+      toast.success('App installation started!');
+    }
+  };
 
   const toggleTheme = () => {
     setTheme(theme === 'dark' ? 'light' : 'dark');
@@ -234,8 +274,20 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
                   <div className="text-xs text-muted-foreground capitalize">{displayRole}</div>
                 </div>
               </div>
-              {/* Notification, Theme, Settings, Logout */}
+              {/* Notification, Install, Theme, Settings, Logout */}
               <NotificationCenter />
+              {canInstall && !isInstalled && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleInstallClick}
+                  className="text-foreground hover:bg-primary hover:text-primary-foreground border-primary"
+                  title="Install Scissors App"
+                >
+                  <Download className="w-4 h-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Install</span>
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
