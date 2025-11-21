@@ -299,9 +299,14 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
 
     window.addEventListener('beforeunload', handleBeforeUnload);
 
-    // Messages subscription
+    // Messages subscription with better connection handling
     const messagesChannel = supabase
-      .channel('chat_messages_full')
+      .channel('chat_messages_full', {
+        config: {
+          broadcast: { self: true },
+          presence: { key: user.id }
+        }
+      })
       .on(
         'postgres_changes',
         {
@@ -310,6 +315,7 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           table: 'chat_messages',
         },
         async (payload) => {
+          console.log('📨 Real-time message received:', payload);
           const newMessage = payload.new as any;
           
           // Fetch sender profile
@@ -360,8 +366,10 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           setMessages((prev) => {
             // Check if message already exists (avoid duplicates)
             if (prev.some(m => m.id === newMessage.id)) {
+              console.log('⚠️ Duplicate message detected, skipping:', newMessage.id);
               return prev;
             }
+            console.log('✅ Adding new message to UI:', formattedMessage.id);
             return [...prev, formattedMessage];
           });
         }
@@ -471,10 +479,125 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('📡 Subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Real-time subscription active');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Channel subscription error');
+        } else if (status === 'TIMED_OUT') {
+          console.warn('⏱️ Subscription timed out, will retry...');
+        } else if (status === 'CLOSED') {
+          console.warn('🔌 Channel closed, will reconnect...');
+        }
+      });
+
+    // Polling fallback: Fetch new messages every 2 seconds if subscription fails
+    let lastMessageId: string | null = null;
+    const pollingInterval = setInterval(async () => {
+      try {
+        const { data: latestMessages, error } = await supabase
+          .from('chat_messages')
+          .select('id, created_at')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (error || !latestMessages) return;
+
+        // If we have a new message that we don't have in our state
+        if (latestMessages.id !== lastMessageId) {
+          if (lastMessageId !== null) {
+            // New message detected, fetch it
+            const { data: newMessages, error: fetchError } = await supabase
+              .from('chat_messages')
+              .select(`
+                id,
+                sender_id,
+                message,
+                user_mentions,
+                order_mentions,
+                created_at,
+                profiles!chat_messages_sender_id_fkey(user_id, full_name, avatar_url)
+              `)
+              .gt('created_at', new Date(Date.now() - 5000).toISOString())
+              .order('created_at', { ascending: true });
+
+            if (!fetchError && newMessages) {
+              // Format and add new messages
+              const formattedMessages = await Promise.all(
+                newMessages.map(async (msg: any) => {
+                  // Fetch reactions
+                  const { data: reactionsData } = await supabase
+                    .from('chat_message_reactions')
+                    .select('message_id, user_id, emoji')
+                    .eq('message_id', msg.id);
+
+                  const reactionsMap = new Map<string, { count: number; users: string[] }>();
+                  (reactionsData || []).forEach((r: any) => {
+                    if (!reactionsMap.has(r.emoji)) {
+                      reactionsMap.set(r.emoji, { count: 0, users: [] });
+                    }
+                    const reaction = reactionsMap.get(r.emoji)!;
+                    reaction.count++;
+                    reaction.users.push(r.user_id);
+                  });
+
+                  const reactions = Array.from(reactionsMap.entries()).map(([emoji, data]) => ({
+                    emoji,
+                    count: data.count,
+                    userReacted: data.users.includes(user?.id || ''),
+                    users: data.users,
+                  }));
+
+                  return {
+                    id: msg.id,
+                    sender_id: msg.sender_id,
+                    message: msg.message,
+                    user_mentions: msg.user_mentions || [],
+                    order_mentions: msg.order_mentions || [],
+                    created_at: msg.created_at,
+                    sender: (msg as any).profiles ? {
+                      full_name: (msg as any).profiles.full_name,
+                      avatar_url: (msg as any).profiles.avatar_url,
+                    } : undefined,
+                    reactions,
+                  };
+                })
+              );
+
+              setMessages((prev) => {
+                const existingIds = new Set(prev.map(m => m.id));
+                const newMessages = formattedMessages.filter(m => !existingIds.has(m.id));
+                if (newMessages.length > 0) {
+                  console.log('🔄 Polling: Found', newMessages.length, 'new messages');
+                  return [...prev, ...newMessages];
+                }
+                return prev;
+              });
+            }
+          }
+          lastMessageId = latestMessages.id;
+        }
+      } catch (error) {
+        console.error('Polling error:', error);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    // Initialize lastMessageId
+    (async () => {
+      const { data } = await supabase
+        .from('chat_messages')
+        .select('id')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      if (data) lastMessageId = data.id;
+    })();
 
     return () => {
       clearInterval(presenceInterval);
+      clearInterval(pollingInterval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       supabase.removeChannel(messagesChannel);
       // Mark as offline (only if table exists)

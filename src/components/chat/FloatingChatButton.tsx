@@ -47,8 +47,6 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
           return msg.user_mentions.includes(user.id);
         });
 
-        if (error) throw error;
-
         if (!messages || messages.length === 0) {
           setUnreadCount(0);
           return;
@@ -74,7 +72,11 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
 
     // Set up real-time subscription for new mentions
     const channel = supabase
-      .channel('chat_mentions')
+      .channel('chat_mentions', {
+        config: {
+          broadcast: { self: true }
+        }
+      })
       .on(
         'postgres_changes',
         {
@@ -83,6 +85,7 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
           table: 'chat_messages',
         },
         (payload) => {
+          console.log('🔔 New message received in FloatingChatButton:', payload);
           const newMessage = payload.new as any;
           // Check if current user is mentioned in the message
           if (
@@ -90,13 +93,55 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
             Array.isArray(newMessage.user_mentions) &&
             newMessage.user_mentions.includes(user.id)
           ) {
-            setUnreadCount((prev) => prev + 1);
+            console.log('✅ User mentioned, refreshing unread count');
+            // Refetch unread count to ensure accuracy
+            const refreshUnreadCount = async () => {
+              try {
+                const { data: allMessages } = await supabase
+                  .from('chat_messages')
+                  .select('id, user_mentions')
+                  .order('created_at', { ascending: false })
+                  .limit(200);
+
+                const messages = (allMessages || []).filter((msg: any) => {
+                  if (!msg.user_mentions || !Array.isArray(msg.user_mentions)) return false;
+                  return msg.user_mentions.includes(user.id);
+                });
+
+                if (!messages || messages.length === 0) {
+                  setUnreadCount(0);
+                  return;
+                }
+
+                const messageIds = messages.map((m) => m.id);
+                const { data: readMentions } = await supabase
+                  .from('chat_mentions_read')
+                  .select('message_id')
+                  .eq('user_id', user.id)
+                  .in('message_id', messageIds);
+
+                const readMessageIds = new Set(readMentions?.map((r) => r.message_id) || []);
+                const unreadMessages = messages.filter((m) => !readMessageIds.has(m.id));
+                setUnreadCount(unreadMessages.length);
+              } catch (error) {
+                console.error('Error refreshing unread count:', error);
+              }
+            };
+            refreshUnreadCount();
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('🔔 FloatingChatButton subscription status:', status);
+      });
+
+    // Polling fallback: Refresh unread count every 3 seconds
+    const pollingInterval = setInterval(() => {
+      fetchUnreadCount();
+    }, 3000);
 
     return () => {
+      clearInterval(pollingInterval);
       supabase.removeChannel(channel);
     };
   }, [user]);
@@ -134,6 +179,7 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
     if (!newState) {
       setScrollToMessageId(undefined);
     }
+    // Note: Unread count will be refreshed by the polling interval
   };
 
   const handleClose = () => {
