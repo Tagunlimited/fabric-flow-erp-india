@@ -6,10 +6,9 @@ const DYNAMIC_CACHE_NAME = 'fabric-flow-dynamic-v1';
 // Static assets to cache
 const STATIC_ASSETS = [
   '/',
-  '/static/js/bundle.js',
-  '/static/css/main.css',
   '/manifest.json',
-  '/favicon.ico'
+  '/favicon.ico',
+  '/offline.html'
 ];
 
 // API endpoints to cache
