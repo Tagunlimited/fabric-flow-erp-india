@@ -251,7 +251,10 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
         if (data) {
           const presenceMap = new Map<string, UserPresence>();
           data.forEach((p: any) => {
-            presenceMap.set(p.user_id, p);
+            // Only include users with 'online' or 'away' status (exclude 'offline')
+            if (p.status === 'online' || p.status === 'away') {
+              presenceMap.set(p.user_id, p);
+            }
           });
           setPresence(presenceMap);
         }
@@ -434,14 +437,26 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           table: 'user_presence',
         },
         (payload) => {
-          // Only process if no error and payload has data
-          if (payload.error || !payload.new) return;
+          // Only process if no error
+          if (payload.error) return;
           
-          const presenceData = payload.new as any;
+          // Handle both INSERT and UPDATE events
+          const presenceData = (payload.new || payload.old) as any;
           if (presenceData && presenceData.user_id) {
             setPresence(prev => {
               const newMap = new Map(prev);
-              newMap.set(presenceData.user_id, presenceData);
+              // If it's a DELETE event, remove the user
+              if (payload.eventType === 'DELETE' || !payload.new) {
+                newMap.delete(presenceData.user_id);
+              } else {
+                // INSERT or UPDATE - add/update the presence (only if online or away)
+                if (presenceData.status === 'online' || presenceData.status === 'away') {
+                  newMap.set(presenceData.user_id, presenceData);
+                } else {
+                  // Remove if status is offline
+                  newMap.delete(presenceData.user_id);
+                }
+              }
               return newMap;
             });
           }
@@ -827,6 +842,9 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
   };
 
   const getPresenceStatus = (userId: string): 'online' | 'away' | 'offline' => {
+    // Current user is always considered online if they're using the chat
+    if (userId === user?.id) return 'online';
+    
     const userPresence = presence.get(userId);
     if (!userPresence) return 'offline';
     
@@ -840,7 +858,15 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
     return userPresence.status as 'online' | 'away' | 'offline';
   };
 
-  const onlineUsers = profiles.filter(p => getPresenceStatus(p.user_id) === 'online');
+  // Count online users (excluding current user from count, but including them in presence)
+  const onlineUsers = profiles.filter(p => {
+    const status = getPresenceStatus(p.user_id);
+    return status === 'online';
+  });
+  
+  // Total online count (including current user if they're online)
+  const onlineCount = onlineUsers.length;
+  
   const awayUsers = profiles.filter(p => getPresenceStatus(p.user_id) === 'away');
   const offlineUsers = profiles.filter(p => getPresenceStatus(p.user_id) === 'offline');
 
@@ -873,8 +899,8 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           </h2>
         </div>
         <div className="flex items-center gap-2">
-          <p className="text-xs text-muted-foreground hidden sm:block">
-            {onlineUsers.length} online
+          <p className="text-xs text-muted-foreground">
+            {onlineCount > 0 ? `${onlineCount} online` : '0 online'}
           </p>
           <Button 
             variant="ghost" 
@@ -923,14 +949,19 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
                           </AvatarFallback>
                         </Avatar>
                         {status === 'online' && (
-                          <div className="absolute bottom-0 right-0 h-2.5 w-2.5 bg-green-500 rounded-full border-2 border-background" />
+                          <div className="absolute bottom-0 right-0 h-3 w-3 bg-green-500 rounded-full border-2 border-background shadow-sm" title="Online" />
                         )}
                         {status === 'away' && (
-                          <div className="absolute bottom-0 right-0 h-2.5 w-2.5 bg-yellow-500 rounded-full border-2 border-background" />
+                          <div className="absolute bottom-0 right-0 h-3 w-3 bg-yellow-500 rounded-full border-2 border-background shadow-sm" title="Away" />
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">{profile.full_name}</div>
+                        <div className="flex items-center gap-1.5">
+                          <div className="text-sm font-medium truncate">{profile.full_name}</div>
+                          {status === 'online' && (
+                            <div className="h-2 w-2 bg-green-500 rounded-full flex-shrink-0" title="Online" />
+                          )}
+                        </div>
                         <div className="text-xs text-muted-foreground">
                           {status === 'online' && 'Active now'}
                           {status === 'away' && 'Away'}
