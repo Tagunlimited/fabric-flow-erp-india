@@ -220,12 +220,15 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
       if (presenceTableExists === false) return;
       
       try {
+        const now = new Date().toISOString();
         const { error } = await supabase
           .from('user_presence')
           .upsert({
             user_id: user.id,
             status: 'online',
-            last_seen: new Date().toISOString(),
+            last_seen: now,
+          }, {
+            onConflict: 'user_id'
           });
 
         // If table doesn't exist, mark it and skip presence updates
@@ -236,6 +239,7 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
 
         // Table exists, mark it
         setPresenceTableExists(true);
+        console.log('✅ Current user presence set to online:', user.id);
 
         // Fetch all presence statuses - get ALL users, not just those in presence table
         const { data: presenceData, error: fetchError } = await supabase
@@ -248,12 +252,13 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           return;
         }
 
-        // Build presence map from database
+        // Build presence map from database - include ALL users
         const presenceMap = new Map<string, UserPresence>();
         if (presenceData) {
           presenceData.forEach((p: any) => {
             // Include all statuses, we'll filter in getPresenceStatus
             presenceMap.set(p.user_id, p);
+            console.log('👤 Found presence for user:', p.user_id, p.status);
           });
         }
         
@@ -264,10 +269,11 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
             status: 'online',
             last_seen: new Date().toISOString(),
           });
+          console.log('✅ Current user marked as online:', user.id);
         }
         
         setPresence(presenceMap);
-        console.log('👥 Initial presence loaded:', Array.from(presenceMap.keys()));
+        console.log('👥 Initial presence loaded:', Array.from(presenceMap.keys()), 'Total:', presenceMap.size);
       } catch {
         // Silently handle errors - table might not exist
         setPresenceTableExists(false);
@@ -275,37 +281,64 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
     })();
 
     // Set up presence update interval (mark as away after 5 minutes of inactivity)
-    const presenceInterval = setInterval(() => {
+    const presenceInterval = setInterval(async () => {
       // Skip if table doesn't exist
       if (presenceTableExists === false) return;
       
+      const now = new Date().toISOString();
+      
       // Update current user's presence
-      supabase
+      const { error: updateError } = await supabase
         .from('user_presence')
         .upsert({
           user_id: user.id,
           status: 'online',
-          last_seen: new Date().toISOString(),
-        })
-        .then(() => {
-          // Also update local presence map immediately
-          setPresence(prev => {
-            const newMap = new Map(prev);
-            newMap.set(user.id, {
-              user_id: user.id,
-              status: 'online',
-              last_seen: new Date().toISOString(),
-            });
-            return newMap;
-          });
-        })
-        .catch((error) => {
-          console.error('Error updating presence:', error);
-          // Silently handle errors - table might not exist
-          if (error.code === 'PGRST301' || error.message?.includes('404')) {
-            setPresenceTableExists(false);
-          }
+          last_seen: now,
+        }, {
+          onConflict: 'user_id'
         });
+      
+      if (updateError) {
+        console.error('❌ Error updating presence:', updateError);
+        if (updateError.code === 'PGRST301' || updateError.message?.includes('404')) {
+          setPresenceTableExists(false);
+        }
+        return;
+      }
+      
+      // Also update local presence map immediately
+      setPresence(prev => {
+        const newMap = new Map(prev);
+        newMap.set(user.id, {
+          user_id: user.id,
+          status: 'online',
+          last_seen: now,
+        });
+        return newMap;
+      });
+      
+      // Also refresh all presence data periodically to catch any missed updates
+      const { data: allPresence, error: fetchError } = await supabase
+        .from('user_presence')
+        .select('*')
+        .neq('status', 'offline'); // Only get online/away users
+      
+      if (!fetchError && allPresence) {
+        setPresence(prev => {
+          const newMap = new Map(prev);
+          allPresence.forEach((p: any) => {
+            newMap.set(p.user_id, p);
+          });
+          // Ensure current user is still online
+          newMap.set(user.id, {
+            user_id: user.id,
+            status: 'online',
+            last_seen: now,
+          });
+          console.log('🔄 Refreshed presence - Total users:', newMap.size);
+          return newMap;
+        });
+      }
     }, 30000); // Update every 30 seconds for better real-time feel
 
     // Mark as offline on page unload
@@ -488,24 +521,33 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
             return;
           }
           
-          // Handle both INSERT and UPDATE events
-          const presenceData = (payload.new || payload.old) as any;
-          if (presenceData && presenceData.user_id) {
-            setPresence(prev => {
-              const newMap = new Map(prev);
-              // If it's a DELETE event, remove the user
-              if (payload.eventType === 'DELETE' || !payload.new) {
-                console.log('🗑️ Removing user from presence:', presenceData.user_id);
-                newMap.delete(presenceData.user_id);
-              } else {
-                // INSERT or UPDATE - add/update the presence
-                console.log('✅ Updating presence for user:', presenceData.user_id, presenceData.status);
-                newMap.set(presenceData.user_id, presenceData);
+          // Handle INSERT, UPDATE, and DELETE events
+          const presenceData = payload.new as any;
+          const oldData = payload.old as any;
+          
+          setPresence(prev => {
+            const newMap = new Map(prev);
+            
+            // Handle DELETE event
+            if (payload.eventType === 'DELETE' || (!presenceData && oldData)) {
+              const userIdToRemove = oldData?.user_id || presenceData?.user_id;
+              if (userIdToRemove) {
+                console.log('🗑️ Removing user from presence:', userIdToRemove);
+                newMap.delete(userIdToRemove);
               }
-              console.log('👥 Current presence map:', Array.from(newMap.keys()));
-              return newMap;
-            });
-          }
+            } else if (presenceData && presenceData.user_id) {
+              // INSERT or UPDATE - add/update the presence
+              console.log('✅ Updating presence for user:', presenceData.user_id, presenceData.status, presenceData.last_seen);
+              newMap.set(presenceData.user_id, {
+                user_id: presenceData.user_id,
+                status: presenceData.status,
+                last_seen: presenceData.last_seen,
+              });
+            }
+            
+            console.log('👥 Updated presence map - Total users:', newMap.size, 'User IDs:', Array.from(newMap.keys()));
+            return newMap;
+          });
         }
       )
       .on(
