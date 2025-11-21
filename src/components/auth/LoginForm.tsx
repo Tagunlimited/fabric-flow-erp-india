@@ -39,6 +39,14 @@ export function LoginForm() {
     setError('');
 
     try {
+      // CRITICAL: Clear any existing session first to prevent user confusion
+      // This ensures we start with a clean slate and the correct user is loaded
+      console.log('🔐 Clearing any existing session before login...');
+      await supabase.auth.signOut();
+      
+      // Small delay to ensure sign out completes
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       const { data, error: authError } = await supabase.auth.signInWithPassword({
         email,
         password
@@ -49,6 +57,23 @@ export function LoginForm() {
       }
 
       if (data.user) {
+        // Verify we got the correct user
+        console.log('✅ Login successful for user:', { 
+          id: data.user.id, 
+          email: data.user.email,
+          expectedEmail: email 
+        });
+        
+        // Double-check the email matches (security check)
+        if (data.user.email?.toLowerCase() !== email.toLowerCase()) {
+          console.error('❌ Email mismatch!', { 
+            expected: email, 
+            actual: data.user.email 
+          });
+          await supabase.auth.signOut();
+          throw new Error('Login failed: User mismatch detected');
+        }
+
         // Handle remember me functionality
         if (rememberMe) {
           localStorage.setItem('rememberedEmail', email);
@@ -79,11 +104,24 @@ export function LoginForm() {
         }
 
         toast.success('Login successful!');
-        navigate('/');
+        
+        // Clear any cached auth state to force fresh load
+        localStorage.removeItem('login_timestamp');
+        // Clear redirect flag to allow fresh redirect on login
+        sessionStorage.removeItem('permissionRedirectDone');
+        
+        // Use window.location.href for reliable navigation after login
+        // This ensures a full page reload which properly initializes auth state
+        // and avoids race conditions with React Router navigation
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 500); // Small delay to ensure toast is visible
       }
     } catch (err: any) {
       setError(err.message || 'Login failed');
       toast.error(err.message || 'Login failed');
+      // Ensure we're signed out on error
+      await supabase.auth.signOut();
     } finally {
       setIsLoading(false);
     }
@@ -95,9 +133,9 @@ export function LoginForm() {
         <CardHeader className="text-center space-y-4">
           <div className="mx-auto">
             <img 
-              src="https://i.postimg.cc/902VYJy5/Group-1.png"
+              src="https://i.postimg.cc/4NKq0Rq5/tag-logo-pdf-pdf-(1000-x-1000-px).png"
               alt="Scissors ERP" 
-              className="w-25 h-12 mx-auto rounded-lg object-cover"
+              className="w-45 h-36 mx-auto rounded-lg object-cover"
               onError={(e) => {
                 (e.target as HTMLImageElement).src = '/placeholder.svg';
               }}

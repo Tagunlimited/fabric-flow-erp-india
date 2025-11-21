@@ -21,6 +21,7 @@ import { toast } from 'sonner';
 import { cn, formatCurrency } from '@/lib/utils';
 import { getOrderItemDisplayImageForForm, getImageSrcFromFileOrUrl } from '@/utils/orderItemImageUtils';
 import { usePageState } from '@/contexts/AppCacheContext';
+import { getSortedSizes, sortSizesQuantities, SizeType as SizeTypeUtil } from '@/utils/sizeSorting';
 
 interface Customer {
   id: string;
@@ -47,6 +48,7 @@ interface SizeType {
   id: string;
   size_name: string;
   available_sizes: string[];
+  size_order?: Record<string, number>;
   created_at?: string;
   updated_at?: string;
 }
@@ -627,43 +629,12 @@ const getSelectedFabricVariant = (productIndex: number) => {
     );
   };
 
-  // Define proper size order
-  const getSizeOrder = (sizes: string[]) => {
-    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 
-                       '20', '22', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44', '46', '48', '50',
-                       '0-2 Yrs', '3-4 Yrs', '5-6 Yrs', '7-8 Yrs', '9-10 Yrs', '11-12 Yrs', '13-14 Yrs', '15-16 Yrs'];
-    
-    return sizes.sort((a, b) => {
-      const indexA = sizeOrder.indexOf(a);
-      const indexB = sizeOrder.indexOf(b);
-      
-      // If both sizes are in our predefined order, sort by that order
-      if (indexA !== -1 && indexB !== -1) {
-        return indexA - indexB;
-      }
-      
-      // If only one is in predefined order, prioritize it
-      if (indexA !== -1) return -1;
-      if (indexB !== -1) return 1;
-      
-      // For numeric sizes not in predefined list, sort numerically
-      const numA = parseInt(a);
-      const numB = parseInt(b);
-      if (!isNaN(numA) && !isNaN(numB)) {
-        return numA - numB;
-      }
-      
-      // Default alphabetical sort
-      return a.localeCompare(b);
-    });
-  };
-
   const handleSizeTypeSelect = (productIndex: number, sizeTypeId: string) => {
     const sizeType = sizeTypes.find(st => st.id === sizeTypeId);
     const newSizesQuantities: { [size: string]: number } = {};
     
     // Sort sizes in proper order before creating quantities object
-    const orderedSizes = getSizeOrder(sizeType?.available_sizes || []);
+    const orderedSizes = getSortedSizes(sizeType || null);
     orderedSizes.forEach(size => {
       newSizesQuantities[size] = 0;
     });
@@ -1231,7 +1202,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {!preSelectedCustomer && (
                   <div className="space-y-2">
-                    <Label>Company Name</Label>
+                    <Label>Client</Label>
                     <CustomerSearchSelect
                       value={formData.customer_id}
                       onValueChange={handleCustomerSelect}
@@ -1244,7 +1215,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                 
                 {preSelectedCustomer && (
                   <div className="space-y-2">
-                    <Label>Company Name</Label>
+                    <Label>Client</Label>
                     <Input 
                       value={preSelectedCustomer.company_name} 
                       disabled 
@@ -1536,8 +1507,17 @@ const getSelectedFabricVariant = (productIndex: number) => {
         )}
       </div>
 
-      {/* GSM */}
-      <div>
+      {/* GSM - Hidden from UI but functionality remains intact */}
+      {/* <div>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
+        <Input
+          value={product.gsm}
+          placeholder="GSM will be auto-selected from fabric"
+          disabled
+          className="bg-gray-50"
+        />
+      </div> */}
+      <div className="hidden">
         <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
         <Input
           value={product.gsm}
@@ -1696,10 +1676,14 @@ const getSelectedFabricVariant = (productIndex: number) => {
       {product.size_type_id && (
         <div className="space-y-2">
           <Label className="text-base font-semibold text-gray-700 mb-2 block">Size-wise Quantities</Label>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {Object.entries(product.sizes_quantities || {}).map(([size, quantity]) => (
-              <div key={size} className="space-y-1">
-                <Label className="text-sm">{size}</Label>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {sortSizesQuantities(
+              product.sizes_quantities || {},
+              product.size_type_id,
+              sizeTypes
+            ).map(([size, quantity]) => (
+              <div key={size} className="flex flex-col space-y-1 flex-shrink-0 flex-1 min-w-0">
+                <Label className="text-sm text-center font-medium">{size}</Label>
                 <Input
                   type="number"
                   value={quantity}
@@ -1720,7 +1704,8 @@ const getSelectedFabricVariant = (productIndex: number) => {
                       )
                     }));
                   }}
-                  placeholder="Qty"
+                  placeholder="0"
+                  className="w-full text-center text-sm px-2 py-1.5 h-9"
                 />
               </div>
             ))}
@@ -2171,7 +2156,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
                               <td className="border border-gray-300 px-3 py-2 text-sm">
                                 <div>{totalQty} Pcs</div>
                                 <div className="text-xs text-gray-600">
-                                  {Object.entries(product.sizes_quantities || {})
+                                  {sortSizesQuantities(
+                                    product.sizes_quantities || {},
+                                    product.size_type_id,
+                                    sizeTypes
+                                  )
                                     .filter(([_, qty]) => qty > 0)
                                     .map(([size, qty]) => `${size}-${qty}`)
                                     .join(', ')}

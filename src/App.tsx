@@ -122,7 +122,18 @@ function ProtectedRouteWithCompanySettings({ children, requiredRole }: { childre
   );
 }
 
-const queryClient = new QueryClient();
+// Configure QueryClient to DISABLE auto-refresh on tab switch
+// This prevents forms from resetting when switching browser tabs/windows
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false, // DISABLED: Prevent auto-refresh when tab becomes visible (main fix)
+      // Keep refetchOnMount: true (default) to preserve existing functionality
+      // Keep refetchOnReconnect: true (default) to preserve existing functionality
+      // Keep retry: true (default) to preserve existing functionality
+    },
+  },
+});
 
 // Global sidebar sync function
 const syncSidebarUrls = async () => {
@@ -210,10 +221,38 @@ const syncSidebarUrls = async () => {
 };
 
 const App = () => {
-  // Run sidebar URL sync on app startup
+  // Prevent multiple initializations - use ref to track if already initialized
+  const appInitializedRef = React.useRef(false);
+  
+  // Run sidebar URL sync on app startup - ONLY ONCE
   React.useEffect(() => {
+    if (appInitializedRef.current) {
+      console.log('⏭️ Skipping App re-initialization - already loaded');
+      return;
+    }
+    
+    appInitializedRef.current = true;
     console.log('🚀 App started - running sidebar URL sync...');
     syncSidebarUrls();
+  }, []); // Empty dependency array - run only once
+
+  // DISABLE ALL AUTO-REFRESH: Monitor and log visibility changes
+  // All auto-refresh mechanisms have been disabled at their source:
+  // - QueryClient: refetchOnWindowFocus = false
+  // - EnhancedDashboardCached: Only refreshes when hasFocus
+  // - usePageVisibility: preventAutoRefresh = true
+  React.useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('👀 Tab became visible - auto-refresh mechanisms disabled');
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   return (

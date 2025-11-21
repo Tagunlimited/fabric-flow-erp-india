@@ -11,6 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useEnhancedFormData } from '@/hooks/useEnhancedFormData';
 import { FormPersistenceWrapper } from '@/components/FormPersistenceWrapper';
+import { StateCitySelector } from '@/components/ui/StateCitySelector';
 
 interface CustomerFormProps {
   customer?: any;
@@ -23,11 +24,6 @@ interface CustomerType {
   name: string;
 }
 
-interface State {
-  id: number;
-  name: string;
-  code: string;
-}
 
 function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) {
   const { 
@@ -60,13 +56,11 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
   });
 
   const [customerTypes, setCustomerTypes] = useState<CustomerType[]>([]);
-  const [states, setStates] = useState<State[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     fetchCustomerTypes();
-    fetchStates();
     
     if (customer) {
       setFormData({
@@ -98,21 +92,6 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
     }
   };
 
-  const fetchStates = async () => {
-    // Mock data for states
-    setStates([
-      { id: 1, name: 'Maharashtra', code: 'MH' },
-      { id: 2, name: 'Gujarat', code: 'GJ' },
-      { id: 3, name: 'Karnataka', code: 'KA' },
-      { id: 4, name: 'Tamil Nadu', code: 'TN' },
-      { id: 5, name: 'Delhi', code: 'DL' },
-      { id: 6, name: 'Uttar Pradesh', code: 'UP' },
-      { id: 7, name: 'West Bengal', code: 'WB' },
-      { id: 8, name: 'Rajasthan', code: 'RJ' },
-      { id: 9, name: 'Madhya Pradesh', code: 'MP' },
-      { id: 10, name: 'Punjab', code: 'PB' }
-    ]);
-  };
 
   const handleChange = (field: string, value: any) => {
     setFormData(prev => ({
@@ -139,8 +118,9 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
       return;
     }
 
-    if (!formData.email.trim()) {
-      setError('Email is required');
+    // Email is optional, but if provided, it must be valid
+    if (formData.email.trim() && !formData.email.includes('@')) {
+      setError('Please enter a valid email address');
       return;
     }
 
@@ -247,18 +227,18 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Company Information */}
+            {/* Client Information */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Company Information</h3>
+              <h3 className="text-lg font-semibold">Client Information</h3>
               
               <div>
-                <Label htmlFor="company_name">Company Name *</Label>
+                <Label htmlFor="company_name">Client *</Label>
                 <Input
                   id="company_name"
                   name="company_name"
                   value={formData.company_name}
                   onChange={(e) => handleChange('company_name', e.target.value)}
-                  placeholder="Enter company name"
+                  placeholder="Enter client name"
                   required
                 />
               </div>
@@ -289,7 +269,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
               </div>
 
               <div>
-                <Label htmlFor="email">Email *</Label>
+                <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
                   name="email"
@@ -297,7 +277,6 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
                   value={formData.email}
                   onChange={(e) => handleChange('email', e.target.value)}
                   placeholder="Enter email address"
-                  required
                 />
               </div>
 
@@ -337,36 +316,16 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="city">City</Label>
-                  <Input
-                    id="city"
-                    name="city"
-                    value={formData.city}
-                    onChange={(e) => handleChange('city', e.target.value)}
-                    placeholder="Enter city"
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="state">State</Label>
-                  <Select
-                    value={formData.state}
-                    onValueChange={(value) => handleChange('state', value)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select state" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {states.map((state) => (
-                        <SelectItem key={state.id} value={state.name}>
-                          {state.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+              <div>
+                <StateCitySelector
+                  selectedState={formData.state}
+                  selectedCity={formData.city}
+                  onStateChange={(value) => handleChange('state', value)}
+                  onCityChange={(value) => handleChange('city', value)}
+                  disabled={isLoading}
+                  stateLabel="State"
+                  cityLabel="City"
+                />
               </div>
 
               <div>

@@ -11,6 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useFormData } from '@/contexts/FormPersistenceContext';
 import { useNavigate } from 'react-router-dom';
+import { StateCitySelector } from '@/components/ui/StateCitySelector';
 
 interface CustomerFormProps {
   customer?: any;
@@ -73,30 +74,38 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
         pan: customer.pan || ''
       });
     }
-  }, [customer, customerTypes]);
+  }, [customer, customerTypes, setFormData]);
 
   const fetchCustomerTypes = async () => {
     try {
-      const { data, error } = await supabase
-        .from('customer_types')
+      // Use type assertion since customer_types table exists but may not be in generated types
+      const { data, error } = await (supabase
+        .from('customer_types' as any)
         .select('id, name')
         .eq('is_active', true)
-        .order('name');
+        .order('name') as any);
 
       if (error) {
         console.error('Error fetching customer types:', error);
         // Fallback customer types
         const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
-        setCustomerTypes(types.map((name, id) => ({ id, name })));
+        setCustomerTypes(types.map((name, id) => ({ id: id + 1, name })));
         return;
       }
 
-      setCustomerTypes(data || []);
+      // Type guard to ensure data is valid
+      if (data && Array.isArray(data)) {
+        setCustomerTypes(data as CustomerType[]);
+      } else {
+        // Fallback if data is invalid
+        const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
+        setCustomerTypes(types.map((name, id) => ({ id: id + 1, name })));
+      }
     } catch (error) {
       console.error('Error fetching customer types:', error);
       // Fallback customer types
       const types = ['Retail', 'Wholesale', 'Corporate', 'B2B', 'B2C', 'Enterprise'];
-      setCustomerTypes(types.map((name, id) => ({ id, name })));
+      setCustomerTypes(types.map((name, id) => ({ id: id + 1, name })));
     }
   };
 
@@ -118,19 +127,16 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
 
   const validateForm = () => {
     if (!formData.company_name.trim()) {
-      setError('Company name is required');
+      setError('Client name is required');
       return false;
     }
     if (!formData.phone.trim() || formData.phone.length < 10) {
       setError('Valid phone number is required');
       return false;
     }
-    if (!formData.email.trim() || !formData.email.includes('@')) {
-      setError('Valid email is required');
-      return false;
-    }
-    if (!formData.address.trim()) {
-      setError('Address is required');
+    // Email is optional, but if provided, it must be valid
+    if (formData.email.trim() && !formData.email.includes('@')) {
+      setError('Please enter a valid email address');
       return false;
     }
     if (!formData.city.trim()) {
@@ -141,8 +147,9 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
       setError('State is required');
       return false;
     }
-    if (!formData.pincode.trim() || formData.pincode.length !== 6) {
-      setError('Valid 6-digit pincode is required');
+    // Pincode is optional, but if provided, it must be 6 digits
+    if (formData.pincode.trim() && formData.pincode.length !== 6) {
+      setError('Pincode must be 6 digits if provided');
       return false;
     }
     return true;
@@ -160,18 +167,19 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
       // Find the customer type ID from the selected name
       const selectedCustomerType = customerTypes.find(type => type.name === formData.customer_types);
       
+      // Create customerData without customer_types field
+      const { customer_types, ...formDataWithoutTypes } = formData;
       const customerData = {
-        ...formData,
+        ...formDataWithoutTypes,
         customer_type: selectedCustomerType?.id || null
       };
-      delete customerData.customer_types;
 
       let result;
       if (customer) {
         // Update existing customer
         result = await supabase
           .from('customers')
-          .update(customerData)
+          .update(customerData as any)
           .eq('id', customer.id)
           .select()
           .single();
@@ -179,7 +187,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
         // Create new customer
         result = await supabase
           .from('customers')
-          .insert(customerData)
+          .insert(customerData as any)
           .select()
           .single();
       }
@@ -230,7 +238,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
               type="button" 
               variant="outline" 
               size="sm"
-              onClick={() => navigate(-1)}
+              onClick={() => navigate('/crm/customers')}
               className="flex items-center gap-2"
             >
               <ArrowLeft className="w-4 h-4" />
@@ -263,12 +271,12 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="company_name">Company Name *</Label>
+              <Label htmlFor="company_name">Client *</Label>
               <Input
                 id="company_name"
                 value={formData.company_name}
                 onChange={(e) => handleChange('company_name', e.target.value)}
-                placeholder="Enter company name"
+                placeholder="Enter client name"
                 required
                 disabled={isLoading}
               />
@@ -298,14 +306,13 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="email">Email *</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
                 type="email"
                 value={formData.email}
                 onChange={(e) => handleChange('email', e.target.value)}
                 placeholder="Enter email address"
-                required
                 disabled={isLoading}
               />
             </div>
@@ -333,52 +340,40 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="address">Address *</Label>
+            <Label htmlFor="address">Address</Label>
             <Textarea
               id="address"
               value={formData.address}
               onChange={(e) => handleChange('address', e.target.value)}
               placeholder="Enter complete address"
-              required
               disabled={isLoading}
               rows={3}
             />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="city">City *</Label>
-              <Input
-                id="city"
-                value={formData.city}
-                onChange={(e) => handleChange('city', e.target.value)}
-                placeholder="Enter city"
-                required
+            <div className="md:col-span-2">
+              <StateCitySelector
+                selectedState={formData.state}
+                selectedCity={formData.city}
+                onStateChange={(value) => handleChange('state', value)}
+                onCityChange={(value) => handleChange('city', value)}
                 disabled={isLoading}
+                stateLabel="State"
+                cityLabel="City"
+                stateRequired={true}
+                cityRequired={true}
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="state">State *</Label>
-              <Input
-                id="state"
-                value={formData.state}
-                onChange={(e) => handleChange('state', e.target.value)}
-                placeholder="Enter state"
-                required
-                disabled={isLoading}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="pincode">Pincode *</Label>
+              <Label htmlFor="pincode">Pincode</Label>
               <Input
                 id="pincode"
                 value={formData.pincode}
                 onChange={(e) => handleChange('pincode', e.target.value)}
                 placeholder="Enter 6-digit pincode"
                 maxLength={6}
-                required
                 disabled={isLoading}
               />
             </div>

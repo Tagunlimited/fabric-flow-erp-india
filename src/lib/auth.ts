@@ -18,6 +18,7 @@ export interface UserProfile {
   phone?: string;
   department?: string;
   status: string;
+  avatar_url?: string;
   created_at: string;
   updated_at: string;
 }
@@ -64,32 +65,80 @@ export const authService = {
   },
 
   // Get user profile with improved error handling and retry logic
-  async getUserProfile(userId: string, retryCount = 0): Promise<UserProfile | null> {
+  async getUserProfile(userId: string, retryCount = 0, skipSessionCheck = false): Promise<UserProfile | null> {
     const maxRetries = 2;
     const retryDelay = Math.min(1000 * Math.pow(2, retryCount), 3000); // Exponential backoff, max 3s
     
     try {
-      console.log(`Fetching profile for user: ${userId} (attempt ${retryCount + 1}/${maxRetries + 1})`);
+      console.log(`Fetching profile for user: ${userId} (attempt ${retryCount + 1}/${maxRetries + 1}, skipSessionCheck: ${skipSessionCheck})`);
       
-      // Validate session before attempting fetch
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError || !session) {
-        console.warn('No valid session, attempting to refresh...');
-        const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-        if (refreshError || !refreshed.session) {
-          console.error('Session refresh failed:', refreshError);
-          return null;
+      // Skip session check if caller already validated session (e.g., from SIGNED_IN event)
+      if (!skipSessionCheck) {
+        // Validate session before attempting fetch - with timeout
+        console.log('🔍 getUserProfile: Checking session validity...');
+        const sessionCheckPromise = supabase.auth.getSession();
+        const sessionTimeoutPromise = new Promise<{ data: { session: null }, error: { message: string } }>((resolve) => {
+          setTimeout(() => {
+            console.warn('⚠️ getUserProfile: Session check timeout after 5 seconds');
+            resolve({ data: { session: null }, error: { message: 'Session check timeout' } });
+          }, 5000);
+        });
+        
+        const { data: { session }, error: sessionError } = await Promise.race([sessionCheckPromise, sessionTimeoutPromise]);
+        if (sessionError || !session) {
+          console.warn('No valid session, attempting to refresh...');
+          const refreshPromise = supabase.auth.refreshSession();
+          const refreshTimeoutPromise = new Promise<{ data: { session: null }, error: { message: string } }>((resolve) => {
+            setTimeout(() => {
+              console.warn('⚠️ getUserProfile: Session refresh timeout after 5 seconds');
+              resolve({ data: { session: null }, error: { message: 'Session refresh timeout' } });
+            }, 5000);
+          });
+          
+          const { data: refreshed, error: refreshError } = await Promise.race([refreshPromise, refreshTimeoutPromise]);
+          if (refreshError || !refreshed.session) {
+            console.error('Session refresh failed:', refreshError);
+            return null;
+          }
+        } else {
+          console.log('✅ getUserProfile: Session is valid');
         }
+      } else {
+        console.log('⏭️ getUserProfile: Skipping session check (skipSessionCheck=true)');
       }
       
-      // Fetch profile
-      const { data, error } = await supabase
+      // Fetch profile - explicitly include avatar_url
+      // Use maybeSingle() which returns null if no row found (doesn't throw error)
+      // Add timeout to the query itself
+      const queryPromise = supabase
         .from('profiles')
-        .select('*')
+        .select('id, user_id, full_name, email, role, phone, department, status, avatar_url, created_at, updated_at')
         .eq('user_id', userId)
         .maybeSingle();
+      
+      const queryTimeout = new Promise<{ data: null, error: { message: string, code?: string } }>((resolve) => {
+        setTimeout(() => {
+          resolve({ data: null, error: { message: 'Query timeout', code: 'TIMEOUT' } });
+        }, 2500); // 2.5 seconds timeout for the query itself
+      });
+      
+      const result = await Promise.race([queryPromise, queryTimeout]);
+      const { data, error } = result;
 
+      // FIX: Handle "No rows found" and timeout as normal cases, not errors
       if (error) {
+        // Handle query timeout - return null to allow fallback profile
+        if (error.code === 'TIMEOUT' || error.message?.includes('timeout') || error.message?.includes('Query timeout')) {
+          console.log('ℹ️ Profile query timed out - will use fallback profile');
+          return null; // Return null to trigger fallback
+        }
+        
+        // PGRST116 = "No rows found" - this is normal if profile doesn't exist
+        if (error.code === 'PGRST116' || error.message?.includes('No rows found')) {
+          console.log('ℹ️ No profile found for user (this is normal if profile not created yet)');
+          return null; // Return null immediately, don't treat as error
+        }
+        
         console.error('Profile fetch error:', error);
         
         // Handle JWT expired/unauthorized errors

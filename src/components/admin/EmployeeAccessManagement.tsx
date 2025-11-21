@@ -706,28 +706,28 @@ export function EmployeeAccessManagement() {
         } catch (adminError: any) {
           // Fallback to signup if admin API not available
           console.warn('Admin API not available, using signup:', adminError);
-          const signupResult = await supabase.auth.signUp({
-            email: newUserData.email,
-            password: newUserData.password,
-            options: {
-              data: {
-                full_name: selectedEmployee.full_name,
-                phone: selectedEmployee.personal_phone,
-                department: selectedEmployee.department,
+        const signupResult = await supabase.auth.signUp({
+          email: newUserData.email,
+          password: newUserData.password,
+          options: {
+            data: {
+              full_name: selectedEmployee.full_name,
+              phone: selectedEmployee.personal_phone,
+              department: selectedEmployee.department,
                 created_by_admin: true
-              },
-              emailRedirectTo: `${window.location.origin}/login`
-            }
-          });
-          authData = signupResult.data;
-          authError = signupResult.error;
-          
-          // Immediately sign out the new user and restore admin session
-          if (authData?.user) {
-            await supabase.auth.signOut();
-            // Restore admin session
-            if (currentSession?.session) {
-              await supabase.auth.setSession(currentSession.session);
+            },
+            emailRedirectTo: `${window.location.origin}/login`
+          }
+        });
+        authData = signupResult.data;
+        authError = signupResult.error;
+        
+        // Immediately sign out the new user and restore admin session
+        if (authData?.user) {
+          await supabase.auth.signOut();
+          // Restore admin session
+          if (currentSession?.session) {
+            await supabase.auth.setSession(currentSession.session);
             }
           }
         }
@@ -817,7 +817,7 @@ export function EmployeeAccessManagement() {
             console.warn('Failed to send welcome email:', emailError);
             // Don't fail the entire operation if email fails
             toast.success(`Employee account created! Email: ${newUserData.email}, Password: [provided during creation]. Welcome email may not have been sent.`);
-          } else {
+        } else {
             toast.success('Employee account created successfully! Welcome email with credentials has been sent.');
           }
         } catch (emailErr) {
@@ -971,9 +971,9 @@ export function EmployeeAccessManagement() {
               .from('user_sidebar_permissions')
               .update({
                 can_view: true,
-                can_edit: canEdit,
-                is_override: true
-              } as any)
+            can_edit: canEdit,
+            is_override: true
+          } as any)
               .eq('user_id', userId as any)
               .eq('sidebar_item_id', sidebarItemId as any);
             
@@ -985,9 +985,9 @@ export function EmployeeAccessManagement() {
           }
         }
 
-        // If granting access to a child item, also grant access to its parent
+      // If granting access to a child item, also grant access to its parent
         if (item && item.parent_id) {
-          console.log(`Auto-granting access to parent for ${item.title}`);
+        console.log(`Auto-granting access to parent for ${item.title}`);
           // Delete any existing parent permission first
           await supabase
             .from('user_sidebar_permissions')
@@ -1012,10 +1012,10 @@ export function EmployeeAccessManagement() {
               const { error: parentUpdateError } = await supabase
                 .from('user_sidebar_permissions')
                 .update({
-                  can_view: true,
-                  can_edit: false,
-                  is_override: true
-                } as any)
+              can_view: true,
+              can_edit: false,
+              is_override: true
+            } as any)
                 .eq('user_id', userId as any)
                 .eq('sidebar_item_id', item.parent_id as any);
               
@@ -1027,11 +1027,11 @@ export function EmployeeAccessManagement() {
               console.error('Error inserting parent permission:', parentInsertError);
               // Don't throw - parent permission is secondary
             }
-          }
         }
-        
+      }
+      
         toast.success('Permission granted! Parent menu access also granted.');
-        await fetchData();
+      await fetchData();
       }
     } catch (error) {
       console.error('Error updating sidebar permission:', error);
@@ -1406,29 +1406,29 @@ export function EmployeeAccessManagement() {
                   </DialogHeader>
                   <form onSubmit={handleCreateUser} className="space-y-4">
                     {grantAccessSource === 'header' && (
-                      <div className="space-y-2">
-                        <Label>Select Employee</Label>
-                        <Select onValueChange={(employeeId) => {
-                          const employee = employees.find(emp => emp.id === employeeId);
-                          setSelectedEmployee(employee || null);
-                          if (employee?.personal_email) {
-                            setNewUserData(prev => ({ ...prev, email: employee.personal_email }));
-                          }
-                        }}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Choose an employee" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {employees
-                              .filter(emp => getUserStatus(emp).status === 'no-access')
-                              .map((employee) => (
-                                <SelectItem key={employee.id} value={employee.id}>
-                                  {employee.full_name} - {employee.department}
-                                </SelectItem>
-                              ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
+                    <div className="space-y-2">
+                      <Label>Select Employee</Label>
+                      <Select onValueChange={(employeeId) => {
+                        const employee = employees.find(emp => emp.id === employeeId);
+                        setSelectedEmployee(employee || null);
+                        if (employee?.personal_email) {
+                          setNewUserData(prev => ({ ...prev, email: employee.personal_email }));
+                        }
+                      }}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Choose an employee" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {employees
+                            .filter(emp => getUserStatus(emp).status === 'no-access')
+                            .map((employee) => (
+                              <SelectItem key={employee.id} value={employee.id}>
+                                {employee.full_name} - {employee.department}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     )}
 
                     {selectedEmployee && (

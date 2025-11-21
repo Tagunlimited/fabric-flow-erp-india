@@ -12,6 +12,7 @@ import { Loader2, Upload, User, X } from "lucide-react";
 import { IdProofUploader } from "@/components/ui/id-proof-uploader";
 import { BankDetailsUploader } from "@/components/ui/bank-details-uploader";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { StateCitySelector } from "@/components/ui/StateCitySelector";
 
 interface TailorFormProps {
   tailor?: any;
@@ -75,6 +76,10 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
     if (tailor?.avatar_url) {
       setAvatarPreview(tailor.avatar_url);
     }
+    // Auto-generate tailor code for new tailors only
+    if (!tailor) {
+      generateNextTailorCode();
+    }
   }, [tailor]);
 
   const fetchBatches = async () => {
@@ -89,6 +94,43 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
       setBatches(data || []);
     } catch (error) {
       console.error('Error fetching batches:', error);
+    }
+  };
+
+  const generateNextTailorCode = async () => {
+    try {
+      // Fetch all existing tailor codes
+      const { data, error } = await supabase
+        .from('tailors')
+        .select('tailor_code')
+        .not('tailor_code', 'is', null);
+
+      if (error) throw error;
+
+      // Extract numeric parts from codes matching "T-XXX" pattern
+      const codes = (data || [])
+        .map(item => item.tailor_code)
+        .filter(code => code && typeof code === 'string' && code.startsWith('T-'))
+        .map(code => {
+          // Extract number after "T-"
+          const match = code.match(/^T-(\d+)$/);
+          return match ? parseInt(match[1], 10) : 0;
+        })
+        .filter(num => !isNaN(num) && num > 0);
+
+      // Find the maximum number
+      const maxNumber = codes.length > 0 ? Math.max(...codes) : 0;
+
+      // Generate next code (T-001, T-002, etc.)
+      const nextNumber = maxNumber + 1;
+      const nextCode = `T-${nextNumber.toString().padStart(3, '0')}`;
+
+      // Update form data with generated code
+      setFormData(prev => ({ ...prev, tailor_code: nextCode }));
+    } catch (error) {
+      console.error('Error generating tailor code:', error);
+      // Fallback to T-001 if there's an error
+      setFormData(prev => ({ ...prev, tailor_code: 'T-001' }));
     }
   };
 
@@ -302,9 +344,16 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
                   id="tailor_code"
                   value={formData.tailor_code}
                   onChange={(e) => setFormData({ ...formData, tailor_code: e.target.value })}
-                  placeholder="e.g., T001"
+                  placeholder="e.g., T-001"
                   required
+                  disabled={!tailor} // Disable for new tailors (auto-generated)
+                  className={!tailor ? "bg-muted cursor-not-allowed" : ""}
                 />
+                {!tailor && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Code will be auto-generated
+                  </p>
+                )}
               </div>
 
               <div>
@@ -468,7 +517,7 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
           {/* Address Information */}
           <div className="space-y-4">
             <h3 className="text-lg font-medium">Address Information</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-4">
               <div>
                 <Label htmlFor="address_line1">Address</Label>
                 <Input
@@ -478,23 +527,14 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
                 />
               </div>
 
-              <div>
-                <Label htmlFor="city">City</Label>
-                <Input
-                  id="city"
-                  value={formData.city}
-                  onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="state">State</Label>
-                <Input
-                  id="state"
-                  value={formData.state}
-                  onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-                />
-              </div>
+              <StateCitySelector
+                selectedState={formData.state}
+                selectedCity={formData.city}
+                onStateChange={(value) => setFormData({ ...formData, state: value })}
+                onCityChange={(value) => setFormData({ ...formData, city: value })}
+                stateLabel="State"
+                cityLabel="City"
+              />
 
               <div>
                 <Label htmlFor="pincode">Pincode</Label>

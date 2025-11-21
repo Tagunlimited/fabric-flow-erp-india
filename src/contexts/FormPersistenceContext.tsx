@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 
 interface FormData {
   [key: string]: any;
@@ -22,8 +22,9 @@ interface FormPersistenceProviderProps {
 export function FormPersistenceProvider({ children }: FormPersistenceProviderProps) {
   const [formData, setFormData] = useState<FormData>({});
   const [isNavigating, setIsNavigating] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
 
-  // Load saved form data from localStorage on mount
+  // Load saved form data from localStorage on mount - run ONLY once
   useEffect(() => {
     try {
       const savedData = localStorage.getItem('formPersistence');
@@ -33,12 +34,32 @@ export function FormPersistenceProvider({ children }: FormPersistenceProviderPro
       }
     } catch (error) {
       console.error('Error loading form data from localStorage:', error);
+    } finally {
+      setIsInitialized(true); // Mark as initialized
     }
+  }, []); // EMPTY dependency array - crucial!
+
+  // Add storage event listener for tab synchronization
+  useEffect(() => {
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'formPersistence' && event.newValue) {
+        try {
+          const newData = JSON.parse(event.newValue);
+          setFormData(newData);
+        } catch (error) {
+          console.error('Error parsing storage event data:', error);
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   // Save form data to localStorage whenever it changes (debounced)
+  // Update the save effect to respect initialization
   useEffect(() => {
-    if (isNavigating) return; // Don't save during navigation
+    if (!isInitialized || isNavigating) return; // Don't save during navigation or before initialization
     
     const timeoutId = setTimeout(() => {
       try {
@@ -46,12 +67,12 @@ export function FormPersistenceProvider({ children }: FormPersistenceProviderPro
       } catch (error) {
         console.error('Error saving form data to localStorage:', error);
       }
-    }, 1000); // Debounce saves by 1 second
+    }, 500); // Debounce saves by 500ms
 
     return () => clearTimeout(timeoutId);
-  }, [formData, isNavigating]);
+  }, [formData, isInitialized, isNavigating]);
 
-  const saveFormData = (formKey: string, data: any) => {
+  const saveFormData = useCallback((formKey: string, data: any) => {
     setFormData(prev => ({
       ...prev,
       [formKey]: {
@@ -59,42 +80,44 @@ export function FormPersistenceProvider({ children }: FormPersistenceProviderPro
         timestamp: Date.now()
       }
     }));
-  };
+  }, []);
 
-  const getFormData = (formKey: string) => {
-    const savedData = formData[formKey];
-    if (savedData && savedData.data) {
-      // Check if data is not too old (24 hours)
-      const isExpired = Date.now() - savedData.timestamp > 24 * 60 * 60 * 1000;
-      if (isExpired) {
-        clearFormData(formKey);
-        return null;
-      }
-      return savedData.data;
-    }
-    return null;
-  };
-
-  const clearFormData = (formKey: string) => {
+  const clearFormDataRef = useCallback((formKey: string) => {
     setFormData(prev => {
       const newData = { ...prev };
       delete newData[formKey];
       return newData;
     });
-  };
+  }, []);
 
-  const clearAllFormData = () => {
+  const getFormData = useCallback((formKey: string) => {
+    const savedData = formData[formKey];
+    if (savedData && savedData.data) {
+      // Check if data is not too old (24 hours)
+      const isExpired = Date.now() - savedData.timestamp > 24 * 60 * 60 * 1000;
+      if (isExpired) {
+        clearFormDataRef(formKey);
+        return null;
+      }
+      return savedData.data;
+    }
+    return null;
+  }, [formData, clearFormDataRef]);
+
+  const clearFormData = clearFormDataRef;
+
+  const clearAllFormData = useCallback(() => {
     setFormData({});
-  };
+  }, []);
 
-  const hasFormData = (formKey: string) => {
+  const hasFormData = useCallback((formKey: string) => {
     const savedData = formData[formKey];
     if (savedData && savedData.data) {
       const isExpired = Date.now() - savedData.timestamp > 24 * 60 * 60 * 1000;
       return !isExpired;
     }
     return false;
-  };
+  }, [formData]);
 
   const value: FormPersistenceContextType = {
     saveFormData,
@@ -130,31 +153,52 @@ export function useFormData<T>(formKey: string, initialData?: T) {
   });
 
   const [isLoaded, setIsLoaded] = useState(false);
+  const [shouldSave, setShouldSave] = useState(false);
+  const dataToSaveRef = useRef<T | null>(null);
 
+  // Fix the initialization effect to prevent infinite loops
   useEffect(() => {
     const savedData = getFormData(formKey);
-    if (savedData) {
+    if (savedData && !isLoaded) { // CRITICAL: Check isLoaded
       setData(savedData);
     }
     setIsLoaded(true);
-  }, [formKey, getFormData]);
+  }, [formKey, getFormData, isLoaded]); // ADD isLoaded to dependencies
 
-  const updateData = (newData: T | ((prev: T) => T)) => {
-    try {
-      const updatedData = typeof newData === 'function' ? (newData as Function)(data) : newData;
-      setData(updatedData);
-      saveFormData(formKey, updatedData);
-    } catch (error) {
-      console.error('FormPersistence: Error updating data:', error);
-      // Fallback to basic state update if persistence fails
-      setData(typeof newData === 'function' ? (newData as Function)(data) : newData);
+  // Save data in useEffect to avoid updating provider during render
+  useEffect(() => {
+    if (shouldSave && dataToSaveRef.current !== null) {
+      try {
+        saveFormData(formKey, dataToSaveRef.current);
+      } catch (error) {
+        console.error('FormPersistence: Error saving data:', error);
+      }
+      setShouldSave(false);
+      dataToSaveRef.current = null;
     }
-  };
+  }, [shouldSave, formKey, saveFormData]);
 
-  const resetData = () => {
-    setData(initialData || ({} as T));
+  // Wrap updateData in useCallback
+  const updateData = useCallback((newData: T | ((prev: T) => T)) => {
+    setData(prev => {
+      const updatedData = typeof newData === 'function' 
+        ? (newData as Function)(prev) 
+        : newData;
+      
+      // Store data to save and trigger save in useEffect
+      dataToSaveRef.current = updatedData;
+      setShouldSave(true);
+      
+      return updatedData;
+    });
+  }, []);
+
+  // Wrap resetData in useCallback
+  const resetData = useCallback(() => {
+    const resetValue = initialData || ({} as T);
+    setData(resetValue);
     clearFormData(formKey);
-  };
+  }, [formKey, clearFormData, initialData]);
 
   return {
     data,

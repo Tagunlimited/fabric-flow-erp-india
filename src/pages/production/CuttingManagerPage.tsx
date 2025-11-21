@@ -594,20 +594,20 @@ const CuttingManagerPage = () => {
             job.cuttingMasters = cuttingMasters.map((cm: any) => ({
               id: cm.cutting_master_id,
               name: cm.cutting_master_name,
-              // Use avatar from order_cutting_assignments if available, otherwise fetch from employees
-              avatarUrl: cm.cutting_master_avatar_url || employeeAvatars[cm.cutting_master_id],
+              // Use avatar from order_cutting_assignments if available
+              avatarUrl: cm.cutting_master_avatar_url || undefined,
               assignedDate: cm.assigned_date || p.cutting_work_date || new Date().toISOString().split('T')[0]
             }));
             // Set legacy fields for backward compatibility (use first cutting master)
             job.cuttingMasterId = cuttingMasters[0].cutting_master_id;
             job.cuttingMasterName = cuttingMasters[0].cutting_master_name;
-            job.cuttingMasterAvatarUrl = cuttingMasters[0].cutting_master_avatar_url || employeeAvatars[cuttingMasters[0].cutting_master_id];
+            job.cuttingMasterAvatarUrl = cuttingMasters[0].cutting_master_avatar_url || undefined;
             job.assignedTo = cuttingMasters[0].cutting_master_name || '';
           } else if (p.cutting_master_id || p.cutting_master_name) {
             // Legacy single cutting master from order_assignments
             job.cuttingMasterId = p.cutting_master_id;
             job.cuttingMasterName = p.cutting_master_name;
-            job.cuttingMasterAvatarUrl = employeeAvatars[p.cutting_master_id];
+            job.cuttingMasterAvatarUrl = undefined; // No avatar available for legacy assignments
             job.assignedTo = p.cutting_master_name || '';
           } else {
             job.assignedTo = '';

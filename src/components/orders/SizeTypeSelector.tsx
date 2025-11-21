@@ -5,11 +5,13 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ChevronLeft, ChevronRight, Check, Image as ImageIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getSortedSizes } from '@/utils/sizeSorting';
 
 interface SizeType {
   id: string;
   size_name: string;
   available_sizes: string[];
+  size_order?: Record<string, number>;
   image_url?: string;
   created_at: string;
 }
@@ -120,7 +122,7 @@ export function SizeTypeSelector({
                     <div className="space-y-3">
                       <h4 className="font-semibold">Available Sizes:</h4>
                       <div className="flex flex-wrap gap-2">
-                        {currentSizeType.available_sizes.map((size, index) => (
+                        {getSortedSizes(currentSizeType).map((size, index) => (
                           <Badge key={index} variant="outline" className="text-sm px-3 py-1">
                             {size}
                           </Badge>

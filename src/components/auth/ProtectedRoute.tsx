@@ -11,8 +11,9 @@ interface ProtectedRouteProps {
 export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
   const { user, profile, loading, profileLoading } = useAuth();
 
-  // Show loader while session is restoring or profile is loading
-  if (loading || profileLoading) {
+  // Show loader ONLY while auth is initializing (not profile loading)
+  // Profile loading is non-blocking - app should work even if profile is null
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -20,6 +21,9 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
       </div>
     );
   }
+  
+  // If profile is still loading but we have a user, show a subtle indicator but allow access
+  // This prevents the app from being blocked by slow profile fetches
 
   // Pre-configured admin user - bypass approval process
   const isPreConfiguredAdmin = user?.email === 'ecom@tagunlimitedclothing.com';

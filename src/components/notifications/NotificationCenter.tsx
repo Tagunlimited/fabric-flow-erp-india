@@ -3,19 +3,21 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
-import { Bell, User, Package, AlertCircle, CheckCircle, X, Clock, Zap } from 'lucide-react';
+import { Bell, User, Package, AlertCircle, CheckCircle, X, Clock, Zap, MessageCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { cn } from '@/lib/utils';
 
 interface Notification {
   id: string;
-  type: 'user_registration' | 'order_update' | 'quality_alert' | 'system' | 'achievement';
+  type: 'user_registration' | 'order_update' | 'quality_alert' | 'system' | 'achievement' | 'chat_mention';
   title: string;
   message: string;
   read: boolean;
   created_at: string;
   priority?: 'low' | 'medium' | 'high';
+  messageId?: string; // For chat mentions
+  senderName?: string; // For chat mentions
 }
 
 export function NotificationCenter() {
@@ -23,12 +25,87 @@ export function NotificationCenter() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
+
+  // Fetch unread chat mentions
+  const fetchChatMentions = async () => {
+    if (!user) return;
+
+    try {
+      // Get all messages where current user is mentioned
+      // user_mentions is a JSONB array containing user_ids
+      // Fetch recent messages and filter client-side (Supabase's .contains() for JSONB can be unreliable)
+      const { data: allMessages, error } = await supabase
+        .from('chat_messages')
+        .select(`
+          id,
+          message,
+          created_at,
+          user_mentions,
+          profiles!chat_messages_sender_id_fkey(full_name, avatar_url)
+        `)
+        .order('created_at', { ascending: false })
+        .limit(200); // Fetch more to ensure we get all mentions
+
+      if (error) throw error;
+
+      // Filter messages where current user is mentioned
+      const messages = (allMessages || []).filter((msg: any) => {
+        if (!msg.user_mentions || !Array.isArray(msg.user_mentions)) return false;
+        return msg.user_mentions.includes(user.id);
+      }).slice(0, 50); // Limit to 50 after filtering
+
+      if (error) throw error;
+
+      if (!messages || messages.length === 0) return;
+
+      // Check which mentions are unread
+      const messageIds = messages.map((m) => m.id);
+      const { data: readMentions } = await supabase
+        .from('chat_mentions_read')
+        .select('message_id')
+        .eq('user_id', user.id)
+        .in('message_id', messageIds);
+
+      const readMessageIds = new Set(readMentions?.map((r) => r.message_id) || []);
+      const unreadMessages = messages.filter((m) => !readMessageIds.has(m.id));
+
+      // Convert to notifications
+      const mentionNotifications: Notification[] = unreadMessages.map((msg: any) => ({
+        id: `mention-${msg.id}`,
+        type: 'chat_mention' as const,
+        title: `Mentioned by ${msg.profiles?.full_name || 'Unknown'}`,
+        message: msg.message.length > 100 ? msg.message.substring(0, 100) + '...' : msg.message,
+        read: false,
+        created_at: msg.created_at,
+        priority: 'medium' as const,
+        messageId: msg.id,
+        senderName: msg.profiles?.full_name,
+      }));
+
+      return mentionNotifications;
+    } catch (error) {
+      console.error('Error fetching chat mentions:', error);
+      return [];
+    }
+  };
 
   useEffect(() => {
     // Initialize with empty notifications - data will be loaded from backend
     setNotifications([]);
     setUnreadCount(0);
+
+    const loadNotifications = async () => {
+      // Load chat mentions
+      const mentionNotifications = await fetchChatMentions();
+      
+      // Combine with other notifications
+      const allNotifications = [...mentionNotifications];
+      setNotifications(allNotifications);
+      setUnreadCount(allNotifications.filter(n => !n.read).length);
+    };
+
+    loadNotifications();
 
     // Set up real-time subscriptions
     const channel = supabase
@@ -59,12 +136,51 @@ export function NotificationCenter() {
           }
         }
       )
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'chat_messages' },
+        async (payload) => {
+          if (!user || !profile) return;
+          
+          const newMessage = payload.new as any;
+          // user_mentions contains profile user_ids (which match auth.users.id)
+          // Check if current user's id is in the mentions array
+          if (newMessage.user_mentions && 
+              Array.isArray(newMessage.user_mentions) && 
+              newMessage.user_mentions.includes(user.id)) {
+            // Fetch sender info
+            const { data: senderData } = await supabase
+              .from('profiles')
+              .select('full_name, avatar_url')
+              .eq('user_id', newMessage.sender_id)
+              .single();
+
+            const newNotification: Notification = {
+              id: `mention-${newMessage.id}`,
+              type: 'chat_mention',
+              title: `Mentioned by ${senderData?.full_name || 'Unknown'}`,
+              message: newMessage.message.length > 100 ? newMessage.message.substring(0, 100) + '...' : newMessage.message,
+              read: false,
+              created_at: newMessage.created_at,
+              priority: 'medium',
+              messageId: newMessage.id,
+              senderName: senderData?.full_name,
+            };
+
+            setNotifications(prev => [newNotification, ...prev]);
+            setUnreadCount(prev => prev + 1);
+            
+            setIsAnimating(true);
+            setTimeout(() => setIsAnimating(false), 1000);
+            playNotificationSound();
+          }
+        }
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [profile]);
+  }, [profile, user]);
 
   const playNotificationSound = () => {
     // Create a simple notification sound
@@ -85,11 +201,36 @@ export function NotificationCenter() {
     oscillator.stop(audioContext.currentTime + 0.5);
   };
 
-  const markAsRead = (id: string) => {
+  const markAsRead = async (id: string) => {
+    const notification = notifications.find(n => n.id === id);
+    
     setNotifications(prev => 
       prev.map(n => n.id === id ? { ...n, read: true } : n)
     );
     setUnreadCount(prev => Math.max(0, prev - 1));
+
+    // If it's a chat mention, mark it as read in database
+    if (notification?.type === 'chat_mention' && notification.messageId && user) {
+      try {
+        await supabase
+          .from('chat_mentions_read')
+          .upsert({
+            message_id: notification.messageId,
+            user_id: user.id,
+            read_at: new Date().toISOString(),
+          });
+      } catch (error) {
+        console.error('Error marking mention as read:', error);
+      }
+    }
+
+    // If it's a chat mention, open chat and scroll to message
+    if (notification?.type === 'chat_mention' && notification.messageId) {
+      // Emit custom event to open chat
+      window.dispatchEvent(new CustomEvent('openChatToMessage', {
+        detail: { messageId: notification.messageId }
+      }));
+    }
   };
 
   const markAllAsRead = () => {
@@ -107,6 +248,8 @@ export function NotificationCenter() {
         return <AlertCircle className="w-4 h-4" />;
       case 'achievement':
         return <Zap className="w-4 h-4" />;
+      case 'chat_mention':
+        return <MessageCircle className="w-4 h-4" />;
       default:
         return <CheckCircle className="w-4 h-4" />;
     }
@@ -129,6 +272,8 @@ export function NotificationCenter() {
         return 'text-red-600 bg-red-50 border-red-200';
       case 'achievement':
         return 'text-purple-600 bg-purple-50 border-purple-200';
+      case 'chat_mention':
+        return 'text-blue-600 bg-blue-50 border-blue-200';
       default:
         return 'text-gray-600 bg-gray-50 border-gray-200';
     }
@@ -205,7 +350,12 @@ export function NotificationCenter() {
                   !notification.read ? 'bg-accent/50 border-l-primary' : 'border-l-transparent',
                   getNotificationColor(notification.type, notification.priority)
                 )}
-                onClick={() => markAsRead(notification.id)}
+                onClick={() => {
+                  markAsRead(notification.id);
+                  if (notification.type === 'chat_mention') {
+                    setIsOpen(false);
+                  }
+                }}
               >
                 <CardContent className="p-4">
                   <div className="flex items-start space-x-3">

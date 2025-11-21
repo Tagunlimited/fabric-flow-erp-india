@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -17,6 +18,7 @@ import { OrderForm } from '../orders/OrderForm';
 import { ReadymadeOrderForm } from '../orders/ReadymadeOrderForm';
 import { calculateLifetimeValue, formatCurrency } from '@/lib/utils';
 import * as XLSX from 'xlsx';
+import { useFormPersistence } from '@/contexts/FormPersistenceContext';
 
 interface Customer {
   id: string;
@@ -46,7 +48,14 @@ export function CustomerList() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState('all');
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
+  const { saveFormData, getFormData, hasFormData } = useFormPersistence();
+  const location = useLocation();
+  const isInitialMount = useRef(true);
+  const lastPathname = useRef(location.pathname);
+  
+  // Persist form visibility state to prevent reset on tab switch
+  // BUT: Don't auto-restore on direct navigation - only on tab switch
+  const [showForm, setShowFormState] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [bulkFile, setBulkFile] = useState<File | null>(null);
@@ -59,6 +68,18 @@ export function CustomerList() {
   const navigate = useNavigate();
   const { toast } = useToast();
 
+  // Wrapper to persist showForm state
+  const setShowForm = (value: boolean, explicitlyClosed: boolean = false) => {
+    setShowFormState(value);
+    saveFormData('customerList_showForm', value);
+    if (explicitlyClosed) {
+      saveFormData('customerList_formClosed', true);
+    } else if (value) {
+      // If opening form, clear the "explicitly closed" flag
+      saveFormData('customerList_formClosed', false);
+    }
+  };
+
   useEffect(() => {
     fetchCustomers();
   }, []);
@@ -66,6 +87,73 @@ export function CustomerList() {
   useEffect(() => {
     filterCustomers();
   }, [customers, searchTerm, selectedType]);
+
+  // Track route changes to detect direct navigation vs tab switch
+  useEffect(() => {
+    const pathnameChanged = lastPathname.current !== location.pathname;
+    if (pathnameChanged) {
+      // Direct navigation occurred - reset form state
+      isInitialMount.current = true;
+      lastPathname.current = location.pathname;
+      // Clear form state on direct navigation to show list
+      if (location.pathname === '/crm/customers') {
+        setShowFormState(false);
+        saveFormData('customerList_showForm', false);
+      }
+    }
+  }, [location.pathname, saveFormData]);
+
+  // Sync form visibility state with persistence (for cross-tab synchronization ONLY)
+  // This should only restore form on tab switch, not on direct navigation
+  useEffect(() => {
+    // Skip on initial mount or direct navigation
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    const checkFormState = () => {
+      const wasFormOpen = getFormData('customerList_showForm') === true;
+      const wasExplicitlyClosed = getFormData('customerList_formClosed') === true;
+      const hasFormDataValue = hasFormData('customerForm');
+      
+      // Only restore on tab switch, not on direct navigation
+      // If form should be open but isn't, restore it (only if not explicitly closed)
+      if (!wasExplicitlyClosed && (wasFormOpen || hasFormDataValue) && !showForm) {
+        setShowFormState(true);
+      }
+      // If form should be closed but is open, close it (only if explicitly closed)
+      else if (wasExplicitlyClosed && showForm) {
+        setShowFormState(false);
+      }
+    };
+
+    // Listen for storage events (cross-tab sync) - this indicates tab switch
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'formPersistence' && event.newValue) {
+        // This is a tab switch - restore form state
+        checkFormState();
+      }
+    };
+
+    // Also listen for visibility changes (user switching back to this tab)
+    const handleVisibilityChange = () => {
+      // Only restore if page becomes visible AND it's not a direct navigation
+      if (document.visibilityState === 'visible' && !isInitialMount.current) {
+        // Small delay to ensure we're not in the middle of a navigation
+        setTimeout(() => {
+          checkFormState();
+        }, 100);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [getFormData, hasFormData, showForm]);
 
   const fetchCustomers = async () => {
     try {
@@ -219,19 +307,25 @@ export function CustomerList() {
   };
 
   const handleFormSave = (customer: Customer) => {
-    setShowForm(false);
+    setShowForm(false, true); // Explicitly closed via save
     setEditingCustomer(null);
+    // Clear form data after successful save
+    saveFormData('customerForm', null);
+    saveFormData('customerList_formClosed', false); // Reset closed flag
     fetchCustomers();
   };
 
   const handleFormCancel = () => {
-    setShowForm(false);
+    setShowForm(false, true); // Explicitly closed via cancel
     setEditingCustomer(null);
+    // Note: We don't clear form data on cancel in case user wants to come back
+    // The "Clear Saved Data" button in the form will handle that
+    // But we mark it as explicitly closed so it doesn't auto-restore on tab switch
   };
 
   const exportCustomers = async () => {
     const csvContent = [
-      ['Company Name', 'GSTIN', 'Mobile', 'Email', 'Customer Type', 'Address', 'City', 'State', 'Pincode', 'Loyalty Points'],
+      ['Client', 'GSTIN', 'Mobile', 'Email', 'Customer Type', 'Address', 'City', 'State', 'Pincode', 'Loyalty Points'],
       ...filteredCustomers.map(customer => [
         customer.company_name,
         customer.gstin || '',
@@ -265,8 +359,8 @@ export function CustomerList() {
 
     // Create data sheet with all database columns
     const dataSheet = [
-      ['Company Name', 'Contact Person', 'Email', 'Phone', 'Address', 'City', 'State', 'Pincode', 'GSTIN', 'PAN', 'Customer Type', 'Customer Tier', 'Credit Limit', 'Outstanding Amount', 'Total Orders', 'Last Order Date'],
-      ['Example Company', 'John Doe', 'example@email.com', '9876543210', '123 Main St', 'Mumbai', 'Maharashtra', '400001', 'GSTIN123456789', 'ABCDE1234F', 'Wholesale', 'gold', '100000', '0', '0', ''],
+      ['Client', 'Contact Person', 'Email', 'Phone', 'Address', 'City', 'State', 'Pincode', 'GSTIN', 'PAN', 'Customer Type', 'Customer Tier', 'Credit Limit', 'Outstanding Amount', 'Total Orders', 'Last Order Date'],
+      ['Example Client', 'John Doe', 'example@email.com', '9876543210', '123 Main St', 'Mumbai', 'Maharashtra', '400001', 'GSTIN123456789', 'ABCDE1234F', 'Wholesale', 'gold', '100000', '0', '0', ''],
       ['ABC Textiles', 'Jane Smith', 'contact@abctextiles.com', '9876543211', '456 Industrial Area', 'Delhi', 'Delhi', '110001', 'GSTIN987654321', 'FGHIJ5678K', 'Retail', 'silver', '50000', '0', '0', ''],
       ['Fashion Hub', 'Mike Johnson', 'sales@fashionhub.com', '9876543212', '789 Commercial Plaza', 'Bangalore', 'Karnataka', '560001', 'GSTIN456789123', 'LMNOP9012Q', 'Corporate', 'bronze', '25000', '0', '0', ''],
       ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
@@ -285,7 +379,7 @@ export function CustomerList() {
       ['CUSTOMER BULK UPLOAD INSTRUCTIONS'],
       [''],
       ['📋 REQUIRED FIELDS:'],
-      ['• Company Name: Required, cannot be empty'],
+      ['• Client: Required, cannot be empty'],
       ['• Email: Required, must be valid email format'],
       ['• Phone: Required, must be at least 10 digits'],
       ['• Address: Required, cannot be empty'],
@@ -474,7 +568,7 @@ export function CustomerList() {
               // Find the data section (skip instructions)
               let dataStartIndex = 0;
               for (let i = 0; i < lines.length; i++) {
-                if (lines[i].includes('Company Name') && lines[i].includes('Contact Person')) {
+                if ((lines[i].includes('Company Name') || lines[i].includes('Client')) && lines[i].includes('Contact Person')) {
                   dataStartIndex = i;
                   break;
                 }
@@ -520,7 +614,7 @@ export function CustomerList() {
               // Debug: Check if the data structure is correct
               if (dataLines.length > 0 && dataLines[0]) {
                 console.log('DEBUG - Expected column structure:');
-                console.log('Column 0 (Company Name):', dataLines[0][0]);
+                console.log('Column 0 (Client):', dataLines[0][0]);
                 console.log('Column 1 (Contact Person):', dataLines[0][1]);
                 console.log('Column 2 (Email):', dataLines[0][2]);
                 console.log('Column 3 (Phone):', dataLines[0][3]);
@@ -761,7 +855,7 @@ export function CustomerList() {
               <Table className="min-w-[600px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Company Name</TableHead>
+                    <TableHead>Client</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Location</TableHead>

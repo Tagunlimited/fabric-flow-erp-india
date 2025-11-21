@@ -4,6 +4,7 @@ import { Search, User, LogOut, Sun, Moon, Bell, Settings, Menu } from "lucide-re
 import { useAuth } from "@/components/auth/AuthProvider";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { FloatingNotification } from "@/components/notifications/FloatingNotification";
+import { FloatingChatButton } from "@/components/chat/FloatingChatButton";
 import { AvatarUploader } from "@/components/ui/avatar-uploader";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuCheckboxItem } from "@/components/ui/dropdown-menu";
@@ -23,7 +24,7 @@ interface ErpLayoutProps {
 }
 
 export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
-  const { user, profile, signOut, refreshProfile } = useAuth();
+  const { user, profile, signOut, refreshProfile, profileLoading } = useAuth();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
@@ -69,21 +70,42 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
   const handleAvatarUpload = async (url: string) => {
     if (!user) return;
     try {
+      console.log('🔄 Updating avatar in database:', { userId: user.id, avatarUrl: url });
+      
       // Update only the avatar_url field to avoid constraint violations
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .update({
           avatar_url: url
         } as any)
-        .eq('user_id', user.id as any);
+        .eq('user_id', user.id as any)
+        .select(); // Select to verify the update
       
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Database update error:', error);
+        throw error;
+      }
+      
+      console.log('✅ Avatar updated in database:', data);
+      
+      // Verify the update by fetching the profile
+      const { data: verifyData, error: verifyError } = await supabase
+        .from('profiles')
+        .select('avatar_url')
+        .eq('user_id', user.id as any)
+        .single();
+      
+      if (verifyError) {
+        console.error('❌ Verification error:', verifyError);
+      } else {
+        console.log('✅ Verified avatar in database:', verifyData);
+      }
       
       // Force refresh profile to get updated avatar
       await refreshProfile();
       toast.success('Avatar uploaded successfully');
     } catch (error: any) {
-      console.error('Avatar upload error:', error);
+      console.error('❌ Avatar upload error:', error);
       toast.error('Failed to upload avatar: ' + (error.message || 'Unknown error'));
     }
   };
@@ -195,7 +217,7 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
                 <div className="relative">
                   {user && (
                     <AvatarUploader
-                      currentUrl={(profile as any)?.avatar_url || ""}
+                      currentUrl={profileLoading ? undefined : (profile?.avatar_url || "")}
                       onUpload={handleAvatarUpload}
                       onDelete={handleAvatarDelete}
                       userId={user.id}
@@ -290,6 +312,7 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
         notification={floatingNotification}
         onDismiss={() => setFloatingNotification(null)}
       />
+      <FloatingChatButton />
     </div>
   );
 }
