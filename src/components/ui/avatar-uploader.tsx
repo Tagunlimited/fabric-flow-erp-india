@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Upload, Trash2, Camera } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -143,6 +143,9 @@ export function AvatarUploader({ currentUrl, onUpload, onDelete, userId, userNam
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Update Avatar</DialogTitle>
+          <DialogDescription>
+            Upload a new profile picture or remove the current one.
+          </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col items-center space-y-4">
           <Avatar className="h-24 w-24">

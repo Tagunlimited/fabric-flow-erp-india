@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2, UserPlus, Calendar, Phone, Mail, MapPin, Building, Scissors, Upload, X } from "lucide-react";
+import { StateCitySelector } from '@/components/ui/StateCitySelector';
 
 interface ProductionTeamFormProps {
   onSuccess: () => void;
@@ -563,28 +564,17 @@ export function ProductionTeamForm({ onSuccess, onCancel, editMode = false, memb
               />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="city">City *</Label>
-                <Input
-                  id="city"
-                  value={formData.city}
-                  onChange={(e) => handleInputChange('city', e.target.value)}
-                  placeholder="Enter city"
-                  required
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="state">State *</Label>
-                <Input
-                  id="state"
-                  value={formData.state}
-                  onChange={(e) => handleInputChange('state', e.target.value)}
-                  placeholder="Enter state"
-                  required
-                />
-              </div>
+            <div className="space-y-4">
+              <StateCitySelector
+                selectedState={formData.state}
+                selectedCity={formData.city}
+                onStateChange={(value) => handleInputChange('state', value)}
+                onCityChange={(value) => handleInputChange('city', value)}
+                stateLabel="State"
+                cityLabel="City"
+                stateRequired={true}
+                cityRequired={true}
+              />
               
               <div className="space-y-2">
                 <Label htmlFor="pincode">Pincode *</Label>

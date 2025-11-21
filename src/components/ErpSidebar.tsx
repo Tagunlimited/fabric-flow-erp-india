@@ -99,7 +99,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "View Quotation", url: "/accounts/quotations", icon: Quote },
         { title: "Create/View Invoices", url: "/accounts/invoices", icon: FileText },
         { title: "Receipts", url: "/accounts/receipts", icon: Receipt },
-        { title: "Payments", url: "/accounts/payments", icon: CreditCard },
+        // { title: "Payments", url: "/accounts/payments", icon: CreditCard },
       ]
     },
     { title: "Design & Printing", url: "/design", icon: Palette },

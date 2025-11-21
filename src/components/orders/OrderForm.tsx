@@ -1507,8 +1507,17 @@ const getSelectedFabricVariant = (productIndex: number) => {
         )}
       </div>
 
-      {/* GSM */}
-      <div>
+      {/* GSM - Hidden from UI but functionality remains intact */}
+      {/* <div>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
+        <Input
+          value={product.gsm}
+          placeholder="GSM will be auto-selected from fabric"
+          disabled
+          className="bg-gray-50"
+        />
+      </div> */}
+      <div className="hidden">
         <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
         <Input
           value={product.gsm}

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 
 interface FormData {
   [key: string]: any;
@@ -153,6 +153,8 @@ export function useFormData<T>(formKey: string, initialData?: T) {
   });
 
   const [isLoaded, setIsLoaded] = useState(false);
+  const [shouldSave, setShouldSave] = useState(false);
+  const dataToSaveRef = useRef<T | null>(null);
 
   // Fix the initialization effect to prevent infinite loops
   useEffect(() => {
@@ -163,6 +165,19 @@ export function useFormData<T>(formKey: string, initialData?: T) {
     setIsLoaded(true);
   }, [formKey, getFormData, isLoaded]); // ADD isLoaded to dependencies
 
+  // Save data in useEffect to avoid updating provider during render
+  useEffect(() => {
+    if (shouldSave && dataToSaveRef.current !== null) {
+      try {
+        saveFormData(formKey, dataToSaveRef.current);
+      } catch (error) {
+        console.error('FormPersistence: Error saving data:', error);
+      }
+      setShouldSave(false);
+      dataToSaveRef.current = null;
+    }
+  }, [shouldSave, formKey, saveFormData]);
+
   // Wrap updateData in useCallback
   const updateData = useCallback((newData: T | ((prev: T) => T)) => {
     setData(prev => {
@@ -170,15 +185,13 @@ export function useFormData<T>(formKey: string, initialData?: T) {
         ? (newData as Function)(prev) 
         : newData;
       
-      try {
-      saveFormData(formKey, updatedData);
-    } catch (error) {
-        console.error('FormPersistence: Error saving data:', error);
-      }
+      // Store data to save and trigger save in useEffect
+      dataToSaveRef.current = updatedData;
+      setShouldSave(true);
       
       return updatedData;
     });
-  }, [formKey, saveFormData]);
+  }, []);
 
   // Wrap resetData in useCallback
   const resetData = useCallback(() => {

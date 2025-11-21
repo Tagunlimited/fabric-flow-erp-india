@@ -15,6 +15,7 @@ import { AvatarUploader } from "@/components/ui/avatar-uploader";
 import { IdProofUploader } from "@/components/ui/id-proof-uploader";
 import { BankDetailsUploader } from "@/components/ui/bank-details-uploader";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { StateCitySelector } from "@/components/ui/StateCitySelector";
 
 const INDIAN_STATES = [
   "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", "Goa", "Gujarat", 
@@ -404,39 +405,27 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="city">City *</Label>
-                <Input
-                  id="city"
-                  value={formData.city}
-                  onChange={(e) => setFormData(prev => ({ ...prev, city: e.target.value }))}
-                  required
-                />
-              </div>
-              <div>
-                <Label htmlFor="pincode">Pincode *</Label>
-                <Input
-                  id="pincode"
-                  value={formData.pincode}
-                  onChange={(e) => setFormData(prev => ({ ...prev, pincode: e.target.value }))}
-                  required
-                />
-              </div>
+            <div>
+              <StateCitySelector
+                selectedState={formData.state}
+                selectedCity={formData.city}
+                onStateChange={(value) => setFormData(prev => ({ ...prev, state: value }))}
+                onCityChange={(value) => setFormData(prev => ({ ...prev, city: value }))}
+                stateLabel="State"
+                cityLabel="City"
+                stateRequired={true}
+                cityRequired={true}
+              />
             </div>
 
             <div>
-              <Label htmlFor="state">State *</Label>
-              <Select value={formData.state} onValueChange={(value) => setFormData(prev => ({ ...prev, state: value }))}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select state" />
-                </SelectTrigger>
-                <SelectContent>
-                  {INDIAN_STATES.map(state => (
-                    <SelectItem key={state} value={state}>{state}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="pincode">Pincode *</Label>
+              <Input
+                id="pincode"
+                value={formData.pincode}
+                onChange={(e) => setFormData(prev => ({ ...prev, pincode: e.target.value }))}
+                required
+              />
             </div>
           </CardContent>
         </Card>

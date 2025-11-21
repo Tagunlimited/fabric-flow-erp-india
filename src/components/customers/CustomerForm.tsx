@@ -11,6 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useFormData } from '@/contexts/FormPersistenceContext';
 import { useNavigate } from 'react-router-dom';
+import { StateCitySelector } from '@/components/ui/StateCitySelector';
 
 interface CustomerFormProps {
   customer?: any;
@@ -73,7 +74,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
         pan: customer.pan || ''
       });
     }
-  }, [customer, customerTypes]);
+  }, [customer, customerTypes, setFormData]);
 
   const fetchCustomerTypes = async () => {
     try {
@@ -351,27 +352,17 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="city">City *</Label>
-              <Input
-                id="city"
-                value={formData.city}
-                onChange={(e) => handleChange('city', e.target.value)}
-                placeholder="Enter city"
-                required
+            <div className="md:col-span-2">
+              <StateCitySelector
+                selectedState={formData.state}
+                selectedCity={formData.city}
+                onStateChange={(value) => handleChange('state', value)}
+                onCityChange={(value) => handleChange('city', value)}
                 disabled={isLoading}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="state">State *</Label>
-              <Input
-                id="state"
-                value={formData.state}
-                onChange={(e) => handleChange('state', e.target.value)}
-                placeholder="Enter state"
-                required
-                disabled={isLoading}
+                stateLabel="State"
+                cityLabel="City"
+                stateRequired={true}
+                cityRequired={true}
               />
             </div>
 
