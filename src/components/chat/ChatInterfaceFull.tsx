@@ -237,8 +237,8 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
         // Table exists, mark it
         setPresenceTableExists(true);
 
-        // Fetch all presence statuses
-        const { data, error: fetchError } = await supabase
+        // Fetch all presence statuses - get ALL users, not just those in presence table
+        const { data: presenceData, error: fetchError } = await supabase
           .from('user_presence')
           .select('*');
 
@@ -248,16 +248,26 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           return;
         }
 
-        if (data) {
-          const presenceMap = new Map<string, UserPresence>();
-          data.forEach((p: any) => {
-            // Only include users with 'online' or 'away' status (exclude 'offline')
-            if (p.status === 'online' || p.status === 'away') {
-              presenceMap.set(p.user_id, p);
-            }
+        // Build presence map from database
+        const presenceMap = new Map<string, UserPresence>();
+        if (presenceData) {
+          presenceData.forEach((p: any) => {
+            // Include all statuses, we'll filter in getPresenceStatus
+            presenceMap.set(p.user_id, p);
           });
-          setPresence(presenceMap);
         }
+        
+        // Also ensure current user is marked as online
+        if (user) {
+          presenceMap.set(user.id, {
+            user_id: user.id,
+            status: 'online',
+            last_seen: new Date().toISOString(),
+          });
+        }
+        
+        setPresence(presenceMap);
+        console.log('👥 Initial presence loaded:', Array.from(presenceMap.keys()));
       } catch {
         // Silently handle errors - table might not exist
         setPresenceTableExists(false);
@@ -269,6 +279,7 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
       // Skip if table doesn't exist
       if (presenceTableExists === false) return;
       
+      // Update current user's presence
       supabase
         .from('user_presence')
         .upsert({
@@ -276,11 +287,26 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           status: 'online',
           last_seen: new Date().toISOString(),
         })
-        .catch(() => {
+        .then(() => {
+          // Also update local presence map immediately
+          setPresence(prev => {
+            const newMap = new Map(prev);
+            newMap.set(user.id, {
+              user_id: user.id,
+              status: 'online',
+              last_seen: new Date().toISOString(),
+            });
+            return newMap;
+          });
+        })
+        .catch((error) => {
+          console.error('Error updating presence:', error);
           // Silently handle errors - table might not exist
-          setPresenceTableExists(false);
+          if (error.code === 'PGRST301' || error.message?.includes('404')) {
+            setPresenceTableExists(false);
+          }
         });
-    }, 60000); // Update every minute
+    }, 30000); // Update every 30 seconds for better real-time feel
 
     // Mark as offline on page unload
     const handleBeforeUnload = () => {
@@ -385,12 +411,21 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           table: 'chat_message_reactions',
         },
         async (payload) => {
+          console.log('🎭 Reaction change detected:', payload);
           // Only process if table exists (no error in payload)
-          if (payload.error) return;
+          if (payload.error) {
+            console.error('❌ Reaction subscription error:', payload.error);
+            return;
+          }
           
           // Get the affected message ID from the payload
           const affectedMessageId = (payload.new as any)?.message_id || (payload.old as any)?.message_id;
-          if (!affectedMessageId) return;
+          if (!affectedMessageId) {
+            console.warn('⚠️ No message ID in reaction payload');
+            return;
+          }
+
+          console.log('🔄 Fetching reactions for message:', affectedMessageId);
 
           // Fetch reactions for the affected message only (more efficient and real-time)
           const { data: reactionsData, error } = await supabase
@@ -400,8 +435,16 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
 
           // If table doesn't exist, skip reaction updates
           if (error && (error.code === 'PGRST301' || error.message?.includes('404'))) {
+            console.warn('⚠️ Reactions table not found');
             return;
           }
+
+          if (error) {
+            console.error('❌ Error fetching reactions:', error);
+            return;
+          }
+
+          console.log('✅ Reactions fetched:', reactionsData);
 
           // Update only the affected message's reactions in real-time
           setMessages(prev => prev.map(msg => {
@@ -425,6 +468,7 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
               users: data.users,
             }));
 
+            console.log('✅ Updated reactions for message:', affectedMessageId, reactions);
             return { ...msg, reactions };
           }));
         }
@@ -437,8 +481,12 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           table: 'user_presence',
         },
         (payload) => {
+          console.log('👤 Presence change detected:', payload);
           // Only process if no error
-          if (payload.error) return;
+          if (payload.error) {
+            console.error('❌ Presence subscription error:', payload.error);
+            return;
+          }
           
           // Handle both INSERT and UPDATE events
           const presenceData = (payload.new || payload.old) as any;
@@ -447,16 +495,14 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
               const newMap = new Map(prev);
               // If it's a DELETE event, remove the user
               if (payload.eventType === 'DELETE' || !payload.new) {
+                console.log('🗑️ Removing user from presence:', presenceData.user_id);
                 newMap.delete(presenceData.user_id);
               } else {
-                // INSERT or UPDATE - add/update the presence (only if online or away)
-                if (presenceData.status === 'online' || presenceData.status === 'away') {
-                  newMap.set(presenceData.user_id, presenceData);
-                } else {
-                  // Remove if status is offline
-                  newMap.delete(presenceData.user_id);
-                }
+                // INSERT or UPDATE - add/update the presence
+                console.log('✅ Updating presence for user:', presenceData.user_id, presenceData.status);
+                newMap.set(presenceData.user_id, presenceData);
               }
+              console.log('👥 Current presence map:', Array.from(newMap.keys()));
               return newMap;
             });
           }
@@ -749,6 +795,8 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
     if (!user) return;
 
     try {
+      console.log('🎭 Reaction click:', { messageId, emoji, userId: user.id });
+      
       // Check if user already reacted with this emoji
       const { data: existingReaction, error: checkError } = await supabase
         .from('chat_message_reactions')
@@ -766,6 +814,7 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
 
       if (existingReaction) {
         // Remove reaction
+        console.log('🗑️ Removing reaction');
         const { error: deleteError } = await supabase
           .from('chat_message_reactions')
           .delete()
@@ -774,10 +823,13 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           .eq('emoji', emoji);
         
         if (deleteError && deleteError.code !== 'PGRST116') {
-          console.error('Error removing reaction:', deleteError);
+          console.error('❌ Error removing reaction:', deleteError);
+        } else {
+          console.log('✅ Reaction removed successfully');
         }
       } else {
         // Add reaction
+        console.log('➕ Adding reaction');
         const { error: insertError } = await supabase.from('chat_message_reactions').insert({
           message_id: messageId,
           user_id: user.id,
@@ -785,12 +837,61 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
         });
         
         if (insertError) {
-          console.error('Error adding reaction:', insertError);
+          console.error('❌ Error adding reaction:', insertError);
           toast.error('Failed to add reaction. Please ensure migrations are run.');
+        } else {
+          console.log('✅ Reaction added successfully');
         }
       }
+      
+      // Optimistically update the UI immediately (will be confirmed by real-time subscription)
+      setMessages(prev => prev.map(msg => {
+        if (msg.id !== messageId) return msg;
+        
+        const currentReactions = msg.reactions || [];
+        const existingReactionIndex = currentReactions.findIndex(r => r.emoji === emoji);
+        
+        if (existingReaction) {
+          // Remove reaction optimistically
+          const updatedReactions = currentReactions.map(r => {
+            if (r.emoji === emoji) {
+              return {
+                ...r,
+                count: Math.max(0, r.count - 1),
+                userReacted: false,
+                users: r.users.filter(u => u !== user.id),
+              };
+            }
+            return r;
+          }).filter(r => r.count > 0);
+          
+          return { ...msg, reactions: updatedReactions };
+        } else {
+          // Add reaction optimistically
+          if (existingReactionIndex >= 0) {
+            const updatedReactions = [...currentReactions];
+            updatedReactions[existingReactionIndex] = {
+              ...updatedReactions[existingReactionIndex],
+              count: updatedReactions[existingReactionIndex].count + 1,
+              userReacted: true,
+              users: [...updatedReactions[existingReactionIndex].users, user.id],
+            };
+            return { ...msg, reactions: updatedReactions };
+          } else {
+            return {
+              ...msg,
+              reactions: [...currentReactions, {
+                emoji,
+                count: 1,
+                userReacted: true,
+                users: [user.id],
+              }],
+            };
+          }
+        }
+      }));
     } catch (error: any) {
-      console.error('Error toggling reaction:', error);
+      console.error('❌ Error toggling reaction:', error);
       if (error && (error.message?.includes('404') || error.code === 'PGRST301')) {
         toast.error('Reactions feature requires database migration. Please run: 20250121000002_create_chat_reactions.sql');
       }
