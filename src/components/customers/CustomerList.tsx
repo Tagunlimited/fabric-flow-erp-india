@@ -325,7 +325,7 @@ export function CustomerList() {
 
   const exportCustomers = async () => {
     const csvContent = [
-      ['Company Name', 'GSTIN', 'Mobile', 'Email', 'Customer Type', 'Address', 'City', 'State', 'Pincode', 'Loyalty Points'],
+      ['Client', 'GSTIN', 'Mobile', 'Email', 'Customer Type', 'Address', 'City', 'State', 'Pincode', 'Loyalty Points'],
       ...filteredCustomers.map(customer => [
         customer.company_name,
         customer.gstin || '',
@@ -359,8 +359,8 @@ export function CustomerList() {
 
     // Create data sheet with all database columns
     const dataSheet = [
-      ['Company Name', 'Contact Person', 'Email', 'Phone', 'Address', 'City', 'State', 'Pincode', 'GSTIN', 'PAN', 'Customer Type', 'Customer Tier', 'Credit Limit', 'Outstanding Amount', 'Total Orders', 'Last Order Date'],
-      ['Example Company', 'John Doe', 'example@email.com', '9876543210', '123 Main St', 'Mumbai', 'Maharashtra', '400001', 'GSTIN123456789', 'ABCDE1234F', 'Wholesale', 'gold', '100000', '0', '0', ''],
+      ['Client', 'Contact Person', 'Email', 'Phone', 'Address', 'City', 'State', 'Pincode', 'GSTIN', 'PAN', 'Customer Type', 'Customer Tier', 'Credit Limit', 'Outstanding Amount', 'Total Orders', 'Last Order Date'],
+      ['Example Client', 'John Doe', 'example@email.com', '9876543210', '123 Main St', 'Mumbai', 'Maharashtra', '400001', 'GSTIN123456789', 'ABCDE1234F', 'Wholesale', 'gold', '100000', '0', '0', ''],
       ['ABC Textiles', 'Jane Smith', 'contact@abctextiles.com', '9876543211', '456 Industrial Area', 'Delhi', 'Delhi', '110001', 'GSTIN987654321', 'FGHIJ5678K', 'Retail', 'silver', '50000', '0', '0', ''],
       ['Fashion Hub', 'Mike Johnson', 'sales@fashionhub.com', '9876543212', '789 Commercial Plaza', 'Bangalore', 'Karnataka', '560001', 'GSTIN456789123', 'LMNOP9012Q', 'Corporate', 'bronze', '25000', '0', '0', ''],
       ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
@@ -379,7 +379,7 @@ export function CustomerList() {
       ['CUSTOMER BULK UPLOAD INSTRUCTIONS'],
       [''],
       ['📋 REQUIRED FIELDS:'],
-      ['• Company Name: Required, cannot be empty'],
+      ['• Client: Required, cannot be empty'],
       ['• Email: Required, must be valid email format'],
       ['• Phone: Required, must be at least 10 digits'],
       ['• Address: Required, cannot be empty'],
@@ -568,7 +568,7 @@ export function CustomerList() {
               // Find the data section (skip instructions)
               let dataStartIndex = 0;
               for (let i = 0; i < lines.length; i++) {
-                if (lines[i].includes('Company Name') && lines[i].includes('Contact Person')) {
+                if ((lines[i].includes('Company Name') || lines[i].includes('Client')) && lines[i].includes('Contact Person')) {
                   dataStartIndex = i;
                   break;
                 }
@@ -614,7 +614,7 @@ export function CustomerList() {
               // Debug: Check if the data structure is correct
               if (dataLines.length > 0 && dataLines[0]) {
                 console.log('DEBUG - Expected column structure:');
-                console.log('Column 0 (Company Name):', dataLines[0][0]);
+                console.log('Column 0 (Client):', dataLines[0][0]);
                 console.log('Column 1 (Contact Person):', dataLines[0][1]);
                 console.log('Column 2 (Email):', dataLines[0][2]);
                 console.log('Column 3 (Phone):', dataLines[0][3]);
@@ -855,7 +855,7 @@ export function CustomerList() {
               <Table className="min-w-[600px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Company Name</TableHead>
+                    <TableHead>Client</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Location</TableHead>

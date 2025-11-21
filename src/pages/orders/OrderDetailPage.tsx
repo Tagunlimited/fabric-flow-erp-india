@@ -39,6 +39,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
+import { sortSizesQuantities, SizeType } from '@/utils/sizeSorting';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -201,7 +202,7 @@ function calculateGSTRatesBreakdown(orderItems: any[], order: Order | null) {
 }
 
 // Component to display readymade order form with existing order data
-function ReadymadeOrderFormView({ orderId, order, customer, orderItems }: { orderId: string; order: Order; customer: Customer | null; orderItems: OrderItem[] }) {
+function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeTypes }: { orderId: string; order: Order; customer: Customer | null; orderItems: OrderItem[]; sizeTypes: SizeType[] }) {
   const [formData, setFormData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [salesManager, setSalesManager] = useState<SalesManager | null>(null);
@@ -517,34 +518,21 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems }: { orde
                 <div className="space-y-2">
                   <Label className="text-base font-semibold">Size-wise Quantities</Label>
                   <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 p-4 border rounded-lg bg-muted/30">
-                    {(() => {
-                      // Sort sizes in order: S, M, L, XL, 2XL
-                      const sizeOrder = ['S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
-                      const sortedSizes = Object.entries(product.sizes_quantities).sort(([sizeA], [sizeB]) => {
-                        const indexA = sizeOrder.indexOf(sizeA);
-                        const indexB = sizeOrder.indexOf(sizeB);
-                        // If both sizes are in the order, sort by their position
-                        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-                        // If only A is in order, it comes first
-                        if (indexA !== -1) return -1;
-                        // If only B is in order, it comes first
-                        if (indexB !== -1) return 1;
-                        // If neither is in order, sort alphabetically
-                        return sizeA.localeCompare(sizeB);
-                      });
-                      
-                      return sortedSizes.map(([size, qty]) => (
-                        <div key={size} className="space-y-1">
-                          <Label className="text-sm font-medium">{size}</Label>
-                          <Input
-                            type="number"
-                            value={qty as number}
-                            readOnly
-                            className="bg-background text-center"
-                          />
-                        </div>
-                      ));
-                    })()}
+                    {sortSizesQuantities(
+                      product.sizes_quantities,
+                      (product as any).size_type_id,
+                      sizeTypes
+                    ).map(([size, qty]) => (
+                      <div key={size} className="space-y-1">
+                        <Label className="text-sm font-medium">{size}</Label>
+                        <Input
+                          type="number"
+                          value={qty as number}
+                          readOnly
+                          className="bg-background text-center"
+                        />
+                      </div>
+                    ))}
                   </div>
                   <div className="text-sm text-muted-foreground">
                     Total Quantity: <span className="font-semibold">{product.quantity}</span>
@@ -944,6 +932,7 @@ export default function OrderDetailPage() {
   const [salesManager, setSalesManager] = useState<SalesManager | null>(null);
   const [fabrics, setFabrics] = useState<{ [key: string]: Fabric }>({});
   const [productCategories, setProductCategories] = useState<{ [key: string]: ProductCategory }>({});
+  const [sizeTypes, setSizeTypes] = useState<SizeType[]>([]);
   const [loading, setLoading] = useState(true);
   const [cancellingOrder, setCancellingOrder] = useState(false);
   const [selectedMockupImages, setSelectedMockupImages] = useState<{ [key: number]: number }>({});
@@ -1144,6 +1133,15 @@ export default function OrderDetailPage() {
           emp.department && emp.department.toLowerCase().includes('sales')
         );
         setEmployees((salesEmployees as unknown as SalesManager[]) || []);
+
+        // Fetch size types for sorting
+        const { data: sizeTypesData } = await (supabase as any)
+          .from('size_types')
+          .select('*');
+        
+        if (sizeTypesData) {
+          setSizeTypes(sizeTypesData as SizeType[]);
+        }
 
         // Fetch order items
         const { data: itemsData, error: itemsError } = await (supabase as any)
@@ -1853,7 +1851,7 @@ export default function OrderDetailPage() {
           </div>
           
           {/* Show Readymade Order Form with all fields */}
-          <ReadymadeOrderFormView orderId={id || ''} order={order} customer={customer} orderItems={orderItems} />
+          <ReadymadeOrderFormView orderId={id || ''} order={order} customer={customer} orderItems={orderItems} sizeTypes={sizeTypes} />
         </div>
       </ErpLayout>
     );
@@ -2239,23 +2237,16 @@ export default function OrderDetailPage() {
                                     <p className="text-sm font-medium text-muted-foreground mb-3">Size Breakdown:</p>
                                     <div className="bg-muted/20 rounded-lg p-4">
                                       <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                                        {Object.entries(item.sizes_quantities as Record<string, number>)
-                                          .sort(([a], [b]) => {
-                                            // Custom sorting for sizes (XS, S, M, L, XL, XXL, etc.)
-                                            const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL'];
-                                            const aIndex = sizeOrder.indexOf(a);
-                                            const bIndex = sizeOrder.indexOf(b);
-                                            if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
-                                            if (aIndex !== -1) return -1;
-                                            if (bIndex !== -1) return 1;
-                                            return a.localeCompare(b);
-                                          })
-                                          .map(([size, qty]) => (
-                                            <div key={size} className="bg-background rounded border text-center p-2">
-                                              <div className="text-xs font-medium text-muted-foreground">{size}</div>
-                                              <div className="text-sm font-bold">{String(qty)}</div>
-                                            </div>
-                                          ))}
+                                        {sortSizesQuantities(
+                                          item.sizes_quantities as Record<string, number> | null,
+                                          (item as any).size_type_id,
+                                          sizeTypes
+                                        ).map(([size, qty]) => (
+                                          <div key={size} className="bg-background rounded border text-center p-2">
+                                            <div className="text-xs font-medium text-muted-foreground">{size}</div>
+                                            <div className="text-sm font-bold">{String(qty)}</div>
+                                          </div>
+                                        ))}
                                       </div>
                                     </div>
                                   </div>
@@ -2615,8 +2606,12 @@ export default function OrderDetailPage() {
                                      <div>{item.quantity} Pcs</div>
                                      <div className="text-xs text-gray-600">
                                        {item.sizes_quantities && typeof item.sizes_quantities === 'object' &&
-                                         Object.entries(item.sizes_quantities)
-                                           .filter(([_, qty]) => (qty as number) > 0)
+                                         sortSizesQuantities(
+                                           item.sizes_quantities as Record<string, number>,
+                                           (item as any).size_type_id,
+                                           sizeTypes
+                                         )
+                                           .filter(([_, qty]) => qty > 0)
                                            .map(([size, qty]) => `${size}-${qty}`)
                                            .join(', ')}
                                      </div>

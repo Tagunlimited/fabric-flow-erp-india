@@ -7,14 +7,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Plus, Pencil, Trash2, X, Grid3X3, List, Upload, Image as ImageIcon } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Grid3X3, List, Upload, Image as ImageIcon, GripVertical } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { createSizeOrder, getSortedSizes } from '@/utils/sizeSorting';
 
 interface SizeType {
   id: string;
   size_name: string;
   available_sizes: string[];
+  size_order?: Record<string, number>;
   image_url?: string;
   created_at: string;
 }
@@ -30,6 +32,7 @@ export function SizeTypeManager() {
   const [formData, setFormData] = useState({
     size_name: '',
     available_sizes: [''],
+    size_order: {} as Record<string, number>,
     image_url: ''
   });
 
@@ -135,9 +138,28 @@ export function SizeTypeManager() {
         }
       }
       
+      // Use existing size_order from formData, or create from array order if not set
+      let sizeOrder = formData.size_order;
+      
+      // If size_order is empty or incomplete, create from array order
+      if (!sizeOrder || Object.keys(sizeOrder).length === 0) {
+        sizeOrder = createSizeOrder(filteredSizes);
+      } else {
+        // Clean up size_order to only include sizes that exist
+        const cleanedOrder: Record<string, number> = {};
+        filteredSizes.forEach((size, index) => {
+          const key = size.trim();
+          if (key) {
+            cleanedOrder[key] = sizeOrder[key] ?? (index + 1);
+          }
+        });
+        sizeOrder = cleanedOrder;
+      }
+
       const sizeTypeData = {
         size_name: formData.size_name,
         available_sizes: filteredSizes,
+        size_order: sizeOrder,
         image_url: imageUrl
       };
 
@@ -160,7 +182,7 @@ export function SizeTypeManager() {
 
       setDialogOpen(false);
       setEditingSizeType(null);
-      setFormData({ size_name: '', available_sizes: [''], image_url: '' });
+      setFormData({ size_name: '', available_sizes: [''], size_order: {}, image_url: '' });
       setImageFile(null);
       setImagePreview(null);
       fetchSizeTypes();
@@ -174,9 +196,15 @@ export function SizeTypeManager() {
 
   const handleEdit = (sizeType: SizeType) => {
     setEditingSizeType(sizeType);
+    // If size_order exists, use it to sort available_sizes, otherwise use as-is
+    const sortedSizes = sizeType.size_order && Object.keys(sizeType.size_order).length > 0
+      ? getSortedSizes(sizeType)
+      : sizeType.available_sizes;
+    
     setFormData({
       size_name: sizeType.size_name,
-      available_sizes: [...sizeType.available_sizes, ''],
+      available_sizes: sortedSizes.length > 0 ? [...sortedSizes, ''] : [''],
+      size_order: sizeType.size_order || {},
       image_url: sizeType.image_url || ''
     });
     setImagePreview(sizeType.image_url || null);
@@ -204,7 +232,7 @@ export function SizeTypeManager() {
 
   const openDialog = () => {
     setEditingSizeType(null);
-    setFormData({ size_name: '', available_sizes: [''], image_url: '' });
+    setFormData({ size_name: '', available_sizes: [''], size_order: {}, image_url: '' });
     setImageFile(null);
     setImagePreview(null);
     setDialogOpen(true);
@@ -229,6 +257,33 @@ export function SizeTypeManager() {
       ...prev,
       available_sizes: prev.available_sizes.map((size, i) => i === index ? value : size)
     }));
+  };
+
+  // Drag and drop handlers for size ordering
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+
+  const handleDragStart = (index: number) => {
+    setDraggedIndex(index);
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === index) return;
+
+    const newSizes = [...formData.available_sizes];
+    const draggedSize = newSizes[draggedIndex];
+    newSizes.splice(draggedIndex, 1);
+    newSizes.splice(index, 0, draggedSize);
+
+    setFormData(prev => ({
+      ...prev,
+      available_sizes: newSizes
+    }));
+    setDraggedIndex(index);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
   };
 
   return (
@@ -295,27 +350,96 @@ export function SizeTypeManager() {
               </div>
               
               <div>
-                <Label>Available Sizes</Label>
+                <Label>Available Sizes (Drag to reorder or set sort value)</Label>
+                <p className="text-sm text-muted-foreground mb-2">
+                  The order you set here will be used throughout the application. You can drag to reorder or manually enter sort values.
+                </p>
                 <div className="space-y-2 mt-2">
-                  {formData.available_sizes.map((size, index) => (
-                    <div key={index} className="flex gap-2">
-                      <Input
-                        value={size}
-                        onChange={(e) => updateSize(index, e.target.value)}
-                        placeholder="e.g., S, M, L, XL"
-                      />
-                      {formData.available_sizes.length > 1 && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => removeSizeField(index)}
-                        >
-                          <X className="w-4 h-4" />
-                        </Button>
-                      )}
-                    </div>
-                  ))}
+                  {formData.available_sizes.map((size, index) => {
+                    const sizeKey = size.trim() || `size_${index}`;
+                    const currentSortValue = formData.size_order[sizeKey] ?? (index + 1);
+                    
+                    return (
+                      <div
+                        key={index}
+                        draggable
+                        onDragStart={() => handleDragStart(index)}
+                        onDragOver={(e) => handleDragOver(e, index)}
+                        onDragEnd={handleDragEnd}
+                        className={`flex gap-2 items-center p-2 rounded border ${
+                          draggedIndex === index ? 'opacity-50 bg-muted' : 'bg-background'
+                        } cursor-move hover:bg-muted/50 transition-colors`}
+                      >
+                        <GripVertical className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                        <Input
+                          value={size}
+                          onChange={(e) => {
+                            const newValue = e.target.value;
+                            updateSize(index, newValue);
+                            // Update sort order when size name changes
+                            if (size.trim()) {
+                              const oldKey = size.trim();
+                              const newKey = newValue.trim();
+                              if (oldKey !== newKey && formData.size_order[oldKey] !== undefined) {
+                                setFormData(prev => {
+                                  const newOrder = { ...prev.size_order };
+                                  if (newKey) {
+                                    newOrder[newKey] = newOrder[oldKey] ?? (index + 1);
+                                    delete newOrder[oldKey];
+                                  }
+                                  return { ...prev, size_order: newOrder };
+                                });
+                              }
+                            }
+                          }}
+                          placeholder="e.g., S, M, L, XL"
+                          className="flex-1"
+                        />
+                        <Label className="text-xs text-muted-foreground flex-shrink-0 whitespace-nowrap">
+                          Sort:
+                        </Label>
+                        <Input
+                          type="number"
+                          value={currentSortValue}
+                          onChange={(e) => {
+                            const sortValue = parseInt(e.target.value) || 0;
+                            const key = size.trim() || `size_${index}`;
+                            setFormData(prev => ({
+                              ...prev,
+                              size_order: {
+                                ...prev.size_order,
+                                [key]: sortValue
+                              }
+                            }));
+                          }}
+                          className="w-16 flex-shrink-0"
+                          min="1"
+                          step="1"
+                        />
+                        {formData.available_sizes.length > 1 && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              const key = size.trim();
+                              if (key && formData.size_order[key]) {
+                                setFormData(prev => {
+                                  const newOrder = { ...prev.size_order };
+                                  delete newOrder[key];
+                                  return { ...prev, size_order: newOrder };
+                                });
+                              }
+                              removeSizeField(index);
+                            }}
+                            className="flex-shrink-0"
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
                   <Button
                     type="button"
                     variant="outline"
@@ -401,7 +525,7 @@ export function SizeTypeManager() {
                       <TableCell className="font-medium">{sizeType.size_name}</TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
-                          {sizeType.available_sizes.map((size, index) => (
+                          {getSortedSizes(sizeType).map((size, index) => (
                             <Badge key={index} variant="outline" className="text-xs">
                               {size}
                             </Badge>
@@ -453,7 +577,7 @@ export function SizeTypeManager() {
                     <CardContent className="p-4">
                       <h3 className="font-semibold text-lg mb-2">{sizeType.size_name}</h3>
                       <div className="flex flex-wrap gap-1 mb-4">
-                        {sizeType.available_sizes.map((size, index) => (
+                        {getSortedSizes(sizeType).map((size, index) => (
                           <Badge key={index} variant="outline" className="text-xs">
                             {size}
                           </Badge>

@@ -126,19 +126,16 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
 
   const validateForm = () => {
     if (!formData.company_name.trim()) {
-      setError('Company name is required');
+      setError('Client name is required');
       return false;
     }
     if (!formData.phone.trim() || formData.phone.length < 10) {
       setError('Valid phone number is required');
       return false;
     }
-    if (!formData.email.trim() || !formData.email.includes('@')) {
-      setError('Valid email is required');
-      return false;
-    }
-    if (!formData.address.trim()) {
-      setError('Address is required');
+    // Email is optional, but if provided, it must be valid
+    if (formData.email.trim() && !formData.email.includes('@')) {
+      setError('Please enter a valid email address');
       return false;
     }
     if (!formData.city.trim()) {
@@ -149,8 +146,9 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
       setError('State is required');
       return false;
     }
-    if (!formData.pincode.trim() || formData.pincode.length !== 6) {
-      setError('Valid 6-digit pincode is required');
+    // Pincode is optional, but if provided, it must be 6 digits
+    if (formData.pincode.trim() && formData.pincode.length !== 6) {
+      setError('Pincode must be 6 digits if provided');
       return false;
     }
     return true;
@@ -272,12 +270,12 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="company_name">Company Name *</Label>
+              <Label htmlFor="company_name">Client *</Label>
               <Input
                 id="company_name"
                 value={formData.company_name}
                 onChange={(e) => handleChange('company_name', e.target.value)}
-                placeholder="Enter company name"
+                placeholder="Enter client name"
                 required
                 disabled={isLoading}
               />
@@ -307,14 +305,13 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="email">Email *</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
                 type="email"
                 value={formData.email}
                 onChange={(e) => handleChange('email', e.target.value)}
                 placeholder="Enter email address"
-                required
                 disabled={isLoading}
               />
             </div>
@@ -342,13 +339,12 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="address">Address *</Label>
+            <Label htmlFor="address">Address</Label>
             <Textarea
               id="address"
               value={formData.address}
               onChange={(e) => handleChange('address', e.target.value)}
               placeholder="Enter complete address"
-              required
               disabled={isLoading}
               rows={3}
             />
@@ -380,14 +376,13 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="pincode">Pincode *</Label>
+              <Label htmlFor="pincode">Pincode</Label>
               <Input
                 id="pincode"
                 value={formData.pincode}
                 onChange={(e) => handleChange('pincode', e.target.value)}
                 placeholder="Enter 6-digit pincode"
                 maxLength={6}
-                required
                 disabled={isLoading}
               />
             </div>

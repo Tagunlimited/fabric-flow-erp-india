@@ -179,22 +179,78 @@ export function AuthProvider({ children }: AuthProviderProps) {
         console.log('⏭️ Skipping session check (skipSessionCheck=true) - session already validated');
       }
 
-      console.log(`Attempting to refresh profile (attempt ${retryCount + 1})`);
+      console.log(`Attempting to refresh profile (attempt ${retryCount + 1}) for userId: ${targetUserId}`);
       
-      // Add timeout to prevent hanging - 3 seconds max (reduced from 10)
+      // OPTIMIZATION: Only call getUser() if we need to verify session (skipSessionCheck=false)
+      // When skipSessionCheck=true and userId is provided, trust the userId from SIGNED_IN event
+      let actualUserId = targetUserId;
+      let currentSessionUser = null;
+      
+      if (!skipSessionCheck) {
+        // Need to verify session user matches - call getUser()
+        const { data: { user: sessionUser } } = await supabase.auth.getUser();
+        if (!sessionUser) {
+          console.error('❌ No session user found! Cannot fetch profile.');
+          profileFetchInProgressRef.current = false;
+          setProfileLoading(false);
+          clearTimeout(globalTimeout);
+          return;
+        }
+        currentSessionUser = sessionUser;
+        actualUserId = sessionUser.id;
+        
+        if (actualUserId !== targetUserId) {
+          console.warn('⚠️ User ID mismatch detected, using session user ID:', {
+            targetUserId,
+            sessionUserId: actualUserId,
+            sessionEmail: sessionUser.email
+          });
+        }
+      } else {
+        // skipSessionCheck=true: Trust the userId provided (from SIGNED_IN event)
+        // No need to call getUser() - saves ~200-500ms
+        console.log('⏭️ Skipping getUser() call - using provided userId directly (skipSessionCheck=true)');
+      }
+      
+      // Add timeout to prevent hanging - 3 seconds max
       // Pass skipSessionCheck to getUserProfile to avoid redundant session checks
-      const profilePromise = authService.getUserProfile(targetUserId, 0, skipSessionCheck);
+      let timeoutId: NodeJS.Timeout | null = null;
+      const profilePromise = authService.getUserProfile(actualUserId, 0, skipSessionCheck);
       const timeoutPromise = new Promise<null>((resolve) => {
-        setTimeout(() => {
+        timeoutId = setTimeout(() => {
           console.warn('⚠️ Profile fetch timeout after 3 seconds - using fallback');
           resolve(null);
-        }, 3000); // Reduced to 3 seconds
+        }, 3000);
       });
       
       const userProfile = await Promise.race([profilePromise, timeoutPromise]);
       
+      // Clear timeout if profile was fetched successfully
+      if (timeoutId && userProfile) {
+        clearTimeout(timeoutId);
+      }
+      
       if (userProfile) {
-        console.log('✅ Profile refreshed successfully:', userProfile);
+        // CRITICAL: Verify profile matches expected user ID
+        if (userProfile.user_id !== actualUserId) {
+          console.error('❌ CRITICAL: Profile user_id does not match expected user!', {
+            profileUserId: userProfile.user_id,
+            expectedUserId: actualUserId,
+            sessionEmail: currentSessionUser?.email || 'N/A'
+          });
+          profileFetchInProgressRef.current = false;
+          setProfileLoading(false);
+          clearTimeout(globalTimeout);
+          return;
+        }
+        
+        console.log('✅ Profile refreshed successfully:', { 
+          profileId: userProfile.id, 
+          userId: userProfile.user_id,
+          email: userProfile.email,
+          role: userProfile.role,
+          matchesSession: userProfile.user_id === actualUserId
+        });
         console.log('📸 Avatar URL in profile:', userProfile.avatar_url);
         setProfile(userProfile);
         profileRef.current = userProfile; // Update ref
@@ -206,14 +262,28 @@ export function AuthProvider({ children }: AuthProviderProps) {
         if (!profileRef.current) {
           console.log('🔄 Creating fallback profile to unblock app...');
           try {
-            const { data: { user: currentUser } } = await supabase.auth.getUser();
-            if (currentUser) {
+            // Get user data - use currentSessionUser if available, otherwise fetch or use user state
+            let userData = currentSessionUser;
+            if (!userData) {
+              // If skipSessionCheck=true, we might not have currentSessionUser
+              // Try to get from user state first, then fetch if needed
+              if (user?.id === actualUserId) {
+                // Use user state if it matches
+                userData = user as any;
+              } else {
+                // Fetch user data
+                const { data: { user: fetchedUser } } = await supabase.auth.getUser();
+                userData = fetchedUser;
+              }
+            }
+            
+            if (userData) {
               // Create fallback profile immediately (don't wait for DB)
               const fallbackProfile = {
-                id: targetUserId,
-                user_id: targetUserId,
-                email: currentUser.email || '',
-                full_name: currentUser.user_metadata?.name || currentUser.email?.split('@')[0] || 'User',
+                id: actualUserId,
+                user_id: actualUserId,
+                email: userData.email || '',
+                full_name: userData.user_metadata?.name || userData.email?.split('@')[0] || 'User',
                 role: 'user',
                 status: 'active',
                 avatar_url: undefined,
@@ -230,10 +300,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
                 supabase
                   .from('profiles')
                   .insert({
-                    id: targetUserId,
-                    user_id: targetUserId,
-                    email: currentUser.email || '',
-                    full_name: currentUser.user_metadata?.name || currentUser.email?.split('@')[0] || 'User',
+                    id: actualUserId,
+                    user_id: actualUserId,
+                    email: userData.email || '',
+                    full_name: userData.user_metadata?.name || userData.email?.split('@')[0] || 'User',
                     role: 'user',
                     status: 'active'
                   } as any)
@@ -257,8 +327,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
             console.warn('⚠️ Error creating fallback profile:', err);
             // Still create a minimal fallback
             const minimalFallback = {
-              id: targetUserId,
-              user_id: targetUserId,
+              id: actualUserId,
+              user_id: actualUserId,
               email: '',
               full_name: 'User',
               role: 'user',
@@ -267,6 +337,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             };
+            console.log('✅ Setting minimal fallback profile:', minimalFallback);
             setProfile(minimalFallback as any);
             profileRef.current = minimalFallback as any;
           }
@@ -366,8 +437,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
           }
           if (currentUser) {
             const fallbackProfile = {
-              id: targetUserId,
-              user_id: targetUserId,
+              id: currentUser.id,
+              user_id: currentUser.id,
               full_name: currentUser.user_metadata?.name || currentUser.email?.split('@')[0] || 'User',
               email: currentUser.email || '',
               role: 'user',
@@ -376,7 +447,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             };
-            console.log('📝 Setting fallback profile to prevent infinite loading');
+            console.log('📝 Setting fallback profile to prevent infinite loading:', fallbackProfile);
             setProfile(fallbackProfile as any);
             profileRef.current = fallbackProfile as any;
           }
@@ -423,7 +494,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     
     console.log('🚀 AuthProvider: Starting initialization...');
     
-    // Immediate safety timeout - force clear loading after 5 seconds (reduced from 10)
+    // Immediate safety timeout - force clear loading after 5 seconds to prevent infinite loading
+    // This is a fallback in case onAuthStateChange doesn't fire
     const safetyTimeout = setTimeout(() => {
       setLoading((currentLoading) => {
         if (currentLoading) {
@@ -435,111 +507,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
     }, 5000);
     
-    // Get initial session - NON-BLOCKING: if it times out, rely on auth state change listener
-    console.log('🔍 AuthProvider: Calling getSession()...');
-    const sessionPromise = supabase.auth.getSession();
-    const sessionTimeout = new Promise<{ data: { session: null }, error: { message: string } }>((resolve) => {
-      setTimeout(() => {
-        console.log('⏭️ Initial getSession taking longer than expected, will rely on auth state listener');
-        resolve({ data: { session: null }, error: { message: 'Session check timeout' } });
-      }, 2000); // Reduced timeout to 2 seconds
-    });
-    
-    Promise.race([sessionPromise, sessionTimeout]).then(async ({ data: { session }, error }) => {
-      console.log('✅ AuthProvider: getSession() completed', { hasSession: !!session, hasError: !!error });
-      
-      // If timeout or error, don't block - let auth state listener handle it
-      if (error && error.message === 'Session check timeout') {
-        console.log('⏭️ getSession timeout - relying on auth state change listener');
-        setLoading(false);
-        clearTimeout(safetyTimeout);
-        return;
-      }
-      
-      if (error) {
-        console.warn('⚠️ Error getting session (non-timeout):', error.message);
-        // Don't set user to null - let auth state listener handle it
-        setLoading(false);
-        clearTimeout(safetyTimeout);
-        return;
-      }
-
-      console.log('✅ Session retrieved successfully', { hasSession: !!session, hasUser: !!session?.user });
-      let sessionUser = session?.user ?? null;
-      if (!sessionUser && session?.refresh_token) {
-        // Try to refresh session if possible
-        console.log('🔄 No user but refresh token exists, attempting refresh...');
-        try {
-          const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-          if (refreshError) {
-            console.error('❌ Session refresh error:', refreshError);
-            setUser(null);
-            setLoading(false);
-            return;
-          }
-          sessionUser = refreshed.session?.user ?? null;
-          console.log('✅ Session refreshed', { hasUser: !!sessionUser });
-        } catch (err) {
-          console.error('❌ Error refreshing session:', err);
-        }
-      }
-      
-      if (sessionUser) {
-        console.log('✅ User found in session:', sessionUser.id);
-        if (isLoginExpired()) {
-          console.log('⚠️ Login expired, signing out...');
-          await signOut();
-          setLoading(false);
-          return;
-        }
-        // ALWAYS fetch profile if it's null, regardless of user ID match
-        // This ensures profile loads on page refresh
-        console.log('🔍 Initial session check:', {
-          userId: sessionUser.id,
-          lastUserId: lastUserIdRef.current,
-          hasProfile: !!profileRef.current,
-          fetchInProgress: profileFetchInProgressRef.current
-        });
-        
-        // Guard: Skip if profile fetch is already in progress
-        if (profileFetchInProgressRef.current) {
-          console.log('⏭️ Skipping initial session profile fetch (already in progress)');
-          setLoading(false);
-          return;
-        }
-        
-        if (lastUserIdRef.current !== sessionUser.id) {
-          console.log('🔄 New user detected, clearing old profile and fetching new...');
-          // Clear old profile immediately when user changes
-          setProfile(null);
-          profileRef.current = null;
-          lastUserIdRef.current = sessionUser.id;
-          setUser(sessionUser);
-          await refreshProfile(0, sessionUser.id, false); // Pass userId directly, check session
-          await waitForProfileFetch(8);
-          setLoading(false);
-        } else if (!profileRef.current) {
-          // User ID matches but profile is null - fetch it (page refresh scenario)
-          console.log('🔄 User ID matches but profile is null - fetching profile');
-          await refreshProfile(0, sessionUser.id, false); // Pass userId directly, check session
-          await waitForProfileFetch(8);
-          setLoading(false);
-        } else {
-          console.log('⏭️ Skipping initial session - same user already loaded with profile');
-          setLoading(false);
-        }
-      } else {
-        console.log('⚠️ No user in session');
-        // Don't set user to null here - let auth state listener handle it
-        setLoading(false);
-      }
-      
-      clearTimeout(safetyTimeout);
-    }).catch((error) => {
-      console.warn('⚠️ Error in getSession promise chain:', error);
-      setLoading(false);
-      clearTimeout(safetyTimeout);
-    });
+    // OPTIMIZATION: Rely entirely on onAuthStateChange listener instead of calling getSession()
+    // The listener fires INITIAL_SESSION and SIGNED_IN events which handle initialization
+    // This eliminates the 2-second delay from redundant session check
+    console.log('⏭️ Skipping getSession() - relying on onAuthStateChange listener for faster initialization');
     
     // Listen for auth changes - with guards to prevent unnecessary updates
     const {
@@ -562,62 +533,64 @@ export function AuthProvider({ children }: AuthProviderProps) {
         localStorage.removeItem('login_timestamp');
       } else if (event === 'SIGNED_IN' && session?.user) {
         // SIGNED_IN means login succeeded - trust this event and proceed
-        console.log('🔐 SIGNED_IN handler:', { userIdChanged, currentUserId, lastUserId: lastUserIdRef.current, fetchInProgress: profileFetchInProgressRef.current });
+        console.log('🔐 SIGNED_IN handler:', { 
+          userIdChanged, 
+          currentUserId, 
+          userEmail: session.user.email,
+          lastUserId: lastUserIdRef.current, 
+          fetchInProgress: profileFetchInProgressRef.current 
+        });
+        
+        // CRITICAL: Always clear old profile when SIGNED_IN fires to prevent user confusion
+        // Even if userId hasn't changed, we want fresh data
+        if (userIdChanged) {
+          console.log('✅ SIGNED_IN: User ID changed, clearing old profile and user state...');
+          setProfile(null);
+          profileRef.current = null;
+          profileFetchInProgressRef.current = false; // Reset fetch flag
+        }
         
         // CRITICAL: Prevent duplicate profile fetches
         if (profileFetchInProgressRef.current) {
           console.log('⏭️ SIGNED_IN: Profile fetch already in progress, skipping duplicate');
           // Still update user state but don't fetch profile again
-          if (userIdChanged) {
-            lastUserIdRef.current = currentUserId;
-            setUser(session.user);
-            localStorage.setItem('login_timestamp', Date.now().toString());
-          }
+          lastUserIdRef.current = currentUserId;
+          setUser(session.user);
+          localStorage.setItem('login_timestamp', Date.now().toString());
           setLoading(false);
           return;
         }
         
-        // Only update if user actually changed
-        if (userIdChanged) {
-          console.log('✅ SIGNED_IN: User changed, clearing old profile and fetching new...');
-          // Clear old profile immediately when user changes
-          setProfile(null);
-          profileRef.current = null;
-          localStorage.setItem('login_timestamp', Date.now().toString());
-          lastUserIdRef.current = currentUserId;
-          setUser(session.user);
-          console.log('📞 Calling refreshProfile from SIGNED_IN...');
-          // Don't await - let it run in background, clear loading immediately
-          refreshProfile(0, session.user.id, true).catch(err => {
-            console.warn('⚠️ Profile fetch error (non-blocking):', err);
-          });
-          
-          // Clear loading immediately - don't wait for profile
-          // Profile will load in background and update when ready
-          setLoading(false);
-          console.log('✅ SIGNED_IN: User set, loading cleared (profile loading in background)');
-        } else {
-          console.log('⏭️ SIGNED_IN: Same user, checking if profile needed');
-          // Update user state even if same user (in case of re-login)
-          lastUserIdRef.current = currentUserId;
-          setUser(session.user);
-          localStorage.setItem('login_timestamp', Date.now().toString());
-          
-          // Only fetch profile if we don't have one (non-blocking)
-          if (!profileRef.current && !profileFetchInProgressRef.current) {
-            console.log('🔄 SIGNED_IN: No profile, fetching in background...');
-            refreshProfile(0, session.user.id, true).catch(err => {
-              console.warn('⚠️ Profile fetch error (non-blocking):', err);
-            });
-          } else {
-            console.log('✅ SIGNED_IN: Profile already exists or fetch in progress');
-          }
-          setLoading(false);
-        }
+        // Always update user state on SIGNED_IN (even if same user, session might be refreshed)
+        console.log('✅ SIGNED_IN: Setting user state for:', { 
+          id: session.user.id, 
+          email: session.user.email 
+        });
+        lastUserIdRef.current = currentUserId;
+        setUser(session.user);
+        localStorage.setItem('login_timestamp', Date.now().toString());
+        
+        // Always fetch fresh profile on SIGNED_IN to ensure correct user data
+        console.log('📞 Calling refreshProfile from SIGNED_IN with userId:', session.user.id);
+        // Don't await - let it run in background, clear loading immediately
+        refreshProfile(0, session.user.id, true).catch(err => {
+          console.warn('⚠️ Profile fetch error (non-blocking):', err);
+        });
+        
+        // Clear loading immediately - don't wait for profile
+        // Profile will load in background and update when ready
+        setLoading(false);
+        console.log('✅ SIGNED_IN: User set, loading cleared (profile loading in background)');
       } else if (event === 'INITIAL_SESSION' && session?.user) {
-        // Guard: Skip if profile fetch is already in progress
+        // OPTIMIZATION: Skip if profile fetch is already in progress from SIGNED_IN
         if (profileFetchInProgressRef.current) {
-          console.log('⏭️ Skipping INITIAL_SESSION profile fetch (already in progress)');
+          console.log('⏭️ Skipping INITIAL_SESSION profile fetch (already in progress from SIGNED_IN)');
+          // Still update user state and clear loading
+          if (userIdChanged) {
+            lastUserIdRef.current = currentUserId;
+            setUser(session.user);
+            authInitializedRef.current = true;
+          }
           setLoading(false);
           return;
         }
@@ -625,38 +598,38 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // Only update if user ID changed OR profile is null
         // This handles page refresh (profile null) vs tab switch (profile exists)
         if (userIdChanged && !authInitializedRef.current) {
-          console.log('Initial session detected - setting user');
+          console.log('🔄 INITIAL_SESSION: User changed, setting user state');
           // Clear old profile if user changed
           if (lastUserIdRef.current && lastUserIdRef.current !== currentUserId) {
-            console.log('🔄 INITIAL_SESSION: User changed, clearing old profile');
+            console.log('🔄 INITIAL_SESSION: Clearing old profile');
             setProfile(null);
             profileRef.current = null;
           }
           lastUserIdRef.current = currentUserId;
           setUser(session.user);
           authInitializedRef.current = true;
-          // Fetch profile if not already loaded
+          // Fetch profile in background if not already loaded (non-blocking)
           if (!profileRef.current) {
-            console.log('🔄 INITIAL_SESSION: Profile is null, fetching...');
-            await refreshProfile(0, session.user.id); // Pass userId directly and await
-            await waitForProfileFetch(8);
-            setLoading(false);
-          } else {
-            setLoading(false);
+            console.log('🔄 INITIAL_SESSION: Profile is null, fetching in background...');
+            refreshProfile(0, session.user.id, true).catch(err => {
+              console.warn('⚠️ Profile fetch error (non-blocking):', err);
+            });
           }
+          // Clear loading immediately - don't wait for profile
+          setLoading(false);
         } else if (!authInitializedRef.current && session.user.id === lastUserIdRef.current && !profileRef.current) {
           // Page refresh scenario: same user, but profile is null
-          console.log('🔄 INITIAL_SESSION: Same user, profile null - fetching...');
+          console.log('🔄 INITIAL_SESSION: Same user, profile null - fetching in background...');
           authInitializedRef.current = true;
-          await refreshProfile(0, session.user.id); // Pass userId directly and await
-          await waitForProfileFetch(8);
+          refreshProfile(0, session.user.id, true).catch(err => {
+            console.warn('⚠️ Profile fetch error (non-blocking):', err);
+          });
+          // Clear loading immediately - don't wait for profile
           setLoading(false);
         } else {
           console.log('⏭️ Skipping INITIAL_SESSION - already initialized or profile exists');
           // Ensure loading is cleared even when skipping
-          if (loading) {
-            setLoading(false);
-          }
+          setLoading(false);
         }
       } else if (event === 'TOKEN_REFRESHED' && session?.user) {
         // DISABLED: Don't auto-refresh profile on token refresh

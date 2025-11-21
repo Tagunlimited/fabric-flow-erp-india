@@ -4,6 +4,7 @@ import { Search, User, LogOut, Sun, Moon, Bell, Settings, Menu } from "lucide-re
 import { useAuth } from "@/components/auth/AuthProvider";
 import { NotificationCenter } from "@/components/notifications/NotificationCenter";
 import { FloatingNotification } from "@/components/notifications/FloatingNotification";
+import { FloatingChatButton } from "@/components/chat/FloatingChatButton";
 import { AvatarUploader } from "@/components/ui/avatar-uploader";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuCheckboxItem } from "@/components/ui/dropdown-menu";
@@ -311,6 +312,7 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
         notification={floatingNotification}
         onDismiss={() => setFloatingNotification(null)}
       />
+      <FloatingChatButton />
     </div>
   );
 }

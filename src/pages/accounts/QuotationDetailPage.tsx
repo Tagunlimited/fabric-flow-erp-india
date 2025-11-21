@@ -1081,7 +1081,7 @@ export default function QuotationDetailPage() {
                   <div>
                   <h3 className="text-lg font-semibold text-gray-800 mb-2">Bill To:</h3>
                   <div className="bg-gray-50 p-4 rounded">
-                    <p className="font-semibold text-gray-800">{customer?.company_name || 'Customer Name'}</p>
+                    <p className="font-semibold text-gray-800">{customer?.company_name || 'Client Name'}</p>
                     <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
                     <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
                     <p className="text-sm text-gray-600">
@@ -1363,7 +1363,7 @@ export default function QuotationDetailPage() {
                 <div>
                     <h3 className="text-lg font-semibold text-gray-800 mb-2">Bill To:</h3>
                     <div className="bg-gray-50 p-4 rounded">
-                      <p className="font-semibold text-gray-800">{customer?.company_name || 'Customer Name'}</p>
+                      <p className="font-semibold text-gray-800">{customer?.company_name || 'Client Name'}</p>
                       <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
                       <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
                       <p className="text-sm text-gray-600">

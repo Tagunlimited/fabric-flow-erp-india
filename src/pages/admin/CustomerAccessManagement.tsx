@@ -390,7 +390,7 @@ export function CustomerAccessManagement() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Company</TableHead>
+                <TableHead>Client</TableHead>
                 <TableHead>Contact</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Portal Access</TableHead>

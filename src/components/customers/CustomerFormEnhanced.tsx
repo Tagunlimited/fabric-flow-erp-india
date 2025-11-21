@@ -139,8 +139,9 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
       return;
     }
 
-    if (!formData.email.trim()) {
-      setError('Email is required');
+    // Email is optional, but if provided, it must be valid
+    if (formData.email.trim() && !formData.email.includes('@')) {
+      setError('Please enter a valid email address');
       return;
     }
 
@@ -247,18 +248,18 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Company Information */}
+            {/* Client Information */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Company Information</h3>
+              <h3 className="text-lg font-semibold">Client Information</h3>
               
               <div>
-                <Label htmlFor="company_name">Company Name *</Label>
+                <Label htmlFor="company_name">Client *</Label>
                 <Input
                   id="company_name"
                   name="company_name"
                   value={formData.company_name}
                   onChange={(e) => handleChange('company_name', e.target.value)}
-                  placeholder="Enter company name"
+                  placeholder="Enter client name"
                   required
                 />
               </div>
@@ -289,7 +290,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
               </div>
 
               <div>
-                <Label htmlFor="email">Email *</Label>
+                <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
                   name="email"
@@ -297,7 +298,6 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
                   value={formData.email}
                   onChange={(e) => handleChange('email', e.target.value)}
                   placeholder="Enter email address"
-                  required
                 />
               </div>
 

@@ -519,7 +519,11 @@ export default function ReceiptPage() {
         return;
       }
 
+      // Get the content and clone it to avoid issues with React refs
       const printContent = printRef.current.innerHTML;
+      
+      // Write the HTML content
+      printWindow.document.open();
       printWindow.document.write(`
         <!DOCTYPE html>
         <html>
@@ -536,15 +540,24 @@ export default function ReceiptPage() {
                 margin: 0;
                 padding: 0;
               }
+              html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+              }
               body { 
                 font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; 
                 margin: 0; 
                 padding: 0; 
                 color: #000;
                 background: #fff;
+                display: flex;
+                justify-content: center;
+                align-items: flex-start;
               }
               .bg-white {
-                background-color: #fff;
+                background-color: #fff !important;
               }
               .flex {
                 display: flex;
@@ -677,15 +690,31 @@ export default function ReceiptPage() {
                 width: 10rem;
               }
               .receipt-print-container { 
-                width: 210mm; 
-                min-height: 148mm; 
-                padding: 3mm; 
-                margin: 0 auto;
-                background: #fff;
+                width: 210mm !important; 
+                min-height: 148mm !important; 
+                padding: 3mm !important; 
+                margin: 0 auto !important;
+                background: #fff !important;
+                display: block !important;
+                visibility: visible !important;
               }
               img {
                 max-width: 100%;
                 height: auto;
+                display: block;
+              }
+              @media print {
+                body {
+                  margin: 0;
+                  padding: 0;
+                }
+                .receipt-print-container {
+                  width: 210mm !important;
+                  min-height: 148mm !important;
+                  padding: 3mm !important;
+                  margin: 0 !important;
+                  page-break-after: avoid;
+                }
               }
             </style>
           </head>
@@ -696,23 +725,21 @@ export default function ReceiptPage() {
       `);
       printWindow.document.close();
       
-      // Wait for window to fully load before printing
-      printWindow.onload = () => {
-        setTimeout(() => {
-          printWindow.focus();
-          printWindow.print();
-          // Don't close immediately - let user interact with print dialog
-          // Window will close when print dialog is dismissed
-        }, 100);
+      // Wait for window to fully load and render before printing
+      const waitForPrint = () => {
+        if (printWindow.document.readyState === 'complete') {
+          // Additional wait to ensure all images and styles are loaded
+          setTimeout(() => {
+            printWindow.focus();
+            printWindow.print();
+          }, 300);
+        } else {
+          setTimeout(waitForPrint, 100);
+        }
       };
       
-      // Fallback if onload doesn't fire
-      setTimeout(() => {
-        if (printWindow.document.readyState === 'complete') {
-          printWindow.focus();
-          printWindow.print();
-        }
-      }, 500);
+      // Start waiting for the document to be ready
+      waitForPrint();
     } catch (error) {
       console.error('Error printing:', error);
       toast.error('Failed to print receipt');
