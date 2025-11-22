@@ -6,15 +6,15 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelect';
-import { SizeTypeSelector } from './SizeTypeSelector';
 import { ProductCustomizationModal } from './ProductCustomizationModal';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { CalendarIcon, Plus, Trash2, Upload, X, Image, ChevronLeft, ChevronRight, Lock, Unlock, Save } from 'lucide-react';
+import { CalendarIcon, Plus, Trash2, Upload, X, Image, ChevronLeft, ChevronRight, Lock, Unlock, Save, ChevronDown } from 'lucide-react';
 import { format } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -22,6 +22,7 @@ import { cn, formatCurrency } from '@/lib/utils';
 import { getOrderItemDisplayImageForForm, getImageSrcFromFileOrUrl } from '@/utils/orderItemImageUtils';
 import { usePageState } from '@/contexts/AppCacheContext';
 import { getSortedSizes, sortSizesQuantities, SizeType as SizeTypeUtil } from '@/utils/sizeSorting';
+import { initializeSizePrices, calculateSizeBasedTotal, calculateAverageUnitPrice } from '@/utils/priceCalculation';
 
 interface Customer {
   id: string;
@@ -132,6 +133,7 @@ interface Product {
   price: number;
   size_type_id: string;
   sizes_quantities: { [size: string]: number };
+  size_prices?: { [size: string]: number };
   branding_items: BrandingItem[];
   gst_rate: number;
   customizations: Customization[];
@@ -253,9 +255,10 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
   const [selectedCategoryImage, setSelectedCategoryImage] = useState<string>('');
   const [isCategoryLocked, setIsCategoryLocked] = useState(false);
   const [mainImages, setMainImages] = useState<{ [productIndex: number]: { reference: string | null, mockup: string | null, category: string | null } }>({});
-  const [sizeTypeSelectorOpen, setSizeTypeSelectorOpen] = useState(false);
   const [customizationModalOpen, setCustomizationModalOpen] = useState(false);
   const [currentProductIndex, setCurrentProductIndex] = useState(0);
+  const [selectedSizesForPriceEdit, setSelectedSizesForPriceEdit] = useState<{ [productIndex: number]: string[] }>({});
+  const [sizePriceEditOpen, setSizePriceEditOpen] = useState<{ [productIndex: number]: boolean }>({});
   const sliderRef = useRef<HTMLDivElement>(null);
   const autoScrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -641,22 +644,22 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
     setFormData(prev => ({
       ...prev,
-      products: prev.products.map((product, index) =>
-        index === productIndex
-          ? {
-              ...product,
-              size_type_id: sizeTypeId,
-              sizes_quantities: newSizesQuantities
-            }
-          : product
-      )
+      products: prev.products.map((product, index) => {
+        if (index === productIndex) {
+          // Don't initialize size_prices - all sizes will use base price by default
+          // Only store custom prices when user explicitly edits them
+          return {
+            ...product,
+            size_type_id: sizeTypeId,
+            sizes_quantities: newSizesQuantities,
+            size_prices: undefined // Start with no custom prices - all use base price
+          };
+        }
+        return product;
+      })
     }));
   };
 
-  const openSizeTypeSelector = (productIndex: number) => {
-    setCurrentProductIndex(productIndex);
-    setSizeTypeSelectorOpen(true);
-  };
 
   const openCustomizationModal = (productIndex: number) => {
     setCurrentProductIndex(productIndex);
@@ -822,7 +825,12 @@ const getSelectedFabricVariant = (productIndex: number) => {
     let subtotal = 0;
     let gstAmount = 0;
     formData.products.forEach(product => {
-      const productTotal = Object.values(product.sizes_quantities || {}).reduce((total, qty) => total + qty, 0) * product.price;
+      // Use size-based pricing if available, otherwise fall back to old calculation
+      const productTotal = calculateSizeBasedTotal(
+        product.sizes_quantities || {},
+        product.size_prices,
+        product.price
+      );
       subtotal += productTotal;
       gstAmount += (productTotal * (product.gst_rate || 0)) / 100;
     });
@@ -1049,7 +1057,19 @@ const getSelectedFabricVariant = (productIndex: number) => {
           return;
         }
         
-        const itemTotal = totalQuantity * product.price;
+        // Calculate item total using size-based pricing
+        const itemTotal = calculateSizeBasedTotal(
+          product.sizes_quantities || {},
+          product.size_prices,
+          product.price
+        );
+        
+        // Calculate average unit price for backward compatibility
+        const avgUnitPrice = calculateAverageUnitPrice(
+          product.sizes_quantities || {},
+          product.size_prices,
+          product.price
+        );
         
         // Upload images for this product
         const uploadedImages = await uploadOrderImages((orderResult as any).id, productIndex, product);
@@ -1058,7 +1078,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
           order_id: (orderResult as any).id,
           // product_id: null, // Removed since it might be causing issues
           quantity: totalQuantity,
-          unit_price: Number(product.price),
+          unit_price: Number(avgUnitPrice), // Average for backward compatibility
           total_price: Number(itemTotal),
           product_category_id: product.product_category_id,
           category_image_url: product.category_image_url || null,
@@ -1069,13 +1089,15 @@ const getSelectedFabricVariant = (productIndex: number) => {
           remarks: product.remarks || '',
           size_type_id: product.size_type_id,
           sizes_quantities: product.sizes_quantities || {},
+          size_prices: product.size_prices || {}, // Store size-wise prices
           gst_rate: product.gst_rate,
           specifications: {
             branding_items: product.branding_items || [],
             reference_images: uploadedImages.reference_images || [],
             mockup_images: uploadedImages.mockup_images || [],
             attachments: uploadedImages.attachments || [],
-            customizations: product.customizations || []
+            customizations: product.customizations || [],
+            size_prices: product.size_prices || {} // Also store in specifications for easy access
           }
         };
 
@@ -1435,7 +1457,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
   {/* Right Column - 2 Rows × 2 Columns each */}
   <div className="lg:col-span-8 grid grid-cols-1 gap-6">
-    {/* Row 1 - Product, Color, and GSM */}
+    {/* Row 1 - Product, Color, and Size Type */}
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
       {/* Product - Only show when product category is selected */}
       {product.product_category_id && (
@@ -1446,7 +1468,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
             onValueChange={(value) => handleFabricSelect(productIndex, value)}
             disabled={false}
           >
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="Select product" />
             </SelectTrigger>
             <SelectContent>
@@ -1473,7 +1495,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
             value={product.color}
             onValueChange={(value) => handleColorSelect(productIndex, value)}
           >
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="Select color" />
             </SelectTrigger>
             <SelectContent>
@@ -1502,9 +1524,29 @@ const getSelectedFabricVariant = (productIndex: number) => {
           <Input
             placeholder="Select fabric first"
             disabled
-            className="bg-gray-50"
+            className="bg-gray-50 w-full"
           />
         )}
+      </div>
+
+      {/* Size Type */}
+      <div>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">Size Type</Label>
+        <Select
+          value={product.size_type_id}
+          onValueChange={(value) => handleSizeTypeSelect(productIndex, value)}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Select size type" />
+          </SelectTrigger>
+          <SelectContent>
+            {sizeTypes.map((sizeType) => (
+              <SelectItem key={sizeType.id} value={sizeType.id}>
+                {sizeType.size_name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* GSM - Hidden from UI but functionality remains intact */}
@@ -1545,58 +1587,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
         </div>
       </div>
     )}
-{/* <div className="space-y-3">
-                        <Label>Color</Label>
-                        {product.fabric_id ? (
-                          <Select
-                            value={product.color}
-                            onValueChange={(value) => handleColorSelect(productIndex, value)}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Select color" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                                          {fabricVariants
-                              .filter(variant => variant.fabric_id === product.fabric_id)
-                              .map((variant) => (
-                                <SelectItem key={variant.id} value={variant.color}>
-                                  {variant.color}
-                                </SelectItem>
-                              ))
-                            }
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Input
-                            value={product.color}
-                            onChange={(e) => setFormData(prev => ({
-                              ...prev,
-                              products: prev.products.map((p, i) => 
-                                i === productIndex ? { ...p, color: e.target.value } : p
-                              )
-                            }))}
-                            placeholder={product.product_category_id ? "Select fabric first to see available colors" : "Select category and fabric first"}
-                            disabled
-                          />
-                        )}
-                      </div> */}
-                      
-    {/* Size Type */}
-    <div>
-      <Label className="text-base font-semibold text-gray-700 mb-2 block">Size Type</Label>
-      <Button
-        type="button"
-        variant="outline"
-        className="w-full justify-start"
-        onClick={() => openSizeTypeSelector(productIndex)}
-      >
-        {product.size_type_id ? (
-          sizeTypes.find(st => st.id === product.size_type_id)?.size_name || "Select size type"
-        ) : (
-          "Select size type"
-        )}
-      </Button>
-    </div>
 
     {/* Customization Button */}
     <div>
@@ -1681,55 +1671,257 @@ const getSelectedFabricVariant = (productIndex: number) => {
               product.sizes_quantities || {},
               product.size_type_id,
               sizeTypes
-            ).map(([size, quantity]) => (
-              <div key={size} className="flex flex-col space-y-1 flex-shrink-0 flex-1 min-w-0">
-                <Label className="text-sm text-center font-medium">{size}</Label>
-                <Input
-                  type="number"
-                  value={quantity}
-                  onChange={(e) => {
-                    const newQuantity = parseInt(e.target.value) || 0;
-                    setFormData(prev => ({
-                      ...prev,
-                      products: prev.products.map((p, i) => 
-                        i === productIndex 
-                          ? { 
-                              ...p, 
-                              sizes_quantities: { 
-                                ...p.sizes_quantities, 
-                                [size]: newQuantity 
+            ).map(([size, quantity]) => {
+              const sizePrice = product.size_prices?.[size] ?? product.price;
+              const isCustomPrice = sizePrice !== product.price;
+              return (
+                <div key={size} className="flex flex-col space-y-1 flex-shrink-0 flex-1 min-w-0">
+                  <Label className="text-sm text-center font-medium">{size}</Label>
+                  <Input
+                    type="number"
+                    value={quantity}
+                    onChange={(e) => {
+                      const newQuantity = parseInt(e.target.value) || 0;
+                      setFormData(prev => ({
+                        ...prev,
+                        products: prev.products.map((p, i) => 
+                          i === productIndex 
+                            ? { 
+                                ...p, 
+                                sizes_quantities: { 
+                                  ...p.sizes_quantities, 
+                                  [size]: newQuantity 
+                                } 
                               } 
-                            } 
-                          : p
-                      )
-                    }));
-                  }}
-                  placeholder="0"
-                  className="w-full text-center text-sm px-2 py-1.5 h-9"
-                />
-              </div>
-            ))}
+                            : p
+                        )
+                      }));
+                    }}
+                    placeholder="0"
+                    className="w-full text-center text-sm px-2 py-1.5 h-9"
+                  />
+                  <div className="text-xs text-center text-gray-500 mt-0.5">
+                    ₹{sizePrice.toFixed(2)}
+                    {isCustomPrice && <span className="text-blue-600 ml-1">*</span>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Price */}
+      {/* Base Price */}
       <div>
-        <Label className="text-base font-semibold text-gray-700 mb-2 block">Price (INR)</Label>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">
+          Base Price (INR)
+          <span className="text-xs font-normal text-gray-500 ml-2">
+            (applies to all sizes by default)
+          </span>
+        </Label>
         <Input
           type="number"
           value={product.price}
-          onChange={(e) =>
+          onChange={(e) => {
+            const newPrice = parseFloat(e.target.value) || 0;
             setFormData((prev) => ({
               ...prev,
-              products: prev.products.map((p, i) =>
-                i === productIndex ? { ...p, price: parseFloat(e.target.value) || 0 } : p
-              ),
-            }))
-          }
-          placeholder="Enter price"
+              products: prev.products.map((p, i) => {
+                if (i === productIndex) {
+                  // Update base price
+                  const updatedProduct = { ...p, price: newPrice };
+                  // Update all size prices that match the old base price (non-customized sizes)
+                  if (p.size_prices) {
+                    const updatedSizePrices = { ...p.size_prices };
+                    const selectedSizes = selectedSizesForPriceEdit[productIndex] || [];
+                    Object.keys(updatedSizePrices).forEach(size => {
+                      // Only update if the size price matches the old base price AND it's not in the selected list (not customized)
+                      // If it's in selected list, it means user customized it, so don't auto-update
+                      if (updatedSizePrices[size] === p.price && !selectedSizes.includes(size)) {
+                        updatedSizePrices[size] = newPrice;
+                      }
+                    });
+                    updatedProduct.size_prices = updatedSizePrices;
+                  } else if (p.size_type_id) {
+                    // Initialize size_prices if not exists
+                    const sizeType = sizeTypes.find(st => st.id === p.size_type_id);
+                    const orderedSizes = getSortedSizes(sizeType || null);
+                    updatedProduct.size_prices = initializeSizePrices(orderedSizes, newPrice);
+                  }
+                  return updatedProduct;
+                }
+                return p;
+              }),
+            }));
+          }}
+          placeholder="Enter base price"
         />
       </div>
+
+      {/* Size-wise Prices */}
+      {product.size_type_id && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between mb-2">
+            <Label className="text-base font-semibold text-gray-700 block">
+              Size-wise Prices (INR)
+              <span className="text-xs font-normal text-gray-500 ml-2">
+                (select sizes to edit prices)
+              </span>
+            </Label>
+            <Popover 
+              open={sizePriceEditOpen[productIndex] || false}
+              onOpenChange={(open) => setSizePriceEditOpen(prev => ({ ...prev, [productIndex]: open }))}
+            >
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="sm" className="h-8">
+                  Select Sizes
+                  <ChevronDown className="ml-2 h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80">
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Select sizes to edit prices:</Label>
+                  <div className="grid grid-cols-3 gap-2 max-h-60 overflow-y-auto">
+                    {sortSizesQuantities(
+                      product.sizes_quantities || {},
+                      product.size_type_id,
+                      sizeTypes
+                    ).map(([size]) => {
+                      const selected = selectedSizesForPriceEdit[productIndex]?.includes(size) || false;
+                      return (
+                        <div key={size} className="flex items-center space-x-2">
+                          <Checkbox
+                            id={`size-${productIndex}-${size}`}
+                            checked={selected}
+                            onCheckedChange={(checked) => {
+                              const currentSelected = selectedSizesForPriceEdit[productIndex] || [];
+                              if (checked) {
+                                setSelectedSizesForPriceEdit(prev => ({
+                                  ...prev,
+                                  [productIndex]: [...currentSelected, size]
+                                }));
+                              } else {
+                                // When unchecking, remove the custom price (reset to base price)
+                                setFormData(prev => {
+                                  const updatedProducts = prev.products.map((p, i) => {
+                                    if (i === productIndex) {
+                                      const currentSizePrices = p.size_prices || {};
+                                      const updatedSizePrices = { ...currentSizePrices };
+                                      // Remove custom price - size will use base price
+                                      delete updatedSizePrices[size];
+                                      return {
+                                        ...p,
+                                        size_prices: Object.keys(updatedSizePrices).length > 0 ? updatedSizePrices : undefined
+                                      };
+                                    }
+                                    return p;
+                                  });
+                                  return {
+                                    ...prev,
+                                    products: updatedProducts
+                                  };
+                                });
+                                setSelectedSizesForPriceEdit(prev => ({
+                                  ...prev,
+                                  [productIndex]: currentSelected.filter(s => s !== size)
+                                }));
+                              }
+                            }}
+                          />
+                          <Label
+                            htmlFor={`size-${productIndex}-${size}`}
+                            className="text-sm font-normal cursor-pointer"
+                          >
+                            {size}
+                          </Label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
+          
+          {/* Single row display for selected sizes */}
+          {selectedSizesForPriceEdit[productIndex] && selectedSizesForPriceEdit[productIndex].length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {selectedSizesForPriceEdit[productIndex]
+                .sort((a, b) => {
+                  // Sort selected sizes in the same order as they appear in the size type
+                  const sortedSizes = sortSizesQuantities(
+                    product.sizes_quantities || {},
+                    product.size_type_id,
+                    sizeTypes
+                  ).map(([size]) => size);
+                  const indexA = sortedSizes.indexOf(a);
+                  const indexB = sortedSizes.indexOf(b);
+                  return indexA - indexB;
+                })
+                .map((size) => {
+                  // Get the current product from formData to ensure we have latest state
+                  const currentProduct = formData.products[productIndex];
+                  const basePrice = currentProduct?.price ?? product.price;
+                  // Get size price, defaulting to base price if not set or if it equals base price
+                  const storedPrice = currentProduct?.size_prices?.[size];
+                  const sizePrice = storedPrice !== undefined && storedPrice !== basePrice ? storedPrice : basePrice;
+                  const isCustomPrice = storedPrice !== undefined && storedPrice !== basePrice;
+                  return (
+                    <div key={size} className="flex flex-col space-y-1 flex-shrink-0 flex-1 min-w-0">
+                      <Label className="text-sm text-center font-medium">{size}</Label>
+                      <div className="relative">
+                        <Input
+                          type="number"
+                          value={sizePrice}
+                          onChange={(e) => {
+                            const newPrice = parseFloat(e.target.value) || 0;
+                            setFormData(prev => {
+                              const updatedProducts = prev.products.map((p, i) => {
+                                if (i === productIndex) {
+                                  // Ensure we have size_prices object
+                                  const currentSizePrices = p.size_prices || {};
+                                  // Only store if different from base price, otherwise remove it
+                                  const updatedSizePrices = { ...currentSizePrices };
+                                  if (newPrice === p.price) {
+                                    // If price equals base price, remove from size_prices (use base price)
+                                    delete updatedSizePrices[size];
+                                  } else {
+                                    // Store custom price
+                                    updatedSizePrices[size] = newPrice;
+                                  }
+                                  return {
+                                    ...p,
+                                    size_prices: Object.keys(updatedSizePrices).length > 0 ? updatedSizePrices : undefined
+                                  };
+                                }
+                                return p;
+                              });
+                              return {
+                                ...prev,
+                                products: updatedProducts
+                              };
+                            });
+                          }}
+                          placeholder="0"
+                          className={`w-full text-center text-sm px-2 py-1.5 h-9 ${isCustomPrice ? 'border-blue-500 bg-blue-50' : ''}`}
+                        />
+                        {isCustomPrice && (
+                          <div className="absolute -top-1 -right-1 h-2 w-2 bg-blue-500 rounded-full" title="Custom price" />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+          
+          {(!selectedSizesForPriceEdit[productIndex] || selectedSizesForPriceEdit[productIndex].length === 0) && (
+            <div className="text-sm text-gray-500 italic p-2 border border-dashed rounded">
+              No sizes selected. Click "Select Sizes" to choose which sizes to edit prices for.
+            </div>
+          )}
+        </div>
+      )}
                        {/* Product Description and Remarks */}
                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                          <div className="space-y-2">
@@ -2114,9 +2306,28 @@ const getSelectedFabricVariant = (productIndex: number) => {
                       <tbody>
                         {formData.products.map((product, index) => {
                           const totalQty = Object.values(product.sizes_quantities || {}).reduce((sum, qty) => sum + qty, 0);
-                          const amount = totalQty * product.price;
+                          // Use size-based pricing calculation
+                          const amount = calculateSizeBasedTotal(
+                            product.sizes_quantities || {},
+                            product.size_prices,
+                            product.price
+                          );
                           const gstAmount = (amount * (product.gst_rate || 0)) / 100;
                           const total = amount + gstAmount;
+                          
+                          // Group sizes by price for display
+                          const sizePriceGroups: { [price: string]: { sizes: string[], qty: number } } = {};
+                          Object.entries(product.sizes_quantities || {}).forEach(([size, qty]) => {
+                            if (qty > 0) {
+                              const sizePrice = product.size_prices?.[size] ?? product.price;
+                              const priceKey = sizePrice.toFixed(2);
+                              if (!sizePriceGroups[priceKey]) {
+                                sizePriceGroups[priceKey] = { sizes: [], qty: 0 };
+                              }
+                              sizePriceGroups[priceKey].sizes.push(size);
+                              sizePriceGroups[priceKey].qty += qty;
+                            }
+                          });
                           
                           return (
                             <tr key={index} className="hover:bg-gray-50">
@@ -2155,18 +2366,23 @@ const getSelectedFabricVariant = (productIndex: number) => {
                               </td>
                               <td className="border border-gray-300 px-3 py-2 text-sm">
                                 <div>{totalQty} Pcs</div>
-                                <div className="text-xs text-gray-600">
-                                  {sortSizesQuantities(
-                                    product.sizes_quantities || {},
-                                    product.size_type_id,
-                                    sizeTypes
-                                  )
-                                    .filter(([_, qty]) => qty > 0)
-                                    .map(([size, qty]) => `${size}-${qty}`)
-                                    .join(', ')}
+                                <div className="text-xs text-gray-600 space-y-1">
+                                  {Object.entries(sizePriceGroups).map(([price, group]) => (
+                                    <div key={price}>
+                                      {group.sizes.join(', ')}: {group.qty} @ ₹{parseFloat(price).toFixed(2)}
+                                    </div>
+                                  ))}
                                 </div>
                               </td>
-                              <td className="border border-gray-300 px-3 py-2 text-sm">₹{product.price}</td>
+                              <td className="border border-gray-300 px-3 py-2 text-sm">
+                                <div className="space-y-1">
+                                  {Object.entries(sizePriceGroups).map(([price, group]) => (
+                                    <div key={price} className="text-xs">
+                                      {group.sizes.join(', ')}: ₹{parseFloat(price).toFixed(2)}
+                                    </div>
+                                  ))}
+                                </div>
+                              </td>
                               <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(amount)}</td>
                               <td className="border border-gray-300 px-3 py-2 text-sm">
                                 <Input
@@ -2307,14 +2523,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
         </CardContent>
       </Card>
 
-      {/* Size Type Selector Popup */}
-      <SizeTypeSelector
-        sizeTypes={sizeTypes as any}
-        selectedSizeTypeId={formData.products[currentProductIndex]?.size_type_id || ''}
-        onSelect={(sizeTypeId) => handleSizeTypeSelect(currentProductIndex, sizeTypeId)}
-        open={sizeTypeSelectorOpen}
-        onOpenChange={setSizeTypeSelectorOpen}
-      />
 
       {/* Product Customization Modal */}
       <ProductCustomizationModal

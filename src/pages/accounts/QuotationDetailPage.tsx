@@ -11,6 +11,8 @@ import { formatCurrency, formatDateIndian } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
+import { calculateSizeBasedTotal } from '@/utils/priceCalculation';
+import { getSortedSizes, sortSizesQuantities as sortSizesQuantitiesUtil } from '@/utils/sizeSorting';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,6 +59,7 @@ interface OrderItem {
   unit_price: number;
   total_price: number;
   sizes_quantities: any;
+  size_prices?: { [size: string]: number };
   specifications: any;
   remarks: string;
   category_image_url?: string;
@@ -88,6 +91,7 @@ export default function QuotationDetailPage() {
   const [fabrics, setFabrics] = useState<{ [key: string]: Fabric }>({});
   const [additionalCharges, setAdditionalCharges] = useState<AdditionalCharge[]>([]);
   const [salesManager, setSalesManager] = useState<SalesManager | null>(null);
+  const [sizeTypes, setSizeTypes] = useState<{ [key: string]: any }>({});
 
   useEffect(() => {
     if (id) fetchData(id);
@@ -171,6 +175,18 @@ export default function QuotationDetailPage() {
           }
         }
       }
+      // Fetch size types for sorting
+      const { data: sizeTypesData } = await supabase
+        .from('size_types')
+        .select('*');
+      if (sizeTypesData) {
+        const sizeTypesMap = sizeTypesData.reduce((acc: { [key: string]: any }, sizeType: any) => {
+          acc[sizeType.id] = sizeType;
+          return acc;
+        }, {});
+        setSizeTypes(sizeTypesMap);
+      }
+      
       // Fetch additional charges if available (optional: you may need to fetch from order or another table)
       // For now, we'll just set it to an empty array as it's not directly linked to order_items in this schema
       setAdditionalCharges([]);
@@ -231,6 +247,23 @@ export default function QuotationDetailPage() {
         // If neither is in the predefined order, sort alphabetically
         return a.localeCompare(b);
       });
+  }
+
+  // Helper function to sort sizes based on size type
+  function sortSizesQuantities(
+    sizesQuantities: { [size: string]: number },
+    sizeTypeId: string | null,
+    sizeTypesMap: { [key: string]: any }
+  ): Array<[string, number]> {
+    if (!sizeTypeId || !sizeTypesMap[sizeTypeId]) {
+      return sortSizes(sizesQuantities);
+    }
+    const sizeType = sizeTypesMap[sizeTypeId];
+    // Convert map to array for getSortedSizesById, or use getSortedSizes directly
+    const sortedSizes = getSortedSizes(sizeType);
+    return sortedSizes
+      .map(size => [size, sizesQuantities[size] || 0] as [string, number])
+      .filter(([_, qty]) => qty > 0);
   }
 
   // Helper: number to words
@@ -779,9 +812,26 @@ export default function QuotationDetailPage() {
   if (!order || !customer) return <div>Quotation not found</div>;
 
   // Calculate totals
-  const subtotal = orderItems.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0);
+  const subtotal = orderItems.reduce((sum, item) => {
+    let amount = 0;
+    if (item.size_prices && item.sizes_quantities) {
+      amount = calculateSizeBasedTotal(item.sizes_quantities, item.size_prices, item.unit_price);
+    } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+      amount = calculateSizeBasedTotal(item.specifications.sizes_quantities, item.specifications.size_prices, item.unit_price);
+    } else {
+      amount = item.quantity * item.unit_price;
+    }
+    return sum + amount;
+  }, 0);
   const gstTotal = orderItems.reduce((sum, item) => {
-    const amount = item.quantity * item.unit_price;
+    let amount = 0;
+    if (item.size_prices && item.sizes_quantities) {
+      amount = calculateSizeBasedTotal(item.sizes_quantities, item.size_prices, item.unit_price);
+    } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+      amount = calculateSizeBasedTotal(item.specifications.sizes_quantities, item.specifications.size_prices, item.unit_price);
+    } else {
+      amount = item.quantity * item.unit_price;
+    }
     const gstRate = (item as any).gst_rate ?? 
                    ((item.specifications as any)?.gst_rate) ?? 
                    (order.gst_rate ?? 0);
@@ -1114,7 +1164,7 @@ export default function QuotationDetailPage() {
                         <tr className="bg-gray-100">
                           <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Product Details</th>
                           <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Qty</th>
-                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Rate</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Price</th>
                           <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Amount</th>
                           <th className="border border-gray-400 px-3 py-2 text-left font-semibold">GST</th>
                           <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Total</th>
@@ -1122,12 +1172,78 @@ export default function QuotationDetailPage() {
                       </thead>
                       <tbody>
                         {orderItems.map((item, idx) => {
-                          const amount = item.quantity * item.unit_price;
+                          // Get size_prices and sizes_quantities
+                          let sizePrices: { [size: string]: number } | undefined = undefined;
+                          let sizesQuantities: { [size: string]: number } | undefined = undefined;
+                          let sizeTypeId: string | null = null;
+                          
+                          if (item.size_prices && item.sizes_quantities) {
+                            sizePrices = item.size_prices;
+                            sizesQuantities = item.sizes_quantities;
+                            sizeTypeId = (item as any).size_type_id || null;
+                          } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                            sizePrices = item.specifications.size_prices;
+                            sizesQuantities = item.specifications.sizes_quantities;
+                            sizeTypeId = item.specifications.size_type_id || null;
+                          }
+                          
+                          let amount = 0;
+                          if (sizePrices && sizesQuantities) {
+                            amount = calculateSizeBasedTotal(sizesQuantities, sizePrices, item.unit_price);
+                          } else {
+                            amount = item.quantity * item.unit_price;
+                          }
+                          
                           const gstRate = (item as any).gst_rate ?? 
                                          ((item.specifications as any)?.gst_rate) ?? 
                                          (order?.gst_rate ?? 0);
                           const gstAmt = (amount * gstRate) / 100;
                           const total = amount + gstAmt;
+                          
+                          // Group sizes by price for display
+                          const sizePriceGroups: { [price: string]: { sizes: string[], qty: number } } = {};
+                          if (sizesQuantities) {
+                            Object.entries(sizesQuantities).forEach(([size, qty]) => {
+                              if (qty > 0) {
+                                const sizePrice = sizePrices?.[size] ?? item.unit_price;
+                                const priceKey = sizePrice.toFixed(2);
+                                if (!sizePriceGroups[priceKey]) {
+                                  sizePriceGroups[priceKey] = { sizes: [], qty: 0 };
+                                }
+                                sizePriceGroups[priceKey].sizes.push(size);
+                                sizePriceGroups[priceKey].qty += qty;
+                              }
+                            });
+                          }
+                          
+                          // Sort sizes within each group and then sort groups by price
+                          const sortedPriceGroups = Object.entries(sizePriceGroups)
+                            .map(([price, data]) => {
+                              let sortedSizes: string[] = [];
+                              if (sizeTypeId && sizeTypes[sizeTypeId]) {
+                                // Convert sizeTypes map to array for the utility function
+                                const sizeTypesArray = Object.values(sizeTypes);
+                                const sorted = sortSizesQuantitiesUtil(
+                                  data.sizes.reduce((acc, s) => ({ ...acc, [s]: 1 }), {}),
+                                  sizeTypeId,
+                                  sizeTypesArray
+                                );
+                                sortedSizes = sorted.map(([s]) => s);
+                              } else {
+                                sortedSizes = data.sizes.sort((a, b) => {
+                                  const order = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL'];
+                                  const indexA = order.indexOf(a);
+                                  const indexB = order.indexOf(b);
+                                  return (indexA === -1 ? 999 : indexA) - (indexB === -1 ? 999 : indexB);
+                                });
+                              }
+                              return {
+                                price: parseFloat(price),
+                                sizes: sortedSizes,
+                                qty: data.qty
+                              };
+                            })
+                            .sort((a, b) => a.price - b.price);
                           
                           // Parse specifications for readymade orders
                           let specs: any = {};
@@ -1198,11 +1314,31 @@ export default function QuotationDetailPage() {
                                   </div>
                                 </div>
                               </td>
-                              <td className="border border-gray-400 px-3 py-2 text-center">
-                                <div className="font-semibold">{item.quantity}</div>
-                                <div className="text-sm">Pcs</div>
+                              <td className="border border-gray-400 px-3 py-2 text-sm">
+                                <div className="font-semibold">{item.quantity} Pcs</div>
+                                {sortedPriceGroups.length > 0 && (
+                                  <div className="text-xs text-gray-600 space-y-1 mt-1">
+                                    {sortedPriceGroups.map((group, groupIndex) => (
+                                      <div key={groupIndex}>
+                                        {group.sizes.join(', ')}: {group.qty} @ ₹{group.price.toFixed(2)}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                               </td>
-                              <td className="border border-gray-400 px-3 py-2 text-right">{formatCurrency(item.unit_price)}</td>
+                              <td className="border border-gray-400 px-3 py-2 text-sm">
+                                {sortedPriceGroups.length > 0 ? (
+                                  <div className="text-xs text-gray-700 space-y-1">
+                                    {sortedPriceGroups.map((group, groupIndex) => (
+                                      <div key={groupIndex}>
+                                        ₹{group.price.toFixed(2)}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  formatCurrency(item.unit_price)
+                                )}
+                              </td>
                               <td className="border border-gray-400 px-3 py-2 text-right">{formatCurrency(amount)}</td>
                               <td className="border border-gray-400 px-3 py-2 text-center">
                                 <div className="text-sm">{gstRate}%</div>
@@ -1223,12 +1359,29 @@ export default function QuotationDetailPage() {
                     <div className="w-80 space-y-2">
                       <div className="flex justify-between">
                         <span>Subtotal:</span>
-                        <span>{formatCurrency(orderItems.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0))}</span>
+                        <span>{formatCurrency(orderItems.reduce((sum, item) => {
+                          let amount = 0;
+                          if (item.size_prices && item.sizes_quantities) {
+                            amount = calculateSizeBasedTotal(item.sizes_quantities, item.size_prices, item.unit_price);
+                          } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                            amount = calculateSizeBasedTotal(item.specifications.sizes_quantities, item.specifications.size_prices, item.unit_price);
+                          } else {
+                            amount = item.quantity * item.unit_price;
+                          }
+                          return sum + amount;
+                        }, 0))}</span>
                       </div>
                       <div className="flex justify-between">
                         <span>GST Total:</span>
                         <span>{formatCurrency(orderItems.reduce((sum, item) => {
-                          const amount = item.quantity * item.unit_price;
+                          let amount = 0;
+                          if (item.size_prices && item.sizes_quantities) {
+                            amount = calculateSizeBasedTotal(item.sizes_quantities, item.size_prices, item.unit_price);
+                          } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                            amount = calculateSizeBasedTotal(item.specifications.sizes_quantities, item.specifications.size_prices, item.unit_price);
+                          } else {
+                            amount = item.quantity * item.unit_price;
+                          }
                           const gstRate = (item as any).gst_rate ?? ((item.specifications as any)?.gst_rate) ?? (order?.gst_rate ?? 0);
                           return sum + (amount * gstRate) / 100;
                         }, 0))}</span>
@@ -1396,7 +1549,7 @@ export default function QuotationDetailPage() {
                     <tr className="bg-gray-100">
                           <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Product Details</th>
                           <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Qty</th>
-                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Rate</th>
+                          <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Price</th>
                           <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Amount</th>
                           <th className="border border-gray-400 px-3 py-2 text-left font-semibold">GST</th>
                           <th className="border border-gray-400 px-3 py-2 text-left font-semibold">Total</th>
@@ -1505,12 +1658,29 @@ export default function QuotationDetailPage() {
                     <div className="w-80 space-y-2">
                       <div className="flex justify-between">
                       <span>Subtotal:</span>
-                        <span>{formatCurrency(orderItems.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0))}</span>
+                        <span>{formatCurrency(orderItems.reduce((sum, item) => {
+                          let amount = 0;
+                          if (item.size_prices && item.sizes_quantities) {
+                            amount = calculateSizeBasedTotal(item.sizes_quantities, item.size_prices, item.unit_price);
+                          } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                            amount = calculateSizeBasedTotal(item.specifications.sizes_quantities, item.specifications.size_prices, item.unit_price);
+                          } else {
+                            amount = item.quantity * item.unit_price;
+                          }
+                          return sum + amount;
+                        }, 0))}</span>
                     </div>
                       <div className="flex justify-between">
                       <span>GST Total:</span>
                         <span>{formatCurrency(orderItems.reduce((sum, item) => {
-                          const amount = item.quantity * item.unit_price;
+                          let amount = 0;
+                          if (item.size_prices && item.sizes_quantities) {
+                            amount = calculateSizeBasedTotal(item.sizes_quantities, item.size_prices, item.unit_price);
+                          } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                            amount = calculateSizeBasedTotal(item.specifications.sizes_quantities, item.specifications.size_prices, item.unit_price);
+                          } else {
+                            amount = item.quantity * item.unit_price;
+                          }
                           const gstRate = (item as any).gst_rate ?? ((item.specifications as any)?.gst_rate) ?? (order?.gst_rate ?? 0);
                           return sum + (amount * gstRate) / 100;
                         }, 0))}</span>

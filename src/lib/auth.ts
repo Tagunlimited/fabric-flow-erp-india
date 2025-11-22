@@ -115,7 +115,7 @@ export const authService = {
         .select('id, user_id, full_name, email, role, phone, department, status, avatar_url, created_at, updated_at')
         .eq('user_id', userId)
         .maybeSingle();
-      
+
       const queryTimeout = new Promise<{ data: null, error: { message: string, code?: string } }>((resolve) => {
         setTimeout(() => {
           resolve({ data: null, error: { message: 'Query timeout', code: 'TIMEOUT' } });

@@ -19,6 +19,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { cn, formatCurrency } from '@/lib/utils';
 import { usePageState } from '@/contexts/AppCacheContext';
+import { initializeSizePrices, calculateSizeBasedTotal, calculateAverageUnitPrice } from '@/utils/priceCalculation';
+import { getSortedSizes } from '@/utils/sizeSorting';
 
 interface Customer {
   id: string;
@@ -93,6 +95,8 @@ interface OrderProduct {
   category?: string; // Category from product_master
   quantity: number; // Total quantity (sum of sizes_quantities)
   sizes_quantities: { [size: string]: number }; // Size-wise quantities
+  size_prices?: { [size: string]: number }; // Size-wise prices
+  size_type_id?: string; // Size type ID for size-based pricing
   unit_price: number;
   gst_rate: number;
   total_price: number;
@@ -447,6 +451,9 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
           product.gst_rate = firstProduct.gst_rate || 0;
           // Initialize sizes_quantities for this class
           product.sizes_quantities = initializeSizesQuantities(selectedClass.class);
+          // Initialize size_prices with base price
+          const availableSizes = getAvailableSizesForClass(selectedClass.class);
+          product.size_prices = initializeSizePrices(availableSizes, product.unit_price);
           product.quantity = 0;
           product.total_price = 0;
         }
@@ -463,9 +470,30 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
         product.total_price = (product.unit_price * product.quantity) * (1 + (product.gst_rate / 100));
       }
     } else if (field === 'unit_price') {
+      const oldPrice = product.unit_price;
       product.unit_price = parseFloat(value) || 0;
+      // Update all size prices that match the old base price
+      if (product.size_prices) {
+        const updatedSizePrices = { ...product.size_prices };
+        Object.keys(updatedSizePrices).forEach(size => {
+          if (updatedSizePrices[size] === oldPrice) {
+            updatedSizePrices[size] = product.unit_price;
+          }
+        });
+        product.size_prices = updatedSizePrices;
+      } else if (product.class) {
+        // Initialize size_prices if not exists
+        const availableSizes = getAvailableSizesForClass(product.class);
+        product.size_prices = initializeSizePrices(availableSizes, product.unit_price);
+      }
       product.quantity = updateTotalQuantity(product);
-      product.total_price = (product.unit_price * product.quantity) * (1 + (product.gst_rate / 100));
+      // Calculate total using size-based pricing
+      const itemTotal = calculateSizeBasedTotal(
+        product.sizes_quantities || {},
+        product.size_prices,
+        product.unit_price
+      );
+      product.total_price = itemTotal * (1 + (product.gst_rate / 100));
     }
 
     updatedProducts[index] = product;
@@ -485,8 +513,13 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
     // Update total quantity
     product.quantity = updateTotalQuantity(product);
     
-    // Update total price
-    product.total_price = (product.unit_price * product.quantity) * (1 + (product.gst_rate / 100));
+    // Update total price using size-based pricing
+    const itemTotal = calculateSizeBasedTotal(
+      product.sizes_quantities || {},
+      product.size_prices,
+      product.unit_price
+    );
+    product.total_price = itemTotal * (1 + (product.gst_rate / 100));
     
     updatedProducts[productIndex] = product;
     setFormData({ ...formData, products: updatedProducts });
@@ -709,17 +742,20 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
 
   const calculateTotals = () => {
     const subtotal = formData.products.reduce((sum, p) => {
-      // Calculate quantity from sizes_quantities if available, otherwise use quantity
-      const qty = Object.keys(p.sizes_quantities || {}).length > 0 
-        ? Object.values(p.sizes_quantities).reduce((qtySum, q) => qtySum + q, 0)
-        : p.quantity;
-      return sum + (p.unit_price * qty);
+      // Use size-based pricing if available, otherwise fall back to old calculation
+      const productTotal = calculateSizeBasedTotal(
+        p.sizes_quantities || {},
+        p.size_prices,
+        p.unit_price
+      );
+      return sum + productTotal;
     }, 0);
     const gstAmount = formData.products.reduce((sum, p) => {
-      const qty = Object.keys(p.sizes_quantities || {}).length > 0 
-        ? Object.values(p.sizes_quantities).reduce((qtySum, q) => qtySum + q, 0)
-        : p.quantity;
-      const productTotal = p.unit_price * qty;
+      const productTotal = calculateSizeBasedTotal(
+        p.sizes_quantities || {},
+        p.size_prices,
+        p.unit_price
+      );
       return sum + (productTotal * (p.gst_rate / 100));
     }, 0);
     // Removed additional charges and advance amount as per custom order form
@@ -874,6 +910,20 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
           ? Object.values(product.sizes_quantities).reduce((sum, qty) => sum + qty, 0)
           : product.quantity;
 
+        // Calculate item total using size-based pricing
+        const itemTotal = calculateSizeBasedTotal(
+          product.sizes_quantities || {},
+          product.size_prices,
+          product.unit_price
+        );
+
+        // Calculate average unit price for backward compatibility
+        const avgUnitPrice = calculateAverageUnitPrice(
+          product.sizes_quantities || {},
+          product.size_prices,
+          product.unit_price
+        );
+
         // Get class image for this product
         const classImage = getClassImage(product.class);
 
@@ -884,10 +934,11 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
             order_id: orderData.id,
             product_id: null,
             quantity: totalQuantity,
-            unit_price: product.unit_price,
-            total_price: product.total_price,
+            unit_price: Number(avgUnitPrice), // Average for backward compatibility
+            total_price: Number(itemTotal),
             gst_rate: product.gst_rate,
             product_description: product.product_name,
+            size_prices: product.size_prices || {}, // Store size-wise prices
             specifications: {
               product_master_id: product.product_master_id,
               product_id: product.product_id,
@@ -897,6 +948,7 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
               color: product.color,
               category: product.category,
               sizes_quantities: product.sizes_quantities || {},
+              size_prices: product.size_prices || {}, // Also store in specifications for easy access
               order_type: 'readymade',
               class_image: classImage, // Store class image
               branding_items: product.branding_items || [],
@@ -1292,8 +1344,14 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
                   </div>
                 )}
 
+                {/* Base Price */}
                 <div className="space-y-2">
-                  <Label>Unit Price *</Label>
+                  <Label>
+                    Base Price (INR) *
+                    <span className="text-xs font-normal text-gray-500 ml-2">
+                      (applies to all sizes by default)
+                    </span>
+                  </Label>
                   <Input
                     type="number"
                     min="0"
@@ -1302,6 +1360,60 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
                     onChange={(e) => updateProduct(index, 'unit_price', e.target.value)}
                   />
                 </div>
+
+                {/* Size-wise Prices */}
+                {product.class && product.size_prices && getAvailableSizesForClass(product.class).length > 0 && (
+                  <div className="space-y-2 md:col-span-4">
+                    <Label className="text-base font-semibold">
+                      Size-wise Prices (INR)
+                      <span className="text-xs font-normal text-gray-500 ml-2">
+                        (override individual sizes as needed)
+                      </span>
+                    </Label>
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 p-4 border rounded-lg bg-muted/30">
+                      {getAvailableSizesForClass(product.class).map((size) => {
+                        const sizePrice = product.size_prices?.[size] ?? product.unit_price;
+                        const isCustomPrice = sizePrice !== product.unit_price;
+                        return (
+                          <div key={size} className="space-y-1">
+                            <Label className="text-sm font-medium">{size}</Label>
+                            <div className="relative">
+                              <Input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={sizePrice}
+                                onChange={(e) => {
+                                  const newPrice = parseFloat(e.target.value) || 0;
+                                  const updatedProducts = [...formData.products];
+                                  const updatedProduct = { ...updatedProducts[index] };
+                                  updatedProduct.size_prices = {
+                                    ...(updatedProduct.size_prices || {}),
+                                    [size]: newPrice
+                                  };
+                                  // Recalculate total
+                                  const itemTotal = calculateSizeBasedTotal(
+                                    updatedProduct.sizes_quantities || {},
+                                    updatedProduct.size_prices,
+                                    updatedProduct.unit_price
+                                  );
+                                  updatedProduct.total_price = itemTotal * (1 + (updatedProduct.gst_rate / 100));
+                                  updatedProducts[index] = updatedProduct;
+                                  setFormData({ ...formData, products: updatedProducts });
+                                }}
+                                placeholder="0"
+                                className={`text-center ${isCustomPrice ? 'border-blue-500 bg-blue-50' : ''}`}
+                              />
+                              {isCustomPrice && (
+                                <div className="absolute -top-1 -right-1 h-2 w-2 bg-blue-500 rounded-full" title="Custom price" />
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-4 text-sm border-t pt-2">
