@@ -189,7 +189,8 @@ export function PurchaseOrderDashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow className="[&>th]:align-middle">
-                        <TableHead className="w-[40%] text-left">BOM</TableHead>
+                        <TableHead className="w-[20%] text-left">Order Number</TableHead>
+                        <TableHead className="w-[20%] text-left">BOM</TableHead>
                         <TableHead className="w-[18%] text-right">Required</TableHead>
                         <TableHead className="w-[18%] text-right">Ordered</TableHead>
                         <TableHead className="w-[18%] text-right">Remaining</TableHead>
@@ -201,7 +202,10 @@ export function PurchaseOrderDashboard() {
                         .sort((a, b) => a.bom_number.localeCompare(b.bom_number))
                         .map(item => (
                           <TableRow key={item.bom_item_id} className="[&>td]:align-middle">
-                            <TableCell className="w-[40%]">
+                            <TableCell className="w-[20%]">
+                              <div className="font-medium">{item.order_number || 'N/A'}</div>
+                            </TableCell>
+                            <TableCell className="w-[20%]">
                               <div className="font-medium">{item.bom_number}</div>
                               <div className="text-xs text-muted-foreground">{item.product_name || 'Unnamed Product'}</div>
                             </TableCell>

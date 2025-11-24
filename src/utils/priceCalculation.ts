@@ -44,3 +44,43 @@ export function initializeSizePrices(
   return sizePrices;
 }
 
+/**
+ * Calculate order summary (subtotal, GST, grand total) from order items
+ * Handles size-based pricing and backward compatibility
+ */
+export function calculateOrderSummary(orderItems: any[], order: any | null) {
+  let subtotal = 0;
+  let gstAmount = 0;
+  orderItems.forEach(item => {
+    let amount = 0;
+    // Check if size-based pricing is available (new format)
+    if (item.size_prices && item.sizes_quantities) {
+      // New format: size-wise pricing
+      amount = calculateSizeBasedTotal(
+        item.sizes_quantities,
+        item.size_prices,
+        item.unit_price
+      );
+    } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+      // Also check in specifications (for backward compatibility)
+      amount = calculateSizeBasedTotal(
+        item.specifications.sizes_quantities,
+        item.specifications.size_prices,
+        item.unit_price
+      );
+    } else {
+      // Old format: single unit_price (backward compatibility)
+      amount = item.quantity * item.unit_price;
+    }
+    
+    subtotal += amount;
+    // Try to get GST rate from item.gst_rate first, then from specifications, then from order
+    const gstRate = item.gst_rate ?? 
+                   (item.specifications?.gst_rate) ?? 
+                   (order?.gst_rate ?? 0);
+    gstAmount += (amount * gstRate) / 100;
+  });
+
+  return { subtotal, gstAmount, grandTotal: subtotal + gstAmount };
+}
+

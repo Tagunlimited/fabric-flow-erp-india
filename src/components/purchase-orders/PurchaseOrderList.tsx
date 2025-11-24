@@ -84,11 +84,17 @@ const PurchaseOrderRow = memo(function PurchaseOrderRow({
       </TableCell>
       <TableCell>{po.order_date ? format(new Date(po.order_date), 'dd MMM yyyy') : '-'}</TableCell>
       <TableCell>
-        <ItemImage 
-          src={imageUrl} 
-          alt="item" 
-          className="w-12 h-12 object-cover rounded"
-        />
+        {imageUrl ? (
+          <ItemImage 
+            src={imageUrl} 
+            alt="item" 
+            className="w-12 h-12 object-cover rounded"
+          />
+        ) : (
+          <div className="w-12 h-12 flex items-center justify-center bg-muted rounded text-xs text-muted-foreground font-medium">
+            NA
+          </div>
+        )}
       </TableCell>
       <TableCell>
         <div className="text-sm space-y-1">

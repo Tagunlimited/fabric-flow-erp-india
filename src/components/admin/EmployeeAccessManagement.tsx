@@ -96,7 +96,25 @@ export function EmployeeAccessManagement() {
   const [sidebarItems, setSidebarItems] = useState<SidebarItem[]>([]);
   const [userSidebarPermissions, setUserSidebarPermissions] = useState<UserSidebarPermission[]>([]);
   const [showSidebarPermissions, setShowSidebarPermissions] = useState<string | null>(null);
+  
+  // Clear pending changes when dialog closes
+  const handleSidebarPermissionsDialogChange = (open: boolean) => {
+    if (!open) {
+      // Clear pending changes when closing
+      if (showSidebarPermissions) {
+        setPendingPermissionChanges(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(showSidebarPermissions);
+          return newMap;
+        });
+      }
+      setShowSidebarPermissions(null);
+    }
+  };
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
+  // Track pending permission changes before saving
+  const [pendingPermissionChanges, setPendingPermissionChanges] = useState<Map<string, Map<string, { canView: boolean; canEdit: boolean }>>>(new Map());
+  const [savingPermissions, setSavingPermissions] = useState(false);
 
 
 
@@ -671,87 +689,28 @@ export function EmployeeAccessManagement() {
     try {
       setProcessingUser('creating');
       
-      // Create user account using admin signup (doesn't auto-login)
-      let authData, authError;
-      
-      try {
-        // Store current admin session before creating user
-        const { data: currentSession } = await supabase.auth.getSession();
-        const adminUserId = currentSession?.session?.user?.id;
-        
-        if (!adminUserId) {
-          throw new Error('Admin session not found. Please log in again.');
-        }
-        
-        // Try to use admin API first (if available)
-        try {
-          const adminResult = await supabase.auth.admin.createUser({
-            email: newUserData.email,
-            password: newUserData.password,
-            email_confirm: true,
-            user_metadata: {
-              full_name: selectedEmployee.full_name,
-              phone: selectedEmployee.personal_phone,
-              department: selectedEmployee.department,
-              created_by_admin: true
-            }
-          });
-          
-          if (adminResult.error) {
-            throw adminResult.error;
-          }
-          
-          authData = adminResult.data;
-          authError = null;
-        } catch (adminError: any) {
-          // Fallback to signup if admin API not available
-          console.warn('Admin API not available, using signup:', adminError);
-        const signupResult = await supabase.auth.signUp({
-          email: newUserData.email,
-          password: newUserData.password,
-          options: {
-            data: {
-              full_name: selectedEmployee.full_name,
-              phone: selectedEmployee.personal_phone,
-              department: selectedEmployee.department,
-                created_by_admin: true
-            },
-            emailRedirectTo: `${window.location.origin}/login`
-          }
-        });
-        authData = signupResult.data;
-        authError = signupResult.error;
-        
-        // Immediately sign out the new user and restore admin session
-        if (authData?.user) {
-          await supabase.auth.signOut();
-          // Restore admin session
-          if (currentSession?.session) {
-            await supabase.auth.setSession(currentSession.session);
-            }
-          }
-        }
-        
-        if (authError) {
-          throw new Error(`Account creation failed: ${authError.message}`);
-        }
-      } catch (signupError: any) {
-        console.error('Signup failed:', signupError);
-        throw new Error(signupError.message || 'Unable to create user account. Please try again or contact your system administrator.');
-      }
+      // Use database function to create user account (uses SECURITY DEFINER, no auto-login)
+      // This function is already in the database and doesn't require edge function deployment
+      const { data: createdUserId, error: rpcError } = await supabase.rpc('create_employee_user_account', {
+        p_email: newUserData.email,
+        p_password: newUserData.password,
+        p_full_name: selectedEmployee.full_name,
+        p_role: 'employee', // Default role for employees
+        p_phone: selectedEmployee.personal_phone || null,
+        p_department: selectedEmployee.department || null
+      });
 
-      // Handle the result after restoring admin session
-      if (authError) {
-        // If user already exists, try to find their user_id and create profile
-        if (authError.message?.includes('already registered') || authError.message?.includes('already exists')) {
-          // Try to get user by email from profiles table
+      if (rpcError) {
+        // Handle "user already exists" case
+        if (rpcError.message?.includes('already registered') || rpcError.message?.includes('already exists') || rpcError.message?.includes('duplicate')) {
+          // Try to find existing user and update their profile
           const { data: existingProfile } = await supabase
             .from('profiles')
             .select('user_id')
             .eq('email', newUserData.email as any)
-            .single();
+            .maybeSingle();
 
-          if (existingProfile && 'user_id' in existingProfile) {
+          if (existingProfile?.user_id) {
             // Update existing profile
             const { error: profileError } = await supabase
               .from('profiles')
@@ -760,79 +719,42 @@ export function EmployeeAccessManagement() {
                 phone: selectedEmployee.personal_phone,
                 department: selectedEmployee.department,
                 role: 'employee',
-                status: 'approved'
+                status: 'approved',
+                email: newUserData.email
               } as any)
-              .eq('user_id', (existingProfile as any).user_id);
+              .eq('user_id', existingProfile.user_id);
 
             if (profileError) {
               throw new Error(profileError.message || 'Failed to update user profile');
             }
 
-            // Set up default permissions for the existing employee if they don't have any
-            await setupDefaultEmployeePermissions((existingProfile as any).user_id);
-
-            toast.success('Employee profile updated successfully!');
+            // Set up default permissions
+            await setupDefaultEmployeePermissions(existingProfile.user_id);
+            toast.success('Employee access granted successfully!');
           } else {
             throw new Error('User exists but no profile found. Please contact administrator.');
           }
         } else {
-          throw new Error(authError.message || 'Failed to create user account');
+          throw new Error(rpcError.message || 'Failed to create user account');
         }
-      } else if (authData.user) {
-        // New user created successfully, create profile
-        // Note: We already signed out the new user and restored admin session above
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-            user_id: authData.user.id,
-            full_name: selectedEmployee.full_name,
-            email: newUserData.email,
-            phone: selectedEmployee.personal_phone,
-            department: selectedEmployee.department,
-            role: 'employee',
-            status: 'approved'
-          } as any);
-
-        if (profileError) {
-          throw new Error(profileError.message || 'Failed to create user profile');
-        }
-
+      } else if (createdUserId) {
+        // User created successfully via database function
         // Set up default permissions for the new employee
-        await setupDefaultEmployeePermissions(authData.user.id);
-
-        // Send welcome email with credentials
-        try {
-          // Use Supabase's email service to send welcome email
-          // Note: This requires email templates to be configured in Supabase dashboard
-          const { error: emailError } = await supabase.functions.invoke('send-welcome-email', {
-            body: {
-              email: newUserData.email,
-              password: newUserData.password,
-              full_name: selectedEmployee.full_name,
-              employee_name: selectedEmployee.full_name
-            }
-          });
-          
-          if (emailError) {
-            console.warn('Failed to send welcome email:', emailError);
-            // Don't fail the entire operation if email fails
-            toast.success(`Employee account created! Email: ${newUserData.email}, Password: [provided during creation]. Welcome email may not have been sent.`);
-        } else {
-            toast.success('Employee account created successfully! Welcome email with credentials has been sent.');
-          }
-        } catch (emailErr) {
-          // If email function doesn't exist or fails, just show success message
-          console.warn('Email sending not available:', emailErr);
-          toast.success(`Employee account created successfully! Email: ${newUserData.email}. They can login immediately with the provided credentials.`);
-        }
+        await setupDefaultEmployeePermissions(createdUserId);
+        
+        // Show success message
+        toast.success(`Employee account created successfully! Email: ${newUserData.email}. They can login immediately with the provided credentials.`);
       } else {
-        throw new Error('User creation failed - no user data returned');
+        throw new Error('User creation failed - no user ID returned');
       }
 
       setShowCreateForm(false);
       setGrantAccessSource(null);
       setNewUserData({ email: '', password: '', confirmPassword: '' });
       setSelectedEmployee(null);
+      
+      // Wait a bit for the database to be ready, then refresh
+      await new Promise(resolve => setTimeout(resolve, 500));
       await fetchData();
     } catch (error: any) {
       console.error('Error creating user account:', error);
@@ -903,7 +825,7 @@ export function EmployeeAccessManagement() {
     }
   };
 
-  const updateUserSidebarPermission = async (userId: string, sidebarItemId: string, canView: boolean, canEdit: boolean) => {
+  const updateUserSidebarPermission = async (userId: string, sidebarItemId: string, canView: boolean, canEdit: boolean, skipRefresh = false) => {
     try {
       // Find the item being updated to check if it has a parent
       const findItemWithParent = (items: SidebarItem[]): SidebarItem | null => {
@@ -933,8 +855,10 @@ export function EmployeeAccessManagement() {
           throw deleteError;
         }
         
-        toast.success('Permission removed successfully');
-        await fetchData();
+        if (!skipRefresh) {
+          toast.success('Permission removed successfully');
+          await fetchData();
+        }
         return;
       }
       
@@ -1030,8 +954,10 @@ export function EmployeeAccessManagement() {
         }
       }
       
-        toast.success('Permission granted! Parent menu access also granted.');
-      await fetchData();
+        if (!skipRefresh) {
+          toast.success('Permission granted! Parent menu access also granted.');
+          await fetchData();
+        }
       }
     } catch (error) {
       console.error('Error updating sidebar permission:', error);
@@ -1064,15 +990,21 @@ export function EmployeeAccessManagement() {
 
   const renderSidebarItem = (item: SidebarItem, userId: string, level = 0) => {
     const permission = getUserSidebarPermission(userId, item.id);
-    // Only show checked if explicit user override exists (is_override: true)
-    let canView = permission?.can_view ?? false;
-    const canEdit = permission?.can_edit ?? false;
+    // Check if there's a pending change for this item
+    const pendingChanges = pendingPermissionChanges.get(userId);
+    const pendingChange = pendingChanges?.get(item.id);
+    
+    // Use pending change if exists, otherwise use saved permission
+    let canView = pendingChange?.canView ?? (permission?.can_view ?? false);
+    const canEdit = pendingChange?.canEdit ?? (permission?.can_edit ?? false);
 
     // If this item has children and any child is selected, also check the parent
     if (item.children && item.children.length > 0) {
       const hasChildSelected = item.children.some(child => {
+        const childPendingChanges = pendingPermissionChanges.get(userId);
+        const childPendingChange = childPendingChanges?.get(child.id);
         const childPermission = getUserSidebarPermission(userId, child.id);
-        return childPermission?.can_view ?? false;
+        return childPendingChange?.canView ?? (childPermission?.can_view ?? false);
       });
       if (hasChildSelected && !canView) {
         canView = true; // Show parent as checked if any child is checked
@@ -1092,7 +1024,16 @@ export function EmployeeAccessManagement() {
             type="checkbox"
             checked={canView}
             onChange={(e) => {
-              updateUserSidebarPermission(userId, item.id, e.target.checked, canEdit);
+              // Update pending changes instead of saving immediately
+              setPendingPermissionChanges(prev => {
+                const newMap = new Map(prev);
+                if (!newMap.has(userId)) {
+                  newMap.set(userId, new Map());
+                }
+                const userChanges = newMap.get(userId)!;
+                userChanges.set(item.id, { canView: e.target.checked, canEdit });
+                return newMap;
+              });
             }}
             className="rounded w-4 h-4"
           />
@@ -1693,7 +1634,7 @@ export function EmployeeAccessManagement() {
       </Card>
 
       {/* Sidebar Permissions Dialog */}
-      <Dialog open={!!showSidebarPermissions} onOpenChange={() => setShowSidebarPermissions(null)}>
+      <Dialog open={!!showSidebarPermissions} onOpenChange={handleSidebarPermissionsDialogChange}>
         <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
@@ -1853,7 +1794,11 @@ export function EmployeeAccessManagement() {
                           Click "🔄 Sync Sub-Menus" button above to load sub-menu items
                         </div>
                       )}
-                      {sidebarItems.map(item => renderSidebarItem(item, showSidebarPermissions))}
+                      {sidebarItems.map(item => (
+                        <React.Fragment key={item.id}>
+                          {renderSidebarItem(item, showSidebarPermissions)}
+                        </React.Fragment>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -1894,6 +1839,78 @@ export function EmployeeAccessManagement() {
               </div>
             </div>
           )}
+          
+          {/* Save/Cancel buttons */}
+          <div className="flex items-center justify-between pt-4 border-t">
+            <div className="text-sm text-muted-foreground">
+              {showSidebarPermissions && pendingPermissionChanges.get(showSidebarPermissions)?.size ? (
+                <span className="text-amber-600">
+                  {pendingPermissionChanges.get(showSidebarPermissions)!.size} unsaved change{pendingPermissionChanges.get(showSidebarPermissions)!.size !== 1 ? 's' : ''}
+                </span>
+              ) : (
+                <span>No unsaved changes</span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  // Clear pending changes for this user
+                  if (showSidebarPermissions) {
+                    setPendingPermissionChanges(prev => {
+                      const newMap = new Map(prev);
+                      newMap.delete(showSidebarPermissions);
+                      return newMap;
+                    });
+                  }
+                  setShowSidebarPermissions(null);
+                }}
+                disabled={savingPermissions}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={async () => {
+                  if (!showSidebarPermissions) return;
+                  
+                  const changes = pendingPermissionChanges.get(showSidebarPermissions);
+                  if (!changes || changes.size === 0) {
+                    toast.info('No changes to save');
+                    return;
+                  }
+                  
+                  setSavingPermissions(true);
+                  try {
+                    // Save all pending changes sequentially to avoid conflicts
+                    // Pass skipRefresh=true to avoid multiple refreshes and toast messages
+                    for (const [sidebarItemId, { canView, canEdit }] of changes.entries()) {
+                      await updateUserSidebarPermission(showSidebarPermissions, sidebarItemId, canView, canEdit, true);
+                    }
+                    
+                    // Refresh data once after all changes are saved
+                    await fetchData();
+                    
+                    // Clear pending changes after successful save
+                    setPendingPermissionChanges(prev => {
+                      const newMap = new Map(prev);
+                      newMap.delete(showSidebarPermissions);
+                      return newMap;
+                    });
+                    
+                    toast.success(`Successfully saved ${changes.size} permission change${changes.size !== 1 ? 's' : ''}`);
+                  } catch (error) {
+                    console.error('Error saving permissions:', error);
+                    toast.error('Failed to save some permissions. Please try again.');
+                  } finally {
+                    setSavingPermissions(false);
+                  }
+                }}
+                disabled={savingPermissions || !showSidebarPermissions || !pendingPermissionChanges.get(showSidebarPermissions)?.size}
+              >
+                {savingPermissions ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

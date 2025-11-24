@@ -28,6 +28,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { calculateOrderSummary } from '@/utils/priceCalculation';
 
 interface Order {
   id: string;
@@ -48,6 +49,8 @@ interface Order {
   total_amount: number;
   final_amount: number;
   balance_amount: number;
+  gst_rate?: number;
+  calculatedAmount?: number;
 }
 
 const OrdersPage = () => {
@@ -103,6 +106,40 @@ const OrdersPage = () => {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
+
+      // Calculate correct amounts for each order using size-based pricing
+      const ordersWithCalculatedAmounts = await Promise.all(
+        (data || []).map(async (order) => {
+          try {
+            // Fetch order items with size_prices and sizes_quantities
+            const { data: orderItems, error: itemsError } = await supabase
+              .from('order_items')
+              .select('id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate')
+              .eq('order_id', order.id);
+
+            if (!itemsError && orderItems && orderItems.length > 0) {
+              // Calculate the correct total using size-based pricing
+              const { grandTotal } = calculateOrderSummary(orderItems, order);
+              return {
+                ...order,
+                calculatedAmount: grandTotal
+              };
+            } else {
+              // Fallback to final_amount if no items found
+              return {
+                ...order,
+                calculatedAmount: order.final_amount
+              };
+            }
+          } catch (error) {
+            console.error(`Error calculating amount for order ${order.order_number}:`, error);
+            return {
+              ...order,
+              calculatedAmount: order.final_amount // Fallback to final_amount on error
+            };
+          }
+        })
+      );
       
       // Fetch sales managers if there are orders with sales_manager field
       if (data && data.length > 0) {
@@ -127,7 +164,7 @@ const OrdersPage = () => {
         }
       }
       
-      setOrders(data || []);
+      setOrders(ordersWithCalculatedAmounts);
     } catch (error) {
       console.error('Error fetching orders:', error);
       toast.error('Failed to fetch orders');
@@ -473,7 +510,7 @@ const OrdersPage = () => {
                                 </Select>
                               </div>
                             </TableCell>
-                            <TableCell>₹{order.final_amount?.toFixed(2) || '0.00'}</TableCell>
+                            <TableCell>₹{(order.calculatedAmount ?? order.final_amount)?.toFixed(2) || '0.00'}</TableCell>
                             <TableCell>₹{order.balance_amount?.toFixed(2) || '0.00'}</TableCell>
                             <TableCell>
                               <div className="flex space-x-2">

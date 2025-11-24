@@ -1389,7 +1389,7 @@ export default function QuotationDetailPage() {
                       <div className="border-t border-gray-400 pt-2">
                         <div className="flex justify-between text-lg font-bold">
                           <span>GRAND TOTAL:</span>
-                          <span>{formatCurrency(order?.final_amount || 0)}</span>
+                          <span>{formatCurrency(grandTotal)}</span>
                         </div>
                       </div>
                     </div>
@@ -1398,7 +1398,7 @@ export default function QuotationDetailPage() {
                   {/* Amount in Words */}
                   <div className="mt-3 p-2 bg-gray-100 border border-gray-400">
                     <div className="text-sm text-gray-600">Amount in words:</div>
-                    <div className="font-bold">INR {numberToWords(Math.round(order?.final_amount || 0))}</div>
+                    <div className="font-bold">INR {numberToWords(Math.round(grandTotal))}</div>
                   </div>
                 </div>
 
@@ -1557,12 +1557,78 @@ export default function QuotationDetailPage() {
                     </thead>
                     <tbody>
                       {orderItems.map((item, idx) => {
-                        const amount = item.quantity * item.unit_price;
-                      const gstRate = (item as any).gst_rate ?? 
+                        // Get size_prices and sizes_quantities for print view
+                        let sizePrices: { [size: string]: number } | undefined = undefined;
+                        let sizesQuantities: { [size: string]: number } | undefined = undefined;
+                        let sizeTypeId: string | null = null;
+                        
+                        if (item.size_prices && item.sizes_quantities) {
+                          sizePrices = item.size_prices;
+                          sizesQuantities = item.sizes_quantities;
+                          sizeTypeId = (item as any).size_type_id || null;
+                        } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                          sizePrices = item.specifications.size_prices;
+                          sizesQuantities = item.specifications.sizes_quantities;
+                          sizeTypeId = item.specifications.size_type_id || null;
+                        }
+                        
+                        let amount = 0;
+                        if (sizePrices && sizesQuantities) {
+                          amount = calculateSizeBasedTotal(sizesQuantities, sizePrices, item.unit_price);
+                        } else {
+                          amount = item.quantity * item.unit_price;
+                        }
+                        
+                        const gstRate = (item as any).gst_rate ?? 
                                      ((item.specifications as any)?.gst_rate) ?? 
                                          (order?.gst_rate ?? 0);
                         const gstAmt = (amount * gstRate) / 100;
                         const total = amount + gstAmt;
+                        
+                        // Group sizes by price for display
+                        const sizePriceGroups: { [price: string]: { sizes: string[], qty: number } } = {};
+                        if (sizesQuantities) {
+                          Object.entries(sizesQuantities).forEach(([size, qty]) => {
+                            if (qty > 0) {
+                              const sizePrice = sizePrices?.[size] ?? item.unit_price;
+                              const priceKey = sizePrice.toFixed(2);
+                              if (!sizePriceGroups[priceKey]) {
+                                sizePriceGroups[priceKey] = { sizes: [], qty: 0 };
+                              }
+                              sizePriceGroups[priceKey].sizes.push(size);
+                              sizePriceGroups[priceKey].qty += qty;
+                            }
+                          });
+                        }
+                        
+                        // Sort sizes within each group and then sort groups by price
+                        const sortedPriceGroups = Object.entries(sizePriceGroups)
+                          .map(([price, data]) => {
+                            let sortedSizes: string[] = [];
+                            if (sizeTypeId && sizeTypes[sizeTypeId]) {
+                              // Convert sizeTypes map to array for the utility function
+                              const sizeTypesArray = Object.values(sizeTypes);
+                              const sorted = sortSizesQuantitiesUtil(
+                                data.sizes.reduce((acc, s) => ({ ...acc, [s]: 1 }), {}),
+                                sizeTypeId,
+                                sizeTypesArray
+                              );
+                              sortedSizes = sorted.map(([s]) => s);
+                            } else {
+                              sortedSizes = data.sizes.sort((a, b) => {
+                                const order = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL'];
+                                const indexA = order.indexOf(a);
+                                const indexB = order.indexOf(b);
+                                return (indexA === -1 ? 999 : indexA) - (indexB === -1 ? 999 : indexB);
+                              });
+                            }
+                            return {
+                              price: parseFloat(price),
+                              sizes: sortedSizes,
+                              qty: data.qty
+                            };
+                          })
+                          .sort((a, b) => a.price - b.price);
                         
                         // Parse specifications for readymade orders
                           let specs: any = {};
@@ -1633,11 +1699,31 @@ export default function QuotationDetailPage() {
                                   </div>
                                 </div>
                           </td>
-                              <td className="border border-gray-400 px-3 py-2 text-center">
-                                <div className="font-semibold">{item.quantity}</div>
-                                <div className="text-sm">Pcs</div>
+                              <td className="border border-gray-400 px-3 py-2 text-sm">
+                                <div className="font-semibold">{item.quantity} Pcs</div>
+                                {sortedPriceGroups.length > 0 && (
+                                  <div className="text-xs text-gray-600 space-y-1 mt-1">
+                                    {sortedPriceGroups.map((group, groupIndex) => (
+                                      <div key={groupIndex}>
+                                        {group.sizes.join(', ')}: {group.qty} @ ₹{group.price.toFixed(2)}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                           </td>
-                              <td className="border border-gray-400 px-3 py-2 text-right">{formatCurrency(item.unit_price)}</td>
+                              <td className="border border-gray-400 px-3 py-2 text-sm">
+                                {sortedPriceGroups.length > 0 ? (
+                                  <div className="text-xs text-gray-700 space-y-1">
+                                    {sortedPriceGroups.map((group, groupIndex) => (
+                                      <div key={groupIndex}>
+                                        ₹{group.price.toFixed(2)}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  formatCurrency(item.unit_price)
+                                )}
+                              </td>
                               <td className="border border-gray-400 px-3 py-2 text-right">{formatCurrency(amount)}</td>
                               <td className="border border-gray-400 px-3 py-2 text-center">
                                 <div className="text-sm">{gstRate}%</div>
@@ -1694,7 +1780,7 @@ export default function QuotationDetailPage() {
                       <div className="border-t border-gray-400 pt-2">
                         <div className="flex justify-between text-lg font-bold">
                         <span>GRAND TOTAL:</span>
-                          <span>{formatCurrency(order?.final_amount || grandTotal)}</span>
+                          <span>{formatCurrency(grandTotal)}</span>
                       </div>
                     </div>
                   </div>
@@ -1703,7 +1789,7 @@ export default function QuotationDetailPage() {
                 {/* Amount in Words */}
                   <div className="mt-3 p-2 bg-gray-100 border border-gray-400">
                     <div className="text-sm text-gray-600">Amount in words:</div>
-                    <div className="font-bold">INR {numberToWords(Math.round(order?.final_amount || grandTotal))}</div>
+                    <div className="font-bold">INR {numberToWords(Math.round(grandTotal))}</div>
                 </div>
               </div>
 

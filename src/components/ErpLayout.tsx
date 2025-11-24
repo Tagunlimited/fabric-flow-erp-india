@@ -11,7 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UniversalSearchBar } from "@/components/UniversalSearchBar";
 import { useTheme } from "next-themes";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -32,7 +32,7 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
   const [floatingNotification, setFloatingNotification] = useState<any>(null);
   const [availableRoles] = useState(['admin', 'sales', 'production', 'quality', 'dispatch', 'manager']);
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
-  const [lastScrollY, setLastScrollY] = useState(0);
+  const lastScrollYRef = useRef(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [canInstall, setCanInstall] = useState(false);
@@ -41,15 +41,22 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
   const headerLogo = config?.header_logo_url || config?.logo_url || 'https://i.postimg.cc/D0hJxKtP/tag-black.png';
   
   // Handle pre-configured admin user display
-  const displayName = profile?.full_name || 
-    (user?.email === 'ecom@tagunlimitedclothing.com' ? 'System Administrator' : user?.email);
-  const displayRole = profile?.role || 
-    (user?.email === 'ecom@tagunlimitedclothing.com' ? 'admin' : 'user');
+  const displayName = useMemo(() => 
+    profile?.full_name || 
+    (user?.email === 'ecom@tagunlimitedclothing.com' ? 'System Administrator' : user?.email),
+    [profile?.full_name, user?.email]
+  );
+  const displayRole = useMemo(() => 
+    profile?.role || 
+    (user?.email === 'ecom@tagunlimitedclothing.com' ? 'admin' : 'user'),
+    [profile?.role, user?.email]
+  );
 
   // Handle floating header
   useEffect(() => {
     const handleScroll = () => {
       const currentScrollY = window.scrollY;
+      const lastScrollY = lastScrollYRef.current;
       
       if (currentScrollY > lastScrollY && currentScrollY > 100) {
         // Scrolling down and past 100px
@@ -59,12 +66,12 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
         setIsHeaderVisible(true);
       }
       
-      setLastScrollY(currentScrollY);
+      lastScrollYRef.current = currentScrollY;
     };
 
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
-  }, [lastScrollY]);
+  }, []);
 
   // Check PWA install status
   useEffect(() => {
@@ -302,7 +309,7 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
                     <Settings className="w-4 h-4" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-56" align="end" forceMount>
+                <DropdownMenuContent className="w-56" align="end">
                   <DropdownMenuLabel className="font-normal">
                     <div className="flex flex-col space-y-1">
                       <p className="text-sm font-medium leading-none">{displayName}</p>

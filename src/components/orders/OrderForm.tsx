@@ -1169,87 +1169,35 @@ const getSelectedFabricVariant = (productIndex: number) => {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Order Header Information */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>Order ID</Label>
-                <Input value={format(formData.order_date, 'dd-MMM-yy') + " (Auto-generated)"} disabled />
-              </div>
-              
-              <div className="space-y-2">
-                <Label>Order Date</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className={cn("justify-start text-left font-normal", !formData.order_date && "text-muted-foreground")}>
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {formData.order_date ? format(formData.order_date, "dd-MMM-yy") : "Pick a date"}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0">
-                    <Calendar
-                      mode="single"
-                      selected={formData.order_date}
-                      onSelect={(date) => date && setFormData(prev => ({ ...prev, order_date: date }))}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Expected Delivery Date</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className={cn("justify-start text-left font-normal", !formData.expected_delivery_date && "text-muted-foreground")}>
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {formData.expected_delivery_date ? format(formData.expected_delivery_date, "dd-MMM-yy") : "Pick a date"}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0">
-                    <Calendar
-                      mode="single"
-                      selected={formData.expected_delivery_date}
-                      onSelect={(date) => date && setFormData(prev => ({ ...prev, expected_delivery_date: date }))}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
-              </div>
-            </div>
-
-            {/* Customer Information */}
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Customer Information</h3>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {!preSelectedCustomer && (
-                  <div className="space-y-2">
-                    <Label>Client</Label>
-                    <CustomerSearchSelect
-                      value={formData.customer_id}
-                      onValueChange={handleCustomerSelect}
-                      onCustomerSelect={(customer) => setSelectedCustomer(customer as any)}
-                      placeholder="Search by name, phone, contact person..."
-                      cacheKey="customerSearchSelect-customOrder"
-                    />
+            {/* Order Information - Client/Sales Manager on left, Order fields on right */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Left Side */}
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="block">Client</Label>
+                  <div className="w-[400px]">
+                    {!preSelectedCustomer ? (
+                      <CustomerSearchSelect
+                        value={formData.customer_id}
+                        onValueChange={handleCustomerSelect}
+                        onCustomerSelect={(customer) => setSelectedCustomer(customer as any)}
+                        placeholder="Search by name, phone, contact person..."
+                        cacheKey="customerSearchSelect-customOrder"
+                      />
+                    ) : (
+                      <Input 
+                        value={preSelectedCustomer.company_name} 
+                        disabled 
+                        className="bg-gray-50"
+                      />
+                    )}
                   </div>
-                )}
-                
-                {preSelectedCustomer && (
-                  <div className="space-y-2">
-                    <Label>Client</Label>
-                    <Input 
-                      value={preSelectedCustomer.company_name} 
-                      disabled 
-                      className="bg-gray-50"
-                    />
-                  </div>
-                )}
+                </div>
 
                 <div className="space-y-2">
-                  <Label>Sales Manager</Label>
+                  <Label className="block">Sales Manager</Label>
                   <Select value={formData.sales_manager} onValueChange={(value) => setFormData(prev => ({ ...prev, sales_manager: value }))}>
-                    <SelectTrigger>
+                    <SelectTrigger className="w-[400px]">
                       <SelectValue placeholder="Select sales manager">
                         {formData.sales_manager && employees.find(emp => emp.id === formData.sales_manager) && (
                           <div className="flex items-center gap-2">
@@ -1288,6 +1236,60 @@ const getSelectedFabricVariant = (productIndex: number) => {
                   </Select>
                 </div>
               </div>
+
+              {/* Right Side */}
+              <div className="space-y-4 flex justify-end">
+                <div className="space-y-4 w-full max-w-md">
+                  <div className="space-y-2">
+                    <Label>Order Date</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" className={cn("justify-start text-left font-normal", !formData.order_date && "text-muted-foreground")}>
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {formData.order_date ? format(formData.order_date, "dd-MMM-yy") : "Pick a date"}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0">
+                        <Calendar
+                          mode="single"
+                          selected={formData.order_date}
+                          onSelect={(date) => date && setFormData(prev => ({ ...prev, order_date: date }))}
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Order ID</Label>
+                    <Input value={format(formData.order_date, 'dd-MMM-yy') + " (Auto-generated)"} disabled />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Expected Delivery Date</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" className={cn("justify-start text-left font-normal", !formData.expected_delivery_date && "text-muted-foreground")}>
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {formData.expected_delivery_date ? format(formData.expected_delivery_date, "dd-MMM-yy") : "Pick a date"}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0">
+                        <Calendar
+                          mode="single"
+                          selected={formData.expected_delivery_date}
+                          onSelect={(date) => date && setFormData(prev => ({ ...prev, expected_delivery_date: date }))}
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Customer Information Details */}
+            <div className="space-y-4">
 
               {selectedCustomer && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted rounded-lg">
@@ -1351,13 +1353,54 @@ const getSelectedFabricVariant = (productIndex: number) => {
                     
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
   {/* Left Column - Product Category */}
-  <div className="lg:col-span-4">
+  <div className="lg:col-span-4 flex flex-col h-full">
      <Label className="text-base font-semibold text-gray-700">Product Category</Label>
                          
-                         {/* Image-based Category Selector */}
-                         <div className="relative"> {/* Added horizontal padding */}
+                         {/* Dropdown Category Selector */}
+                         <Select
+                           value={product.product_category_id || ''}
+                           onValueChange={(value) => handleProductCategorySelect(productIndex, value)}
+                         >
+                           <SelectTrigger className="w-full">
+                             <SelectValue placeholder="Select product category" />
+                           </SelectTrigger>
+                           <SelectContent>
+                             {productCategories.map((category) => (
+                               <SelectItem key={category.id} value={category.id}>
+                                 {category.category_name}
+                               </SelectItem>
+                             ))}
+                           </SelectContent>
+                         </Select>
+
+                         {/* Mockup Image Display - Extended height container */}
+                         {product.mockup_images && product.mockup_images.length > 0 ? (
+                           <div className="mt-4 flex-1 flex flex-col">
+                             <Label className="text-sm font-medium text-gray-600 mb-2 block">Uploaded Mockup</Label>
+                             <div className="border-2 border-gray-200 rounded-lg p-3 bg-gray-50 flex-1 flex flex-col min-h-[400px]">
+                               <div className="flex-1 flex items-center justify-center">
+                                 <img 
+                                   src={getMainImage(productIndex, 'mockup') || URL.createObjectURL(product.mockup_images[0])} 
+                                   alt="Mockup Preview"
+                                   className="max-w-full max-h-full object-contain rounded cursor-pointer hover:opacity-90 transition-opacity"
+                                   onClick={() => {
+                                     const mainImage = getMainImage(productIndex, 'mockup') || URL.createObjectURL(product.mockup_images[0]);
+                                     window.open(mainImage, '_blank');
+                                   }}
+                                 />
+                               </div>
+                               <p className="text-center text-xs text-muted-foreground mt-2">
+                                 {product.mockup_images.length} file(s) uploaded • Click to view full size
+                               </p>
+                             </div>
+                           </div>
+                         ) : (
+                           <div className="mt-4 flex-1 min-h-[400px]"></div>
+                         )}
+
+                         {/* Image-based Category Selector - COMMENTED OUT */}
+                         {/* <div className="relative"> 
                            <div className="w-[300px] h-[400px] bg-gradient-to-br from-gray-50 to-white border-2 border-gray-200 rounded-xl overflow-hidden relative shadow-lg hover:shadow-xl transition-all duration-300">
-                             {/* Category Slider */}
                              <div 
                                ref={sliderRef}
                                className={cn(
@@ -1396,7 +1439,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                ))}
                              </div>
 
-                             {/* Lock Icon Overlay */}
                              {isCategoryLocked && (
                                <div className="absolute inset-0   flex items-center justify-center">
                                  <div className="bg-white rounded-full p-4 shadow-xl border-2 border-gray-200">
@@ -1405,7 +1447,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                </div>
                              )}
 
-                             {/* Navigation Arrows */}
                              {!isCategoryLocked && productCategories.length > 1 && (
                                <>
                                  <button
@@ -1425,7 +1466,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                </>
                              )}
 
-                             {/* Save Button */}
                              {selectedCategoryImage && isCategoryLocked && (
                                <div className="absolute bottom-4 left-1/2 -translate-x-1/2">
                                  <Button
@@ -1440,7 +1480,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                </div>
                              )}
 
-                             {/* Unlock Button */}
                              {isCategoryLocked && (
                                <button
                                  type="button"
@@ -1452,7 +1491,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                </button>
                              )}
                            </div>
-                           </div>
+                           </div> */}
   </div>
 
   {/* Right Column - 2 Rows × 2 Columns each */}
@@ -2333,17 +2372,39 @@ const getSelectedFabricVariant = (productIndex: number) => {
                             <tr key={index} className="hover:bg-gray-50">
                               <td className="border border-gray-300 px-3 py-2">
                                 {(() => {
-                                  // In form context, use helper that handles File objects
-                                  const image = getOrderItemDisplayImageForForm(product);
-                                  const imageSrc = getImageSrcFromFileOrUrl(image);
-                                  
-                                  return imageSrc ? (
-                                    <img 
-                                      src={imageSrc} 
-                                      alt="Product" 
-                                      className="w-20 h-20 object-cover rounded" // bigger image
-                                    />
-                                  ) : null;
+                                  // Only show mockup image, not category image
+                                  // Keep blank until mockup is uploaded
+                                  if (product.mockup_images && product.mockup_images.length > 0) {
+                                    const firstMockup = product.mockup_images[0];
+                                    let imageSrc: string | null = null;
+                                    
+                                    // Handle File object (before upload)
+                                    if (firstMockup instanceof File) {
+                                      imageSrc = URL.createObjectURL(firstMockup);
+                                    }
+                                    // Handle URL string (after upload)
+                                    else if (typeof firstMockup === 'string' && firstMockup.trim()) {
+                                      imageSrc = firstMockup.trim();
+                                    }
+                                    
+                                    // Also check main image if set
+                                    if (!imageSrc) {
+                                      const mainImage = getMainImage(index, 'mockup');
+                                      if (mainImage) {
+                                        imageSrc = mainImage;
+                                      }
+                                    }
+                                    
+                                    return imageSrc ? (
+                                      <img 
+                                        src={imageSrc} 
+                                        alt="Mockup" 
+                                        className="w-20 h-20 object-cover rounded"
+                                      />
+                                    ) : null;
+                                  }
+                                  // Return null (blank) if no mockup images
+                                  return null;
                                 })()}
                               </td>
                               <td className="border border-gray-300 px-3 py-2">

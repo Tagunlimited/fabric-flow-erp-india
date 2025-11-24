@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Badge } from '../ui/badge';
-import { Search, Eye, Edit, FileText, Plus, Users, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
+import { Search, Eye, Edit, Plus, CheckCircle2, Clock, AlertCircle, FileText } from 'lucide-react';
 import { BomDisplayCard } from './BomDisplayCard';
 import { BomToPOWizardDialog } from './BomToPOWizardDialog';
 import { getBomCompletionStatus } from '@/services/bomPOTracking';
@@ -1104,10 +1104,16 @@ export function BomList({ refreshTrigger }: BomListProps) {
           <h1 className="text-3xl font-bold">BOM Management</h1>
           <p className="text-muted-foreground">Manage your Bills of Materials</p>
         </div>
-        <Button onClick={() => navigate('/bom/create')}>
-          <Plus className="w-4 h-4 mr-2" />
-          Create BOM
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => navigate('/procurement/po')} variant="outline">
+            <FileText className="w-4 h-4 mr-2" />
+            Create PO
+          </Button>
+          <Button onClick={() => navigate('/bom/create')}>
+            <Plus className="w-4 h-4 mr-2" />
+            Create BOM
+          </Button>
+        </div>
       </div>
 
       {/* Search */}
@@ -1204,23 +1210,6 @@ export function BomList({ refreshTrigger }: BomListProps) {
                           >
                             <Edit className="w-4 h-4 mr-1" />
                             Edit
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => openMultiSupplierWizard(bom)}
-                            className="bg-primary hover:bg-primary/90 text-white"
-                          >
-                            <Users className="w-4 h-4 mr-1" />
-                            Multi-Supplier PO
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => createPurchaseOrderFromBom(bom)}
-                            variant="outline"
-                            disabled={bom.has_purchase_order}
-                          >
-                            <FileText className="w-4 h-4 mr-1" />
-                            {bom.has_purchase_order ? 'PO Created' : 'Single PO'}
                           </Button>
                         </div>
                       </TableCell>

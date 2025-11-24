@@ -7,6 +7,7 @@ export interface PendingItem {
   bom_number: string;
   bom_status: string | null;
   order_id?: string | null;
+  order_number?: string | null;
   product_name: string | null;
   product_image_url: string | null;
   item_name: string;
@@ -268,6 +269,7 @@ export const usePendingPoItems = () => {
               bom_number: row.bom_records?.bom_number || 'Unknown',
               bom_status: row.bom_records?.status || null,
               order_id: row.bom_records?.order_id || null,
+              order_number: row.bom_records?.order?.order_number || null,
               product_name: row.bom_records?.product_name || null,
               product_image_url: row.bom_records?.product_image_url || null,
               item_name: row.item_name,

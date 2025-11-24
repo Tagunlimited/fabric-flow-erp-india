@@ -13,6 +13,7 @@ import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelec
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
+import { calculateOrderSummary } from '@/utils/priceCalculation';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
@@ -131,10 +132,34 @@ export default function ReceiptPage() {
         // Fetch order and customer to prefill
         const { data: ord } = await supabase
           .from('orders')
-          .select('id, order_number, order_date, customer_id, final_amount, balance_amount')
+          .select('id, order_number, order_date, customer_id, final_amount, balance_amount, gst_rate')
           .eq('id', prefill.id)
           .single();
         if (!ord) return;
+        
+        // Fetch order items to calculate correct total
+        const { data: orderItems } = await supabase
+          .from('order_items')
+          .select('*, size_prices, sizes_quantities, specifications')
+          .eq('order_id', ord.id);
+        
+        // Calculate correct total using size-based pricing
+        let calculatedTotal = ord.final_amount; // Fallback to final_amount
+        if (orderItems && orderItems.length > 0) {
+          const summary = calculateOrderSummary(orderItems, ord);
+          calculatedTotal = summary.grandTotal;
+        }
+        
+        // Calculate pending amount (calculated total - existing receipts)
+        const { data: existingReceipts } = await supabase
+          .from('receipts')
+          .select('amount')
+          .eq('reference_number', ord.order_number)
+          .eq('reference_type', 'order');
+        
+        const totalReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+        const pendingAmount = calculatedTotal - totalReceipts;
+        
         const { data: cust } = await supabase
           .from('customers')
           .select('*')
@@ -149,12 +174,12 @@ export default function ReceiptPage() {
           date: ord.order_date,
           customer_id: ord.customer_id,
           customer_name: cust?.company_name,
-          total_amount: ord.final_amount,
-          balance_amount: ord.balance_amount,
+          total_amount: calculatedTotal,
+          balance_amount: pendingAmount,
         };
         setSelected(sel);
         setReceiptReference(ord.order_number);
-        setAmount(String(prefill.amount ?? ord.final_amount ?? ''));
+        setAmount(String(prefill.amount ?? pendingAmount ?? ''));
       } catch (e) {
         // ignore prefill errors
       }
@@ -221,7 +246,7 @@ export default function ReceiptPage() {
         // Orders for customer only
         let ordersQuery = supabase
           .from('orders')
-          .select('id, order_number, customer_id, order_date, final_amount, balance_amount')
+          .select('id, order_number, customer_id, order_date, final_amount, balance_amount, gst_rate')
           .eq('customer_id', customer.id)
           .limit(20);
         if (refSearch) {
@@ -229,16 +254,41 @@ export default function ReceiptPage() {
         }
         const { data: orders } = await ordersQuery;
         if (orders) {
-          orders.forEach((o: any) => res.push({
-            id: o.id,
-            type: 'order',
-            number: o.order_number,
-            date: o.order_date,
-            customer_id: o.customer_id,
-            customer_name: customer.company_name,
-            total_amount: o.final_amount,
-            balance_amount: o.balance_amount,
-          }));
+          // Fetch order items for each order to calculate correct totals
+          for (const o of orders) {
+            const { data: orderItems } = await supabase
+              .from('order_items')
+              .select('*, size_prices, sizes_quantities, specifications')
+              .eq('order_id', o.id);
+            
+            // Calculate correct total using size-based pricing
+            let calculatedTotal = o.final_amount; // Fallback to final_amount
+            if (orderItems && orderItems.length > 0) {
+              const summary = calculateOrderSummary(orderItems, o);
+              calculatedTotal = summary.grandTotal;
+            }
+            
+            // Calculate pending amount (calculated total - existing receipts)
+            const { data: existingReceipts } = await supabase
+              .from('receipts')
+              .select('amount')
+              .eq('reference_number', o.order_number)
+              .eq('reference_type', 'order');
+            
+            const totalReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+            const pendingAmount = calculatedTotal - totalReceipts;
+            
+            res.push({
+              id: o.id,
+              type: 'order',
+              number: o.order_number,
+              date: o.order_date,
+              customer_id: o.customer_id,
+              customer_name: customer.company_name,
+              total_amount: calculatedTotal,
+              balance_amount: pendingAmount,
+            });
+          }
         }
 
         setResults(res);
@@ -249,6 +299,13 @@ export default function ReceiptPage() {
     const t = setTimeout(run, 300);
     return () => clearTimeout(t);
   }, [customer, refSearch]);
+
+  // Update amount field when order is selected
+  useEffect(() => {
+    if (selected && selected.type === 'order' && selected.balance_amount !== undefined) {
+      setAmount(String(selected.balance_amount));
+    }
+  }, [selected]);
 
   const handleGenerate = async (isCredit: boolean = false) => {
     if (!selected || (!amount && !isCredit)) {
@@ -265,7 +322,7 @@ export default function ReceiptPage() {
         console.log('Validating order amount...');
         const { data: order, error: orderError } = await supabase
           .from('orders')
-          .select('id, final_amount, balance_amount')
+          .select('id, final_amount, balance_amount, gst_rate')
           .eq('order_number', selected.number)
           .single();
 
@@ -277,6 +334,20 @@ export default function ReceiptPage() {
 
         if (order) {
           console.log('Order found:', order);
+          
+          // Fetch order items to calculate correct total
+          const { data: orderItems } = await supabase
+            .from('order_items')
+            .select('*, size_prices, sizes_quantities, specifications')
+            .eq('order_id', order.id);
+          
+          // Calculate correct total using size-based pricing
+          let calculatedTotal = order.final_amount; // Fallback to final_amount
+          if (orderItems && orderItems.length > 0) {
+            const summary = calculateOrderSummary(orderItems, order);
+            calculatedTotal = summary.grandTotal;
+          }
+          
           // Calculate total existing receipts for this order
           const { data: existingReceipts, error: receiptsError } = await supabase
             .from('receipts')
@@ -297,13 +368,14 @@ export default function ReceiptPage() {
             totalExistingReceipts,
             newAmount: Number(amount || 0),
             totalWithNewReceipt,
+            calculatedTotal,
             orderAmount: Number(order.final_amount),
             isCredit
           });
 
           // Skip overpayment validation for credit orders (₹0 amount)
-          if (!isCredit && totalWithNewReceipt > Number(order.final_amount)) {
-            toast.error(`Total receipts (${formatCurrency(totalWithNewReceipt)}) cannot exceed order amount (${formatCurrency(Number(order.final_amount))})`);
+          if (!isCredit && totalWithNewReceipt > calculatedTotal) {
+            toast.error(`Total receipts (${formatCurrency(totalWithNewReceipt)}) cannot exceed order amount (${formatCurrency(calculatedTotal)})`);
             return;
           }
         } else {
@@ -381,15 +453,28 @@ export default function ReceiptPage() {
       // Update order balance if reference is order
       if (selected.type === 'order') {
         console.log('Updating order balance...');
-        const { data: order, error: orderUpdateError } = await supabase
-          .from('orders')
-          .select('id, final_amount, balance_amount, order_type, status')
-          .eq('order_number', selected.number)
-          .single();
+          const { data: order, error: orderUpdateError } = await supabase
+            .from('orders')
+            .select('id, final_amount, balance_amount, order_type, status, gst_rate')
+            .eq('order_number', selected.number)
+            .single();
 
         if (orderUpdateError) {
           console.error('Error fetching order for balance update:', orderUpdateError);
         } else if (order) {
+          // Fetch order items to calculate correct total
+          const { data: orderItems } = await supabase
+            .from('order_items')
+            .select('*, size_prices, sizes_quantities, specifications')
+            .eq('order_id', order.id);
+          
+          // Calculate correct total using size-based pricing
+          let calculatedTotal = order.final_amount; // Fallback to final_amount
+          if (orderItems && orderItems.length > 0) {
+            const summary = calculateOrderSummary(orderItems, order);
+            calculatedTotal = summary.grandTotal;
+          }
+          
           // Calculate total receipts for this order (including the new one)
           const { data: allReceipts, error: receiptsError } = await supabase
             .from('receipts')
@@ -401,9 +486,10 @@ export default function ReceiptPage() {
             console.error('Error fetching receipts for balance calculation:', receiptsError);
           } else {
             const totalReceipts = (allReceipts || []).reduce((sum, r) => sum + Number(r.amount), 0);
-            const newBalance = Number(order.final_amount) - totalReceipts;
+            const newBalance = calculatedTotal - totalReceipts;
             
             console.log('Balance calculation:', {
+              calculatedTotal,
               finalAmount: Number(order.final_amount),
               totalReceipts,
               newBalance
@@ -1203,7 +1289,11 @@ export default function ReceiptPage() {
                           {customer && (
                             <CommandGroup heading="Orders">
                               {results.map((r) => (
-                                <CommandItem key={`order-${r.id}`} onSelect={() => { setSelected(r); setRefOpen(false); }} className="flex items-center gap-2">
+                                <CommandItem key={`order-${r.id}`} onSelect={() => { 
+                                  setSelected(r); 
+                                  setAmount(String(r.balance_amount ?? '')); 
+                                  setRefOpen(false); 
+                                }} className="flex items-center gap-2">
                                   <span className="font-medium">{r.number}</span>
                                   <span className="ml-auto text-xs text-muted-foreground">{formatDateIndian(r.date)}</span>
                                 </CommandItem>
