@@ -279,7 +279,8 @@ export function BomCreator() {
         description: 'BOM created successfully'
       });
 
-      navigate('/bom');
+      // Navigate to BOM list tab
+      navigate('/bom?tab=view-bom');
     } catch (error) {
       console.error('Error saving BOM:', error);
       toast({

@@ -40,7 +40,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { sortSizesQuantities, SizeType } from '@/utils/sizeSorting';
-import { calculateSizeBasedTotal } from '@/utils/priceCalculation';
+import { calculateSizeBasedTotal, calculateOrderSummary } from '@/utils/priceCalculation';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -162,42 +162,7 @@ const extractImagesFromSpecifications = (specifications: any) => {
   }
 };
 
-// 1. Add a function to calculate per-product and overall totals
-function calculateOrderSummary(orderItems: any[], order: Order | null) {
-  let subtotal = 0;
-  let gstAmount = 0;
-  orderItems.forEach(item => {
-    let amount = 0;
-    // Check if size-based pricing is available (new format)
-    if (item.size_prices && item.sizes_quantities) {
-      // New format: size-wise pricing
-      amount = calculateSizeBasedTotal(
-        item.sizes_quantities,
-        item.size_prices,
-        item.unit_price
-      );
-    } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
-      // Also check in specifications (for backward compatibility)
-      amount = calculateSizeBasedTotal(
-        item.specifications.sizes_quantities,
-        item.specifications.size_prices,
-        item.unit_price
-      );
-    } else {
-      // Old format: single unit_price (backward compatibility)
-      amount = item.quantity * item.unit_price;
-    }
-    
-    subtotal += amount;
-    // Try to get GST rate from item.gst_rate first, then from specifications, then from order
-    const gstRate = item.gst_rate ?? 
-                   (item.specifications?.gst_rate) ?? 
-                   (order?.gst_rate ?? 0);
-    gstAmount += (amount * gstRate) / 100;
-  });
-
-  return { subtotal, gstAmount, grandTotal: subtotal + gstAmount };
-}
+// calculateOrderSummary is now imported from '@/utils/priceCalculation'
 
 // 2. Add a function to calculate GST rates breakdown
 function calculateGSTRatesBreakdown(orderItems: any[], order: Order | null) {
@@ -945,27 +910,9 @@ export default function OrderDetailPage() {
   const { profile } = useAuth();
   
   // Determine if we should hide pricing/order summary/lifecycle sections
-  // Hide if: user is NOT admin OR if coming from Accounts sidebar
-  const [fromAccounts, setFromAccounts] = useState(false);
-  
-  useEffect(() => {
-    // Check if user came from Accounts sidebar
-    const from = searchParams.get('from');
-    const referrer = document.referrer || '';
-    
-    // Check if referrer contains any Accounts route
-    const isFromAccounts = from === 'accounts' || 
-                           referrer.includes('/accounts/quotations') ||
-                           referrer.includes('/accounts/invoices') ||
-                           referrer.includes('/accounts/receipts') ||
-                           referrer.includes('/accounts/payments') ||
-                           referrer.includes('/accounts/');
-    
-    setFromAccounts(isFromAccounts);
-  }, [searchParams]);
-  
+  // Hide if: user is NOT admin (admins should always see all sections)
   const isAdmin = profile?.role === 'admin';
-  const shouldHideSections = !isAdmin || fromAccounts;
+  const shouldHideSections = !isAdmin;
   
   const [order, setOrder] = useState<Order | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -2661,19 +2608,128 @@ export default function OrderDetailPage() {
                                    </td>
                                    <td className="border border-gray-300 px-3 py-2 text-sm">
                                      <div>{item.quantity} Pcs</div>
-                                     <div className="text-xs text-gray-600">
-                                       {item.sizes_quantities && typeof item.sizes_quantities === 'object' &&
-                                         sortSizesQuantities(
-                                           item.sizes_quantities as Record<string, number>,
-                                           (item as any).size_type_id,
-                                           sizeTypes
+                                     {(() => {
+                                       // Get size_prices and sizes_quantities
+                                       let sizePrices: { [size: string]: number } | undefined = undefined;
+                                       let sizesQuantities: { [size: string]: number } | undefined = undefined;
+                                       
+                                       if (item.size_prices && item.sizes_quantities) {
+                                         sizePrices = item.size_prices;
+                                         sizesQuantities = item.sizes_quantities;
+                                       } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                                         sizePrices = item.specifications.size_prices;
+                                         sizesQuantities = item.specifications.sizes_quantities;
+                                       }
+                                       
+                                       // Group sizes by price for display
+                                       const sizePriceGroups: { [price: string]: { sizes: string[], qty: number } } = {};
+                                       if (sizesQuantities) {
+                                         Object.entries(sizesQuantities).forEach(([size, qty]) => {
+                                           if (qty > 0) {
+                                             const sizePrice = sizePrices?.[size] ?? item.unit_price;
+                                             const priceKey = sizePrice.toFixed(2);
+                                             if (!sizePriceGroups[priceKey]) {
+                                               sizePriceGroups[priceKey] = { sizes: [], qty: 0 };
+                                             }
+                                             sizePriceGroups[priceKey].sizes.push(size);
+                                             sizePriceGroups[priceKey].qty += qty;
+                                           }
+                                         });
+                                       }
+                                       
+                                       // Sort sizes within each group and then sort groups by price
+                                       const sortedPriceGroups = Object.entries(sizePriceGroups)
+                                         .map(([price, data]) => ({
+                                           price: parseFloat(price),
+                                           sizes: sortSizesQuantities(
+                                             data.sizes.reduce((acc, s) => ({ ...acc, [s]: 1 }), {}),
+                                             (item as any).size_type_id,
+                                             sizeTypes
+                                           ).map(([s]) => s),
+                                           qty: data.qty
+                                         }))
+                                         .sort((a, b) => a.price - b.price);
+                                       
+                                       return sortedPriceGroups.length > 0 ? (
+                                         <div className="text-xs text-gray-600 space-y-1 mt-1">
+                                           {sortedPriceGroups.map((group, groupIndex) => (
+                                             <div key={groupIndex}>
+                                               {group.sizes.join(', ')}: {group.qty} @ ₹{group.price.toFixed(2)}
+                                             </div>
+                                           ))}
+                                         </div>
+                                       ) : (
+                                         item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
+                                           <div className="text-xs text-gray-600">
+                                             {sortSizesQuantities(
+                                               item.sizes_quantities as Record<string, number>,
+                                               (item as any).size_type_id,
+                                               sizeTypes
+                                             )
+                                               .filter(([_, qty]) => qty > 0)
+                                               .map(([size, qty]) => `${size}-${qty}`)
+                                               .join(', ')}
+                                           </div>
                                          )
-                                           .filter(([_, qty]) => qty > 0)
-                                           .map(([size, qty]) => `${size}-${qty}`)
-                                           .join(', ')}
-                                     </div>
+                                       );
+                                     })()}
                                    </td>
-                                    <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(item.unit_price)}</td>
+                                   <td className="border border-gray-300 px-3 py-2 text-sm">
+                                     {(() => {
+                                       // Get size_prices and sizes_quantities
+                                       let sizePrices: { [size: string]: number } | undefined = undefined;
+                                       let sizesQuantities: { [size: string]: number } | undefined = undefined;
+                                       
+                                       if (item.size_prices && item.sizes_quantities) {
+                                         sizePrices = item.size_prices;
+                                         sizesQuantities = item.sizes_quantities;
+                                       } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                                         sizePrices = item.specifications.size_prices;
+                                         sizesQuantities = item.specifications.sizes_quantities;
+                                       }
+                                       
+                                       // Group sizes by price for display
+                                       const sizePriceGroups: { [price: string]: { sizes: string[], qty: number } } = {};
+                                       if (sizesQuantities) {
+                                         Object.entries(sizesQuantities).forEach(([size, qty]) => {
+                                           if (qty > 0) {
+                                             const sizePrice = sizePrices?.[size] ?? item.unit_price;
+                                             const priceKey = sizePrice.toFixed(2);
+                                             if (!sizePriceGroups[priceKey]) {
+                                               sizePriceGroups[priceKey] = { sizes: [], qty: 0 };
+                                             }
+                                             sizePriceGroups[priceKey].sizes.push(size);
+                                             sizePriceGroups[priceKey].qty += qty;
+                                           }
+                                         });
+                                       }
+                                       
+                                       // Sort sizes within each group and then sort groups by price
+                                       const sortedPriceGroups = Object.entries(sizePriceGroups)
+                                         .map(([price, data]) => ({
+                                           price: parseFloat(price),
+                                           sizes: sortSizesQuantities(
+                                             data.sizes.reduce((acc, s) => ({ ...acc, [s]: 1 }), {}),
+                                             (item as any).size_type_id,
+                                             sizeTypes
+                                           ).map(([s]) => s),
+                                           qty: data.qty
+                                         }))
+                                         .sort((a, b) => a.price - b.price);
+                                       
+                                       return sortedPriceGroups.length > 0 ? (
+                                         <div className="text-xs text-gray-700 space-y-1">
+                                           {sortedPriceGroups.map((group, groupIndex) => (
+                                             <div key={groupIndex}>
+                                               ₹{group.price.toFixed(2)}
+                                             </div>
+                                           ))}
+                                         </div>
+                                       ) : (
+                                         formatCurrency(item.unit_price)
+                                       );
+                                     })()}
+                                   </td>
                                     <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(amount)}</td>
                                    <td className="border border-gray-300 px-3 py-2 text-sm">{gstRate}%</td>
                                     <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(gstAmt)}</td>

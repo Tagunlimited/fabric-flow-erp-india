@@ -7,8 +7,9 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Eye, Search, Plus, FileText, Calendar, User, Package } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatCurrency } from '@/lib/utils';
+import { calculateOrderSummary } from '@/utils/priceCalculation';
 
 // Import existing BomList component
 import { BomList } from './BomList';
@@ -24,6 +25,8 @@ interface Order {
   advance_amount?: number;
   total_receipts?: number;
   pending_amount?: number;
+  calculatedAmount?: number;
+  gst_rate?: number;
   customer: {
     company_name: string;
     contact_person?: string;
@@ -157,22 +160,58 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
         return hasReceipt && !hasBom;
       });
       
-      // Use the same simple approach as OrdersPage - just use balance_amount directly
-      const ordersWithReceiptTotals = eligibleOrders.map((order: any) => {
-        // Use the order's balance_amount directly from the database (same as OrdersPage)
-        const pendingAmount = order.balance_amount || 0;
-        
-        return {
-          ...order,
-          total_receipts: 0, // Not needed for display, just for consistency
-          pending_amount: Math.max(0, pendingAmount) // Ensure pending amount is never negative
-        };
-      });
+      // Calculate correct amounts using size-based pricing for each order
+      const ordersWithCalculatedAmounts = await Promise.all(
+        eligibleOrders.map(async (order: any) => {
+          try {
+            // Fetch order items with size_prices and sizes_quantities
+            const { data: orderItems, error: itemsError } = await supabase
+              .from('order_items')
+              .select('id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate')
+              .eq('order_id', order.id);
+
+            if (!itemsError && orderItems && orderItems.length > 0) {
+              // Calculate the correct total using size-based pricing
+              const { grandTotal } = calculateOrderSummary(orderItems, order);
+              
+              // Calculate pending amount (grandTotal - total receipts)
+              const totalReceipts = orderReceiptTotals.get(order.id) || orderReceiptTotals.get(order.order_number) || 0;
+              const pendingAmount = Math.max(0, grandTotal - totalReceipts);
+              
+              return {
+                ...order,
+                calculatedAmount: grandTotal,
+                pending_amount: pendingAmount
+              };
+            } else {
+              // Fallback to final_amount if no items found
+              const totalReceipts = orderReceiptTotals.get(order.id) || orderReceiptTotals.get(order.order_number) || 0;
+              const pendingAmount = Math.max(0, (order.final_amount || 0) - totalReceipts);
+              
+              return {
+                ...order,
+                calculatedAmount: order.final_amount,
+                pending_amount: pendingAmount
+              };
+            }
+          } catch (error) {
+            console.error(`Error calculating amount for order ${order.order_number}:`, error);
+            const totalReceipts = orderReceiptTotals.get(order.id) || orderReceiptTotals.get(order.order_number) || 0;
+            const pendingAmount = Math.max(0, (order.final_amount || 0) - totalReceipts);
+            
+            return {
+              ...order,
+              calculatedAmount: order.final_amount,
+              pending_amount: pendingAmount
+            };
+          }
+        })
+      );
       
-      console.log('Eligible orders (with receipts, without BOMs):', ordersWithReceiptTotals.length);
-      console.log('Eligible orders details:', ordersWithReceiptTotals);
+      console.log('Eligible orders (with receipts, without BOMs):', ordersWithCalculatedAmounts.length);
+      console.log('Eligible orders details:', ordersWithCalculatedAmounts);
       
-      setOrders(ordersWithReceiptTotals as unknown as Order[]);
+      setOrders(ordersWithCalculatedAmounts as unknown as Order[]);
     } catch (error) {
       console.error('Error fetching orders without BOM:', error);
     } finally {
@@ -206,19 +245,10 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
     }
   };
 
-  // Calculate totals using the same approach as OrdersPage
-  const totals = filteredOrders.reduce((acc, order) => {
-    const totalAmount = order.final_amount || order.total_amount;
-    const pendingAmount = order.balance_amount || 0; // Use balance_amount directly
-    acc.totalAmount += totalAmount;
-    acc.pendingAmount += pendingAmount;
-    return acc;
-  }, { totalAmount: 0, pendingAmount: 0 });
-
   return (
     <div className="space-y-4">
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
@@ -228,34 +258,6 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
               </div>
               <div className="h-8 w-8 bg-blue-100 rounded-full flex items-center justify-center">
                 <span className="text-blue-600 text-sm font-bold">{filteredOrders.length}</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Total Amount</p>
-                <p className="text-2xl font-bold text-green-600">{formatCurrency(totals.totalAmount)}</p>
-              </div>
-              <div className="h-8 w-8 bg-green-100 rounded-full flex items-center justify-center">
-                <span className="text-green-600 text-sm font-bold">₹</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Pending Amount</p>
-                <p className="text-2xl font-bold text-orange-600">{formatCurrency(totals.pendingAmount)}</p>
-              </div>
-              <div className="h-8 w-8 bg-orange-100 rounded-full flex items-center justify-center">
-                <span className="text-orange-600 text-sm font-bold">₹</span>
               </div>
             </div>
           </CardContent>
@@ -369,8 +371,6 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
                   <TableHead>Order #</TableHead>
                   <TableHead>Customer</TableHead>
                   <TableHead>Products</TableHead>
-                  <TableHead className="text-right">Total Amount</TableHead>
-                  <TableHead className="text-right">Pending Amount</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Order Date</TableHead>
                   <TableHead>Delivery Date</TableHead>
@@ -414,16 +414,6 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
                             +{order.order_items.length - 2} more items
                           </div>
                         )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="font-medium text-green-600">
-                        {formatCurrency(order.final_amount || order.total_amount)}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="font-medium text-orange-600">
-                        {formatCurrency(order.balance_amount || 0)}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -484,6 +474,8 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
 export function BomTabsPage() {
   const navigate = useNavigate();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [searchParams] = useSearchParams();
+  const tabFromUrl = searchParams.get('tab');
 
   // Refresh when component mounts (user returns from BOM creation)
   useEffect(() => {
@@ -497,6 +489,9 @@ export function BomTabsPage() {
   const handleRefresh = () => {
     setRefreshTrigger(prev => prev + 1);
   };
+
+  // Determine default tab: use URL param if present, otherwise default to 'create-bom'
+  const defaultTab = tabFromUrl === 'view-bom' ? 'view-bom' : 'create-bom';
 
   return (
     <div className="space-y-6">
@@ -522,7 +517,10 @@ export function BomTabsPage() {
       </div>
 
       <div className="border rounded-lg p-4">
-        <Tabs defaultValue="create-bom" className="w-full">
+        <Tabs value={tabFromUrl || defaultTab} onValueChange={(value) => {
+          // Update URL when tab changes
+          navigate(`/bom?tab=${value}`, { replace: true });
+        }} className="w-full">
           <TabsList className="grid w-full grid-cols-2 mb-6 bg-gray-100">
             <TabsTrigger value="create-bom" className="flex items-center gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm">
               <Plus className="w-4 h-4" />

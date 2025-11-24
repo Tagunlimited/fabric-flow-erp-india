@@ -316,7 +316,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
                 />
               </div>
 
-              <div>
+                <div>
                 <StateCitySelector
                   selectedState={formData.state}
                   selectedCity={formData.city}

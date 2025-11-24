@@ -405,7 +405,7 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
               />
             </div>
 
-            <div>
+              <div>
               <StateCitySelector
                 selectedState={formData.state}
                 selectedCity={formData.city}
@@ -415,17 +415,17 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
                 cityLabel="City"
                 stateRequired={true}
                 cityRequired={true}
-              />
-            </div>
+                />
+              </div>
 
-            <div>
-              <Label htmlFor="pincode">Pincode *</Label>
-              <Input
-                id="pincode"
-                value={formData.pincode}
-                onChange={(e) => setFormData(prev => ({ ...prev, pincode: e.target.value }))}
-                required
-              />
+              <div>
+                <Label htmlFor="pincode">Pincode *</Label>
+                <Input
+                  id="pincode"
+                  value={formData.pincode}
+                  onChange={(e) => setFormData(prev => ({ ...prev, pincode: e.target.value }))}
+                  required
+                />
             </div>
           </CardContent>
         </Card>

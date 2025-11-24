@@ -1511,8 +1511,9 @@ export function BomForm() {
       }
       
       // Navigate after a short delay to ensure toast is visible
+      // Navigate to BOM list tab instead of detail page
       setTimeout(() => {
-        navigate(`/bom/${bomId}`);
+        navigate('/bom?tab=view-bom');
       }, 1000);
       
     } catch (error) {

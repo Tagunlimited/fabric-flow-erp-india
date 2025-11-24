@@ -438,7 +438,7 @@ export function PurchaseOrderForm() {
                         <TableHead className="w-[10%] text-right">Required</TableHead>
                         <TableHead className="w-[10%] text-right">Ordered</TableHead>
                         <TableHead className="w-[10%] text-right">Remaining</TableHead>
-                        <TableHead className="w-[12%] text-right">Qty</TableHead>
+                        <TableHead className="w-[12%] text-right">Order Qty</TableHead>
                         <TableHead className="w-[9%] text-center">UOM</TableHead>
                         <TableHead className="w-[15%] text-left">Remark</TableHead>
                         <TableHead className="w-[15%] text-center">Actions</TableHead>

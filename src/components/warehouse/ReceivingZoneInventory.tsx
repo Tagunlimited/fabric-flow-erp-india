@@ -658,13 +658,18 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                             alt={displayName}
                             className="w-16 h-16 object-cover rounded border"
                             onError={(e) => { 
-                              // Show placeholder if image fails to load
-                              (e.currentTarget as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yNCAzNkMzMC42Mzc0IDM2IDM2IDMwLjYyNzQgMzYgMjRDMzYgMTcuMzcyNiAzMC42Mzc0IDEyIDI0IDEyQzE3LjM3MjYgMTIgMTIgMTcuMzcyNiAxMiAyNEMxMiAzMC42Mzc0IDE3LjM3MjYgMzYgMjQgMzZaIiBmaWxsPSIjOUNBM0FGIi8+CjxwYXRoIGQ9Ik0yNCAyOEMyNi4yMDkxIDI4IDI4IDI2LjIwOTEgMjggMjRDMjggMjEuNzkwOSAyNi4yMDkxIDIwIDI0IDIwQzIxLjc5MDkgMjAgMjAgMjEuNzkwOSAyMCAyNEMyMCAyNi4yMDkxIDIxLjc5MDkgMjggMjQgMjhaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K';
+                              // Replace image with NA when it fails to load
+                              const img = e.currentTarget as HTMLImageElement;
+                              img.style.display = 'none';
+                              const naDiv = document.createElement('div');
+                              naDiv.className = 'w-16 h-16 flex items-center justify-center bg-muted rounded border text-xs text-muted-foreground font-medium';
+                              naDiv.textContent = 'NA';
+                              img.parentElement?.appendChild(naDiv);
                             }}
                           />
                         ) : (
-                          <div className="w-16 h-16 bg-gray-100 rounded border flex items-center justify-center">
-                            <Package className="w-6 h-6 text-gray-400" />
+                          <div className="w-16 h-16 flex items-center justify-center bg-muted rounded border text-xs text-muted-foreground font-medium">
+                            NA
                           </div>
                         )}
                       </TableCell>

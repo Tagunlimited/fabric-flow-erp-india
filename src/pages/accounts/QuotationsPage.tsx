@@ -9,6 +9,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { formatCurrency } from '@/lib/utils';
 import { Eye } from 'lucide-react';
+import { calculateOrderSummary } from '@/utils/priceCalculation';
 
 interface Order {
   id: string;
@@ -19,6 +20,8 @@ interface Order {
   status: string;
   final_amount: number;
   sales_manager?: string;
+  gst_rate?: number;
+  calculatedAmount?: number; // Store calculated amount with size-based pricing
 }
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -39,7 +42,7 @@ export default function QuotationsPage() {
       setLoading(true);
       let query: any = supabase
         .from('orders')
-        .select(`*, customer:customers(company_name)`);
+        .select(`*, customer:customers(company_name), gst_rate`);
 
       if (showCompleted === 'no') {
         query = query.neq('status', 'completed');
@@ -48,7 +51,39 @@ export default function QuotationsPage() {
       const { data, error } = await query.order('created_at', { ascending: false });
       if (error) throw error;
       const list: Order[] = data || [];
-      setOrders(list);
+      
+      // Calculate correct amounts using size-based pricing for each order
+      const ordersWithCalculatedAmounts = await Promise.all(
+        list.map(async (order) => {
+          try {
+            // Fetch order items to calculate correct total
+            const { data: orderItems } = await supabase
+              .from('order_items')
+              .select('*, size_prices, sizes_quantities, specifications')
+              .eq('order_id', order.id);
+            
+            // Calculate correct total using size-based pricing
+            let calculatedAmount = order.final_amount; // Fallback to final_amount
+            if (orderItems && orderItems.length > 0) {
+              const summary = calculateOrderSummary(orderItems, order);
+              calculatedAmount = summary.grandTotal;
+            }
+            
+            return {
+              ...order,
+              calculatedAmount
+            };
+          } catch (error) {
+            console.error(`Error calculating amount for order ${order.order_number}:`, error);
+            return {
+              ...order,
+              calculatedAmount: order.final_amount // Fallback to final_amount on error
+            };
+          }
+        })
+      );
+      
+      setOrders(ordersWithCalculatedAmounts);
 
       // Fetch sales manager names/avatars in a second query (avoids FK join issues)
       const ids = Array.from(new Set(list.map(o => o.sales_manager).filter(Boolean)));
@@ -124,7 +159,7 @@ export default function QuotationsPage() {
                         <TableCell>{order.customer?.company_name}</TableCell>
                         <TableCell>{new Date(order.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}</TableCell>
                         <TableCell><Badge>{order.status}</Badge></TableCell>
-                        <TableCell>{formatCurrency(order.final_amount || 0)}</TableCell>
+                        <TableCell>{formatCurrency(order.calculatedAmount ?? order.final_amount ?? 0)}</TableCell>
                         <TableCell>
                           {employeeMap[order.sales_manager || ''] ? (
                             <div className="flex items-center gap-2">
@@ -153,7 +188,7 @@ export default function QuotationsPage() {
                             variant="outline"
                             size="sm"
                             className="ml-2"
-                            onClick={() => navigate('/accounts/receipts', { state: { prefill: { type: 'order', id: order.id, number: order.order_number, date: order.order_date, customer_id: order.customer_id, amount: order.final_amount }, tab: 'create' } })}
+                            onClick={() => navigate('/accounts/receipts', { state: { prefill: { type: 'order', id: order.id, number: order.order_number, date: order.order_date, customer_id: order.customer_id, amount: order.calculatedAmount ?? order.final_amount }, tab: 'create' } })}
                           >
                             Create Receipt
                           </Button>
