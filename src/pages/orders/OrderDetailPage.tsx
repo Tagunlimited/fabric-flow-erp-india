@@ -40,6 +40,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { sortSizesQuantities, SizeType } from '@/utils/sizeSorting';
+import { calculateSizeBasedTotal } from '@/utils/priceCalculation';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -166,7 +167,27 @@ function calculateOrderSummary(orderItems: any[], order: Order | null) {
   let subtotal = 0;
   let gstAmount = 0;
   orderItems.forEach(item => {
-    const amount = item.quantity * item.unit_price;
+    let amount = 0;
+    // Check if size-based pricing is available (new format)
+    if (item.size_prices && item.sizes_quantities) {
+      // New format: size-wise pricing
+      amount = calculateSizeBasedTotal(
+        item.sizes_quantities,
+        item.size_prices,
+        item.unit_price
+      );
+    } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+      // Also check in specifications (for backward compatibility)
+      amount = calculateSizeBasedTotal(
+        item.specifications.sizes_quantities,
+        item.specifications.size_prices,
+        item.unit_price
+      );
+    } else {
+      // Old format: single unit_price (backward compatibility)
+      amount = item.quantity * item.unit_price;
+    }
+    
     subtotal += amount;
     // Try to get GST rate from item.gst_rate first, then from specifications, then from order
     const gstRate = item.gst_rate ?? 
@@ -183,7 +204,27 @@ function calculateGSTRatesBreakdown(orderItems: any[], order: Order | null) {
   const gstRatesMap = new Map<number, number>();
   
   orderItems.forEach(item => {
-    const amount = item.quantity * item.unit_price;
+    let amount = 0;
+    // Check if size-based pricing is available (new format)
+    if (item.size_prices && item.sizes_quantities) {
+      // New format: size-wise pricing
+      amount = calculateSizeBasedTotal(
+        item.sizes_quantities,
+        item.size_prices,
+        item.unit_price
+      );
+    } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+      // Also check in specifications (for backward compatibility)
+      amount = calculateSizeBasedTotal(
+        item.specifications.sizes_quantities,
+        item.specifications.size_prices,
+        item.unit_price
+      );
+    } else {
+      // Old format: single unit_price (backward compatibility)
+      amount = item.quantity * item.unit_price;
+    }
+    
     // Try to get GST rate from item.gst_rate first, then from specifications, then from order
     const gstRate = item.gst_rate ?? 
                    (item.specifications?.gst_rate) ?? 
@@ -2515,7 +2556,23 @@ export default function OrderDetailPage() {
                            </thead>
                            <tbody>
                              {orderItems.map((item, index) => {
-                               const amount = item.quantity * item.unit_price;
+                               let amount = 0;
+                               // Check if size-based pricing is available
+                               if (item.size_prices && item.sizes_quantities) {
+                                 amount = calculateSizeBasedTotal(
+                                   item.sizes_quantities,
+                                   item.size_prices,
+                                   item.unit_price
+                                 );
+                               } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                                 amount = calculateSizeBasedTotal(
+                                   item.specifications.sizes_quantities,
+                                   item.specifications.size_prices,
+                                   item.unit_price
+                                 );
+                               } else {
+                                 amount = item.quantity * item.unit_price;
+                               }
                                // Try to get GST rate from item.gst_rate first, then from specifications, then from order
                                const gstRate = item.gst_rate ?? 
                                              (item.specifications?.gst_rate) ?? 
