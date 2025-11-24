@@ -1241,7 +1241,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
               <div className="space-y-4 flex justify-end">
                 <div className="space-y-4 w-full max-w-md">
                   <div className="space-y-2">
-                    <Label>Order Date</Label>
+                    <Label className="block">Order Date</Label>
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button variant="outline" className={cn("justify-start text-left font-normal", !formData.order_date && "text-muted-foreground")}>
@@ -1261,12 +1261,12 @@ const getSelectedFabricVariant = (productIndex: number) => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Order ID</Label>
+                    <Label className="block">Order ID</Label>
                     <Input value={format(formData.order_date, 'dd-MMM-yy') + " (Auto-generated)"} disabled />
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Expected Delivery Date</Label>
+                    <Label className="block">Expected Delivery Date</Label>
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button variant="outline" className={cn("justify-start text-left font-normal", !formData.expected_delivery_date && "text-muted-foreground")}>
