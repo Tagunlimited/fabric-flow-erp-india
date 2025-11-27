@@ -39,6 +39,16 @@ const ColorMaster = () => {
     fetchColors();
   }, []);
 
+  // Update formRows when editingColor changes
+  useEffect(() => {
+    if (editingColor && dialogOpen) {
+      setFormRows([{ 
+        color: editingColor.color || '', 
+        hex: editingColor.hex || '' 
+      }]);
+    }
+  }, [editingColor, dialogOpen]);
+
   const fetchColors = async () => {
     try {
       setLoading(true);
@@ -139,8 +149,15 @@ const ColorMaster = () => {
   };
 
   const handleEdit = (color: Color) => {
+    // Set the editing color and form data
     setEditingColor(color);
-    setFormRows([{ color: color.color, hex: color.hex }]);
+    // Set form data with the actual color values - ensure we use the exact values
+    const colorName = color.color?.trim() || '';
+    const hexCode = color.hex?.trim() || '';
+    setFormRows([{ 
+      color: colorName, 
+      hex: hexCode
+    }]);
     setDialogOpen(true);
   };
 
@@ -591,7 +608,16 @@ const ColorMaster = () => {
         </CardContent>
       </Card>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog 
+        open={dialogOpen} 
+        onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open) {
+            // Reset form when dialog is closed
+            resetForm();
+          }
+        }}
+      >
         <DialogContent className="max-w-4xl w-[90vw] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
@@ -625,13 +651,13 @@ const ColorMaster = () => {
               }}
             >
               {formRows.map((row, index) => (
-                <div key={index} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-muted/50 transition-colors">
+                <div key={`${editingColor?.id || 'new'}-${index}`} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-muted/50 transition-colors">
                   <div className="flex-1 grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor={`color-${index}`}>Color Name</Label>
                       <Input
                         id={`color-${index}`}
-                        value={row.color}
+                        value={row.color || ''}
                         onChange={(e) => updateRow(index, 'color', e.target.value)}
                         placeholder="e.g., Red, Blue, Green"
                         required={index === 0}
@@ -643,7 +669,7 @@ const ColorMaster = () => {
                       <div className="flex items-center gap-2">
                         <Input
                           id={`hex-${index}`}
-                          value={row.hex}
+                          value={row.hex || ''}
                           onChange={(e) => updateRow(index, 'hex', e.target.value)}
                           placeholder="#FF5733 or FF5733"
                           required={index === 0}
