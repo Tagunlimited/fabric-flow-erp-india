@@ -62,7 +62,7 @@ export function getOrderItemDisplayImage(item: any, order?: any): string | null 
     return null;
   }
 
-  // For custom orders, use mockup images if available
+  // For custom orders, use mockup images if available (do NOT fall back to category_image_url)
   // Priority 1: Check mockup_images column (TEXT[] array)
   if (item.mockup_images && Array.isArray(item.mockup_images) && item.mockup_images.length > 0) {
     const firstMockup = item.mockup_images[0];
@@ -90,15 +90,11 @@ export function getOrderItemDisplayImage(item: any, order?: any): string | null 
       }
     }
   } catch (error) {
-    // If parsing fails, continue to fallback
+    // If parsing fails, continue
     console.warn('Error parsing specifications for mockup images:', error);
   }
 
-  // Priority 3: Fallback to category_image_url
-  if (item.category_image_url && typeof item.category_image_url === 'string' && item.category_image_url.trim()) {
-    return item.category_image_url.trim();
-  }
-
+  // For custom orders, do NOT fall back to category_image_url - return null if no mockup
   return null;
 }
 
@@ -146,11 +142,7 @@ export function getOrderItemDisplayImageForForm(item: any): string | File | null
     console.warn('Error parsing specifications for mockup images:', error);
   }
 
-  // Priority 3: Fallback to category_image_url
-  if (item.category_image_url && typeof item.category_image_url === 'string' && item.category_image_url.trim()) {
-    return item.category_image_url.trim();
-  }
-
+  // For form context, do NOT fall back to category_image_url - return null if no mockup
   return null;
 }
 

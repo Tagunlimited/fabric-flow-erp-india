@@ -73,6 +73,12 @@ const masters = [
     path: "/masters/branding-types"
   },
   {
+    title: "Color Master",
+    description: "Manage color definitions with hex codes",
+    icon: Palette,
+    path: "/masters/colors"
+  },
+  {
     title: "Product Parts Manager",
     description: "Create and manage product customization parts",
     icon: Wrench,

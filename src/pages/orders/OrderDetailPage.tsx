@@ -22,9 +22,10 @@ import {
   ChevronDown,
   Trash2,
   Receipt,
-  ScrollText
+  ScrollText,
+  Plus
 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { toast } from "sonner";
@@ -36,11 +37,13 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { sortSizesQuantities, SizeType } from '@/utils/sizeSorting';
 import { calculateSizeBasedTotal, calculateOrderSummary } from '@/utils/priceCalculation';
+import { ProductCustomizationModal } from "@/components/orders/ProductCustomizationModal";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -390,6 +393,75 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
     return value;
   };
 
+  const humanizeStatus = (status?: string | null) => {
+    if (!status) return 'Status Updated';
+    return status
+      .split('_')
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+  };
+
+  const getActivityTitle = (activity: OrderActivity) => {
+    if (activity.activity_type === 'status_changed') {
+      const newObj: any = parseMaybeJson(activity.new_values) || {};
+      return humanizeStatus(newObj.status);
+    }
+
+    switch (activity.activity_type) {
+      case 'order_created':
+        return 'Order Created';
+      case 'order_updated':
+        return 'Order Updated';
+      case 'payment_received':
+        return 'Payment Received';
+      case 'order_dispatched':
+        return 'Order Dispatched';
+      default:
+        return activity.activity_description;
+    }
+  };
+
+  const getActivitySubtitle = (activity: OrderActivity) => {
+    if (activity.activity_type === 'status_changed') {
+      const oldObj: any = parseMaybeJson(activity.old_values) || {};
+      const newObj: any = parseMaybeJson(activity.new_values) || {};
+      const newStatus = String(newObj.status || '').toLowerCase();
+
+      switch (newStatus) {
+        case 'designing_done':
+          return 'Mockups approved and uploaded to Order Detail page.';
+        case 'confirmed':
+          return 'Advance payment received, order confirmed.';
+        case 'under_procurement':
+          return 'Materials planned and sent for procurement.';
+        case 'under_cutting':
+          return 'Cutting process started for this order.';
+        case 'under_stitching':
+          return 'Stitching in progress for this order.';
+        case 'under_qc':
+          return 'Order is under quality check.';
+        case 'ready_for_dispatch':
+          return 'Order packed and ready for dispatch.';
+        case 'partial_dispatched':
+          return 'Order partially dispatched to customer.';
+        case 'dispatched':
+          return 'Order fully dispatched to customer.';
+        case 'rework':
+          return 'Order sent back to production for rework.';
+        default:
+          if (oldObj.status && newObj.status) {
+            return `Status changed from ${humanizeStatus(oldObj.status)} to ${humanizeStatus(
+              newObj.status
+            )}.`;
+          }
+          return activity.activity_description;
+      }
+    }
+
+    // Non-status activities: keep existing description
+    return activity.activity_description;
+  };
+
   const formatDateTimeSafe = (value: any, options?: Intl.DateTimeFormatOptions) => {
     if (!value) return 'N/A';
     try {
@@ -641,52 +713,152 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
-                <p className="text-sm text-muted-foreground">Order Date</p>
-                <p className="font-medium">
-                  {new Date(order.order_date).toLocaleDateString('en-GB', {
-                    day: '2-digit',
-                    month: 'long',
-                    year: 'numeric'
-                  })}
-                </p>
-              </div>
-              {order.expected_delivery_date && (
-                <div>
-                  <p className="text-sm text-muted-foreground">Expected Delivery</p>
+                <Label className="text-sm text-muted-foreground">Order Date</Label>
+                {isEditing && editDraft ? (
+                  <Input 
+                    type="date" 
+                    value={editDraft.order_date} 
+                    onChange={e => setEditDraft({ ...editDraft, order_date: e.target.value })} 
+                    className="mt-1"
+                  />
+                ) : (
                   <p className="font-medium">
-                    {new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
+                    {new Date(order.order_date).toLocaleDateString('en-GB', {
                       day: '2-digit',
                       month: 'long',
                       year: 'numeric'
                     })}
                   </p>
-                </div>
-              )}
-              {salesManager && (
-                <div>
-                  <p className="text-sm text-muted-foreground">Sales Manager</p>
-                  <div className="flex items-center gap-2">
-                    {salesManager.avatar_url ? (
-                      <img
-                        src={salesManager.avatar_url}
-                        alt={salesManager.full_name}
-                        className="w-8 h-8 rounded-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-                        <User className="w-4 h-4 text-primary" />
-                      </div>
-                    )}
-                    <p className="font-medium">{salesManager.full_name}</p>
-                  </div>
-                </div>
-              )}
-              {order.notes && (
-                <div>
-                  <p className="text-sm text-muted-foreground">Notes</p>
-                  <p className="font-medium text-sm">{order.notes}</p>
-                </div>
-              )}
+                )}
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Expected Delivery</Label>
+                {isEditing && editDraft ? (
+                  <Input 
+                    type="date" 
+                    value={editDraft.expected_delivery_date} 
+                    onChange={e => setEditDraft({ ...editDraft, expected_delivery_date: e.target.value })} 
+                    className="mt-1"
+                  />
+                ) : (
+                  order.expected_delivery_date && (
+                    <p className="font-medium">
+                      {new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
+                        day: '2-digit',
+                        month: 'long',
+                        year: 'numeric'
+                      })}
+                    </p>
+                  )
+                )}
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Sales Manager</Label>
+                {isEditing && editDraft ? (
+                  <Select 
+                    value={editDraft.sales_manager || 'none'} 
+                    onValueChange={(v) => setEditDraft({ ...editDraft, sales_manager: v === 'none' ? null : v })}
+                    className="mt-1"
+                  >
+                    <SelectTrigger><SelectValue placeholder="Select manager" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      {employees.map(emp => (
+                        <SelectItem key={emp.id} value={emp.id}>{emp.full_name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  salesManager && (
+                    <div className="flex items-center gap-2">
+                      {salesManager.avatar_url ? (
+                        <img
+                          src={salesManager.avatar_url}
+                          alt={salesManager.full_name}
+                          className="w-8 h-8 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                          <User className="w-4 h-4 text-primary" />
+                        </div>
+                      )}
+                      <p className="font-medium">{salesManager.full_name}</p>
+                    </div>
+                  )
+                )}
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Payment Method</Label>
+                {isEditing && editDraft ? (
+                  <Input 
+                    value={editDraft.payment_channel || ''} 
+                    onChange={e => setEditDraft({ ...editDraft, payment_channel: e.target.value })} 
+                    className="mt-1"
+                    placeholder="Payment method"
+                  />
+                ) : (
+                  order.payment_channel && (
+                    <p className="font-medium">{order.payment_channel}</p>
+                  )
+                )}
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Reference ID</Label>
+                {isEditing && editDraft ? (
+                  <Input 
+                    value={editDraft.reference_id || ''} 
+                    onChange={e => setEditDraft({ ...editDraft, reference_id: e.target.value })} 
+                    className="mt-1"
+                    placeholder="Reference ID"
+                  />
+                ) : (
+                  order.reference_id && (
+                    <p className="font-medium">{order.reference_id}</p>
+                  )
+                )}
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Notes</Label>
+                {isEditing && editDraft ? (
+                  <Textarea 
+                    value={editDraft.notes || ''} 
+                    onChange={e => setEditDraft({ ...editDraft, notes: e.target.value })} 
+                    className="mt-1"
+                    placeholder="Notes"
+                    rows={3}
+                  />
+                ) : (
+                  order.notes && (
+                    <p className="font-medium text-sm">{order.notes}</p>
+                  )
+                )}
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">GST Rate (%)</Label>
+                {isEditing && editDraft ? (
+                  <Input 
+                    type="number" 
+                    value={editDraft.gst_rate} 
+                    onChange={e => setEditDraft({ ...editDraft, gst_rate: parseFloat(e.target.value) || 0 })} 
+                    className="mt-1"
+                  />
+                ) : (
+                  <p className="font-medium">{order.gst_rate || 0}%</p>
+                )}
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Advance Amount</Label>
+                {isEditing && editDraft ? (
+                  <Input 
+                    type="number" 
+                    value={editDraft.advance_amount} 
+                    onChange={e => setEditDraft({ ...editDraft, advance_amount: parseFloat(e.target.value) || 0 })} 
+                    className="mt-1"
+                  />
+                ) : (
+                  <p className="font-medium">{formatCurrency(order.advance_amount || 0)}</p>
+                )}
+              </div>
             </CardContent>
           </Card>
 
@@ -699,29 +871,52 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div>
-                <p className="font-semibold text-lg">{customer?.company_name}</p>
-                <p className="text-muted-foreground">{customer?.contact_person}</p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Email</p>
-                <p className="font-medium">{customer?.email}</p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Phone</p>
-                <p className="font-medium">{customer?.phone}</p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Address</p>
-                <p className="font-medium">
-                  {customer?.address}, {customer?.city}, {customer?.state} - {customer?.pincode}
-                </p>
-              </div>
-              {customer?.gstin && (
+              {isEditing && editDraft ? (
                 <div>
-                  <p className="text-sm text-muted-foreground">GSTIN</p>
-                  <p className="font-medium">{customer.gstin}</p>
+                  <Label className="text-sm text-muted-foreground">Customer</Label>
+                  <Select 
+                    value={editDraft.customer_id || 'none'} 
+                    onValueChange={(v) => setEditDraft({ ...editDraft, customer_id: v === 'none' ? null : v })}
+                    className="mt-1"
+                  >
+                    <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      {customers.map(cust => (
+                        <SelectItem key={cust.id} value={cust.id}>
+                          {cust.company_name} {cust.contact_person ? `(${cust.contact_person})` : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
+              ) : (
+                <>
+                  <div>
+                    <p className="font-semibold text-lg">{customer?.company_name}</p>
+                    <p className="text-muted-foreground">{customer?.contact_person}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Email</p>
+                    <p className="font-medium">{customer?.email}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Phone</p>
+                    <p className="font-medium">{customer?.phone}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Address</p>
+                    <p className="font-medium">
+                      {customer?.address}, {customer?.city}, {customer?.state} - {customer?.pincode}
+                    </p>
+                  </div>
+                  {customer?.gstin && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">GSTIN</p>
+                      <p className="font-medium">{customer.gstin}</p>
+                    </div>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>
@@ -837,20 +1032,26 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
                         <div className="flex-1 min-w-0">
                           <div className="w-full rounded-lg border bg-muted/10 p-3 sm:p-4">
                             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-1 gap-1">
-                              <h4 className="font-semibold text-xs sm:text-sm break-words break-all leading-snug">
-                                {activity.activity_description}
+                              <h4 className="font-semibold text-xs sm:text-sm break-words break-all leading-snug text-blue-700">
+                                {getActivityTitle(activity)}
                               </h4>
-                              <span className="text-[11px] sm:text-xs text-muted-foreground sm:max-w-[65%] whitespace-normal sm:whitespace-normal break-words break-all sm:text-right">
+                              <span className="text-[11px] sm:text-xs text-blue-600 sm:max-w-[65%] whitespace-normal sm:whitespace-normal break-words break-all sm:text-right">
                                 {formatDateTimeSafe(activity.performed_at)}
                               </span>
                             </div>
-                          
+
+                            {/* Subtitle / description */}
+                            <p className="text-[11px] sm:text-xs text-muted-foreground mb-2 break-words">
+                              {getActivitySubtitle(activity)}
+                            </p>
+
                             {/* User info */}
-                            {activity.user_name && (
-                              <p className="text-[11px] sm:text-xs text-muted-foreground mb-2 break-words">
-                                By: {activity.user_name} {activity.user_email ? `(${activity.user_email})` : ''}
-                              </p>
-                            )}
+                            <p className="text-[11px] sm:text-xs text-muted-foreground mb-2 break-words">
+                              By:{' '}
+                              {activity.user_name ||
+                                activity.user_email ||
+                                'System'}
+                            </p>
                           
                             {/* Activity details */}
                             {activity.metadata && (
@@ -907,11 +1108,12 @@ export default function OrderDetailPage() {
   const [searchParams] = useSearchParams();
   const printRef = useRef<HTMLDivElement>(null);
   const { config: company } = useCompanySettings();
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
   
   // Determine if we should hide pricing/order summary/lifecycle sections
   // Hide if: user is NOT admin (admins should always see all sections)
   const isAdmin = profile?.role === 'admin';
+  const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
   const shouldHideSections = !isAdmin;
   
   const [order, setOrder] = useState<Order | null>(null);
@@ -926,7 +1128,7 @@ export default function OrderDetailPage() {
   const [selectedMockupImages, setSelectedMockupImages] = useState<{ [key: number]: number }>({});
   const [selectedReferenceImages, setSelectedReferenceImages] = useState<{ [key: number]: number }>({});
   const [employees, setEmployees] = useState<SalesManager[]>([]);
-  const [editOpen, setEditOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -934,15 +1136,46 @@ export default function OrderDetailPage() {
     order_date: string; 
     expected_delivery_date: string; 
     sales_manager: string | null; 
+    customer_id: string | null;
     gst_rate: number; 
     payment_channel: string | null; 
     reference_id: string | null; 
-    notes: string | null; 
+    notes: string | null;
+    advance_amount: number;
   } | null>(null);
-  const [editItems, setEditItems] = useState<Array<{ id: string; product_description: string; quantity: number; unit_price: number; gst_rate: number }>>([]);
+  const [editItems, setEditItems] = useState<Array<{ 
+    id: string; 
+    product_description: string; 
+    fabric_id: string;
+    fabric_base_id?: string;
+    color: string;
+    gsm: string;
+    product_category_id: string;
+    size_type_id: string;
+    quantity: number; 
+    unit_price: number; 
+    price: number; // base price
+    size_prices?: Record<string, number>;
+    gst_rate: number;
+    sizes_quantities: Record<string, number>;
+    remarks: string;
+    customizations?: any[];
+    branding_items?: any[];
+  }>>([]);
+  const [customers, setCustomers] = useState<Array<{ id: string; company_name: string; contact_person: string }>>([]);
+  const [additionalCharges, setAdditionalCharges] = useState<Array<{
+    particular: string;
+    rate: number;
+    gst_percentage: number;
+    amount_incl_gst: number;
+  }>>([]);
+  const [customizationModalOpen, setCustomizationModalOpen] = useState(false);
+  const [activeCustomizationIndex, setActiveCustomizationIndex] = useState<number | null>(null);
+  const [editingCustomizationIndex, setEditingCustomizationIndex] = useState<number | null>(null);
   const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [totalReceipts, setTotalReceipts] = useState<number>(0);
+  const [hasCuttingMaster, setHasCuttingMaster] = useState<boolean>(false);
 
   // Handle back navigation based on referrer and order type
   const handleBackNavigation = () => {
@@ -958,6 +1191,58 @@ export default function OrderDetailPage() {
       navigate('/orders', { state: { refreshOrders: true } });
     }
   };
+
+  // Map logged-in user -> employee_id so we can restrict edit access
+  useEffect(() => {
+    const loadEmployeeMapping = async () => {
+      try {
+        if (!user?.id) return;
+
+        const { data: employeesData } = await supabase
+          .from('employees')
+          .select('id, personal_email, user_id');
+
+        if (!employeesData) return;
+
+        // Fetch profiles once to support email-based mapping if needed
+        const { data: allProfiles } = await supabase
+          .from('profiles')
+          .select('user_id, email');
+
+        let matchedEmployeeId: string | null = null;
+
+        for (const emp of employeesData as any[]) {
+          if (emp.user_id && emp.user_id === user.id) {
+            matchedEmployeeId = emp.id;
+            break;
+          }
+        }
+
+        // Fallback: match via email if we didn't find a direct user_id match
+        if (!matchedEmployeeId && allProfiles && profile?.email) {
+          const matchingProfile = allProfiles.find((p: any) => p.email === profile.email);
+          if (matchingProfile) {
+            const emp = (employeesData as any[]).find(
+              (e: any) => e.user_id === matchingProfile.user_id || e.personal_email === matchingProfile.email
+            );
+            if (emp) {
+              matchedEmployeeId = emp.id;
+            }
+          }
+        }
+
+        if (matchedEmployeeId) {
+          setCurrentEmployeeId(matchedEmployeeId);
+        }
+      } catch (error) {
+        console.error('Error mapping user to employee:', error);
+      }
+    };
+
+    loadEmployeeMapping();
+  }, [user?.id, profile?.email]);
+
+  const canEditOrder = !!order && !hasCuttingMaster && (isAdmin || (currentEmployeeId && order.sales_manager === currentEmployeeId));
 
   const handleDeleteOrder = async () => {
     if (!order) return;
@@ -1144,6 +1429,24 @@ export default function OrderDetailPage() {
         
         setOrderItems((itemsData as unknown as OrderItem[]) || []);
 
+        // Check if order has cutting master assigned
+        try {
+          const { data: assignmentData, error: assignmentError } = await supabase
+            .from('order_assignments')
+            .select('cutting_master_id')
+            .eq('order_id', id as string)
+            .maybeSingle();
+          
+          if (!assignmentError) {
+            setHasCuttingMaster(!!assignmentData?.cutting_master_id);
+          } else {
+            setHasCuttingMaster(false);
+          }
+        } catch (error) {
+          console.error('Error checking cutting master assignment:', error);
+          setHasCuttingMaster(false);
+        }
+
         // Fetch fabric details for all items
         if (itemsData && (itemsData as any[]).length > 0) {
           const fabricIds = ((itemsData || []) as any[]).map((item: any) => item.fabric_id).filter(Boolean);
@@ -1293,39 +1596,176 @@ export default function OrderDetailPage() {
     }
   };
 
-  const openEditDialog = () => {
+  const startEditing = async () => {
     if (!order) return;
+    
+    // Fetch customers list
+    try {
+      const { data: customersData } = await supabase
+        .from('customers')
+        .select('id, company_name, contact_person')
+        .order('company_name');
+      if (customersData) {
+        setCustomers(customersData);
+      }
+    } catch (error) {
+      console.error('Error fetching customers:', error);
+    }
+    
     setEditDraft({
       order_date: order.order_date ? order.order_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
       expected_delivery_date: order.expected_delivery_date ? order.expected_delivery_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
       sales_manager: order.sales_manager || null,
+      customer_id: order.customer_id || null,
       gst_rate: order.gst_rate ?? 0,
       payment_channel: order.payment_channel || '',
       reference_id: order.reference_id || '',
-      notes: order.notes || ''
+      notes: order.notes || '',
+      advance_amount: order.advance_amount || 0
     });
-    const itemsDraft = orderItems.map(it => ({
-      id: it.id,
-      product_description: it.product_description,
-      quantity: it.quantity,
-      unit_price: it.unit_price,
-      gst_rate: it.gst_rate ?? (order.gst_rate ?? 0)
-    }));
+    
+    // Fetch additional charges if any
+    try {
+      const { data: chargesData } = await supabase
+        .from('order_additional_charges')
+        .select('*')
+        .eq('order_id', order.id);
+      if (chargesData) {
+        setAdditionalCharges(chargesData.map((c: any) => ({
+          particular: c.particular || '',
+          rate: c.rate || 0,
+          gst_percentage: c.gst_percentage || 0,
+          amount_incl_gst: c.amount_incl_gst || 0
+        })));
+      }
+    } catch (error) {
+      console.error('Error fetching additional charges:', error);
+    }
+    
+    const itemsDraft = orderItems.map(it => {
+      const specs = typeof it.specifications === 'string' ? JSON.parse(it.specifications) : (it.specifications || {});
+      const sizePrices = specs.size_prices || it.size_prices || {};
+      const basePrice = it.unit_price || (sizePrices && Object.values(sizePrices).length > 0 ? Math.min(...Object.values(sizePrices) as number[]) : 0);
+      
+      return {
+        id: it.id,
+        product_description: it.product_description || '',
+        fabric_id: it.fabric_id || '',
+        fabric_base_id: specs.fabric_base_id || it.fabric_base_id || '',
+        color: it.color || '',
+        gsm: it.gsm || '',
+        product_category_id: it.product_category_id || '',
+        size_type_id: specs.size_type_id || it.size_type_id || '',
+        quantity: it.quantity,
+        unit_price: it.unit_price,
+        price: basePrice,
+        size_prices: sizePrices,
+        gst_rate: it.gst_rate ?? (order.gst_rate ?? 0),
+        sizes_quantities: it.sizes_quantities || specs.sizes_quantities || {},
+        remarks: it.remarks || specs.remarks || '',
+        customizations: specs.customizations || [],
+        branding_items: specs.branding_items || []
+      };
+    });
     setEditItems(itemsDraft);
-    setEditOpen(true);
+    setIsEditing(true);
   };
 
-  const computeDraftTotals = () => {
+  const cancelEditing = () => {
+    setIsEditing(false);
+    setEditDraft(null);
+    setEditItems([]);
+    setAdditionalCharges([]);
+    setCustomizationModalOpen(false);
+    setActiveCustomizationIndex(null);
+    setEditingCustomizationIndex(null);
+  };
+
+  // Computed display items - use edited items when editing, otherwise use original items
+  const displayItems = useMemo(() => {
+    if (isEditing && editItems.length > 0) {
+      return editItems;
+    }
+    return orderItems;
+  }, [isEditing, editItems, orderItems]);
+
+  // Helper function to calculate item total using size-based pricing
+  const calculateItemTotal = (item: typeof editItems[0]) => {
+    if (item.size_prices && Object.keys(item.sizes_quantities || {}).length > 0) {
+      // Use size-based pricing
+      return calculateSizeBasedTotal(
+        item.sizes_quantities || {},
+        item.size_prices,
+        item.price || item.unit_price || 0
+      );
+    } else {
+      // Fallback to quantity * unit_price
+      return item.quantity * (item.unit_price || item.price || 0);
+    }
+  };
+
+  // Memoized totals calculation that recalculates when dependencies change
+  const draftTotals = useMemo(() => {
     let subtotal = 0;
     let gstTotal = 0;
     editItems.forEach(it => {
-      const amount = it.quantity * it.unit_price;
+      const amount = calculateItemTotal(it);
       subtotal += amount;
       const rate = isNaN(it.gst_rate) ? 0 : it.gst_rate;
       gstTotal += (amount * rate) / 100;
     });
-    return { subtotal, gstTotal, grandTotal: subtotal + gstTotal };
+    const additionalChargesTotal = additionalCharges.reduce((sum, charge) => sum + charge.amount_incl_gst, 0);
+    const grandTotal = subtotal + gstTotal + additionalChargesTotal;
+    const balance = grandTotal - (editDraft?.advance_amount || 0);
+    return { subtotal, gstTotal, additionalChargesTotal, grandTotal, balance };
+  }, [editItems, additionalCharges, editDraft?.advance_amount]);
+
+  const handleRemoveCustomization = (itemIdx: number, customizationIdx: number) => {
+    setEditItems(prev =>
+      prev.map((item, index) =>
+        index === itemIdx
+          ? {
+              ...item,
+              customizations: (item.customizations || []).filter((_, i) => i !== customizationIdx),
+            }
+          : item
+      )
+    );
+    // Clear editing index if we removed the one being edited
+    setEditingCustomizationIndex(prev => (prev === customizationIdx ? null : prev));
   };
+
+  // Computed order summary - use draft totals when editing, otherwise calculate from orderItems
+  const orderSummary = useMemo(() => {
+    if (isEditing && editItems.length > 0) {
+      return draftTotals;
+    }
+    if (!order) {
+      // Return default values when order is not loaded yet
+      return {
+        subtotal: 0,
+        gstTotal: 0,
+        additionalChargesTotal: 0,
+        grandTotal: 0,
+        balance: 0
+      };
+    }
+    const summary = calculateOrderSummary(orderItems, order);
+    const additionalChargesTotal = isEditing ? additionalCharges.reduce((sum, charge) => sum + charge.amount_incl_gst, 0) : 0;
+    return {
+      subtotal: summary.subtotal,
+      gstTotal: summary.gstAmount,
+      additionalChargesTotal,
+      grandTotal: summary.grandTotal + additionalChargesTotal,
+      balance: summary.grandTotal + additionalChargesTotal - (isEditing ? (editDraft?.advance_amount || 0) : (order?.advance_amount || 0))
+    };
+  }, [isEditing, editItems, orderItems, order, draftTotals, additionalCharges, editDraft?.advance_amount]);
+
+  // Computed GST breakdown - use displayItems
+  const gstBreakdown = useMemo(() => {
+    if (!order) return [];
+    return calculateGSTRatesBreakdown(displayItems, order);
+  }, [displayItems, order]);
 
   const handleSaveEdit = async () => {
     if (!order || !editDraft) return;
@@ -1333,21 +1773,94 @@ export default function OrderDetailPage() {
       setSavingEdit(true);
       // Update order items
       await Promise.all(
-        editItems.map(it =>
-          (supabase as any)
+        editItems.map(async (it) => {
+          // Get existing specifications to preserve other fields
+          const { data: existingItem } = await supabase
+            .from('order_items')
+            .select('specifications')
+            .eq('id', it.id)
+            .single();
+          
+          const existingSpecs = existingItem?.specifications 
+            ? (typeof existingItem.specifications === 'string' 
+                ? JSON.parse(existingItem.specifications) 
+                : existingItem.specifications)
+            : {};
+          
+          // Calculate item total using size-based pricing if available
+          let itemTotal = 0;
+          if (it.size_prices && Object.keys(it.sizes_quantities || {}).length > 0) {
+            Object.entries(it.sizes_quantities || {}).forEach(([size, qty]) => {
+              const sizePrice = it.size_prices?.[size] ?? it.price ?? it.unit_price;
+              itemTotal += (qty || 0) * sizePrice;
+            });
+          } else {
+            itemTotal = it.quantity * (it.unit_price || it.price || 0);
+          }
+          
+          // Merge all fields into specifications
+          const updatedSpecs = {
+            ...existingSpecs,
+            sizes_quantities: it.sizes_quantities,
+            size_prices: it.size_prices,
+            size_type_id: it.size_type_id,
+            remarks: it.remarks,
+            customizations: it.customizations,
+            branding_items: it.branding_items,
+            fabric_base_id: it.fabric_base_id
+          };
+          
+          return (supabase as any)
             .from('order_items')
             .update({
+              product_description: it.product_description,
+              fabric_id: it.fabric_id || null,
+              color: it.color || null,
+              gsm: it.gsm || null,
+              product_category_id: it.product_category_id || null,
               quantity: it.quantity,
-              unit_price: it.unit_price,
-              total_price: it.quantity * it.unit_price,
+              unit_price: it.price || it.unit_price,
+              total_price: itemTotal,
               gst_rate: it.gst_rate,
+              sizes_quantities: it.sizes_quantities,
+              remarks: it.remarks,
+              specifications: updatedSpecs,
             })
-            .eq('id', it.id)
-        )
+            .eq('id', it.id);
+        })
       );
 
-      const { subtotal, gstTotal, grandTotal } = computeDraftTotals();
-      const balanceAmount = grandTotal - (order.advance_amount || 0);
+      // Save/Update additional charges
+      if (additionalCharges.length > 0) {
+        // Delete existing charges
+        await supabase
+          .from('order_additional_charges')
+          .delete()
+          .eq('order_id', order.id);
+        
+        // Insert new charges
+        await supabase
+          .from('order_additional_charges')
+          .insert(
+            additionalCharges
+              .filter(c => c.particular && c.rate > 0)
+              .map(charge => ({
+                order_id: order.id,
+                particular: charge.particular,
+                rate: charge.rate,
+                gst_percentage: charge.gst_percentage,
+                amount_incl_gst: charge.amount_incl_gst
+              }))
+          );
+      } else {
+        // Delete all charges if none exist
+        await supabase
+          .from('order_additional_charges')
+          .delete()
+          .eq('order_id', order.id);
+      }
+
+      const { subtotal, gstTotal, grandTotal, balance: balanceAmount } = draftTotals;
 
       const { error: orderUpdateError } = await (supabase as any)
         .from('orders')
@@ -1355,10 +1868,12 @@ export default function OrderDetailPage() {
           order_date: new Date(editDraft.order_date).toISOString(),
           expected_delivery_date: new Date(editDraft.expected_delivery_date).toISOString(),
           sales_manager: editDraft.sales_manager,
+          customer_id: editDraft.customer_id,
           gst_rate: editDraft.gst_rate,
           payment_channel: editDraft.payment_channel,
           reference_id: editDraft.reference_id,
           notes: editDraft.notes,
+          advance_amount: editDraft.advance_amount || 0,
           total_amount: subtotal,
           tax_amount: gstTotal,
           final_amount: grandTotal,
@@ -1368,7 +1883,9 @@ export default function OrderDetailPage() {
       if (orderUpdateError) throw orderUpdateError;
 
       toast.success('Order updated successfully');
-      setEditOpen(false);
+      setIsEditing(false);
+      setEditDraft(null);
+      setEditItems([]);
       // Refresh
       await fetchOrderDetails();
       await fetchOrderActivities();
@@ -1777,6 +2294,75 @@ export default function OrderDetailPage() {
     return value;
   };
 
+  const humanizeStatus = (status?: string | null) => {
+    if (!status) return 'Status Updated';
+    return status
+      .split('_')
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+  };
+
+  const getActivityTitle = (activity: OrderActivity) => {
+    if (activity.activity_type === 'status_changed') {
+      const newObj: any = parseMaybeJson(activity.new_values) || {};
+      return humanizeStatus(newObj.status);
+    }
+
+    switch (activity.activity_type) {
+      case 'order_created':
+        return 'Order Created';
+      case 'order_updated':
+        return 'Order Updated';
+      case 'payment_received':
+        return 'Payment Received';
+      case 'order_dispatched':
+        return 'Order Dispatched';
+      default:
+        return activity.activity_description;
+    }
+  };
+
+  const getActivitySubtitle = (activity: OrderActivity) => {
+    if (activity.activity_type === 'status_changed') {
+      const oldObj: any = parseMaybeJson(activity.old_values) || {};
+      const newObj: any = parseMaybeJson(activity.new_values) || {};
+      const newStatus = String(newObj.status || '').toLowerCase();
+
+      switch (newStatus) {
+        case 'designing_done':
+          return 'Mockups approved and uploaded to Order Detail page.';
+        case 'confirmed':
+          return 'Advance payment received, order confirmed.';
+        case 'under_procurement':
+          return 'Materials planned and sent for procurement.';
+        case 'under_cutting':
+          return 'Cutting process started for this order.';
+        case 'under_stitching':
+          return 'Stitching in progress for this order.';
+        case 'under_qc':
+          return 'Order is under quality check.';
+        case 'ready_for_dispatch':
+          return 'Order packed and ready for dispatch.';
+        case 'partial_dispatched':
+          return 'Order partially dispatched to customer.';
+        case 'dispatched':
+          return 'Order fully dispatched to customer.';
+        case 'rework':
+          return 'Order sent back to production for rework.';
+        default:
+          if (oldObj.status && newObj.status) {
+            return `Status changed from ${humanizeStatus(oldObj.status)} to ${humanizeStatus(
+              newObj.status
+            )}.`;
+          }
+          return activity.activity_description;
+      }
+    }
+
+    // Non-status activities: keep existing description
+    return activity.activity_description;
+  };
+
   const formatDateTimeSafe = (value: any, options?: Intl.DateTimeFormatOptions) => {
     try {
       const d = new Date(value);
@@ -1933,6 +2519,22 @@ export default function OrderDetailPage() {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+
+              {canEditOrder && !isEditing && (
+                <Button variant="outline" onClick={startEditing}>
+                  Edit Order
+                </Button>
+              )}
+              {isEditing && (
+                <>
+                  <Button variant="outline" onClick={cancelEditing} disabled={savingEdit}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleSaveEdit} disabled={savingEdit}>
+                    {savingEdit ? 'Saving...' : 'Save Changes'}
+                  </Button>
+                </>
+              )}
               
               <AlertDialog>
                 <AlertDialogTrigger asChild>
@@ -2058,8 +2660,418 @@ export default function OrderDetailPage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-6">
-                    {orderItems.map((item, index) => {
+                  {isEditing && editItems.length > 0 ? (
+                    <div className="space-y-6">
+                      {editItems.map((it, itemIdx) => {
+                        const amount = calculateItemTotal(it);
+                        const sortedSizes = sortSizesQuantities(
+                          it.sizes_quantities || {},
+                          it.size_type_id,
+                          sizeTypes
+                        );
+                        return (
+                          <div key={it.id} className="border rounded-lg p-4 space-y-4 bg-muted/10">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                              {/* Product Category */}
+                              <div>
+                                <Label>Product Category</Label>
+                                <Select 
+                                  value={it.product_category_id || 'none'} 
+                                  onValueChange={(v) => setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, product_category_id: v === 'none' ? '' : v } : p))}
+                                >
+                                  <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="none">None</SelectItem>
+                                    {Object.values(productCategories).map(cat => (
+                                      <SelectItem key={cat.id} value={cat.id}>{cat.category_name}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              
+                              {/* Product Description */}
+                              <div>
+                                <Label>Product Description</Label>
+                                <Input 
+                                  value={it.product_description} 
+                                  onChange={e => setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, product_description: e.target.value } : p))}
+                                />
+                              </div>
+                              
+                              {/* Size Type */}
+                              <div>
+                                <Label>Size Type</Label>
+                                <Select 
+                                  value={it.size_type_id || 'none'} 
+                                  onValueChange={(v) => setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, size_type_id: v === 'none' ? '' : v } : p))}
+                                >
+                                  <SelectTrigger><SelectValue placeholder="Select size type" /></SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="none">None</SelectItem>
+                                    {sizeTypes.map(st => (
+                                      <SelectItem key={st.id} value={st.id}>{st.size_name}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              
+                              {/* Fabric */}
+                              <div>
+                                <Label>Fabric</Label>
+                                <Select 
+                                  value={it.fabric_id || 'none'} 
+                                  onValueChange={(v) => setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, fabric_id: v === 'none' ? '' : v } : p))}
+                                >
+                                  <SelectTrigger><SelectValue placeholder="Select fabric" /></SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="none">None</SelectItem>
+                                    {Object.values(fabrics).map(fabric => (
+                                      <SelectItem key={fabric.id} value={fabric.id}>{fabric.name}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              
+                              {/* Color */}
+                              <div>
+                                <Label>Color</Label>
+                                <Input 
+                                  value={it.color || ''} 
+                                  onChange={e => setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, color: e.target.value } : p))}
+                                />
+                              </div>
+                              
+                              {/* GSM */}
+                              <div>
+                                <Label>GSM</Label>
+                                <Input 
+                                  value={it.gsm || ''} 
+                                  onChange={e => setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, gsm: e.target.value } : p))}
+                                />
+                              </div>
+                              
+                              {/* Base Price */}
+                              <div>
+                                <Label>Base Price</Label>
+                                <Input 
+                                  type="number" 
+                                  value={it.price || 0} 
+                                  onChange={e => {
+                                    const v = parseFloat(e.target.value) || 0;
+                                    setEditItems(prev => prev.map((p, i) => {
+                                      if (i === itemIdx) {
+                                        return { ...p, price: v, unit_price: v };
+                                      }
+                                      return p;
+                                    }));
+                                  }}
+                                />
+                              </div>
+                              
+                              {/* Quantity */}
+                              <div>
+                                <Label>Total Quantity</Label>
+                                <Input 
+                                  type="number" 
+                                  value={it.quantity} 
+                                  onChange={e => {
+                                    const v = parseInt(e.target.value) || 0;
+                                    setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, quantity: v } : p));
+                                  }}
+                                />
+                              </div>
+                              
+                              {/* GST Rate */}
+                              <div>
+                                <Label>GST Rate (%)</Label>
+                                <Input 
+                                  type="number" 
+                                  value={it.gst_rate} 
+                                  onChange={e => {
+                                    const v = parseFloat(e.target.value) || 0;
+                                    setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, gst_rate: v } : p));
+                                  }}
+                                />
+                              </div>
+                              
+                              {/* Remarks */}
+                              <div className="md:col-span-2 lg:col-span-3">
+                                <Label>Remarks</Label>
+                                <Textarea 
+                                  value={it.remarks || ''} 
+                                  onChange={e => setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, remarks: e.target.value } : p))}
+                                  rows={2}
+                                />
+                              </div>
+                              
+                              {/* Customizations */}
+                              <div className="md:col-span-2 lg:col-span-3 space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <Label>Customizations</Label>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={!it.product_category_id}
+                                    onClick={() => {
+                                      setActiveCustomizationIndex(itemIdx);
+                                      setEditingCustomizationIndex(null);
+                                      setCustomizationModalOpen(true);
+                                    }}
+                                  >
+                                    <Plus className="w-4 h-4 mr-1" />
+                                    {(it.customizations && it.customizations.length > 0) ? 'Add More' : 'Add Customization'}
+                                  </Button>
+                                </div>
+                                
+                                {(it.customizations && it.customizations.length > 0) && (
+                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                                    {it.customizations.map((customization: any, cIdx: number) => (
+                                      <div
+                                        key={`${customization.partId || cIdx}-${cIdx}`}
+                                        className="relative p-3 border rounded-lg bg-white shadow-sm cursor-pointer"
+                                        onClick={() => {
+                                          setActiveCustomizationIndex(itemIdx);
+                                          setEditingCustomizationIndex(cIdx);
+                                          setCustomizationModalOpen(true);
+                                        }}
+                                      >
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="xs"
+                                          className="absolute top-2 right-2 h-5 w-5 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                          onClick={() => handleRemoveCustomization(itemIdx, cIdx)}
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </Button>
+                                        <div className="flex items-start gap-2">
+                                          {customization.selectedAddonImageUrl && (
+                                            <img 
+                                              src={customization.selectedAddonImageUrl} 
+                                              alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
+                                              className="w-8 h-8 object-cover rounded border flex-shrink-0"
+                                              onError={(e) => {
+                                                e.currentTarget.style.display = 'none';
+                                              }}
+                                            />
+                                          )}
+                                          <div className="flex-1 min-w-0">
+                                            <div className="font-medium text-xs truncate" title={customization.partName}>
+                                              {customization.partName}
+                                            </div>
+                                            {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
+                                              <div className="text-xs text-muted-foreground truncate" title={customization.selectedAddonName}>
+                                                {customization.selectedAddonName}
+                                              </div>
+                                            )}
+                                            {customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
+                                              <div className="text-xs text-muted-foreground">
+                                                Qty: {customization.quantity}
+                                              </div>
+                                            )}
+                                            {customization.priceImpact !== undefined && customization.priceImpact !== null && customization.priceImpact !== 0 && (
+                                              <div className="text-xs font-medium text-green-600">
+                                                ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                
+                                {!it.product_category_id && (
+                                  <p className="text-xs text-muted-foreground">
+                                    Select a product category to enable customizations
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            
+                            {/* Size-wise Quantities */}
+                            {it.size_type_id && sortedSizes.length > 0 && (
+                              <div className="space-y-2 border-t pt-4">
+                                <Label className="text-sm font-semibold">Size-wise Quantities</Label>
+                                <div className="flex gap-2 overflow-x-auto pb-1">
+                                  {sortedSizes.map(([size, qty]) => (
+                                    <div key={size} className="flex flex-col space-y-1 flex-shrink-0 min-w-[80px]">
+                                      <Label className="text-xs text-center">{size}</Label>
+                                      <Input
+                                        type="number"
+                                        value={qty}
+                                        onChange={(e) => {
+                                          const v = parseInt(e.target.value) || 0;
+                                          setEditItems(prev => prev.map((p, i) => {
+                                            if (i === itemIdx) {
+                                              const newSizes = { ...p.sizes_quantities, [size]: v };
+                                              return { ...p, sizes_quantities: newSizes };
+                                            }
+                                            return p;
+                                          }));
+                                        }}
+                                        className="w-full text-center text-sm"
+                                      />
+                                    </div>
+                                  ))}
+                                  <div className="flex flex-col space-y-1 flex-shrink-0 min-w-[80px]">
+                                    <Label className="text-xs text-center">Add</Label>
+                                    <Input 
+                                      placeholder="Size"
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && e.currentTarget.value) {
+                                          const newSize = e.currentTarget.value.trim();
+                                          if (!it.sizes_quantities[newSize]) {
+                                            setEditItems(prev => prev.map((p, i) => {
+                                              if (i === itemIdx) {
+                                                const newSizes = { ...p.sizes_quantities, [newSize]: 0 };
+                                                return { ...p, sizes_quantities: newSizes };
+                                              }
+                                              return p;
+                                            }));
+                                            e.currentTarget.value = '';
+                                          }
+                                        }
+                                      }}
+                                      className="w-full text-center text-sm"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* Size-wise Prices */}
+                            {it.size_type_id && sortedSizes.length > 0 && it.size_prices && (
+                              <div className="space-y-2 border-t pt-4">
+                                <Label className="text-sm font-semibold">Size-wise Prices (Custom prices, leave empty to use base price)</Label>
+                                <div className="flex gap-2 overflow-x-auto pb-1">
+                                  {sortedSizes.map(([size]) => {
+                                    const sizePrice = it.size_prices?.[size];
+                                    const isCustom = sizePrice !== undefined && sizePrice !== it.price;
+                                    return (
+                                      <div key={size} className="flex flex-col space-y-1 flex-shrink-0 min-w-[80px]">
+                                        <Label className="text-xs text-center">{size}</Label>
+                                        <Input
+                                          type="number"
+                                          value={sizePrice !== undefined ? sizePrice : it.price}
+                                          onChange={(e) => {
+                                            const v = parseFloat(e.target.value) || 0;
+                                            setEditItems(prev => prev.map((p, i) => {
+                                              if (i === itemIdx) {
+                                                const currentSizePrices = p.size_prices || {};
+                                                const updatedSizePrices = { ...currentSizePrices };
+                                                if (v === p.price) {
+                                                  delete updatedSizePrices[size];
+                                                } else {
+                                                  updatedSizePrices[size] = v;
+                                                }
+                                                return { 
+                                                  ...p, 
+                                                  size_prices: Object.keys(updatedSizePrices).length > 0 ? updatedSizePrices : undefined
+                                                };
+                                              }
+                                              return p;
+                                            }));
+                                          }}
+                                          className={`w-full text-center text-sm ${isCustom ? 'border-blue-500 bg-blue-50' : ''}`}
+                                        />
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                            
+                            <div className="text-right text-sm font-medium border-t pt-2">
+                              Item Total: {formatCurrency(amount)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      
+                      {/* Additional Charges */}
+                      <div className="space-y-3 border-t pt-4">
+                        <div className="flex justify-between items-center">
+                          <Label className="text-sm font-semibold">Additional Charges</Label>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setAdditionalCharges(prev => [...prev, { particular: '', rate: 0, gst_percentage: 0, amount_incl_gst: 0 }])}
+                          >
+                            <Plus className="w-4 h-4 mr-2" />
+                            Add Charge
+                          </Button>
+                        </div>
+                        {additionalCharges.map((charge, chargeIdx) => (
+                          <div key={chargeIdx} className="grid grid-cols-1 md:grid-cols-4 gap-2 border rounded-lg p-3">
+                            <Input
+                              placeholder="Particular"
+                              value={charge.particular}
+                              onChange={(e) => setAdditionalCharges(prev => prev.map((c, i) => i === chargeIdx ? { ...c, particular: e.target.value } : c))}
+                            />
+                            <Input
+                              type="number"
+                              placeholder="Rate"
+                              value={charge.rate}
+                              onChange={(e) => {
+                                const rate = parseFloat(e.target.value) || 0;
+                                const gst = charge.gst_percentage || 0;
+                                const amountInclGst = rate * (1 + gst / 100);
+                                setAdditionalCharges(prev => prev.map((c, i) => i === chargeIdx ? { ...c, rate, amount_incl_gst: amountInclGst } : c));
+                              }}
+                            />
+                            <Input
+                              type="number"
+                              placeholder="GST %"
+                              value={charge.gst_percentage}
+                              onChange={(e) => {
+                                const gst = parseFloat(e.target.value) || 0;
+                                const rate = charge.rate || 0;
+                                const amountInclGst = rate * (1 + gst / 100);
+                                setAdditionalCharges(prev => prev.map((c, i) => i === chargeIdx ? { ...c, gst_percentage: gst, amount_incl_gst: amountInclGst } : c));
+                              }}
+                            />
+                            <div className="flex gap-2">
+                              <Input
+                                type="number"
+                                placeholder="Amount"
+                                value={charge.amount_incl_gst}
+                                disabled
+                                className="flex-1"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setAdditionalCharges(prev => prev.filter((_, i) => i !== chargeIdx))}
+                              >
+                                <X className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      
+                      <div className="text-right space-y-1 text-sm border-t pt-4">
+                        <div>Subtotal: {formatCurrency(draftTotals.subtotal)}</div>
+                        <div>GST Total: {formatCurrency(draftTotals.gstTotal)}</div>
+                        {draftTotals.additionalChargesTotal > 0 && (
+                          <div>Additional Charges: {formatCurrency(draftTotals.additionalChargesTotal)}</div>
+                        )}
+                        <div className="font-semibold text-lg">Grand Total: {formatCurrency(draftTotals.grandTotal)}</div>
+                        {editDraft && (
+                          <>
+                            <div>Advance Amount: {formatCurrency(editDraft.advance_amount || 0)}</div>
+                            <div className="font-medium">Balance Due: {formatCurrency(draftTotals.balance)}</div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {displayItems.map((item, index) => {
                       // Define proper size order
                       const getSizeOrder = (sizes: string[]) => {
                         const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 
@@ -2091,7 +3103,7 @@ export default function OrderDetailPage() {
                           <div className="flex flex-col xl:flex-row gap-6">
                             {/* Product Images Section - Better aspect ratio and space utilization */}
                             <div className="xl:w-2/5 space-y-6">
-                              {/* Product Image with priority: mockup > category */}
+                              {/* Product Image - Only show mockup images, not category images */}
                               {(() => {
                                 const displayImage = getOrderItemDisplayImage(item, order);
                                 const { mockup_images } = extractImagesFromSpecifications(item.specifications);
@@ -2099,22 +3111,24 @@ export default function OrderDetailPage() {
                                 const hasMockup = !isReadymadeOrder && ((item.mockup_images && item.mockup_images.length > 0) || 
                                                  (mockup_images && mockup_images.length > 0));
                                 
-                                return displayImage ? (
+                                // Only show image if it's a mockup (not category image)
+                                // For custom orders, getOrderItemDisplayImage now returns null if no mockup
+                                return displayImage && hasMockup ? (
                                   <div>
                                     <p className="text-sm font-medium text-muted-foreground mb-3">
-                                      {hasMockup ? 'Product Image (Mockup)' : 'Category Image'}
+                                      Product Image (Mockup)
                                     </p>
                                     <div className="aspect-[3/3.5] w-full overflow-hidden rounded-lg border shadow-md">
                                       <img 
                                         src={displayImage} 
-                                        alt={hasMockup ? "Product Mockup" : "Category"}
+                                        alt="Product Mockup"
                                         className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
                                         onClick={() => {
                                           const modal = document.createElement('div');
                                           modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
                                           modal.innerHTML = `
                                             <div class="relative max-w-4xl max-h-full">
-                                              <img src="${displayImage}" alt="${hasMockup ? 'Product Mockup' : 'Category'}" class="max-w-full max-h-full object-contain rounded-lg" />
+                                              <img src="${displayImage}" alt="Product Mockup" class="max-w-full max-h-full object-contain rounded-lg" />
                                               <button class="absolute top-4 right-4 bg-white/90 hover:bg-white rounded-full p-2 text-black" onclick="this.closest('.fixed').remove()">
                                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                                   <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -2209,11 +3223,15 @@ export default function OrderDetailPage() {
                                     <>
                                       <div className="bg-muted/30 rounded-lg p-3">
                                         <span className="text-xs text-muted-foreground block">Unit Price</span>
-                                        <span className="font-medium">{formatCurrency(item.unit_price)}</span>
+                                        <span className="font-medium">{formatCurrency((item as any).unit_price || (item as any).price || 0)}</span>
                                       </div>
                                       <div className="bg-muted/30 rounded-lg p-3">
                                         <span className="text-xs text-muted-foreground block">Total Price</span>
-                                        <span className="font-medium text-primary">{formatCurrency(item.total_price)}</span>
+                                        <span className="font-medium text-primary">{formatCurrency(
+                                          isEditing && editItems.some(ei => ei.id === item.id)
+                                            ? calculateItemTotal(editItems.find(ei => ei.id === item.id)!)
+                                            : (item.total_price || 0)
+                                        )}</span>
                                       </div>
                                     </>
                                   )}
@@ -2227,7 +3245,9 @@ export default function OrderDetailPage() {
                                       <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
                                         {sortSizesQuantities(
                                           item.sizes_quantities as Record<string, number> | null,
-                                          (item as any).size_type_id,
+                                          isEditing && editItems.some(ei => ei.id === item.id)
+                                            ? editItems.find(ei => ei.id === item.id)?.size_type_id
+                                            : (item as any).size_type_id,
                                           sizeTypes
                                         ).map(([size, qty]) => (
                                           <div key={size} className="bg-background rounded border text-center p-2">
@@ -2473,7 +3493,8 @@ export default function OrderDetailPage() {
                         </div>
                       );
                     })}
-                   </div>
+                    </div>
+                  )}
                  </CardContent>
                </Card>
 
@@ -2501,37 +3522,58 @@ export default function OrderDetailPage() {
                                <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Total</th>
                              </tr>
                            </thead>
-                           <tbody>
-                             {orderItems.map((item, index) => {
-                               let amount = 0;
-                               // Check if size-based pricing is available
-                               if (item.size_prices && item.sizes_quantities) {
-                                 amount = calculateSizeBasedTotal(
-                                   item.sizes_quantities,
-                                   item.size_prices,
-                                   item.unit_price
-                                 );
-                               } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
-                                 amount = calculateSizeBasedTotal(
-                                   item.specifications.sizes_quantities,
-                                   item.specifications.size_prices,
-                                   item.unit_price
-                                 );
-                               } else {
-                                 amount = item.quantity * item.unit_price;
-                               }
-                               // Try to get GST rate from item.gst_rate first, then from specifications, then from order
-                               const gstRate = item.gst_rate ?? 
-                                             (item.specifications?.gst_rate) ?? 
-                                             (order?.gst_rate ?? 0);
-                               const gstAmt = (amount * gstRate) / 100;
-                               const total = amount + gstAmt;
+                          <tbody>
+                            {orderItems.map((item, index) => {
+                              // When editing, prefer values from the draft item for live updates
+                              const draftItem = isEditing
+                                ? editItems.find((ei) => ei.id === item.id)
+                                : null;
+
+                              // Use draft or original item as the primary source for display
+                              const displayItem: any = draftItem || item;
+
+                              // Calculate amount using size-based pricing where available
+                              let amount = 0;
+                              if (draftItem && draftItem.size_prices && Object.keys(draftItem.sizes_quantities || {}).length > 0) {
+                                amount = calculateSizeBasedTotal(
+                                  draftItem.sizes_quantities || {},
+                                  draftItem.size_prices,
+                                  draftItem.price || draftItem.unit_price || 0
+                                );
+                              } else if (item.size_prices && item.sizes_quantities) {
+                                amount = calculateSizeBasedTotal(
+                                  item.sizes_quantities,
+                                  item.size_prices,
+                                  item.unit_price
+                                );
+                              } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                                amount = calculateSizeBasedTotal(
+                                  item.specifications.sizes_quantities,
+                                  item.specifications.size_prices,
+                                  item.unit_price
+                                );
+                              } else {
+                                amount = displayItem.quantity * (displayItem.unit_price || displayItem.price || 0);
+                              }
+
+                              // GST rate: prefer draft item, then item.specifications, then order-level
+                              const gstRate = (draftItem?.gst_rate ?? 
+                                              item.gst_rate ?? 
+                                              item.specifications?.gst_rate ?? 
+                                              (order?.gst_rate ?? 0));
+                              const gstAmt = (amount * gstRate) / 100;
+                              const total = amount + gstAmt;
                                return (
                                  <tr key={index} className="hover:bg-gray-50">
                                    <td className="border border-gray-300 px-3 py-2">
                                      {(() => {
                                        const displayImage = getOrderItemDisplayImage(item, order);
-                                       return displayImage ? (
+                                       const { mockup_images } = extractImagesFromSpecifications(item.specifications);
+                                       const isReadymadeOrder = order?.order_type === 'readymade';
+                                       const hasMockup = !isReadymadeOrder && ((item.mockup_images && item.mockup_images.length > 0) || 
+                                                        (mockup_images && mockup_images.length > 0));
+                                       // Only show image if it's a mockup (not category image)
+                                       return displayImage && hasMockup ? (
                                          <img
                                            src={displayImage}
                                            alt="Product"
@@ -2540,23 +3582,27 @@ export default function OrderDetailPage() {
                                        ) : null;
                                      })()}
                                    </td>
-                                   <td className="border border-gray-300 px-3 py-2">
-                                     <div className="text-sm">
-                                       <div className="text-gray-600 text-xs font-medium">
-                                         {fabrics[item.fabric_id]?.name} - {item.color}, {item.gsm} GSM
-                                       </div>
-                                       <div className="font-medium">{item.product_description}</div>
-                                       <div className="text-gray-600 text-xs">
-                                         {productCategories[item.product_category_id]?.category_name}
-                                       </div>
-                                     </div>
-                                   </td>
+                                  <td className="border border-gray-300 px-3 py-2">
+                                    <div className="text-sm">
+                                      <div className="text-gray-600 text-xs font-medium">
+                                        {fabrics[displayItem.fabric_id || item.fabric_id]?.name} - {displayItem.color || item.color}, {displayItem.gsm || item.gsm} GSM
+                                      </div>
+                                      <div className="font-medium">{displayItem.product_description || item.product_description}</div>
+                                      <div className="text-gray-600 text-xs">
+                                        {productCategories[displayItem.product_category_id || item.product_category_id]?.category_name}
+                                      </div>
+                                    </div>
+                                  </td>
                                    <td className="border border-gray-300 px-3 py-2 text-sm">
                                      <div className="max-w-xs">
                                        {(() => {
                                          try {
-                                           const parsed = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
-                                           const customizations = parsed.customizations || [];
+                                          // Prefer customizations from draft item if available
+                                          const customizations = draftItem?.customizations 
+                                            || (() => {
+                                                 const parsed = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
+                                                 return parsed?.customizations || [];
+                                               })();
                                            
                                            if (customizations.length === 0) {
                                              return <span className="text-gray-500">-</span>;
@@ -2602,31 +3648,35 @@ export default function OrderDetailPage() {
                                    <td className="border border-gray-300 px-3 py-2 text-sm">
                                      <div className="max-w-xs">
                                        <span className="text-sm text-gray-700 break-words">
-                                         {item.remarks || '-'}
+                                        {displayItem.remarks || item.remarks || '-'}
                                        </span>
                                      </div>
                                    </td>
                                    <td className="border border-gray-300 px-3 py-2 text-sm">
-                                     <div>{item.quantity} Pcs</div>
+                                    <div>{displayItem.quantity} Pcs</div>
                                      {(() => {
                                        // Get size_prices and sizes_quantities
                                        let sizePrices: { [size: string]: number } | undefined = undefined;
                                        let sizesQuantities: { [size: string]: number } | undefined = undefined;
                                        
-                                       if (item.size_prices && item.sizes_quantities) {
-                                         sizePrices = item.size_prices;
-                                         sizesQuantities = item.sizes_quantities;
-                                       } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
-                                         sizePrices = item.specifications.size_prices;
-                                         sizesQuantities = item.specifications.sizes_quantities;
+                                      if (draftItem && draftItem.size_prices && draftItem.sizes_quantities) {
+                                        sizePrices = draftItem.size_prices;
+                                        sizesQuantities = draftItem.sizes_quantities;
+                                      } else if (item.size_prices && item.sizes_quantities) {
+                                        sizePrices = item.size_prices;
+                                        sizesQuantities = item.sizes_quantities;
+                                      } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                                        sizePrices = item.specifications.size_prices;
+                                        sizesQuantities = item.specifications.sizes_quantities;
                                        }
                                        
                                        // Group sizes by price for display
                                        const sizePriceGroups: { [price: string]: { sizes: string[], qty: number } } = {};
-                                       if (sizesQuantities) {
+                                      if (sizesQuantities) {
                                          Object.entries(sizesQuantities).forEach(([size, qty]) => {
                                            if (qty > 0) {
-                                             const sizePrice = sizePrices?.[size] ?? item.unit_price;
+                                            const basePrice = draftItem?.price || draftItem?.unit_price || item.unit_price;
+                                            const sizePrice = sizePrices?.[size] ?? basePrice;
                                              const priceKey = sizePrice.toFixed(2);
                                              if (!sizePriceGroups[priceKey]) {
                                                sizePriceGroups[priceKey] = { sizes: [], qty: 0 };
@@ -2659,11 +3709,11 @@ export default function OrderDetailPage() {
                                            ))}
                                          </div>
                                        ) : (
-                                         item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
+                                         displayItem.sizes_quantities && typeof displayItem.sizes_quantities === 'object' && (
                                            <div className="text-xs text-gray-600">
                                              {sortSizesQuantities(
-                                               item.sizes_quantities as Record<string, number>,
-                                               (item as any).size_type_id,
+                                              displayItem.sizes_quantities as Record<string, number>,
+                                              (displayItem as any).size_type_id || (item as any).size_type_id,
                                                sizeTypes
                                              )
                                                .filter(([_, qty]) => qty > 0)
@@ -2680,20 +3730,24 @@ export default function OrderDetailPage() {
                                        let sizePrices: { [size: string]: number } | undefined = undefined;
                                        let sizesQuantities: { [size: string]: number } | undefined = undefined;
                                        
-                                       if (item.size_prices && item.sizes_quantities) {
-                                         sizePrices = item.size_prices;
-                                         sizesQuantities = item.sizes_quantities;
-                                       } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
-                                         sizePrices = item.specifications.size_prices;
-                                         sizesQuantities = item.specifications.sizes_quantities;
+                                      if (draftItem && draftItem.size_prices && draftItem.sizes_quantities) {
+                                        sizePrices = draftItem.size_prices;
+                                        sizesQuantities = draftItem.sizes_quantities;
+                                      } else if (item.size_prices && item.sizes_quantities) {
+                                        sizePrices = item.size_prices;
+                                        sizesQuantities = item.sizes_quantities;
+                                      } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
+                                        sizePrices = item.specifications.size_prices;
+                                        sizesQuantities = item.specifications.sizes_quantities;
                                        }
                                        
                                        // Group sizes by price for display
                                        const sizePriceGroups: { [price: string]: { sizes: string[], qty: number } } = {};
-                                       if (sizesQuantities) {
+                                      if (sizesQuantities) {
                                          Object.entries(sizesQuantities).forEach(([size, qty]) => {
                                            if (qty > 0) {
-                                             const sizePrice = sizePrices?.[size] ?? item.unit_price;
+                                            const basePrice = draftItem?.price || draftItem?.unit_price || item.unit_price;
+                                            const sizePrice = sizePrices?.[size] ?? basePrice;
                                              const priceKey = sizePrice.toFixed(2);
                                              if (!sizePriceGroups[priceKey]) {
                                                sizePriceGroups[priceKey] = { sizes: [], qty: 0 };
@@ -2725,9 +3779,9 @@ export default function OrderDetailPage() {
                                              </div>
                                            ))}
                                          </div>
-                                       ) : (
-                                         formatCurrency(item.unit_price)
-                                       );
+                                      ) : (
+                                        formatCurrency(draftItem?.price || draftItem?.unit_price || item.unit_price)
+                                      );
                                      })()}
                                    </td>
                                     <td className="border border-gray-300 px-3 py-2 text-sm">{formatCurrency(amount)}</td>
@@ -2741,27 +3795,68 @@ export default function OrderDetailPage() {
                          </table>
                        </div>
                        {/* Subtotal, GST, Grand Total */}
-                       {(() => {
-                         const { subtotal, gstAmount, grandTotal } = calculateOrderSummary(orderItems, order);
-                         return (
-                           <div className="text-right space-y-1">
-                             <div className="text-lg font-semibold">Subtotal: {formatCurrency(subtotal)}</div>
-                             <div className="text-lg font-semibold">GST Total: {formatCurrency(gstAmount)}</div>
-                             <div className="text-2xl font-bold text-primary">Grand Total: {formatCurrency(grandTotal)}</div>
-                           </div>
-                         );
-                       })()}
+                       <div className="text-right space-y-1">
+                         <div className="text-lg font-semibold">Subtotal: {formatCurrency(orderSummary.subtotal)}</div>
+                         <div className="text-lg font-semibold">GST Total: {formatCurrency(orderSummary.gstTotal)}</div>
+                         {orderSummary.additionalChargesTotal > 0 && (
+                           <div className="text-lg font-semibold">Additional Charges: {formatCurrency(orderSummary.additionalChargesTotal)}</div>
+                         )}
+                         <div className="text-2xl font-bold text-primary">Grand Total: {formatCurrency(orderSummary.grandTotal)}</div>
+                       </div>
                      </div>
                    </CardContent>
                  </Card>
                )}
 
-               {/* Order Lifecycle */}
-               
+              {/* Order Lifecycle */}
+              
 
-               
+              
 
-             </div>
+            </div>
+
+            {/* Customization Modal (for editing/adding item customizations) */}
+            {isEditing && customizationModalOpen && activeCustomizationIndex !== null && editItems[activeCustomizationIndex] && (
+              <ProductCustomizationModal
+                productIndex={activeCustomizationIndex}
+                productCategoryId={editItems[activeCustomizationIndex].product_category_id || ''}
+                isOpen={customizationModalOpen}
+                initialCustomizations={
+                  editingCustomizationIndex !== null
+                    ? [editItems[activeCustomizationIndex].customizations?.[editingCustomizationIndex]].filter(Boolean) as any
+                    : []
+                }
+                onClose={() => {
+                  setCustomizationModalOpen(false);
+                  setEditingCustomizationIndex(null);
+                }}
+                onSave={(customizations) => {
+                  setEditItems(prev =>
+                    prev.map((item, index) => {
+                      if (index !== activeCustomizationIndex) return item;
+                      const existing = item.customizations || [];
+                      if (editingCustomizationIndex !== null) {
+                        // Replace the customization at the editing index with the first returned customization
+                        const updated = [...existing];
+                        if (customizations[0]) {
+                          updated[editingCustomizationIndex] = customizations[0];
+                        }
+                        return { ...item, customizations: updated };
+                      }
+                      // Add mode - append all new customizations
+                      return { ...item, customizations: [...existing, ...customizations] };
+                    })
+                  );
+                  setCustomizationModalOpen(false);
+                  setEditingCustomizationIndex(null);
+                  toast.success(
+                    editingCustomizationIndex !== null
+                      ? 'Customization updated'
+                      : `${customizations.length} customization(s) added`
+                  );
+                }}
+              />
+            )}
 
             <div className="xl:col-span-1 space-y-6">
               {/* Order Information */}
@@ -2776,18 +3871,18 @@ export default function OrderDetailPage() {
                   <div>
                     <p className="text-sm text-muted-foreground">Order Date</p>
                     <p className="font-medium">
-                      {new Date(order.order_date).toLocaleDateString('en-GB', {
+                      {new Date(isEditing && editDraft ? editDraft.order_date : order.order_date).toLocaleDateString('en-GB', {
                         day: '2-digit',
                         month: 'long',
                         year: 'numeric'
                       })}
                     </p>
                   </div>
-                  {order.expected_delivery_date && (
+                  {(isEditing && editDraft ? editDraft.expected_delivery_date : order.expected_delivery_date) && (
                     <div>
                       <p className="text-sm text-muted-foreground">Expected Delivery</p>
                       <p className="font-medium">
-                        {new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
+                        {new Date(isEditing && editDraft ? editDraft.expected_delivery_date : order.expected_delivery_date).toLocaleDateString('en-GB', {
                           day: '2-digit',
                           month: 'long',
                           year: 'numeric'
@@ -2814,10 +3909,10 @@ export default function OrderDetailPage() {
                       </div>
                     </div>
                   )}
-                  {order.notes && (
+                  {(isEditing && editDraft ? editDraft.notes : order.notes) && (
                     <div>
                       <p className="text-sm text-muted-foreground">Notes</p>
-                      <p className="font-medium text-sm">{order.notes}</p>
+                      <p className="font-medium text-sm">{isEditing && editDraft ? editDraft.notes : order.notes}</p>
                     </div>
                   )}
                 </CardContent>
@@ -2873,10 +3968,9 @@ export default function OrderDetailPage() {
                   <CardContent className="space-y-4">
                     <div className="flex justify-between">
                       <span>Subtotal</span>
-                      <span>{formatCurrency(order.total_amount)}</span>
+                      <span>{formatCurrency(orderSummary.subtotal)}</span>
                     </div>
                     {(() => {
-                      const gstBreakdown = calculateGSTRatesBreakdown(orderItems, order);
                       if (gstBreakdown.length === 0) {
                         return (
                           <div className="flex justify-between">
@@ -2908,29 +4002,33 @@ export default function OrderDetailPage() {
                       );
                     }
                   })()}
+                    {orderSummary.additionalChargesTotal > 0 && (
+                      <div className="flex justify-between">
+                        <span>Additional Charges</span>
+                        <span>{formatCurrency(orderSummary.additionalChargesTotal)}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between">
                       <span>Amount Paid</span>
-                      <span className="text-green-600">{formatCurrency(totalReceipts)}</span>
+                      <span className="text-green-600">{formatCurrency(isEditing ? (editDraft?.advance_amount || 0) : totalReceipts)}</span>
                     </div>
                     <hr />
                     <div className="flex justify-between font-bold text-lg">
                       <span>Total Amount</span>
-                      <span>{formatCurrency(calculateOrderSummary(orderItems, order).grandTotal)}</span>
+                      <span>{formatCurrency(orderSummary.grandTotal)}</span>
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Balance Due</span>
                       <span className={(() => {
-                        const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
-                        const balance = calculatedTotal - totalReceipts;
+                        const balance = orderSummary.grandTotal - (isEditing ? (editDraft?.advance_amount || 0) : totalReceipts);
                         return balance > 0 ? "text-orange-600" : "text-green-600";
                       })()}>
-                        {formatCurrency(calculateOrderSummary(orderItems, order).grandTotal - totalReceipts)}
+                        {formatCurrency(orderSummary.grandTotal - (isEditing ? (editDraft?.advance_amount || 0) : totalReceipts))}
                       </span>
                     </div>
                     
                     {(() => {
-                      const calculatedTotal = calculateOrderSummary(orderItems, order).grandTotal;
-                      const balance = calculatedTotal - totalReceipts;
+                      const balance = orderSummary.grandTotal - (isEditing ? (editDraft?.advance_amount || 0) : totalReceipts);
                       return balance > 0;
                     })() && (
                       <Button
@@ -2946,7 +4044,7 @@ export default function OrderDetailPage() {
                               number: order.order_number, 
                               date: order.order_date, 
                               customer_id: order.customer_id, 
-                              amount: calculateOrderSummary(orderItems, order).grandTotal - totalReceipts 
+                              amount: orderSummary.grandTotal - (isEditing ? (editDraft?.advance_amount || 0) : totalReceipts)
                             }, 
                             tab: 'create' 
                           } 
@@ -2956,11 +4054,11 @@ export default function OrderDetailPage() {
                       </Button>
                     )}
                     
-                    {order.payment_channel && (
+                    {(isEditing && editDraft ? editDraft.payment_channel : order.payment_channel) && (
                       <div className="pt-2 border-t">
                         <div className="flex justify-between text-sm">
                           <span className="text-muted-foreground">Payment Method</span>
-                          <span>{order.payment_channel}</span>
+                          <span>{isEditing && editDraft ? editDraft.payment_channel : order.payment_channel}</span>
                         </div>
                       </div>
                     )}
@@ -3016,20 +4114,26 @@ export default function OrderDetailPage() {
               <div className="flex-1 min-w-0">
                 <div className="w-full rounded-lg border bg-muted/10 p-3 sm:p-4">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-1 gap-1">
-                    <h4 className="font-semibold text-xs sm:text-sm break-words break-all leading-snug">
-                      {activity.activity_description}
+                    <h4 className="font-semibold text-xs sm:text-sm break-words break-all leading-snug text-blue-700">
+                      {getActivityTitle(activity)}
                     </h4>
-                    <span className="text-[11px] sm:text-xs text-muted-foreground sm:max-w-[65%] whitespace-normal sm:whitespace-normal break-words break-all sm:text-right">
+                    <span className="text-[11px] sm:text-xs text-blue-600 sm:max-w-[65%] whitespace-normal sm:whitespace-normal break-words break-all sm:text-right">
                       {formatDateTimeSafe(activity.performed_at)}
                     </span>
                   </div>
-                
+
+                  {/* Subtitle / description */}
+                  <p className="text-[11px] sm:text-xs text-muted-foreground mb-2 break-words">
+                    {getActivitySubtitle(activity)}
+                  </p>
+
                   {/* User info */}
-                  {activity.user_name && (
-                    <p className="text-[11px] sm:text-xs text-muted-foreground mb-2 break-words">
-                      By: {activity.user_name} {activity.user_email ? `(${activity.user_email})` : ''}
-                    </p>
-                  )}
+                  <p className="text-[11px] sm:text-xs text-muted-foreground mb-2 break-words">
+                    By:{' '}
+                    {activity.user_name ||
+                      activity.user_email ||
+                      'System'}
+                  </p>
                 
                   {/* Activity details */}
                   {activity.metadata && (
@@ -3255,119 +4359,6 @@ export default function OrderDetailPage() {
         </div>
       </div>
 
-      {/* Edit Dialog */}
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-5xl">
-          <DialogHeader>
-            <DialogTitle>Edit Order</DialogTitle>
-          </DialogHeader>
-          {editDraft && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <Label>Order Date</Label>
-                  <Input type="date" value={editDraft.order_date} onChange={e => setEditDraft({ ...editDraft, order_date: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Expected Delivery</Label>
-                  <Input type="date" value={editDraft.expected_delivery_date} onChange={e => setEditDraft({ ...editDraft, expected_delivery_date: e.target.value })} />
-                </div>
-                <div>
-                  <Label>GST Rate (%)</Label>
-                  <Input type="number" value={editDraft.gst_rate} onChange={e => setEditDraft({ ...editDraft, gst_rate: parseFloat(e.target.value) || 0 })} />
-                </div>
-                <div>
-                  <Label>Sales Manager</Label>
-                  <Select value={editDraft.sales_manager || ''} onValueChange={(v) => setEditDraft({ ...editDraft, sales_manager: v || null })}>
-                    <SelectTrigger><SelectValue placeholder="Select manager" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="">None</SelectItem>
-                      {employees.map(emp => (
-                        <SelectItem key={emp.id} value={emp.id}>{emp.full_name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>Payment Method</Label>
-                  <Input value={editDraft.payment_channel || ''} onChange={e => setEditDraft({ ...editDraft, payment_channel: e.target.value })} />
-                </div>
-                <div>
-                  <Label>Reference ID</Label>
-                  <Input value={editDraft.reference_id || ''} onChange={e => setEditDraft({ ...editDraft, reference_id: e.target.value })} />
-                </div>
-                <div className="md:col-span-3">
-                  <Label>Notes</Label>
-                  <Input value={editDraft.notes || ''} onChange={e => setEditDraft({ ...editDraft, notes: e.target.value })} />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <h3 className="font-semibold">Items</h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full border">
-                    <thead className="bg-muted/50 text-sm">
-                      <tr>
-                        <th className="p-2 border text-left">Product</th>
-                        <th className="p-2 border">Qty</th>
-                        <th className="p-2 border">Unit Price</th>
-                        <th className="p-2 border">GST %</th>
-                        <th className="p-2 border">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {editItems.map((it, idx) => {
-                        const amount = it.quantity * it.unit_price;
-                        return (
-                          <tr key={it.id} className="text-sm">
-                            <td className="p-2 border text-left">{it.product_description}</td>
-                            <td className="p-2 border w-24">
-                              <Input type="number" value={it.quantity} onChange={e => {
-                                const v = parseInt(e.target.value) || 0;
-                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, quantity: v } : p));
-                              }} />
-                            </td>
-                            <td className="p-2 border w-32">
-                              <Input type="number" value={it.unit_price} onChange={e => {
-                                const v = parseFloat(e.target.value) || 0;
-                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, unit_price: v } : p));
-                              }} />
-                            </td>
-                            <td className="p-2 border w-24">
-                              <Input type="number" value={it.gst_rate} onChange={e => {
-                                const v = parseFloat(e.target.value) || 0;
-                                setEditItems(prev => prev.map((p, i) => i === idx ? { ...p, gst_rate: v } : p));
-                              }} />
-                            </td>
-                            <td className="p-2 border text-right">{formatCurrency(amount)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                {(() => {
-                  const { subtotal, gstTotal, grandTotal } = computeDraftTotals();
-                  return (
-                    <div className="text-right space-y-1 text-sm">
-                      <div>Subtotal: {formatCurrency(subtotal)}</div>
-                      <div>GST Total: {formatCurrency(gstTotal)}</div>
-                      <div className="font-semibold">Grand Total: {formatCurrency(grandTotal)}</div>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline" disabled={savingEdit}>Cancel</Button>
-            </DialogClose>
-            <Button onClick={handleSaveEdit} disabled={savingEdit}>{savingEdit ? 'Saving...' : 'Save Changes'}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      
     </ErpLayout>
   );
 }

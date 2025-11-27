@@ -47,6 +47,7 @@ interface ProductCustomizationModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (customizations: Customization[]) => void;
+  initialCustomizations?: Customization[];
 }
 
 export function ProductCustomizationModal({
@@ -54,7 +55,8 @@ export function ProductCustomizationModal({
   productCategoryId,
   isOpen,
   onClose,
-  onSave
+  onSave,
+  initialCustomizations
 }: ProductCustomizationModalProps) {
   const [parts, setParts] = useState<ProductPart[]>([]);
   const [addons, setAddons] = useState<PartAddon[]>([]);
@@ -80,8 +82,8 @@ export function ProductCustomizationModal({
   const [showAddonSelection, setShowAddonSelection] = useState(false);
   const [selectedPartForAddon, setSelectedPartForAddon] = useState<ProductPart | null>(null);
 
-  const resetFormState = () => {
-    setCustomizations([]);
+  const resetFormState = (initial: Customization[] = []) => {
+    setCustomizations(initial);
     setSelectedPart('');
     setSelectedAddon('');
     setNumberValue('');
@@ -103,9 +105,13 @@ export function ProductCustomizationModal({
     if (isOpen && productCategoryId) {
       fetchPartsForCategory();
       // Reset form state when modal opens
-      resetFormState();
+      if (initialCustomizations && initialCustomizations.length > 0) {
+        resetFormState(initialCustomizations);
+      } else {
+        resetFormState([]);
+      }
     }
-  }, [isOpen, productCategoryId]);
+  }, [isOpen, productCategoryId, initialCustomizations]);
 
   const fetchPartsForCategory = async () => {
     try {
@@ -306,7 +312,7 @@ export function ProductCustomizationModal({
 
   const handleSave = () => {
     onSave(customizations);
-    resetFormState();
+    resetFormState([]);
     onClose();
   };
 
@@ -319,7 +325,7 @@ export function ProductCustomizationModal({
   };
 
   const handleClose = () => {
-    resetFormState();
+    resetFormState(initialCustomizations || []);
     onClose();
   };
 

@@ -32,6 +32,7 @@ import InventoryAdjustmentPage from "./pages/inventory/InventoryAdjustmentPage";
 import CustomerTypeMasterPage from "./pages/masters/CustomerTypeMasterPage";
 import SupplierMasterPage from "./pages/masters/SupplierMasterPage";
 import BrandingTypePage from "./pages/masters/BrandingTypePage";
+import ColorMasterPage from "./pages/masters/ColorMasterPage";
 import ProductPartsManager from "./pages/masters/ProductPartsManager";
 import ImageMasterPage from "./pages/masters/ImageMasterPage";
 import NotFound from "./pages/NotFound";
@@ -395,6 +396,11 @@ const App = () => {
                 <Route path="/masters/branding-types" element={
                   <ProtectedRouteWithCompanySettings>
                     <BrandingTypePage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/masters/colors" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ColorMasterPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/masters/product-parts" element={
