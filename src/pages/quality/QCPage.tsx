@@ -10,6 +10,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import QCReviewDialog from "@/components/quality/QCReviewDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
+interface BatchAvatarInfo {
+  avatar_url: string;
+  batch_name?: string;
+  batch_leader_name?: string;
+}
+
 interface PickedOrderCard {
   order_id: string;
   order_number: string;
@@ -22,6 +28,8 @@ interface PickedOrderCard {
   rejected_quantity: number; // sum across assignments
   is_fully_qc: boolean; // true if all assignments are fully QC'd
   qc_status: 'pending' | 'partial' | 'completed';
+  product_category?: string;
+  batch_avatars: BatchAvatarInfo[];
 }
 
 export default function QCPage() {
@@ -32,6 +40,9 @@ export default function QCPage() {
   const [qcOpen, setQcOpen] = useState(false);
   const [qcCtx, setQcCtx] = useState<null | { assignmentId: string; orderId: string; orderNumber: string }>(null);
   const [activeTab, setActiveTab] = useState("pending");
+  const [imageGalleryOpen, setImageGalleryOpen] = useState(false);
+  const [galleryBatchInfo, setGalleryBatchInfo] = useState<BatchAvatarInfo[]>([]);
+  const [galleryTitle, setGalleryTitle] = useState('');
 
   useEffect(() => {
     loadPickedOrders();
@@ -43,13 +54,33 @@ export default function QCPage() {
       // Load all batch assignments with quantities and batch leader
       const { data: assignments } = await (supabase as any)
         .from('order_batch_assignments_with_details')
-        .select('assignment_id, order_id, total_quantity, batch_name, batch_leader_name, batch_leader_avatar')
+        .select('assignment_id, order_id, total_quantity, batch_name, batch_leader_name, batch_leader_avatar, batch_leader_avatar_url, batch_id')
         .order('assignment_date', { ascending: false });
 
       const rows = assignments || [];
       if (rows.length === 0) { setOrders([]); return; }
       const assignmentIds = rows.map((r: any) => r.assignment_id).filter(Boolean);
       const orderIds = Array.from(new Set(rows.map((r: any) => r.order_id).filter(Boolean)));
+      
+      // Fetch batch leader avatars in bulk from tailors table
+      const batchIds = Array.from(new Set(rows.map((r: any) => r.batch_id).filter(Boolean)));
+      let batchAvatarMap: Record<string, string> = {};
+      if (batchIds.length > 0) {
+        try {
+          const { data: tailorsData } = await (supabase as any)
+            .from('tailors')
+            .select('batch_id, avatar_url')
+            .eq('is_batch_leader', true)
+            .in('batch_id', batchIds as any);
+          (tailorsData || []).forEach((t: any) => {
+            if (t.batch_id && t.avatar_url) {
+              batchAvatarMap[t.batch_id] = t.avatar_url;
+            }
+          });
+        } catch (e) {
+          console.error('Error fetching batch leader avatars:', e);
+        }
+      }
 
       // Sum picked by assignment (column first, notes fallback)
       let pickedByAssignment: Record<string, number> = {};
@@ -104,13 +135,14 @@ export default function QCPage() {
           });
           
           // Check if QC is complete for each assignment
+          // QC is complete when all picked items have been QC'd: (approved + rejected) === currentPicked
           assignmentIds.forEach((id: string) => {
-            const picked = pickedByAssignment[id] || 0;
+            const currentPicked = pickedByAssignment[id] || 0;
             const approved = approvedByAssignment[id] || 0;
             const rejected = rejectedByAssignment[id] || 0;
             
-            // QC is complete if approved + rejected = picked (and picked > 0)
-            qcCompleteByAssignment[id] = picked > 0 && (approved + rejected) === picked;
+            // QC is complete if all picked items have been QC'd
+            qcCompleteByAssignment[id] = currentPicked > 0 && (approved + rejected) === currentPicked;
           });
           
         } catch {}
@@ -136,6 +168,7 @@ export default function QCPage() {
         (customers || []).forEach((c: any) => { customersMap[c.id] = c.company_name; });
       }
       let imageByOrder: Record<string, string | undefined> = {};
+      let categoryByOrder: Record<string, string | undefined> = {};
       try {
         const { data: boms } = await (supabase as any)
           .from('bom_records')
@@ -146,13 +179,31 @@ export default function QCPage() {
       try {
         const { data: items } = await (supabase as any)
           .from('order_items')
-          .select('order_id, category_image_url, mockup_images')
+          .select('order_id, category_image_url, mockup_images, specifications, product_category_id, product_category:product_categories(category_name)')
           .in('order_id', orderIds as any);
         (items || []).forEach((it: any) => {
           const oid = it?.order_id; if (!oid) return;
           if (!imageByOrder[oid]) {
             const mock = Array.isArray(it?.mockup_images) && it.mockup_images.length > 0 ? it.mockup_images[0] : undefined;
             imageByOrder[oid] = it?.category_image_url || mock || imageByOrder[oid];
+          }
+          
+          // Try to get product category
+          if (!categoryByOrder[oid]) {
+            // First try from joined product_category
+            if (it?.product_category?.category_name) {
+              categoryByOrder[oid] = it.product_category.category_name;
+            } else {
+              // Try from specifications
+              try {
+                const specs = typeof it.specifications === 'string' ? JSON.parse(it.specifications) : it.specifications;
+                if (specs?.category) {
+                  categoryByOrder[oid] = specs.category;
+                } else if (specs?.class) {
+                  categoryByOrder[oid] = specs.class;
+                }
+              } catch {}
+            }
           }
         });
       } catch {}
@@ -162,8 +213,23 @@ export default function QCPage() {
       const assignmentMeta: Record<string, { order_id: string; order_number: string; batch_name?: string; picked: number; batch_leader_name?: string; batch_leader_avatar?: string | null }> = {};
       
       rows.forEach((r: any) => {
-        const picked = Number(pickedByAssignment[r.assignment_id] || 0);
-        if (picked <= 0) return; // exclude not picked
+        const currentPicked = Number(pickedByAssignment[r.assignment_id] || 0);
+        if (currentPicked <= 0) return; // exclude not picked
+        
+        // Show orders when there are new picks needing QC OR when there are rejected items waiting for replacement
+        // New picks = currentPicked - (approved + rejected)
+        const approved = Number(approvedByAssignment[r.assignment_id] || 0);
+        const rejected = Number(rejectedByAssignment[r.assignment_id] || 0);
+        const itemsNeedingQC = Math.max(0, currentPicked - (approved + rejected));
+        
+        // Include orders that have:
+        // 1. New picks needing QC verification, OR
+        // 2. Rejected items (even if all current picked items are QC'd, rejected items mean replacements need to be picked and then QC'd)
+        // Skip only if: no new picks AND no rejected items AND all picked items are fully QC'd
+        if (itemsNeedingQC <= 0 && rejected <= 0 && (approved + rejected) === currentPicked) {
+          return; // Skip fully QC'd assignments with no rejected items and no new picks
+        }
+        
         const oid = r.order_id as string;
         const key = oid;
         if (!byOrder[key]) {
@@ -178,10 +244,12 @@ export default function QCPage() {
             approved_quantity: 0,
             rejected_quantity: 0,
             is_fully_qc: true,
-            qc_status: 'pending'
+            qc_status: 'pending',
+            product_category: categoryByOrder[oid],
+            batch_avatars: []
           };
         }
-        byOrder[key].picked_quantity += picked;
+        byOrder[key].picked_quantity += currentPicked;
         byOrder[key].total_quantity += Number(r.total_quantity || 0);
         byOrder[key].approved_quantity += Number(approvedByAssignment[r.assignment_id] || 0);
         byOrder[key].rejected_quantity += Number(rejectedByAssignment[r.assignment_id] || 0);
@@ -193,7 +261,32 @@ export default function QCPage() {
           byOrder[key].is_fully_qc = false;
         }
         
-        assignmentMeta[r.assignment_id] = { order_id: oid, order_number: byOrder[key].order_number, batch_name: r.batch_name, picked, batch_leader_name: r.batch_leader_name, batch_leader_avatar: r.batch_leader_avatar };
+        // Get avatar URL (check both possible field names, then fallback to batchAvatarMap)
+        let avatarUrl = r.batch_leader_avatar || r.batch_leader_avatar_url || null;
+        
+        // If avatar is still null, try from the batchAvatarMap we fetched
+        if (!avatarUrl && r.batch_id && batchAvatarMap[r.batch_id]) {
+          avatarUrl = batchAvatarMap[r.batch_id];
+        }
+        
+        assignmentMeta[r.assignment_id] = { order_id: oid, order_number: byOrder[key].order_number, batch_name: r.batch_name, picked: currentPicked, batch_leader_name: r.batch_leader_name, batch_leader_avatar: avatarUrl };
+        
+        // Collect batch leader avatars with metadata (include all batches, even without avatars)
+        // Check if this batch is already in the list (avoid duplicates by batch_name if available, otherwise by avatar_url)
+        const existingIndex = byOrder[key].batch_avatars.findIndex(ba => {
+          if (r.batch_name && ba.batch_name === r.batch_name) return true;
+          if (avatarUrl && ba.avatar_url === avatarUrl && avatarUrl) return true;
+          return false;
+        });
+        
+        if (existingIndex === -1) {
+          // Always add batch info - even if no avatar, we'll show fallback
+          byOrder[key].batch_avatars.push({
+            avatar_url: avatarUrl || '',
+            batch_name: r.batch_name || undefined,
+            batch_leader_name: r.batch_leader_name || undefined
+          });
+        }
       });
 
       // Determine QC status for each order
@@ -258,6 +351,12 @@ export default function QCPage() {
     }
   };
 
+  const openBatchAvatarGallery = (orderNumber: string, batchAvatars: BatchAvatarInfo[]) => {
+    setGalleryTitle(`Batches Assigned - Order ${orderNumber}`);
+    setGalleryBatchInfo(batchAvatars);
+    setImageGalleryOpen(true);
+  };
+
   return (
     <ErpLayout>
       <div className="space-y-6">
@@ -297,7 +396,7 @@ export default function QCPage() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filtered.map((o) => (
-                  <Card key={o.order_id} className={`border hover:shadow-md transition cursor-pointer ${o.qc_status === 'completed' ? 'opacity-75' : ''}`} onClick={() => {
+                  <Card key={o.order_id} className={`border-0 shadow-md hover:shadow-lg transition-all rounded-xl overflow-hidden ${o.qc_status === 'completed' ? 'opacity-75' : ''}`} onClick={() => {
                     // Only allow QC for non-completed orders
                     if (o.qc_status === 'completed') return;
                     
@@ -311,30 +410,125 @@ export default function QCPage() {
                       setSelectAssignmentsForOrder({ order_id: o.order_id, order_number: o.order_number, options });
                     }
                   }}>
-                    <CardContent className="pt-7">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-start gap-3">
-                          <img src={o.image_url || '/placeholder.svg'} alt={o.order_number} className="w-12 h-12 rounded object-cover border" />
-                          <div>
-                            <div className="font-semibold flex items-center gap-2">
-                              Order #{o.order_number}
-                              {getStatusIcon(o.qc_status)}
+                    <CardContent className="p-5 sm:p-6">
+                      {/* Order Number - Top */}
+                      <div className="mb-4">
+                        <div className="text-lg sm:text-xl font-bold text-slate-900">Order #: {o.order_number}</div>
+                      </div>
+
+                      <div className="flex flex-col md:flex-row gap-6 md:gap-8">
+                        {/* Left Column: Product Image Panel */}
+                        <div className="flex-shrink-0 w-full md:w-[40%]">
+                          {/* Product Image Panel with Gradient - Portrait */}
+                          <div className="rounded-xl overflow-hidden w-full aspect-[3/4] relative" style={{ background: 'linear-gradient(to bottom, rgb(239 246 255) 40%, rgb(241 245 249) 40%)' }}>
+                            <div className="absolute inset-0 flex items-center justify-center p-4 sm:p-5">
+                              <img 
+                                src={o.image_url || '/placeholder.svg'} 
+                                alt={o.order_number}
+                                className="max-h-[85%] max-w-[85%] object-contain"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
                             </div>
-                            <div className="text-xs text-muted-foreground">{o.customer_name}</div>
-                            <Badge className={`text-xs mt-1 ${getStatusColor(o.qc_status)}`}>
-                              {o.qc_status.charAt(0).toUpperCase() + o.qc_status.slice(1)}
-                            </Badge>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1 flex-wrap justify-end">
-                          <Badge className="bg-green-100 text-green-800">Picked: {o.picked_quantity}</Badge>
-                          <Badge className="bg-blue-100 text-blue-800">Approved: {o.approved_quantity}</Badge>
-                          <Badge className="bg-red-100 text-red-800">Rejected: {o.rejected_quantity}</Badge>
-                          <Badge className="bg-purple-100 text-purple-800">Total: {o.total_quantity}</Badge>
+
+                        {/* Right Column: Order Info */}
+                        <div className="flex-1 flex flex-col gap-4 min-w-0">
+                          {/* Batches Assigned Section */}
+                          <div className="mb-1">
+                            <div className="text-sm font-semibold text-slate-900 mb-3">Batches Assigned:</div>
+                            {o.batch_avatars && o.batch_avatars.length > 0 ? (
+                              <div className="flex items-center relative" style={{ height: '64px' }}>
+                                {o.batch_avatars.slice(0, 3).map((batchInfo, idx) => (
+                                  <Avatar 
+                                    key={idx}
+                                    className="w-16 h-16 border-2 border-white flex-shrink-0 shadow-sm cursor-pointer"
+                                    style={{ 
+                                      marginLeft: idx > 0 ? '-16px' : '0',
+                                      zIndex: 3 - idx,
+                                      position: 'relative'
+                                    }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openBatchAvatarGallery(o.order_number, o.batch_avatars);
+                                    }}
+                                  >
+                                    <AvatarImage src={batchInfo.avatar_url || undefined} alt={batchInfo.batch_name || `Batch ${idx + 1}`} />
+                                    <AvatarFallback className="bg-slate-200 text-slate-700">
+                                      {(batchInfo.batch_name || batchInfo.batch_leader_name || 'B')[0].toUpperCase()}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                ))}
+                                {o.batch_avatars.length > 3 && (
+                                  <div 
+                                    className="relative w-16 h-16 rounded-full overflow-hidden cursor-pointer border-2 border-white flex-shrink-0 shadow-sm"
+                                    style={{ 
+                                      marginLeft: '-16px',
+                                      zIndex: 0,
+                                      backgroundColor: '#3b82f6'
+                                    }}
+                                    onClick={(e) => { 
+                                      e.stopPropagation(); 
+                                      openBatchAvatarGallery(o.order_number, o.batch_avatars); 
+                                    }}
+                                  >
+                                    {o.batch_avatars[3] && (
+                                      <img 
+                                        src={o.batch_avatars[3].avatar_url} 
+                                        alt="More batches"
+                                        className="w-full h-full object-cover blur-sm"
+                                        onError={(e) => {
+                                          (e.target as HTMLImageElement).style.display = 'none';
+                                        }}
+                                      />
+                                    )}
+                                    <div className="absolute inset-0 flex items-center justify-center bg-blue-500/70 rounded-full">
+                                      <span className="text-white font-bold text-sm">+{o.batch_avatars.length - 3}</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-muted-foreground">No batches assigned</div>
+                            )}
+                          </div>
+
+                          {/* Product Category Badge - Full Width */}
+                          {o.product_category && (
+                            <div className="mb-2">
+                              <Badge className="bg-blue-100 text-blue-800 text-sm px-4 py-2 rounded-lg w-full justify-center">
+                                Product Category: {o.product_category}
+                              </Badge>
+                            </div>
+                          )}
+
+                          {/* Quantity Badges - Grid Layout */}
+                          <div className="flex flex-col gap-2 mt-auto">
+                            {/* Second Row: Total Qty and Picked Qty */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <Badge className="bg-purple-100 text-purple-800 text-sm px-4 py-2 rounded-full w-full justify-center">
+                                Total Qty: {o.total_quantity} Pcs
+                              </Badge>
+                              <Badge className="bg-yellow-100 text-orange-700 text-sm px-4 py-2 rounded-full w-full justify-center">
+                                Picked: {o.picked_quantity} Pcs
+                              </Badge>
+                            </div>
+                            {/* Third Row: Approved and Rejected */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <Badge className="bg-green-100 text-green-800 text-sm px-4 py-2 rounded-full w-full justify-center">
+                                Approved: {o.approved_quantity} Pcs
+                              </Badge>
+                              <Badge className="bg-red-100 text-red-800 text-sm px-4 py-2 rounded-full w-full justify-center">
+                                Rejected: {o.rejected_quantity || 0} Pcs
+                              </Badge>
+                            </div>
+                          </div>
                         </div>
                       </div>
                       {o.qc_status === 'completed' && (
-                        <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded text-xs text-green-700">
+                        <div className="mt-4 p-2 bg-green-50 border border-green-200 rounded text-xs text-green-700">
                           ✓ QC Completed - All batches reviewed
                         </div>
                       )}
@@ -388,6 +582,46 @@ export default function QCPage() {
             assignmentId={qcCtx.assignmentId}
           />
         )}
+
+        {/* Image Gallery Dialog */}
+        <Dialog open={imageGalleryOpen} onOpenChange={setImageGalleryOpen}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>{galleryTitle}</DialogTitle>
+            </DialogHeader>
+            {galleryBatchInfo.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No batch avatars available.</p>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 mt-4">
+                {galleryBatchInfo.map((batchInfo, idx) => (
+                  <div key={idx} className="flex flex-col items-center gap-2">
+                    <div className="relative w-24 h-24">
+                      <Avatar className="w-full h-full border-2 border-slate-200">
+                        <AvatarImage 
+                          src={batchInfo.avatar_url || undefined} 
+                          alt={batchInfo.batch_name || `Batch ${idx + 1}`}
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            target.style.display = 'none';
+                          }}
+                        />
+                        <AvatarFallback className="text-lg bg-slate-200 text-slate-700">
+                          {(batchInfo.batch_name || batchInfo.batch_leader_name || 'B')[0].toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                    </div>
+                    {batchInfo.batch_name && (
+                      <div className="text-sm font-medium text-slate-900 text-center">{batchInfo.batch_name}</div>
+                    )}
+                    {batchInfo.batch_leader_name && (
+                      <div className="text-xs text-muted-foreground text-center">{batchInfo.batch_leader_name}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </ErpLayout>
   );

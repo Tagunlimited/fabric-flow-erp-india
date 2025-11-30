@@ -27,6 +27,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { formatDueDateIndian } from '@/lib/utils';
+import { ReassignCuttingMasterDialog } from '@/components/production/ReassignCuttingMasterDialog';
 
 interface OrderAssignment {
   id: string;
@@ -38,11 +39,19 @@ interface OrderAssignment {
   assignedTo: string; // legacy single assignee
   // Multiple cutting masters support
   cuttingMasters?: Array<{
-    id: string;
+    id: string;                    // NEW - assignment ID from order_cutting_assignments
+    cuttingMasterId: string;       // NEW - cutting master employee ID
     name: string;
     avatarUrl?: string;
     assignedDate: string;
     assignedBy?: string;
+    assignedQuantity?: number | null;    // NEW - may be NULL
+    completedQuantity?: number;         // NEW - what this master has cut
+    cutQuantitiesBySize?: Record<string, number>; // NEW - size-wise cut quantities for this master
+    leftQuantity?: number;               // NEW (calculated) - left quantity for this master
+    leftQuantitiesBySize?: Record<string, number>; // NEW - size-wise left quantities for this master
+    status?: string;                     // NEW
+    bomTotalQuantity?: number;            // NEW - for reference
   }>;
   // Legacy single cutting master fields (for backward compatibility)
   cuttingMasterId?: string;
@@ -72,6 +81,7 @@ const AssignOrdersPage = () => {
 
   // Initialize with empty array - data will be loaded from backend
   const [assignments, setAssignments] = useState<OrderAssignment[]>([]);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // Initialize with empty array - data will be loaded from backend
   const [workers, setWorkers] = useState([
@@ -114,6 +124,10 @@ const AssignOrdersPage = () => {
   const [stitchingPriceSingleNeedle, setStitchingPriceSingleNeedle] = useState<string>('');
   const [stitchingPriceOverlockFlatlock, setStitchingPriceOverlockFlatlock] = useState<string>('');
   const [isEditingStitchingRates, setIsEditingStitchingRates] = useState(false);
+  
+  // Reassignment dialog
+  const [reassignDialogOpen, setReassignDialogOpen] = useState(false);
+  const [reassignAssignment, setReassignAssignment] = useState<OrderAssignment | null>(null);
   
   // Current user state
   const [currentUser, setCurrentUser] = useState<{id: string, name: string} | null>(null);
@@ -402,21 +416,77 @@ const AssignOrdersPage = () => {
           }
         }
 
-        // Load multiple cutting masters from order_cutting_assignments
+        // Fetch order items to get sizes_quantities for size-wise calculations
+        let orderItemsByOrder: Record<string, any[]> = {};
+        try {
+          const { data: orderItemsData } = await supabase
+            .from('order_items' as any)
+            .select('order_id, sizes_quantities')
+            .in('order_id', orderIds as any);
+          (orderItemsData || []).forEach((item: any) => {
+            if (item?.order_id) {
+              if (!orderItemsByOrder[item.order_id]) orderItemsByOrder[item.order_id] = [];
+              orderItemsByOrder[item.order_id].push(item);
+            }
+          });
+        } catch (e) {
+          console.error('Failed to load order items:', e);
+        }
+
+        // Fetch cut_quantities_by_size from order_assignments for each order
+        let cutQuantitiesByOrder: Record<string, any> = {};
+        try {
+          const { data: cutQuantitiesData } = await supabase
+            .from('order_assignments' as any)
+            .select('order_id, cut_quantities_by_size')
+            .in('order_id', orderIds as any);
+          (cutQuantitiesData || []).forEach((r: any) => {
+            if (r?.order_id) {
+              cutQuantitiesByOrder[r.order_id] = r.cut_quantities_by_size || {};
+            }
+          });
+        } catch (e) {
+          console.error('Failed to load cut quantities:', e);
+        }
+
+        // Load multiple cutting masters from order_cutting_assignments with quantity fields
+        // Also fetch employee avatars for cutting masters
+        const allCuttingMasterIds: string[] = [];
         let cuttingMastersByOrder: Record<string, any[]> = {};
         try {
           const { data: cuttingRows } = await supabase
             .from('order_cutting_assignments' as any)
-            .select('order_id, cutting_master_id, cutting_master_name, cutting_master_avatar_url, assigned_date')
+            .select('id, order_id, cutting_master_id, cutting_master_name, cutting_master_avatar_url, assigned_date, assigned_quantity, completed_quantity, status, notes, cut_quantities_by_size')
             .in('order_id', orderIds as any);
           (cuttingRows || []).forEach((r: any) => { 
             if (r?.order_id) {
               if (!cuttingMastersByOrder[r.order_id]) cuttingMastersByOrder[r.order_id] = [];
               cuttingMastersByOrder[r.order_id].push(r);
+              if (r.cutting_master_id && !allCuttingMasterIds.includes(r.cutting_master_id)) {
+                allCuttingMasterIds.push(r.cutting_master_id);
+              }
             }
           });
         } catch (e) {
           console.error('Failed to load cutting masters:', e);
+        }
+
+        // Fetch employee avatars for all cutting masters
+        let cuttingMasterAvatars: Record<string, string> = {};
+        if (allCuttingMasterIds.length > 0) {
+          try {
+            const { data: employees } = await supabase
+              .from('employees' as any)
+              .select('id, avatar_url')
+              .in('id', allCuttingMasterIds as any);
+            (employees || []).forEach((emp: any) => {
+              if (emp?.id && emp?.avatar_url) {
+                cuttingMasterAvatars[emp.id] = emp.avatar_url;
+              }
+            });
+          } catch (e) {
+            console.error('Failed to load cutting master avatars:', e);
+          }
         }
         const nextAssignments: OrderAssignment[] = validOrders.map((o: any) => {
           const bomList = bomsByOrder[o.id] || [];
@@ -463,14 +533,80 @@ const AssignOrdersPage = () => {
           const cuttingMasters = cuttingMastersByOrder[o.id] || [];
           
           if (cuttingMasters.length > 0) {
-            // Multiple cutting masters
-            base.cuttingMasters = cuttingMasters.map((cm: any) => ({
-              id: cm.cutting_master_id,
-              name: cm.cutting_master_name,
-              avatarUrl: cm.cutting_master_avatar_url,
-              assignedDate: cm.assigned_date,
-              assignedBy: 'System'
-            }));
+            // Multiple cutting masters - calculate quantities per master
+            const bomTotalQty = quantity; // Already calculated from BOM
+            
+            // Get order items for this order to calculate size-wise quantities
+            const orderItems = orderItemsByOrder[o.id] || [];
+            const totalOrderSizes: Record<string, number> = {};
+            orderItems.forEach((item: any) => {
+              const sizes = item.sizes_quantities || {};
+              Object.entries(sizes).forEach(([size, qty]: [string, any]) => {
+                totalOrderSizes[size] = (totalOrderSizes[size] || 0) + (Number(qty) || 0);
+              });
+            });
+            
+            base.cuttingMasters = cuttingMasters.map((cm: any) => {
+              const assignedQty = cm.assigned_quantity ?? null;
+              const effectiveAssignedQty = assignedQty ?? bomTotalQty;
+              
+              // Get this cutting master's cut quantities by size (per-cutting-master tracking)
+              const masterCutQuantitiesBySize = cm.cut_quantities_by_size || {};
+              
+              // Calculate total cut quantity from size-wise breakdown
+              const masterTotalCutQtyFromSizes = Object.values(masterCutQuantitiesBySize).reduce((sum: number, val: any) => {
+                return sum + (Number(val) || 0);
+              }, 0);
+              
+              // Also check completed_quantity field from database
+              const completedQtyFromDB = Number(cm.completed_quantity || 0);
+              
+              // Use the maximum of both to ensure we don't miss any cuts
+              // This handles cases where completed_quantity might be updated separately
+              const masterTotalCutQty = Math.max(masterTotalCutQtyFromSizes, completedQtyFromDB);
+              
+              // Calculate left quantities by size for this cutting master
+              // Left = assigned_quantity (proportional by size) - what they've already cut
+              const masterLeftQuantitiesBySize: Record<string, number> = {};
+              
+              // Get order sizes to calculate proportional assignment
+              const totalOrderQty = Object.values(totalOrderSizes).reduce((sum, qty) => sum + qty, 0);
+              
+              if (totalOrderQty > 0) {
+                Object.entries(totalOrderSizes).forEach(([size, orderQty]) => {
+                  // Calculate proportional assigned quantity for this size based on effectiveAssignedQty
+                  const proportionalAssigned = Math.round((orderQty / totalOrderQty) * effectiveAssignedQty);
+                  const masterCutQty = Number(masterCutQuantitiesBySize[size] || 0);
+                  // Left = proportional assigned - what they've cut
+                  masterLeftQuantitiesBySize[size] = Math.max(0, proportionalAssigned - masterCutQty);
+                });
+              }
+              
+              // Calculate total left quantity for this master
+              // Left = assigned_quantity - what they've cut
+              // IMPORTANT: Allow reassignment if effectiveAssignedQty > 0 and not fully cut
+              // This ensures reassignment works even if cutting hasn't started (cutQty = 0)
+              const masterLeftQty = Math.max(0, effectiveAssignedQty - masterTotalCutQty);
+              
+              // Use avatar from employees table if not in cutting_master_avatar_url
+              const avatarUrl = cm.cutting_master_avatar_url || cuttingMasterAvatars[cm.cutting_master_id] || undefined;
+              
+              return {
+                id: cm.id, // Assignment ID from order_cutting_assignments
+                cuttingMasterId: cm.cutting_master_id, // Cutting master employee ID
+                name: cm.cutting_master_name,
+                avatarUrl: avatarUrl,
+                assignedDate: cm.assigned_date,
+                assignedBy: 'System',
+                assignedQuantity: assignedQty,
+                completedQuantity: masterTotalCutQty, // What this master has cut
+                cutQuantitiesBySize: masterCutQuantitiesBySize, // Size-wise cut quantities for this master
+                leftQuantity: masterLeftQty, // Left quantity for this master
+                leftQuantitiesBySize: masterLeftQuantitiesBySize, // Size-wise left quantities for this master
+                status: cm.status,
+                bomTotalQuantity: bomTotalQty
+              };
+            });
             // Keep legacy single cutting master for backward compatibility
             base.cuttingMasterId = cuttingMasters[0].cutting_master_id;
             base.cuttingMasterName = cuttingMasters[0].cutting_master_name;
@@ -505,7 +641,7 @@ const AssignOrdersPage = () => {
     };
 
     loadAssignments();
-  }, []);
+  }, [refreshTrigger]);
 
   // Helper function to check if an order is fully assigned (has cutting master and stitching rates)
   const isOrderFullyAssigned = (assignment: OrderAssignment): boolean => {
@@ -519,6 +655,28 @@ const AssignOrdersPage = () => {
     const hasCuttingMaster = assignment.cuttingMasterId != null;
     const hasStitchingRates = assignment.stitchingPriceSingleNeedle != null && assignment.stitchingPriceOverlockFlatlock != null;
     return !hasCuttingMaster || !hasStitchingRates;
+  };
+
+  // Helper function to check if reassignment is possible
+  // Reassignment is allowed if at least one cutting master has assigned quantity that hasn't been fully cut
+  // This means: assignedQuantity > completedQuantity (or assignedQuantity > 0 if no cutting started)
+  const canReassign = (assignment: OrderAssignment): boolean => {
+    if (!assignment.cuttingMasters || assignment.cuttingMasters.length === 0) {
+      return false; // No cutting master assigned
+    }
+    
+    // Check if any cutting master has quantity left to cut
+    // This works even if cutting hasn't started yet (leftQty will equal assignedQty)
+    return assignment.cuttingMasters.some(master => {
+      const leftQty = master.leftQuantity ?? 0;
+      const assignedQty = master.assignedQuantity ?? master.bomTotalQuantity ?? 0;
+      const completedQty = master.completedQuantity ?? 0;
+      
+      // Allow reassignment if:
+      // 1. There's left quantity > 0, OR
+      // 2. There's assigned quantity > 0 and completed < assigned (not fully cut)
+      return leftQty > 0 || (assignedQty > 0 && completedQty < assignedQty);
+    });
   };
 
   // Filter assignments for "Order Assignments" tab (orders that need assignment)
@@ -739,6 +897,18 @@ const AssignOrdersPage = () => {
     setStitchingPriceOverlockFlatlock('');
     setIsEditingStitchingRates(false);
     setStitchingRatesOpen(true);
+  };
+
+  // Function to open reassignment dialog
+  const handleOpenReassignDialog = (assignment: OrderAssignment) => {
+    setReassignAssignment(assignment);
+    setReassignDialogOpen(true);
+  };
+
+  // Function to handle successful reassignment - triggers refresh
+  const handleReassignmentSuccess = () => {
+    // Trigger refresh by incrementing refreshTrigger, which will cause useEffect to re-run
+    setRefreshTrigger(prev => prev + 1);
   };
 
   // Function to handle multiple cutting master assignment
@@ -1209,17 +1379,40 @@ const AssignOrdersPage = () => {
                           <TableCell>{assignment.quantity}</TableCell>
                           <TableCell>
                             {assignment.cuttingMasters && assignment.cuttingMasters.length > 0 ? (
-                              <div className="flex flex-wrap gap-2">
-                                {assignment.cuttingMasters.map((master, index) => (
-                                  <div key={master.id} className="flex items-center">
-                                    <Avatar className="w-12 h-12">
-                                      <AvatarImage src={master.avatarUrl} />
-                                      <AvatarFallback className="text-sm">{master.name.charAt(0)}</AvatarFallback>
-                                    </Avatar>
-                                    <span className="ml-2 text-sm">{master.name}</span>
-                                    {index < assignment.cuttingMasters.length - 1 && <span className="mx-1">,</span>}
-                                  </div>
-                                ))}
+                              <div className="flex flex-wrap gap-3">
+                                {assignment.cuttingMasters.map((master, index) => {
+                                  // Show cutting master name, how much they've cut, and left quantity
+                                  const cutQty = master.completedQuantity ?? 0;
+                                  const leftQty = master.leftQuantity ?? 0;
+                                  const leftQuantitiesBySize = master.leftQuantitiesBySize || {};
+                                  const hasSizeBreakdown = Object.keys(leftQuantitiesBySize).length > 0;
+                                  
+                                  return (
+                                    <div key={master.id} className="flex items-start gap-2 p-2 border rounded-lg bg-gray-50">
+                                      <Avatar className="w-10 h-10">
+                                        <AvatarImage src={master.avatarUrl} />
+                                        <AvatarFallback className="text-xs">{master.name.charAt(0)}</AvatarFallback>
+                                      </Avatar>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-medium">{master.name}</div>
+                                        <div className="text-xs text-muted-foreground">
+                                          Cut: {cutQty} pcs | Left: {leftQty} pcs
+                                        </div>
+                                        {hasSizeBreakdown && (
+                                          <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-1">
+                                            {Object.entries(leftQuantitiesBySize)
+                                              .filter(([_, qty]) => qty > 0)
+                                              .map(([size, qty]) => (
+                                                <span key={size} className="bg-gray-200 px-1.5 py-0.5 rounded">
+                                                  {size}: {qty}
+                                                </span>
+                                              ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             ) : assignment.cuttingMasterName ? (
                               <div className="flex items-center">
@@ -1279,6 +1472,16 @@ const AssignOrdersPage = () => {
                               >
                                 Edit Rate
                               </Button>
+                              {/* Reassign Cutting Master button */}
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                onClick={() => handleOpenReassignDialog(assignment)}
+                                disabled={!canReassign(assignment)}
+                                title={!canReassign(assignment) ? 'All cutting is completed' : 'Reassign cutting master'}
+                              >
+                                Reassign
+                              </Button>
                               <Button variant="outline" size="sm" onClick={() => navigate(`/orders/${assignment.id}?from=production`)}>
                                 View
                               </Button>
@@ -1332,6 +1535,15 @@ const AssignOrdersPage = () => {
             </Card>
           </TabsContent>
         </Tabs>
+
+        {/* Reassign Cutting Master Dialog */}
+        <ReassignCuttingMasterDialog
+          isOpen={reassignDialogOpen}
+          onClose={() => setReassignDialogOpen(false)}
+          onSuccess={handleReassignmentSuccess}
+          assignment={reassignAssignment}
+          workers={workers}
+        />
 
         {/* Schedule date selection dialog */}
         <Dialog open={scheduleDialogOpen} onOpenChange={setScheduleDialogOpen}>

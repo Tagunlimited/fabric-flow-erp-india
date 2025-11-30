@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelect';
 import { ProductCustomizationModal } from './ProductCustomizationModal';
+import { CustomizationColorChips } from '@/components/common/CustomizationColorChips';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -116,6 +117,7 @@ interface Customization {
   customValue?: string;
   quantity?: number;
   priceImpact?: number;
+  colors?: Array<{ colorId: string; colorName: string; hex: string }>;
 }
 
 interface Product {
@@ -1693,6 +1695,12 @@ const getSelectedFabricVariant = (productIndex: number) => {
                       ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
                     </div>
                   )}
+                  {/* Display Colors */}
+                  {customization.colors && customization.colors.length > 0 && (
+                    <div className="mt-2">
+                      <CustomizationColorChips colors={customization.colors} />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2591,6 +2599,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
         productCategoryId={formData.products[currentProductIndex]?.product_category_id || ''}
         isOpen={customizationModalOpen}
         onClose={() => setCustomizationModalOpen(false)}
+        fabricColor={formData.products[currentProductIndex]?.color}
         onSave={(customizations) => {
           setFormData(prev => ({
             ...prev,

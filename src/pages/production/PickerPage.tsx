@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
-import { Search, Users, Scissors, ShoppingCart, Shirt, Package, ClipboardList, Printer } from "lucide-react";
+import { Search, Users, Scissors, ShoppingCart, Shirt, Package, ClipboardList, Printer, Check } from "lucide-react";
 import PickerQuantityDialog from "@/components/production/PickerQuantityDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
@@ -17,18 +17,22 @@ import type { BinInfo, BinSizeInfo } from "@/utils/inventoryAdjustmentAPI";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
+import { useSizeTypes } from "@/hooks/useSizeTypes";
+import { sortSizesByMasterOrder, sortSizeDistributionsByMasterOrder, getFallbackSizeOrder } from "@/utils/sizeSorting";
 
 interface TailorListItem {
   id: string;
   full_name: string;
   avatar_url?: string | null;
   tailor_type?: string | null;
+  batch_code?: string;
   assigned_orders: number;
   assigned_quantity: number;
   picked_quantity: number;
   rejected_quantity?: number;
   batch_id?: string | null;
   is_batch_leader?: boolean | null;
+  order_images?: string[];
 }
 
 interface ReadymadeOrder {
@@ -73,6 +77,7 @@ interface GroupedProduct {
   product_id?: string;
   product_master_id?: string;
   product_class?: string | null;
+  size_type_id?: string | null;
   total_quantity: number;
   size_quantities: Record<string, number>;
   orders: Array<{
@@ -86,27 +91,9 @@ interface GroupedProduct {
   size_variants?: Record<string, ProductSizeVariant>;
 }
 
-// Helper function to sort size distributions in proper order
-const sortSizeDistributions = (sizes: any[]) => {
-  const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 
-    '20', '22', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44', '46', '48', '50',
-    '0-2 Yrs', '3-4 Yrs', '5-6 Yrs', '7-8 Yrs', '9-10 Yrs', '11-12 Yrs', '13-14 Yrs', '15-16 Yrs'];
-  
-  return [...sizes].sort((a, b) => {
-    const indexA = sizeOrder.indexOf(a.size_name);
-    const indexB = sizeOrder.indexOf(b.size_name);
-    
-    if (indexA !== -1 && indexB !== -1) {
-      return indexA - indexB;
-    }
-    if (indexA !== -1) return -1;
-    if (indexB !== -1) return 1;
-    return (a.size_name || '').localeCompare(b.size_name || '');
-  });
-};
-
 export default function PickerPage() {
   const { config: company } = useCompanySettings();
+  const { sizeTypes, loading: loadingSizeTypes } = useSizeTypes();
   const [tailors, setTailors] = useState<TailorListItem[]>([]);
   const [tailorSearch, setTailorSearch] = useState("");
   const [loadingTailors, setLoadingTailors] = useState(false);
@@ -128,6 +115,9 @@ export default function PickerPage() {
   const [batchRejectedOpen, setBatchRejectedOpen] = useState(false);
   const [batchRejectedTitle, setBatchRejectedTitle] = useState("");
   const [batchRejectedDetails, setBatchRejectedDetails] = useState<{ order_number: string; sizes: { size_name: string; rejected_quantity: number; remarks?: string }[] }[]>([]);
+  const [imageGalleryOpen, setImageGalleryOpen] = useState(false);
+  const [galleryImages, setGalleryImages] = useState<string[]>([]);
+  const [galleryBatchName, setGalleryBatchName] = useState('');
   
   // Readymade Orders state
   const [readymadeOrders, setReadymadeOrders] = useState<ReadymadeOrder[]>([]);
@@ -160,6 +150,7 @@ export default function PickerPage() {
     setLoadingReadymadeOrders(true);
     try {
       // Fetch readymade orders
+      // @ts-expect-error - Supabase nested select causes deep type inference issue
       const { data: ordersData, error: ordersError } = await supabase
         .from('orders')
         .select(`
@@ -210,32 +201,27 @@ export default function PickerPage() {
     }
   };
 
-  // Utility function to sort sizes in logical order
-  const sortSizes = (sizes: string[]): string[] => {
-    const sizeOrder: Record<string, number> = {
-      'XS': 1, 'S': 2, 'M': 3, 'L': 4, 'XL': 5, '2XL': 6, 'XXL': 6,
-      '3XL': 7, 'XXXL': 7, '4XL': 8, 'XXXXL': 8, '5XL': 9,
-      '28': 1, '30': 2, '32': 3, '34': 4, '36': 5, '38': 6, '40': 7, '42': 8, '44': 9, '46': 10, '48': 11,
-    };
+  // Helper function to sort size distributions using master order
+  const sortSizeDistributions = (sizes: any[], sizeTypeId?: string | null): any[] => {
+    if (!sizes || sizes.length === 0) return [];
+    
+    // Use master-based sorting
+    return sortSizeDistributionsByMasterOrder(sizes, sizeTypeId || null, sizeTypes);
+  };
 
-    return sizes.sort((a, b) => {
-      const aOrder = sizeOrder[a.toUpperCase()] || sizeOrder[a] || 999;
-      const bOrder = sizeOrder[b.toUpperCase()] || sizeOrder[b] || 999;
-      
-      if (aOrder !== bOrder) {
-        return aOrder - bOrder;
-      }
-      
-      // If same order, try numeric comparison
-      const aNum = parseInt(a);
-      const bNum = parseInt(b);
-      if (!isNaN(aNum) && !isNaN(bNum)) {
-        return aNum - bNum;
-      }
-      
-      // Otherwise alphabetical
-      return a.localeCompare(b);
-    });
+  // Utility function to sort sizes using master order
+  const sortSizes = (sizes: string[], sizeTypeId?: string | null): string[] => {
+    if (!sizes || sizes.length === 0) return [];
+    
+    // Use master-based sorting
+    const sorted = sortSizesByMasterOrder(sizes, sizeTypeId || null, sizeTypes);
+    
+    // If master sorting didn't work (no size type found), use fallback
+    if (sorted.length === 0) {
+      return getFallbackSizeOrder(sizes);
+    }
+    
+    return sorted;
   };
 
   const normalizeSizeLabel = (value?: string | null): string => {
@@ -314,6 +300,7 @@ export default function PickerPage() {
       const productName = item.product_description || specs.product_name || 'Unknown Product';
       const productClass = specs.class || null;
       const productMasterId = specs.product_master_id || item.product_master_id || null;
+      const sizeTypeId = item.size_type_id || specs.size_type_id || null;
       const order = ordersMap[item.order_id];
       
       if (!productMap[productName]) {
@@ -322,6 +309,7 @@ export default function PickerPage() {
           product_id: specs.product_id,
           product_master_id: specs.product_master_id,
           product_class: productClass,
+          size_type_id: sizeTypeId,
           total_quantity: 0,
           size_quantities: {},
           orders: [],
@@ -333,6 +321,9 @@ export default function PickerPage() {
         }
         if (!productMap[productName].product_class && productClass) {
           productMap[productName].product_class = productClass;
+        }
+        if (!productMap[productName].size_type_id && sizeTypeId) {
+          productMap[productName].size_type_id = sizeTypeId;
         }
       }
 
@@ -371,9 +362,9 @@ export default function PickerPage() {
       }
     });
 
-    // Sort sizes in each product
+    // Sort sizes in each product using master order
     Object.values(productMap).forEach((product) => {
-      const sortedSizes = sortSizes(Object.keys(product.size_quantities));
+      const sortedSizes = sortSizes(Object.keys(product.size_quantities), product.size_type_id);
       const sortedSizeQuantities: Record<string, number> = {};
       sortedSizes.forEach((size) => {
         sortedSizeQuantities[size] = product.size_quantities[size];
@@ -485,7 +476,7 @@ export default function PickerPage() {
 
     const result: Record<string, { requiredQty: number; options: Array<{ bin: BinInfo; detail: BinSizeInfo }> }> = {};
     const sizeQuantities = picklistData.product.size_quantities || {};
-    const sortedSizes = sortSizes(Object.keys(sizeQuantities));
+    const sortedSizes = sortSizes(Object.keys(sizeQuantities), picklistData.product.size_type_id);
 
     sortedSizes.forEach((sizeLabel) => {
       const requiredQty = Number(sizeQuantities[sizeLabel] || 0);
@@ -536,7 +527,7 @@ export default function PickerPage() {
     if (!picklistData.product) {
       return [] as Array<{ size: string; requiredQty: number; selection: SizeBinSelection | null }>;
     }
-    const sizes = sortSizes(Object.keys(picklistData.product.size_quantities));
+    const sizes = sortSizes(Object.keys(picklistData.product.size_quantities), picklistData.product.size_type_id);
     return sizes.map((size) => ({
       size,
       requiredQty: Number(picklistData.product!.size_quantities[size] || 0),
@@ -704,13 +695,15 @@ export default function PickerPage() {
       let rejectedByBatch: Record<string, number> = {};
       let assignmentToBatch: Record<string, string> = {};
       let assignmentIds: string[] = [];
+      let orderSet: Record<string, Set<string>> = {}; // Declare outside try-catch
+      let orderImagesByBatch: Record<string, string[]> = {}; // Declare outside try-catch
       if (batchIds.length > 0) {
         try {
           const { data: oba } = await (supabase as any)
             .from('order_batch_assignments_with_details')
             .select('assignment_id, batch_id, order_id, total_quantity')
             .in('batch_id', batchIds as any);
-          const orderSet: Record<string, Set<string>> = {};
+          orderSet = {}; // Initialize
           (oba || []).forEach((row: any) => {
             const b = row?.batch_id as string | undefined;
             if (!b) return;
@@ -725,6 +718,54 @@ export default function PickerPage() {
           });
           Object.keys(orderSet).forEach(b => { ordersCountByBatch[b] = orderSet[b].size; });
         } catch {}
+
+        // Fetch product images for each batch's orders
+        if (batchIds.length > 0 && Object.keys(orderSet).length > 0) {
+          try {
+            for (const [batchId, orderIdSet] of Object.entries(orderSet)) {
+              const orderIds = Array.from(orderIdSet);
+              if (orderIds.length === 0) continue;
+              
+              // Fetch order items with images
+              const { data: orderItems } = await (supabase as any)
+                .from('order_items')
+                .select('order_id, specifications, category_image_url')
+                .in('order_id', orderIds);
+              
+              const images: string[] = [];
+              const processedOrders = new Set<string>();
+              
+              (orderItems || []).forEach((item: any) => {
+                if (processedOrders.has(item.order_id)) return; // One image per order
+                
+                let imageUrl = null;
+                // Try mockup image from specifications
+                try {
+                  const specs = typeof item.specifications === 'string' 
+                    ? JSON.parse(item.specifications) 
+                    : item.specifications;
+                  if (specs?.mockup_images && Array.isArray(specs.mockup_images) && specs.mockup_images.length > 0) {
+                    imageUrl = specs.mockup_images[0];
+                  }
+                } catch {}
+                
+                // Fallback to category image
+                if (!imageUrl && item.category_image_url) {
+                  imageUrl = item.category_image_url;
+                }
+                
+                if (imageUrl) {
+                  images.push(imageUrl);
+                  processedOrders.add(item.order_id);
+                }
+              });
+              
+              orderImagesByBatch[batchId] = images;
+            }
+          } catch (error) {
+            console.error('Error fetching order images:', error);
+          }
+        }
 
         // Compute picked totals per batch from size distributions
         if (assignmentIds.length > 0) {
@@ -776,22 +817,34 @@ export default function PickerPage() {
       const list: TailorListItem[] = baseBatches.map((b: any) => ({
         id: b.id,
         full_name: b.batch_name,
-        avatar_url: leaderByBatch[b.id]?.avatar_url,
+        avatar_url: leaderByBatch[b.id]?.avatar_url || null, // Ensure batch leader avatar is used
         tailor_type: b.tailor_type,
+        batch_code: b.batch_code,
         assigned_orders: ordersCountByBatch[b.id] || 0,
         assigned_quantity: qtyByBatch[b.id] || 0,
-        picked_quantity: Math.max(0, (pickedByBatch[b.id] || 0) - (rejectedByBatch[b.id] || 0)),
+        picked_quantity: pickedByBatch[b.id] || 0, // Show actual picked quantity without subtracting rejected
         rejected_quantity: rejectedByBatch[b.id] || 0,
         batch_id: b.id,
         is_batch_leader: true,
+        order_images: orderImagesByBatch[b.id] || [],
       }));
 
+      console.log('Batches loaded:', list.length, 'batches');
+      console.log('Batch leaders:', Object.keys(leaderByBatch).length, 'leaders found');
       setTailors(list);
     } catch (e) {
+      console.error('Error in fetchTailorsWithAssignedCounts:', e);
       setTailors([]);
     } finally {
       setLoadingTailors(false);
     }
+  };
+
+  const openImageGallery = (batchId: string, images: string[]) => {
+    const batch = tailors.find(t => t.id === batchId);
+    setGalleryBatchName(batch?.full_name || 'Batch');
+    setGalleryImages(images);
+    setImageGalleryOpen(true);
   };
 
   const openBatchRejectedDetails = async (batchId: string, batchName: string) => {
@@ -897,7 +950,7 @@ export default function PickerPage() {
       }
 
       const orderIds = Array.from(new Set((rows || []).map((r: any) => r.order_id).filter(Boolean)));
-      let ordersMap: Record<string, { order_number?: string; customer_id?: string; mockup_image?: string; category_image?: string }> = {};
+      let ordersMap: Record<string, { order_number?: string; customer_id?: string; mockup_image?: string; category_image?: string; size_type_id?: string | null }> = {};
       if (orderIds.length > 0) {
         const { data: orders } = await (supabase as any)
           .from('orders')
@@ -905,10 +958,10 @@ export default function PickerPage() {
           .in('id', orderIds as any);
         (orders || []).forEach((o: any) => { ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id }; });
         
-        // Fetch order items to get product images (mockup or category)
+        // Fetch order items to get product images (mockup or category) and size_type_id
         const { data: orderItems } = await (supabase as any)
           .from('order_items')
-          .select('order_id, specifications, category_image_url')
+          .select('order_id, specifications, category_image_url, size_type_id')
           .in('order_id', orderIds as any);
         
         (orderItems || []).forEach((item: any) => {
@@ -930,6 +983,10 @@ export default function PickerPage() {
           if (item.category_image_url && !ordersMap[item.order_id].category_image) {
             ordersMap[item.order_id].category_image = item.category_image_url;
           }
+          // Store size_type_id (use first non-null value found)
+          if (item.size_type_id && !ordersMap[item.order_id].size_type_id) {
+            ordersMap[item.order_id].size_type_id = item.size_type_id;
+          }
         });
       }
       const customerIds = Array.from(new Set(Object.values(ordersMap).map(o => o.customer_id).filter(Boolean)));
@@ -949,6 +1006,7 @@ export default function PickerPage() {
         customer_name: customersMap[ordersMap[r.order_id]?.customer_id || ''],
         mockup_image: ordersMap[r.order_id]?.mockup_image,
         category_image: ordersMap[r.order_id]?.category_image,
+        size_type_id: ordersMap[r.order_id]?.size_type_id || null,
         assignment_date: r.assignment_date,
         total_quantity: Number(r.total_quantity || 0),
         picked_quantity: Number(pickedByAssignment[r.assignment_id] || 0),
@@ -956,9 +1014,26 @@ export default function PickerPage() {
         rejected_sizes: rejectedSizesByAssignment[r.assignment_id] || [],
         size_distributions: Array.isArray(r.size_distributions) ? r.size_distributions : [],
       }));
+      // Show orders that have work to do: pending items OR rejected items needing replacement
+      // Key insight: If picked >= total, then all assigned items are picked.
+      // If there are rejected items but picked >= total, replacements have already been picked,
+      // so we shouldn't show the card (the rejected items are already replaced).
       const pending = enriched.filter((o: any) => {
-        const effectivePicked = Math.max(0, Number(o.picked_quantity || 0) - Number(o.rejected_quantity || 0));
-        return Number(o.total_quantity || 0) > effectivePicked;
+        const totalQty = Number(o.total_quantity || 0);
+        const picked = Number(o.picked_quantity || 0);
+        const rejected = Number(o.rejected_quantity || 0);
+        
+        // Pending items = assigned items not yet picked
+        const pendingItems = Math.max(0, totalQty - picked);
+        
+        // Rejected items that need replacement
+        // BUT: If picked >= total, then all items are picked, including replacements for rejected items
+        // So we don't need to show rejected as needing replacement if picked >= total
+        const rejectedNeedingReplacement = (picked < totalQty) ? rejected : 0;
+        
+        // Show card only if there are pending items OR rejected items needing replacement
+        const remainingToPick = pendingItems + rejectedNeedingReplacement;
+        return remainingToPick > 0;
       });
       setBatchOrders(pending);
       setOrdersDialogOpen(true);
@@ -1038,56 +1113,128 @@ export default function PickerPage() {
                   <p className="text-sm sm:text-base text-muted-foreground">No tailors found.</p>
                 ) : (
                   <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 sm:gap-4">
-                    {filteredTailors.map((t) => (
-                      <Card key={t.id} className="border shadow-erp-md cursor-pointer hover:shadow-lg transition" onClick={() => openBatchOrders(t.id)}>
-                        <CardContent className="pt-4 sm:pt-6 p-4 sm:p-6">
-                          <div className="flex items-center gap-3 sm:gap-4">
-                            <Avatar className="h-10 w-10 sm:h-12 sm:w-12 flex-shrink-0">
-                              <AvatarImage src={t.avatar_url || undefined} alt={t.full_name} />
-                              <AvatarFallback className="text-xs sm:text-sm">{t.full_name.charAt(0)}</AvatarFallback>
-                            </Avatar>
-                            <div className="space-y-1 min-w-0 flex-1">
-                              <div className="font-semibold text-sm sm:text-base truncate">{t.full_name}</div>
-                              <div className="text-xs text-muted-foreground flex items-center gap-1">
-                                <Scissors className="w-3 h-3 sm:w-3.5 sm:h-3.5 flex-shrink-0" />
-                                <span className="truncate">{t.tailor_type ? String(t.tailor_type).replace(/_/g, ' ') : 'Tailor'}</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-3 gap-3 sm:gap-4">
+                    {filteredTailors.map((t) => {
+                      const pendingQty = Math.max(0, (t.assigned_quantity || 0) - (t.picked_quantity || 0));
+                      return (
+                        <Card key={t.id} className="border shadow-erp-md cursor-pointer hover:shadow-lg transition relative min-h-[280px] rounded-xl w-full" onClick={() => openBatchOrders(t.id)}>
+                          <CardContent className="p-4 sm:p-5 relative h-full flex flex-col">
+                            {/* Top Section: Avatar + Name + Batch Code */}
+                            <div className="flex items-start gap-3 mb-6">
+                              <Avatar className="w-20 h-20 flex-shrink-0">
+                                <AvatarImage src={t.avatar_url || undefined} alt={t.full_name} />
+                                <AvatarFallback className="text-base font-semibold">{t.full_name.charAt(0)}</AvatarFallback>
+                              </Avatar>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-bold text-lg text-slate-900 truncate">{t.full_name}</div>
+                                {t.batch_code && (
+                                  <div className="text-sm text-muted-foreground mt-0.5">BATCH: {t.batch_code}</div>
+                                )}
                               </div>
                             </div>
-                          </div>
-                          <div className="mt-3 sm:mt-4">
-                            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                              <Badge className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5">
-                                <span className="hidden sm:inline">Assigned Orders: </span>
-                                <span className="sm:hidden">Orders: </span>
-                                {t.assigned_orders}
+
+                            {/* Badges with Absolute Positioning */}
+                            {/* Rejected Qty - Top Right */}
+                            {t.rejected_quantity > 0 && (
+                              <Badge 
+                                className="absolute top-4 sm:top-5 right-4 sm:right-5 bg-red-500 hover:bg-red-600 text-white text-xs px-4 py-2 cursor-pointer z-10 shadow-sm rounded-full w-[180px] flex items-center justify-center" 
+                                onClick={(e) => { e.stopPropagation(); openBatchRejectedDetails(t.id, t.full_name); }}
+                                style={{ top: '16px' }}
+                              >
+                                Rejected Qty: {t.rejected_quantity}
                               </Badge>
-                              {t.assigned_quantity > 0 && (
-                                <Badge className="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">
-                                  <span className="hidden sm:inline">Assigned Qty: </span>
-                                  <span className="sm:hidden">Qty: </span>
-                                  {t.assigned_quantity}
-                                </Badge>
-                              )}
-                              {t.picked_quantity > 0 && (
-                                <Badge className="bg-green-100 text-green-800 text-xs px-2 py-0.5">
-                                  <span className="hidden sm:inline">Picked Qty: </span>
-                                  <span className="sm:hidden">Picked: </span>
-                                  {t.picked_quantity}
-                                </Badge>
-                              )}
-                              {t.rejected_quantity && t.rejected_quantity > 0 && (
-                                <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 cursor-pointer" onClick={(e) => { e.stopPropagation(); openBatchRejectedDetails(t.id, t.full_name); }}>
-                                  <span className="hidden sm:inline">Rejected Qty: </span>
-                                  <span className="sm:hidden">Rej: </span>
-                                  {t.rejected_quantity}
-                                </Badge>
-                              )}
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
+                            )}
+
+                            {/* Assigned Orders - Middle Left */}
+                            <Badge 
+                              className="absolute left-4 sm:left-5 bg-blue-100 text-blue-800 text-xs px-4 py-2 rounded-full w-[180px] flex items-center justify-center"
+                              style={{ top: '50%', transform: 'translateY(-50%)' }}
+                            >
+                              Assigned Orders: {t.assigned_orders}
+                            </Badge>
+
+                            {/* Assigned Qty - Middle Right */}
+                            {t.assigned_quantity > 0 && (
+                              <Badge 
+                                className="absolute right-4 sm:right-5 bg-purple-100 text-purple-800 text-xs px-4 py-2 rounded-full w-[180px] flex items-center justify-center"
+                                style={{ top: '50%', transform: 'translateY(-50%)' }}
+                              >
+                                Assigned Qty: {t.assigned_quantity}
+                              </Badge>
+                            )}
+
+                            {/* Pending Qty - Bottom Right */}
+                            {pendingQty > 0 ? (
+                              <Badge 
+                                className="absolute bottom-4 sm:bottom-5 right-4 sm:right-5 bg-yellow-500 hover:bg-yellow-600 text-white text-xs px-4 py-2 shadow-sm rounded-full w-[180px] flex items-center justify-center"
+                                style={{ bottom: '16px' }}
+                              >
+                                Pending Qty: {pendingQty}
+                              </Badge>
+                            ) : pendingQty === 0 && t.assigned_quantity > 0 ? (
+                              <Badge 
+                                className="absolute bottom-4 sm:bottom-5 right-4 sm:right-5 bg-green-500 hover:bg-green-600 text-white text-xs px-4 py-2 shadow-sm rounded-full w-[180px] flex items-center justify-center gap-1.5"
+                                style={{ bottom: '16px' }}
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                                All Completed
+                              </Badge>
+                            ) : null}
+
+                            {/* Product Images Row - Bottom with Overlapping Circular Images */}
+                            {t.order_images && t.order_images.length > 0 && (
+                              <div className="flex items-center mt-auto pt-4 relative" style={{ height: '64px' }}>
+                                {t.order_images.slice(0, 3).map((img, idx) => (
+                                  <img 
+                                    key={idx} 
+                                    src={img} 
+                                    alt={`Product ${idx + 1}`}
+                                    className="w-16 h-16 rounded-full object-cover border-2 border-white flex-shrink-0 shadow-sm cursor-pointer"
+                                    style={{ 
+                                      marginLeft: idx > 0 ? '-16px' : '0',
+                                      zIndex: 3 - idx,
+                                      position: 'relative'
+                                    }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openImageGallery(t.id, t.order_images || []);
+                                    }}
+                                    onError={(e) => {
+                                      (e.target as HTMLImageElement).style.display = 'none';
+                                    }}
+                                  />
+                                ))}
+                                {t.order_images.length > 3 && (
+                                  <div 
+                                    className="relative w-16 h-16 rounded-full overflow-hidden cursor-pointer border-2 border-white flex-shrink-0 shadow-sm"
+                                    style={{ 
+                                      marginLeft: '-16px',
+                                      zIndex: 0
+                                    }}
+                                    onClick={(e) => { 
+                                      e.stopPropagation(); 
+                                      openImageGallery(t.id, t.order_images || []); 
+                                    }}
+                                  >
+                                    <img 
+                                      src={t.order_images[3]} 
+                                      alt="More products"
+                                      className="w-full h-full object-cover blur-sm"
+                                      onError={(e) => {
+                                        (e.target as HTMLImageElement).style.display = 'none';
+                                      }}
+                                    />
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-full">
+                                      <span className="text-white font-bold text-sm">+{t.order_images.length - 3}</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
                   </div>
 
                   {activeBatchId && (
@@ -1098,50 +1245,112 @@ export default function PickerPage() {
                       ) : batchOrders.length === 0 ? (
                         <p className="text-sm sm:text-base text-muted-foreground">No pending orders for this batch.</p>
                       ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                          {batchOrders.map((o) => (
-                            <Card key={o.assignment_id} className="border hover:shadow-lg transition cursor-pointer" onClick={() => openPickerForAssignment(o)}>
-                              <CardContent className="pt-5 p-5 sm:p-6">
-                                <div className="flex gap-4">
-                                  {/* Product Image */}
-                                  {(o.mockup_image || o.category_image) && (
-                                    <div className="flex-shrink-0">
-                                      <img 
-                                        src={o.mockup_image || o.category_image} 
-                                        alt="Product"
-                                        className="w-20 h-20 sm:w-24 sm:h-24 object-cover rounded-lg border-2 border-gray-200"
-                                        onError={(e) => {
-                                          e.currentTarget.style.display = 'none';
-                                        }}
-                                      />
-                                  </div>
-                                  )}
-                                  
-                                  {/* Order Details */}
-                                  <div className="flex-1 min-w-0">
-                                    <div className="font-semibold text-sm sm:text-base truncate">Order #{o.order_number}</div>
-                                    <div className="text-xs text-muted-foreground truncate mt-1">{o.customer_name}</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+                          {batchOrders.map((o) => {
+                            // Calculate left to pick: pending items (assigned - picked) + rejected items needing replacement
+                            const pending = Math.max(0, (o.total_quantity || 0) - (o.picked_quantity || 0));
+                            const rejected = Number(o.rejected_quantity || 0);
+                            const leftQuantity = pending + rejected;
+                            return (
+                              <Card 
+                                key={o.assignment_id} 
+                                className="border-0 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer bg-gradient-to-br from-white to-slate-50/50 overflow-hidden group"
+                                onClick={() => openPickerForAssignment(o)}
+                              >
+                                <CardContent className="p-5 sm:p-6">
+                                  <div className="flex flex-col gap-4">
+                                    {/* Header with Image and Order Info */}
+                                    <div className="flex items-start gap-4">
+                                      {/* Circular Product Image */}
+                                      <div className="flex-shrink-0">
+                                        <Avatar className="w-16 h-16 sm:w-20 sm:h-20 border-2 border-slate-200 shadow-sm">
+                                          <AvatarImage 
+                                            src={o.mockup_image || o.category_image || undefined} 
+                                            alt={o.order_number}
+                                            className="object-cover"
+                                          />
+                                          <AvatarFallback className="bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600 text-sm font-semibold">
+                                            {o.order_number?.slice(-3) || 'N/A'}
+                                          </AvatarFallback>
+                                        </Avatar>
+                                      </div>
+                                      
+                                      {/* Order Details */}
+                                      <div className="flex-1 min-w-0">
+                                        <div className="font-bold text-base sm:text-lg text-slate-900 truncate mb-1">
+                                          Order #{o.order_number}
+                                        </div>
+                                        <div className="text-sm text-slate-600 truncate">
+                                          {o.customer_name || 'Unknown Customer'}
+                                        </div>
+                                      </div>
+                                    </div>
                                     
-                                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mt-2">
-                                    <Badge className="bg-purple-100 text-purple-800 text-xs px-2 py-0.5">Qty: {o.total_quantity}</Badge>
-                                    <Badge className="bg-green-100 text-green-800 text-xs px-2 py-0.5">Picked: {o.picked_quantity}</Badge>
-                                    {o.rejected_quantity > 0 && (
-                                      <Badge className="bg-red-100 text-red-800 text-xs px-2 py-0.5 cursor-pointer" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rej: {o.rejected_quantity}</Badge>
+                                    {/* Quantity Badges */}
+                                    <div className="space-y-2 pt-2 border-t border-slate-100">
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <div className="flex flex-col">
+                                          <span className="text-xs text-slate-500 mb-1">Total Qty</span>
+                                          <Badge className="bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold px-3 py-1.5 w-fit">
+                                            {o.total_quantity || 0}
+                                          </Badge>
+                                        </div>
+                                        <div className="flex flex-col">
+                                          <span className="text-xs text-slate-500 mb-1">Picked</span>
+                                          <Badge className="bg-green-500 hover:bg-green-600 text-white text-sm font-semibold px-3 py-1.5 w-fit">
+                                            {o.picked_quantity || 0}
+                                          </Badge>
+                                        </div>
+                                      </div>
+                                      
+                                      {/* Left to Pick - Prominent Display */}
+                                      <div className="flex flex-col pt-2">
+                                        <span className="text-xs text-slate-500 mb-1.5 font-medium">Left to Pick</span>
+                                        <Badge className="bg-orange-500 hover:bg-orange-600 text-white text-base font-bold px-4 py-2 w-fit shadow-sm">
+                                          {leftQuantity}
+                                        </Badge>
+                                      </div>
+                                      
+                                      {/* Rejected Quantity */}
+                                      {o.rejected_quantity > 0 && (
+                                        <div className="pt-1">
+                                          <Badge 
+                                            className="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-3 py-1.5 w-fit cursor-pointer" 
+                                            onClick={(e) => { 
+                                              e.stopPropagation(); 
+                                              setRejectedOrderNumber(o.order_number); 
+                                              setRejectedItems(o.rejected_sizes || []); 
+                                              setRejectedOpen(true); 
+                                            }}
+                                          >
+                                            Rejected: {o.rejected_quantity}
+                                          </Badge>
+                                        </div>
+                                      )}
+                                    </div>
+                                    
+                                    {/* Size Distribution */}
+                                    {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 && (
+                                      <div className="pt-2 border-t border-slate-100">
+                                        <div className="text-xs text-slate-500 mb-2 font-medium">Size Breakdown</div>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {sortSizeDistributions(o.size_distributions, (o as any).size_type_id).map((sd: any) => (
+                                            <Badge 
+                                              key={sd.size_name} 
+                                              variant="outline" 
+                                              className="text-xs bg-slate-50 border-slate-200 text-slate-700 px-2 py-0.5"
+                                            >
+                                              {sd.size_name}: {sd.quantity || 0}
+                                            </Badge>
+                                          ))}
+                                        </div>
+                                      </div>
                                     )}
                                   </div>
-                                    
-                                <div className="mt-2 text-xs text-muted-foreground line-clamp-2">
-                                  {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 ? (
-                              <span className="font-medium">Sizes: {sortSizeDistributions(o.size_distributions).map((sd: any) => `${sd.size_name}:${sd.quantity}`).join(', ')}</span>
-                                  ) : (
-                                    <span>No sizes</span>
-                                  )}
-                          </div>
-                                  </div>
-                                </div>
-                              </CardContent>
-                            </Card>
-                          ))}
+                                </CardContent>
+                              </Card>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -1291,7 +1500,7 @@ export default function PickerPage() {
                                   <div className="pt-2 border-t border-slate-100">
                                     <div className="text-xs text-slate-500 mb-1.5 font-medium">Sizes:</div>
                                     <div className="flex flex-wrap gap-1">
-                                      {sortSizes(Object.keys(product.size_quantities)).map((size) => (
+                                      {sortSizes(Object.keys(product.size_quantities), product.size_type_id).map((size) => (
                                         <Badge key={size} variant="outline" className="text-xs bg-slate-50 border-slate-200 text-slate-700 px-1.5 py-0.5">
                                           {size}: {product.size_quantities[size]}
                                         </Badge>
@@ -1346,50 +1555,120 @@ export default function PickerPage() {
             ) : batchOrders.length === 0 ? (
               <p className="text-sm sm:text-base text-muted-foreground">No pending orders for this batch.</p>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-                {batchOrders.map((o) => (
-                  <Card key={o.assignment_id} className="border hover:shadow-lg transition cursor-pointer" onClick={() => { setOrdersDialogOpen(false); openPickerForAssignment(o); }}>
-                    <CardContent className="pt-5 p-5 sm:p-6">
-                      <div className="flex gap-4">
-                        {/* Product Image */}
-                        {(o.mockup_image || o.category_image) && (
-                          <div className="flex-shrink-0">
-                            <img 
-                              src={o.mockup_image || o.category_image} 
-                              alt="Product"
-                              className="w-24 h-24 sm:w-28 sm:h-28 object-cover rounded-lg border-2 border-gray-200"
-                              onError={(e) => {
-                                e.currentTarget.style.display = 'none';
-                              }}
-                            />
-                        </div>
-                        )}
-                        
-                        {/* Order Details */}
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-base sm:text-lg truncate">Order #{o.order_number}</div>
-                          <div className="text-sm text-muted-foreground truncate mt-1">{o.customer_name}</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+                {batchOrders.map((o) => {
+                  // Calculate left to pick: pending items (assigned - picked) + rejected items needing replacement
+                  const pending = Math.max(0, (o.total_quantity || 0) - (o.picked_quantity || 0));
+                  const rejected = Number(o.rejected_quantity || 0);
+                  const leftQuantity = pending + rejected;
+                  return (
+                    <Card 
+                      key={o.assignment_id} 
+                      className="border-0 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer bg-gradient-to-br from-white to-slate-50/50 overflow-hidden group"
+                      onClick={() => { setOrdersDialogOpen(false); openPickerForAssignment(o); }}
+                    >
+                      <CardContent className="p-5 sm:p-6">
+                        <div className="flex flex-col gap-4">
+                          {/* Header with Image and Order Info */}
+                          <div className="flex items-start gap-4">
+                            {/* Circular Product Image */}
+                            <div className="flex-shrink-0">
+                              <Avatar className="w-16 h-16 sm:w-20 sm:h-20 border-2 border-slate-200 shadow-sm">
+                                <AvatarImage 
+                                  src={o.mockup_image || o.category_image || undefined} 
+                                  alt={o.order_number}
+                                  className="object-cover"
+                                />
+                                <AvatarFallback className="bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600 text-sm font-semibold">
+                                  {o.order_number?.slice(-3) || 'N/A'}
+                                </AvatarFallback>
+                              </Avatar>
+                            </div>
+                            
+                            {/* Order Details */}
+                            <div className="flex-1 min-w-0">
+                              <div className="font-bold text-base sm:text-lg text-slate-900 truncate mb-1">
+                                Order #{o.order_number}
+                              </div>
+                              <div className="text-sm text-slate-600 truncate">
+                                {o.customer_name || 'Unknown Customer'}
+                              </div>
+                            </div>
+                          </div>
                           
-                          <div className="flex flex-wrap items-center gap-2 mt-3">
-                            <Badge className="bg-purple-100 text-purple-800 text-sm px-3 py-1">Qty: {o.total_quantity}</Badge>
-                            <Badge className="bg-green-100 text-green-800 text-sm px-3 py-1">Picked: {o.picked_quantity}</Badge>
-                          {o.rejected_quantity > 0 && (
-                              <Badge className="bg-red-100 text-red-800 text-sm px-3 py-1 cursor-pointer" onClick={(e) => { e.stopPropagation(); setRejectedOrderNumber(o.order_number); setRejectedItems(o.rejected_sizes || []); setRejectedOpen(true); }}>Rej: {o.rejected_quantity}</Badge>
+                          {/* Quantity Badges */}
+                          <div className="space-y-2 pt-2 border-t border-slate-100">
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="flex flex-col">
+                                <span className="text-xs text-slate-500 mb-1">Total Qty</span>
+                                <Badge className="bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold px-3 py-1.5 w-fit">
+                                  {o.total_quantity || 0}
+                                </Badge>
+                              </div>
+                              <div className="flex flex-col">
+                                <span className="text-xs text-slate-500 mb-1">Picked</span>
+                                <Badge className="bg-green-500 hover:bg-green-600 text-white text-sm font-semibold px-3 py-1.5 w-fit">
+                                  {o.picked_quantity || 0}
+                                </Badge>
+                              </div>
+                            </div>
+                            
+                            {/* Left to Pick - Prominent Display */}
+                            <div className="flex flex-col pt-2">
+                              <span className="text-xs text-slate-500 mb-1.5 font-medium">Left to Pick</span>
+                              <Badge className="bg-orange-500 hover:bg-orange-600 text-white text-base font-bold px-4 py-2 w-fit shadow-sm">
+                                {(() => {
+                                  // Calculate left to pick: pending items (assigned - picked) + rejected items needing replacement
+                                  const pending = Math.max(0, (o.total_quantity || 0) - (o.picked_quantity || 0));
+                                  const rejected = Number(o.rejected_quantity || 0);
+                                  return pending + rejected;
+                                })()}
+                              </Badge>
+                            </div>
+                            
+                            {/* Rejected Quantity */}
+                            {o.rejected_quantity > 0 && (
+                              <div className="pt-1">
+                                <Badge 
+                                  className="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-3 py-1.5 w-fit cursor-pointer" 
+                                  onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    setRejectedOrderNumber(o.order_number); 
+                                    setRejectedItems(o.rejected_sizes || []); 
+                                    setRejectedOpen(true); 
+                                  }}
+                                >
+                                  Rejected: {o.rejected_quantity}
+                                </Badge>
+                              </div>
+                            )}
+                          </div>
+                          
+                          {/* Size Distribution */}
+                          {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 && (
+                            <div className="pt-2 border-t border-slate-100">
+                              <div className="text-xs text-slate-500 mb-2 font-medium">Size Breakdown</div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {sortSizeDistributions(o.size_distributions, (o as any).size_type_id).map((sd: any) => {
+                                  const sizeLeft = (sd.quantity || 0) - (sd.picked_quantity || 0);
+                                  return (
+                                    <Badge 
+                                      key={sd.size_name} 
+                                      variant="outline" 
+                                      className="text-xs bg-slate-50 border-slate-200 text-slate-700 px-2 py-0.5"
+                                    >
+                                      {sd.size_name}: {sd.quantity || 0} ({sizeLeft} left)
+                                    </Badge>
+                                  );
+                                })}
+                              </div>
+                            </div>
                           )}
                         </div>
-                          
-                          <div className="mt-3 text-sm text-muted-foreground">
-                        {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 ? (
-                              <span className="font-medium">Sizes: {sortSizeDistributions(o.size_distributions).map((sd: any) => `${sd.size_name}:${sd.quantity}`).join(', ')}</span>
-                        ) : (
-                          <span>No sizes</span>
-                        )}
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </div>
             )}
           </DialogContent>
@@ -1416,6 +1695,29 @@ export default function PickerPage() {
                 ))}
               </div>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Image Gallery Dialog */}
+        <Dialog open={imageGalleryOpen} onOpenChange={setImageGalleryOpen}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Product Images - {galleryBatchName}</DialogTitle>
+            </DialogHeader>
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-4 mt-4">
+              {galleryImages.map((img, idx) => (
+                <div key={idx} className="relative aspect-square">
+                  <img 
+                    src={img} 
+                    alt={`Product ${idx + 1}`}
+                    className="w-full h-full object-cover rounded border border-slate-200"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
           </DialogContent>
         </Dialog>
 
@@ -1545,7 +1847,7 @@ export default function PickerPage() {
                                         <Button
                                           type="button"
                                           variant="ghost"
-                                          size="xs"
+                                          size="sm"
                                           className="text-xs"
                                           onClick={() => handleApplyBinToAllSizes(size)}
                                         >
@@ -1901,7 +2203,7 @@ export default function PickerPage() {
                     <TableHeader>
                       <TableRow className="bg-slate-50">
                         <TableHead className="font-semibold text-slate-900 sticky left-0 bg-slate-50 z-10">Order Number</TableHead>
-                        {sortSizes(Object.keys(selectedProductDetail.size_quantities)).map((size) => (
+                        {sortSizes(Object.keys(selectedProductDetail.size_quantities), selectedProductDetail.size_type_id).map((size) => (
                           <TableHead key={size} className="font-semibold text-slate-900 text-center min-w-[80px]">
                             {size}
                           </TableHead>
@@ -1912,7 +2214,7 @@ export default function PickerPage() {
                     <TableBody>
                       {selectedProductDetail.orders.map((order) => {
                         const rowTotal = Object.values(order.size_quantities).reduce((sum, qty) => sum + (Number(qty) || 0), 0);
-                        const sortedSizes = sortSizes(Object.keys(selectedProductDetail.size_quantities));
+                        const sortedSizes = sortSizes(Object.keys(selectedProductDetail.size_quantities), selectedProductDetail.size_type_id);
                         return (
                           <TableRow key={order.order_id} className="hover:bg-slate-50/50">
                             <TableCell className="font-medium text-slate-900 sticky left-0 bg-white z-10">

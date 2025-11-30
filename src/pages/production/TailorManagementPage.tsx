@@ -51,12 +51,21 @@ interface Tailor {
   assigned_orders: number;
   active_orders: number;
   completed_orders: number;
-  personal_phone: string;
+  // Personal Information
+  personal_phone?: string;
   personal_email?: string;
-  joining_date: string;
-  employment_type: string;
-  salary: number;
-  work_hours_per_day: number;
+  date_of_birth?: string;
+  gender?: string;
+  // Address Information
+  address_line1?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  // Employment Information
+  joining_date?: string;
+  employment_type?: string;
+  salary?: number;
+  work_hours_per_day?: number;
   id_proof_type?: string;
   id_proof_number?: string;
   id_proof_image_url?: string;
@@ -152,12 +161,32 @@ const TailorManagementPage = () => {
           assigned_orders: tailor.active_assignments || 0,
           active_orders: tailor.active_assignments || 0,
           completed_orders: tailor.completed_assignments || 0,
+          // Personal Information
           personal_phone: tailor.personal_phone,
           personal_email: tailor.personal_email,
+          date_of_birth: tailor.date_of_birth,
+          gender: tailor.gender,
+          // Address Information
+          address_line1: tailor.address_line1,
+          city: tailor.city,
+          state: tailor.state,
+          pincode: tailor.pincode,
+          // Employment Information
           joining_date: tailor.joining_date,
           employment_type: tailor.employment_type,
           salary: tailor.salary,
-          work_hours_per_day: tailor.work_hours_per_day
+          work_hours_per_day: tailor.work_hours_per_day,
+          // ID Proof Information
+          id_proof_type: tailor.id_proof_type,
+          id_proof_number: tailor.id_proof_number,
+          id_proof_image_url: tailor.id_proof_image_url,
+          id_proof_back_image_url: tailor.id_proof_back_image_url,
+          // Bank Details
+          bank_name: tailor.bank_name,
+          account_holder_name: tailor.account_holder_name,
+          account_number: tailor.account_number,
+          ifsc_code: tailor.ifsc_code,
+          passbook_image_url: tailor.passbook_image_url
         };
       });
       
@@ -234,9 +263,35 @@ const TailorManagementPage = () => {
     setIsBatchDialogOpen(false);
   };
 
-  const handleEditTailor = (tailor: Tailor) => {
-    setEditingTailor(tailor);
-    setIsTailorDialogOpen(true);
+  const handleEditTailor = async (tailor: Tailor) => {
+    try {
+      // Fetch complete tailor data with all fields from database
+      const { data: fullTailorData, error } = await supabase
+        .from('tailors')
+        .select('*')
+        .eq('id', tailor.id)
+        .single();
+
+      if (error) {
+        console.error('Error fetching full tailor data:', error);
+        toast({
+          title: "Warning",
+          description: "Could not load all tailor details. Some fields may be empty.",
+          variant: "default",
+        });
+        // Fallback to using the partial data we have
+        setEditingTailor(tailor);
+      } else {
+        // Use the complete data from database
+        setEditingTailor(fullTailorData as any);
+      }
+      setIsTailorDialogOpen(true);
+    } catch (error) {
+      console.error('Error in handleEditTailor:', error);
+      // Fallback to using the partial data we have
+      setEditingTailor(tailor);
+      setIsTailorDialogOpen(true);
+    }
   };
 
   const handleViewTailor = (tailor: Tailor) => {

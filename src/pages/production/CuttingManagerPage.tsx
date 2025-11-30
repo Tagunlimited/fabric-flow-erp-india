@@ -40,6 +40,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleBatchAssignmentDialog";
 import { UpdateCuttingQuantityDialog } from "@/components/production/UpdateCuttingQuantityDialog";
+import { ReassignBatchDialog } from "@/components/production/ReassignBatchDialog";
 import { generateBatchAssignmentPDF } from "@/utils/batchAssignmentPDF";
 
 interface CuttingJob {
@@ -86,7 +87,9 @@ interface CuttingJob {
     total_quantity?: number;
     size_distributions?: Array<{
       size_name: string;
-      quantity: number;
+      quantity: number;            // Assigned
+      picked_quantity: number;    // Picked
+      left_quantity: number;      // Calculated: quantity - picked_quantity
     }>;
     assignment_date?: string;
     assigned_by?: string;
@@ -141,6 +144,14 @@ const CuttingManagerPage = () => {
   const [batchAssignmentOpen, setBatchAssignmentOpen] = useState(false);
   const [selectedJobForBatch, setSelectedJobForBatch] = useState<CuttingJob | null>(null);
   
+  // Batch reassignment dialog state
+  const [reassignBatchOpen, setReassignBatchOpen] = useState(false);
+  const [selectedBatchForReassign, setSelectedBatchForReassign] = useState<{
+    job: CuttingJob;
+    batchAssignment: CuttingJob['batchAssignments'][0];
+  } | null>(null);
+  const [availableBatches, setAvailableBatches] = useState<any[]>([]);
+  
   // PDF generation state
   const [generatingPDF, setGeneratingPDF] = useState<string | null>(null);
 
@@ -157,6 +168,50 @@ const CuttingManagerPage = () => {
   };
 
   const handleBatchAssignmentSuccess = () => {
+    // Reload cutting jobs to get updated batch assignments
+    refreshData();
+  };
+
+  // Helper function to check if batch can be reassigned
+  const canReassignBatch = (batchAssignment: CuttingJob['batchAssignments'][0]): boolean => {
+    if (!batchAssignment.size_distributions || batchAssignment.size_distributions.length === 0) {
+      return false; // No size distributions
+    }
+    
+    // Check if any size has left quantity > 0 (unpicked)
+    return batchAssignment.size_distributions.some(size => {
+      const leftQty = size.left_quantity || 0;
+      return leftQty > 0;
+    });
+  };
+
+  // Handle batch reassignment
+  const handleReassignBatch = async (job: CuttingJob, batchAssignment: CuttingJob['batchAssignments'][0]) => {
+    // Fetch available batches
+    try {
+      // Fetch batches - avatar is optional, use batch_leader_avatar if available
+      const { data: batches } = await supabase
+        .from('batches')
+        .select('id, batch_name, batch_leader_name, batch_leader_avatar, tailor_type, status')
+        .eq('status', 'active')
+        .order('batch_name');
+      
+      // Map batch_leader_avatar to batch_leader_avatar_url for consistency with interface
+      // The batches table uses batch_leader_avatar, but the interface expects batch_leader_avatar_url
+      const mappedBatches = (batches || []).map((batch: any) => ({
+        ...batch,
+        batch_leader_avatar_url: batch.batch_leader_avatar || undefined
+      }));
+      
+      setAvailableBatches(mappedBatches);
+      setSelectedBatchForReassign({ job, batchAssignment });
+      setReassignBatchOpen(true);
+    } catch (error) {
+      console.error('Error fetching batches:', error);
+    }
+  };
+
+  const handleReassignBatchSuccess = () => {
     // Reload cutting jobs to get updated batch assignments
     refreshData();
   };
@@ -606,9 +661,42 @@ const CuttingManagerPage = () => {
               .select('*')
               .eq('order_id', job.id as any);
 
+            // Fetch size distributions with picked_quantity for all batch assignments
+            const assignmentIds = (batchAssignments || []).map((ba: any) => ba.id).filter(Boolean);
+            let sizeDistributionsMap: Record<string, any[]> = {};
+            
+            if (assignmentIds.length > 0) {
+              const { data: sizeDistributions } = await supabase
+                .from('order_batch_size_distributions' as any)
+                .select('order_batch_assignment_id, size_name, quantity, picked_quantity')
+                .in('order_batch_assignment_id', assignmentIds as any);
+              
+              // Group by assignment_id
+              (sizeDistributions || []).forEach((sd: any) => {
+                const assignmentId = sd.order_batch_assignment_id;
+                if (!sizeDistributionsMap[assignmentId]) {
+                  sizeDistributionsMap[assignmentId] = [];
+                }
+                const quantity = Number(sd.quantity || 0);
+                const pickedQuantity = Number(sd.picked_quantity || 0);
+                sizeDistributionsMap[assignmentId].push({
+                  size_name: sd.size_name,
+                  quantity: quantity,
+                  picked_quantity: pickedQuantity,
+                  left_quantity: Math.max(0, quantity - pickedQuantity)
+                });
+              });
+            }
+
+            // Enrich batch assignments with size distributions
+            const enrichedBatchAssignments = (batchAssignments || []).map((ba: any) => ({
+              ...ba,
+              size_distributions: sizeDistributionsMap[ba.id] || []
+            }));
+
             return {
               ...job,
-              batchAssignments: (batchAssignments as any) || []
+              batchAssignments: enrichedBatchAssignments
             } as CuttingJob;
           } catch (error) {
             console.error(`Error fetching batch assignments for order ${job.id}:`, error);
@@ -1025,14 +1113,14 @@ const CuttingManagerPage = () => {
                                 {job.batchAssignments.map((assignment, index) => (
                                   <div key={assignment.id} className="p-2 border rounded-lg bg-green-50">
                                     <div className="flex items-center justify-between">
-                                      <div className="flex items-center space-x-3">
+                                      <div className="flex items-center space-x-3 flex-1">
                                         <Avatar className="w-8 h-8">
                                           <AvatarImage src={assignment.batch_leader_avatar_url} alt={assignment.batch_leader_name} />
                                           <AvatarFallback className="bg-gray-200 text-gray-700 text-xs">
                                             {assignment.batch_leader_name?.charAt(0) || assignment.batch_name.charAt(0)}
                                           </AvatarFallback>
                                         </Avatar>
-                                        <div>
+                                        <div className="flex-1">
                                           <div className="font-medium text-green-700 text-sm">
                                             {assignment.batch_name}
                                           </div>
@@ -1041,10 +1129,31 @@ const CuttingManagerPage = () => {
                                           </div>
                                         </div>
                                       </div>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleReassignBatch(job, assignment)}
+                                        disabled={!canReassignBatch(assignment)}
+                                        className="ml-2 text-orange-600 border-orange-200 hover:bg-orange-50"
+                                      >
+                                        Reassign
+                                      </Button>
                                     </div>
                                     {assignment.size_distributions && assignment.size_distributions.length > 0 && (
-                                      <div className="mt-1 text-xs text-muted-foreground">
-                                        Sizes: {assignment.size_distributions.map(sd => `${sd.size_name}: ${sd.quantity}`).join(', ')}
+                                      <div className="mt-2 space-y-1">
+                                        <div className="text-xs font-medium text-muted-foreground">Size-wise breakdown:</div>
+                                        <div className="text-xs text-muted-foreground flex flex-wrap gap-1">
+                                          {assignment.size_distributions.map(sd => {
+                                            const assigned = sd.quantity || 0;
+                                            const picked = sd.picked_quantity || 0;
+                                            const left = sd.left_quantity || 0;
+                                            return (
+                                              <span key={sd.size_name} className="bg-gray-100 px-2 py-0.5 rounded">
+                                                {sd.size_name}: {assigned}/{picked}/{left}
+                                              </span>
+                                            );
+                                          })}
+                                        </div>
                                       </div>
                                     )}
                                   </div>
@@ -1253,28 +1362,60 @@ const CuttingManagerPage = () => {
                             )}
                           </TableCell>
                           <TableCell>
-                            <div className="space-y-1">
+                            <div className="space-y-2">
                               {job.batchAssignments?.map((assignment, index) => (
                                 <div key={assignment.id} className="p-2 border rounded-lg bg-green-100">
-                                  <div className="flex items-center space-x-2">
-                                    <Avatar className="w-6 h-6">
-                                      <AvatarImage 
-                                        src={assignment.batch_leader_avatar_url || undefined} 
-                                        alt={assignment.batch_leader_name || assignment.batch_name || 'Batch'} 
-                                      />
-                                      <AvatarFallback className="bg-green-200 text-green-700 text-xs">
-                                        {(assignment.batch_leader_name || assignment.batch_name || 'B').charAt(0).toUpperCase()}
-                                      </AvatarFallback>
-                                    </Avatar>
-                                    <div>
-                                      <div className="font-medium text-green-700 text-xs">
-                                        {assignment.batch_name || 'Unknown Batch'}
-                                      </div>
-                                      <div className="text-xs text-muted-foreground">
-                                        {assignment.total_quantity || 0} pieces
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center space-x-2 flex-1">
+                                      <Avatar className="w-6 h-6">
+                                        <AvatarImage 
+                                          src={assignment.batch_leader_avatar_url || undefined} 
+                                          alt={assignment.batch_leader_name || assignment.batch_name || 'Batch'}
+                                          onError={(e) => {
+                                            // Hide image if it fails to load
+                                            (e.target as HTMLImageElement).style.display = 'none';
+                                          }}
+                                        />
+                                        <AvatarFallback className="bg-green-200 text-green-700 text-xs">
+                                          {(assignment.batch_leader_name || assignment.batch_name || 'B').charAt(0).toUpperCase()}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <div className="flex-1">
+                                        <div className="font-medium text-green-700 text-xs">
+                                          {assignment.batch_name || 'Unknown Batch'}
+                                        </div>
+                                        <div className="text-xs text-muted-foreground">
+                                          {assignment.batch_leader_name} • {assignment.total_quantity || 0} pieces
+                                        </div>
                                       </div>
                                     </div>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleReassignBatch(job, assignment)}
+                                      disabled={!canReassignBatch(assignment)}
+                                      className="ml-2 text-orange-600 border-orange-200 hover:bg-orange-50 text-xs"
+                                    >
+                                      Reassign
+                                    </Button>
                                   </div>
+                                  {assignment.size_distributions && assignment.size_distributions.length > 0 && (
+                                    <div className="mt-2 space-y-1">
+                                      <div className="text-xs font-medium text-muted-foreground">Size-wise breakdown:</div>
+                                      <div className="text-xs text-muted-foreground flex flex-wrap gap-1">
+                                        {assignment.size_distributions.map(sd => {
+                                          const assigned = sd.quantity || 0;
+                                          const picked = sd.picked_quantity || 0;
+                                          const left = sd.left_quantity || 0;
+                                          return (
+                                            <span key={sd.size_name} className="bg-gray-100 px-2 py-0.5 rounded">
+                                              {sd.size_name}: {assigned}/{picked}/{left}
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -1366,7 +1507,21 @@ const CuttingManagerPage = () => {
           notes: ba.notes
         })) || []}
         orderItems={selectedJobForBatch?.orderItems || []}
-        />
+      />
+
+      {/* Reassign Batch Dialog */}
+      <ReassignBatchDialog
+        isOpen={reassignBatchOpen}
+        onClose={() => {
+          setReassignBatchOpen(false);
+          setSelectedBatchForReassign(null);
+        }}
+        onSuccess={handleReassignBatchSuccess}
+        orderId={selectedBatchForReassign?.job.id || ''}
+        orderNumber={selectedBatchForReassign?.job.orderNumber || ''}
+        batchAssignment={selectedBatchForReassign?.batchAssignment || null}
+        availableBatches={availableBatches}
+      />
       </div>
     </ErpLayout>
   );

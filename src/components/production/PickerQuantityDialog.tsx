@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useSizeTypes } from "@/hooks/useSizeTypes";
+import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
 
 interface SizeItem {
   size_name: string;
@@ -33,33 +35,61 @@ export default function PickerQuantityDialog({
   productImage,
 }: PickerQuantityDialogProps) {
   const { toast } = useToast();
+  const { sizeTypes } = useSizeTypes();
   const [pickedBySize, setPickedBySize] = useState<Record<string, number>>({}); // existing picked
   const [rejectedBySize, setRejectedBySize] = useState<Record<string, number>>({}); // existing QC rejected
   const [addBySize, setAddBySize] = useState<Record<string, number>>({}); // increment to add
   const [saving, setSaving] = useState(false);
+  const [sizeTypeId, setSizeTypeId] = useState<string | null>(null);
 
-  // Define size order for proper sorting
-  const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 
-    '20', '22', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44', '46', '48', '50',
-    '0-2 Yrs', '3-4 Yrs', '5-6 Yrs', '7-8 Yrs', '9-10 Yrs', '11-12 Yrs', '13-14 Yrs', '15-16 Yrs'];
-  
-  // Sort size distributions in proper order
+  // Fetch size_type_id from assignment/order when dialog opens
+  useEffect(() => {
+    if (isOpen && assignmentId) {
+      const fetchSizeTypeId = async () => {
+        try {
+          // Get order_id from assignment
+          const { data: assignment } = await supabase
+            .from('order_batch_assignments')
+            .select('order_id, order_items!inner(size_type_id)')
+            .eq('id', assignmentId)
+            .limit(1)
+            .maybeSingle();
+          
+          if (assignment && (assignment as any).order_items) {
+            const orderItem = Array.isArray((assignment as any).order_items) 
+              ? (assignment as any).order_items[0]
+              : (assignment as any).order_items;
+            if (orderItem?.size_type_id) {
+              setSizeTypeId(orderItem.size_type_id);
+              return;
+            }
+          }
+          
+          // Fallback: try to get from order directly
+          const orderId = (assignment as any)?.order_id;
+          if (orderId) {
+            const { data: orderItems } = await supabase
+              .from('order_items')
+              .select('size_type_id')
+              .eq('order_id', orderId)
+              .limit(1);
+            if (orderItems && orderItems.length > 0 && orderItems[0].size_type_id) {
+              setSizeTypeId(orderItems[0].size_type_id);
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching size_type_id:', error);
+        }
+      };
+      fetchSizeTypeId();
+    }
+  }, [isOpen, assignmentId]);
+
+  // Sort size distributions using master order
   const sortedSizeDistributions = useMemo(() => {
-    return [...(sizeDistributions || [])].sort((a, b) => {
-      const indexA = sizeOrder.indexOf(a.size_name);
-      const indexB = sizeOrder.indexOf(b.size_name);
-      
-      // If both sizes are in the order array, sort by their position
-      if (indexA !== -1 && indexB !== -1) {
-        return indexA - indexB;
-      }
-      // If only one is in the order array, prioritize it
-      if (indexA !== -1) return -1;
-      if (indexB !== -1) return 1;
-      // Otherwise, sort alphabetically
-      return a.size_name.localeCompare(b.size_name);
-    });
-  }, [sizeDistributions]);
+    if (!sizeDistributions || sizeDistributions.length === 0) return [];
+    return sortSizeDistributionsByMasterOrder(sizeDistributions, sizeTypeId, sizeTypes);
+  }, [sizeDistributions, sizeTypeId, sizeTypes]);
 
   useEffect(() => {
     const loadPicked = async () => {
@@ -130,17 +160,25 @@ export default function PickerQuantityDialog({
   const getAssigned = (size: string) => Number((sizeDistributions || []).find(s => s.size_name === size)?.quantity || 0);
   const getPicked = (size: string) => Number(pickedBySize[size] || 0);
   const getRejected = (size: string) => Number(rejectedBySize[size] || 0);
-  // Effective rejected = rejected minus newly picked items that compensate for rejected ones
-  const getEffectiveRejected = (size: string) => {
+  
+  // Remaining to pick = (assigned - picked) + rejected
+  // This includes:
+  // - Pending items: (assigned - picked) - items not yet picked
+  // - Rejected items: rejected - items that need replacement
+  const getRemaining = (size: string) => {
+    const assigned = getAssigned(size);
+    const picked = getPicked(size);
     const rejected = getRejected(size);
     const newPicks = Number(addBySize[size] || 0);
-    return Math.max(0, rejected - newPicks);
-  };
-  // Remaining = assigned - (picked - effective rejected) = assigned - picked + effective rejected
-  // Rejected items need to be re-picked, but only show net rejected (after accounting for new picks)
-  const getRemaining = (size: string) => {
-    const effectiveRejected = getEffectiveRejected(size);
-    return Math.max(0, getAssigned(size) - getPicked(size) + effectiveRejected);
+    
+    // Pending items (not yet picked)
+    const pending = Math.max(0, assigned - picked);
+    
+    // Rejected items that still need replacement (rejected minus what we're picking now)
+    const rejectedNeedingReplacement = Math.max(0, rejected - newPicks);
+    
+    // Total remaining = pending + rejected needing replacement
+    return Math.max(0, pending + rejectedNeedingReplacement);
   };
 
   const incDelta = (size: string, delta: number) => {
@@ -166,13 +204,16 @@ export default function PickerQuantityDialog({
 
   const persistToNotes = async () => {
     // Merge with existing picked values and write back JSON
-    // When rejected items exist, new picks replace them (don't add on top)
+    // Key concept: newPickedQuantity = currentPicked - rejected + newPicks
+    // This removes rejected items from count and adds new picks (replacements + pending)
     const merged: Record<string, number> = {};
     Object.keys(pickedBySize).forEach(size => {
       const currentPicked = Number(pickedBySize[size] || 0);
       const rejected = Number(rejectedBySize[size] || 0);
       const newPicks = Number(addBySize[size] || 0);
-      // New picked = (current picked - rejected) + new picks
+      // Formula: newPicked = currentPicked - rejected + newPicks
+      // This ensures rejected items are replaced, not added on top
+      // Example: picked=40, rejected=5, newPicks=15 → newPicked = 40-5+15 = 50
       const newPicked = Math.max(0, currentPicked - rejected + newPicks);
       const assigned = getAssigned(size);
       merged[size] = Math.min(newPicked, assigned);
@@ -194,10 +235,15 @@ export default function PickerQuantityDialog({
           const currentPicked = getPicked(sizeName);
           const rejected = getRejected(sizeName);
           const newPicks = Number(addBySize[sizeName] || 0);
-          // New picked = (current picked - rejected) + new picks
-          // This ensures rejected items are replaced, not added on top
-          // Example: picked=10, rejected=1, newPicks=1 → newPicked = (10-1)+1 = 10
+          
+          // Formula: newPickedQuantity = currentPicked - rejected + newPicks
+          // This removes rejected items from picked count and adds new picks
+          // Example: picked=40, rejected=5, newPicks=15 → newPicked = 40-5+15 = 50
+          // This correctly handles:
+          // - Rejected items being replaced (subtracted from current, added as new picks)
+          // - Pending items being picked (added as new picks)
           const newPicked = Math.max(0, currentPicked - rejected + newPicks);
+          
           // Ensure we don't exceed assigned quantity
           const assigned = getAssigned(sizeName);
           const finalPicked = Math.min(newPicked, assigned);
@@ -265,9 +311,11 @@ export default function PickerQuantityDialog({
               const assigned = getAssigned(s.size_name);
               const picked = getPicked(s.size_name);
               const rejected = getRejected(s.size_name);
-              const effectiveRejected = getEffectiveRejected(s.size_name);
               const remaining = getRemaining(s.size_name);
               const addVal = Number(addBySize[s.size_name] || 0);
+              const pending = Math.max(0, assigned - picked);
+              const rejectedNeedingReplacement = Math.max(0, rejected - addVal);
+              
               return (
                 <div key={s.size_name} className="border rounded-lg p-3">
                   <div className="text-sm font-medium mb-2">{s.size_name}</div>
@@ -283,10 +331,23 @@ export default function PickerQuantityDialog({
                     />
                     <Button type="button" variant="outline" size="sm" onClick={() => incDelta(s.size_name, +1)}>+</Button>
                   </div>
-                  <div className="mt-2 text-xs text-muted-foreground flex items-center gap-2">
-                    <span>Picked {picked} / {assigned}</span>
-                    {effectiveRejected > 0 && <span>• Rejected {effectiveRejected}</span>}
-                    {remaining > 0 ? <span>• Remaining {remaining}</span> : <span>• Completed</span>}
+                  <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span>Picked {picked} / {assigned}</span>
+                    </div>
+                    {rejected > 0 && (
+                      <div className="text-red-600">
+                        Rejected: {rejected} {rejectedNeedingReplacement < rejected && `(${rejectedNeedingReplacement} remaining)`}
+                      </div>
+                    )}
+                    {pending > 0 && (
+                      <div>Pending: {pending}</div>
+                    )}
+                    {remaining > 0 ? (
+                      <div className="font-medium">Remaining to pick: {remaining}</div>
+                    ) : (
+                      <div className="text-green-600">✓ Completed</div>
+                    )}
                   </div>
                 </div>
               );

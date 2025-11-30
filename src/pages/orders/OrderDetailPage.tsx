@@ -41,9 +41,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
-import { sortSizesQuantities, SizeType } from '@/utils/sizeSorting';
+import { sortSizesQuantities, SizeType, sortSizesByMasterOrder } from '@/utils/sizeSorting';
 import { calculateSizeBasedTotal, calculateOrderSummary } from '@/utils/priceCalculation';
 import { ProductCustomizationModal } from "@/components/orders/ProductCustomizationModal";
+import { CustomizationColorChips } from "@/components/common/CustomizationColorChips";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -2875,6 +2876,12 @@ export default function OrderDetailPage() {
                                                 ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
                                               </div>
                                             )}
+                                            {/* Display Colors */}
+                                            {customization.colors && customization.colors.length > 0 && (
+                                              <div className="mt-2">
+                                                <CustomizationColorChips colors={customization.colors} />
+                                              </div>
+                                            )}
                                           </div>
                                         </div>
                                       </div>
@@ -3072,30 +3079,15 @@ export default function OrderDetailPage() {
                   ) : (
                     <div className="space-y-6">
                       {displayItems.map((item, index) => {
-                      // Define proper size order
+                      // Define proper size order using master configuration
                       const getSizeOrder = (sizes: string[]) => {
-                        const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 
-                                           '20', '22', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44', '46', '48', '50',
-                                           '0-2 Yrs', '3-4 Yrs', '5-6 Yrs', '7-8 Yrs', '9-10 Yrs', '11-12 Yrs', '13-14 Yrs', '15-16 Yrs'];
+                        // Get size_type_id from item if available
+                        const sizeTypeId = item.size_type_id || 
+                          (item.specifications && typeof item.specifications === 'object' && item.specifications.size_type_id) || 
+                          null;
                         
-                        return sizes.sort((a, b) => {
-                          const indexA = sizeOrder.indexOf(a);
-                          const indexB = sizeOrder.indexOf(b);
-                          
-                          if (indexA !== -1 && indexB !== -1) {
-                            return indexA - indexB;
-                          }
-                          if (indexA !== -1) return -1;
-                          if (indexB !== -1) return 1;
-                          
-                          const numA = parseInt(a);
-                          const numB = parseInt(b);
-                          if (!isNaN(numA) && !isNaN(numB)) {
-                            return numA - numB;
-                          }
-                          
-                          return a.localeCompare(b);
-                        });
+                        // Sort sizes using master order
+                        return sortSizesByMasterOrder(sizes, sizeTypeId, sizeTypes);
                       };
 
                       return (
@@ -3360,6 +3352,12 @@ export default function OrderDetailPage() {
                                                   {!shouldHideSections && customization.priceImpact !== undefined && customization.priceImpact !== null && customization.priceImpact !== 0 && (
                                                     <div className="text-xs font-medium text-green-600">
                                                       ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
+                                                    </div>
+                                                  )}
+                                                  {/* Display Colors */}
+                                                  {customization.colors && customization.colors.length > 0 && (
+                                                    <div className="mt-2">
+                                                      <CustomizationColorChips colors={customization.colors} />
                                                     </div>
                                                   )}
                                                 </div>
@@ -3631,6 +3629,12 @@ export default function OrderDetailPage() {
                                                      {customization.partType !== 'dropdown' && customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
                                                        <div className="text-gray-600">Qty: {customization.quantity}</div>
                                                      )}
+                                                     {/* Display Colors */}
+                                                     {customization.colors && customization.colors.length > 0 && (
+                                                       <div className="mt-1">
+                                                         <CustomizationColorChips colors={customization.colors} />
+                                                       </div>
+                                                     )}
                                                    </div>
                                                  </div>
                                                ))}
@@ -3821,6 +3825,7 @@ export default function OrderDetailPage() {
                 productIndex={activeCustomizationIndex}
                 productCategoryId={editItems[activeCustomizationIndex].product_category_id || ''}
                 isOpen={customizationModalOpen}
+                fabricColor={editItems[activeCustomizationIndex]?.color}
                 initialCustomizations={
                   editingCustomizationIndex !== null
                     ? [editItems[activeCustomizationIndex].customizations?.[editingCustomizationIndex]].filter(Boolean) as any

@@ -8,6 +8,8 @@ import { Minus, Plus, Package, Scissors, Droplets } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { useSizeTypes } from '@/hooks/useSizeTypes';
+import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
 
 interface OrderSize {
   size_name: string;
@@ -54,6 +56,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
   orderItems,
   currentCutQuantities = {}
 }) => {
+  const { sizeTypes } = useSizeTypes();
   const [additionalCutQuantities, setAdditionalCutQuantities] = useState<{ [size: string]: number }>({});
   const [existingCutQuantities, setExistingCutQuantities] = useState<{ [size: string]: number }>({});
   const [orderSizes, setOrderSizes] = useState<OrderSize[]>([]);
@@ -228,20 +231,18 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
       fetchOrderData();
     }, [isOpen, jobId, orderItems]);
 
-  const sortSizes = (sizes: OrderSize[]) => {
-    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
-    return sizes.sort((a, b) => {
-      const indexA = sizeOrder.indexOf(a.size_name);
-      const indexB = sizeOrder.indexOf(b.size_name);
-      
-      if (indexA !== -1 && indexB !== -1) {
-        return indexA - indexB;
-      }
-      if (indexA !== -1) return -1;
-      if (indexB !== -1) return 1;
-      
-      return a.size_name.localeCompare(b.size_name);
-    });
+  const sortSizes = (sizes: OrderSize[], sizeTypeId?: string | null) => {
+    if (!sizes || sizes.length === 0) return sizes;
+    
+    // Get size_type_id from orderItems if not provided
+    let typeId = sizeTypeId;
+    if (!typeId && orderItems && orderItems.length > 0) {
+      const firstItem = orderItems[0];
+      typeId = firstItem.size_type_id || (firstItem.specifications && typeof firstItem.specifications === 'object' && firstItem.specifications.size_type_id) || null;
+    }
+    
+    // Use master-based sorting
+    return sortSizeDistributionsByMasterOrder(sizes, typeId || null, sizeTypes);
   };
 
   const updateAdditionalQuantity = (size: string, quantity: number) => {
