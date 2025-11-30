@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Bell, User, Package, AlertCircle, CheckCircle, X, Clock, Zap, MessageCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -25,6 +26,7 @@ export function NotificationCenter() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
+  const [activeTab, setActiveTab] = useState<'unread' | 'read'>('unread');
   const { profile, user } = useAuth();
 
   // Fetch unread chat mentions
@@ -59,7 +61,7 @@ export function NotificationCenter() {
 
       if (!messages || messages.length === 0) return;
 
-      // Check which mentions are unread
+      // Check which mentions are already marked as read for this user
       const messageIds = messages.map((m) => m.id);
       const { data: readMentions } = await supabase
         .from('chat_mentions_read')
@@ -68,15 +70,14 @@ export function NotificationCenter() {
         .in('message_id', messageIds);
 
       const readMessageIds = new Set(readMentions?.map((r) => r.message_id) || []);
-      const unreadMessages = messages.filter((m) => !readMessageIds.has(m.id));
 
-      // Convert to notifications
-      const mentionNotifications: Notification[] = unreadMessages.map((msg: any) => ({
+      // Convert to notifications for both read and unread mentions
+      const mentionNotifications: Notification[] = messages.map((msg: any) => ({
         id: `mention-${msg.id}`,
         type: 'chat_mention' as const,
         title: `Mentioned by ${msg.profiles?.full_name || 'Unknown'}`,
         message: msg.message.length > 100 ? msg.message.substring(0, 100) + '...' : msg.message,
-        read: false,
+        read: readMessageIds.has(msg.id),
         created_at: msg.created_at,
         priority: 'medium' as const,
         messageId: msg.id,
@@ -233,9 +234,31 @@ export function NotificationCenter() {
     }
   };
 
-  const markAllAsRead = () => {
+  const markAllAsRead = async () => {
+    // Optimistically update UI
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     setUnreadCount(0);
+
+    // Persist read state for chat mentions so they don't re-appear after refresh
+    try {
+      if (!user) return;
+
+      const mentionNotifications = notifications.filter(
+        (n) => n.type === 'chat_mention' && !n.read && n.messageId
+      );
+
+      if (mentionNotifications.length === 0) return;
+
+      const rows = mentionNotifications.map((n) => ({
+        message_id: n.messageId!,
+        user_id: user.id,
+        read_at: new Date().toISOString(),
+      }));
+
+      await supabase.from('chat_mentions_read').upsert(rows);
+    } catch (error) {
+      console.error('Error marking all mentions as read:', error);
+    }
   };
 
   const getNotificationIcon = (type: string) => {
@@ -315,7 +338,7 @@ export function NotificationCenter() {
         </Button>
       </SheetTrigger>
       <SheetContent className="w-96 sm:w-[400px]">
-        <SheetHeader className="border-b pb-4">
+        <SheetHeader className="border-b pb-3">
           <SheetTitle className="flex items-center justify-between">
             <div className="flex items-center space-x-2">
               <Bell className="w-5 h-5" />
@@ -333,68 +356,107 @@ export function NotificationCenter() {
             )}
           </SheetTitle>
         </SheetHeader>
-        
-        <div className="mt-6 space-y-3 max-h-[calc(100vh-120px)] overflow-y-auto">
-          {notifications.length === 0 ? (
+
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v as 'unread' | 'read')}
+          className="mt-3"
+        >
+          <TabsList className="w-full bg-blue-50">
+            <TabsTrigger
+              value="unread"
+              className={cn(
+                'flex-1 data-[state=active]:bg-blue-100 data-[state=active]:text-blue-700 data-[state=active]:shadow-sm',
+                'data-[state=inactive]:text-blue-900'
+              )}
+            >
+              Unread ({notifications.filter((n) => !n.read).length})
+            </TabsTrigger>
+            <TabsTrigger
+              value="read"
+              className={cn(
+                'flex-1 data-[state=active]:bg-blue-100 data-[state=active]:text-blue-700 data-[state=active]:shadow-sm',
+                'data-[state=inactive]:text-blue-900'
+              )}
+            >
+              Read ({notifications.filter((n) => n.read).length})
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        <div className="mt-4 space-y-3 max-h-[calc(100vh-140px)] overflow-y-auto">
+          {notifications.filter((n) => (activeTab === 'unread' ? !n.read : n.read)).length === 0 ? (
             <div className="text-center py-12">
               <Bell className="w-16 h-16 text-muted-foreground/50 mx-auto mb-4" />
-              <p className="text-muted-foreground font-medium">No notifications</p>
-              <p className="text-sm text-muted-foreground mt-1">You're all caught up!</p>
+              <p className="text-muted-foreground font-medium">
+                {activeTab === 'unread' ? 'No unread notifications' : 'No read notifications yet'}
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {activeTab === 'unread'
+                  ? "You're all caught up!"
+                  : 'Read notifications will appear here.'}
+              </p>
             </div>
           ) : (
-            notifications.map((notification) => (
-              <Card 
-                key={notification.id} 
-                className={cn(
-                  "cursor-pointer transition-all duration-200 hover:shadow-md border-l-4",
-                  !notification.read ? 'bg-accent/50 border-l-primary' : 'border-l-transparent',
-                  getNotificationColor(notification.type, notification.priority)
-                )}
-                onClick={() => {
-                  markAsRead(notification.id);
-                  if (notification.type === 'chat_mention') {
-                    setIsOpen(false);
-                  }
-                }}
-              >
-                <CardContent className="p-4">
-                  <div className="flex items-start space-x-3">
-                    <div className={cn(
-                      "mt-1 p-2 rounded-full",
-                      getNotificationColor(notification.type, notification.priority)
-                    )}>
-                      {getNotificationIcon(notification.type)}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <h4 className="text-sm font-semibold truncate">
-                            {notification.title}
-                          </h4>
-                          <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
-                            {notification.message}
-                          </p>
-                        </div>
-                        {!notification.read && (
-                          <div className="w-2 h-2 bg-primary rounded-full ml-2 mt-1 flex-shrink-0" />
+            notifications
+              .filter((n) => (activeTab === 'unread' ? !n.read : n.read))
+              .map((notification) => (
+                <Card
+                  key={notification.id}
+                  className={cn(
+                    'cursor-pointer transition-all duration-200 hover:shadow-md border-l-4',
+                    !notification.read ? 'bg-accent/50 border-l-primary' : 'border-l-transparent',
+                    getNotificationColor(notification.type, notification.priority)
+                  )}
+                  onClick={() => {
+                    if (!notification.read) {
+                      markAsRead(notification.id);
+                    }
+                    if (notification.type === 'chat_mention') {
+                      setIsOpen(false);
+                    }
+                  }}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex items-start space-x-3">
+                      <div
+                        className={cn(
+                          'mt-1 p-2 rounded-full',
+                          getNotificationColor(notification.type, notification.priority)
                         )}
+                      >
+                        {getNotificationIcon(notification.type)}
                       </div>
-                      <div className="flex items-center justify-between mt-3">
-                        <div className="flex items-center space-x-1 text-xs text-muted-foreground">
-                          <Clock className="w-3 h-3" />
-                          <span>{getTimeAgo(notification.created_at)}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <h4 className="text-sm font-semibold truncate">
+                              {notification.title}
+                            </h4>
+                            <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                              {notification.message}
+                            </p>
+                          </div>
+                          {!notification.read && (
+                            <div className="w-2 h-2 bg-primary rounded-full ml-2 mt-1 flex-shrink-0" />
+                          )}
                         </div>
-                        {notification.priority === 'high' && (
-                          <Badge variant="destructive" className="text-xs">
-                            High Priority
-                          </Badge>
-                        )}
+                        <div className="flex items-center justify-between mt-3">
+                          <div className="flex items-center space-x-1 text-xs text-muted-foreground">
+                            <Clock className="w-3 h-3" />
+                            <span>{getTimeAgo(notification.created_at)}</span>
+                          </div>
+                          {notification.priority === 'high' && (
+                            <Badge variant="destructive" className="text-xs">
+                              High Priority
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))
+                  </CardContent>
+                </Card>
+              ))
           )}
         </div>
       </SheetContent>

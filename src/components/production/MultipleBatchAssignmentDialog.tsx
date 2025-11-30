@@ -14,6 +14,8 @@ import { Users, Clock, User, Plus, Trash2, Calculator } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { DistributeQuantityDialog } from './DistributeQuantityDialog';
+import { useSizeTypes } from '@/hooks/useSizeTypes';
+import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
 
 interface Batch {
   id: string;
@@ -62,6 +64,7 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
   existingAssignments = [],
   orderItems = []
 }) => {
+  const { sizeTypes } = useSizeTypes();
   const [batches, setBatches] = useState<Batch[]>([]);
   const [orderSizes, setOrderSizes] = useState<OrderSize[]>([]);
   const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set());
@@ -222,21 +225,18 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
     return orderSizes.reduce((total, size) => total + size.total_quantity, 0);
   };
 
-  const sortSizes = (sizes: OrderSize[]) => {
-    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
-    return sizes.sort((a, b) => {
-      const indexA = sizeOrder.indexOf(a.size_name);
-      const indexB = sizeOrder.indexOf(b.size_name);
-      
-      if (indexA !== -1 && indexB !== -1) {
-        return indexA - indexB;
-      }
-      if (indexA !== -1) return -1;
-      if (indexB !== -1) return 1;
-      
-      // For sizes not in the predefined order, sort alphabetically
-      return a.size_name.localeCompare(b.size_name);
-    });
+  const sortSizes = (sizes: OrderSize[], sizeTypeId?: string | null) => {
+    if (!sizes || sizes.length === 0) return sizes;
+    
+    // Get size_type_id from orderItems if not provided
+    let typeId = sizeTypeId;
+    if (!typeId && orderItems && orderItems.length > 0) {
+      const firstItem = orderItems[0];
+      typeId = firstItem.size_type_id || (firstItem.specifications && typeof firstItem.specifications === 'object' && firstItem.specifications.size_type_id) || null;
+    }
+    
+    // Use master-based sorting
+    return sortSizeDistributionsByMasterOrder(sizes, typeId || null, sizeTypes);
   };
 
   const handleDistributeClick = () => {

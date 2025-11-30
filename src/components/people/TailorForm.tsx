@@ -56,8 +56,8 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
     pincode: tailor?.pincode || '',
     joining_date: tailor?.joining_date || '',
     employment_type: tailor?.employment_type || 'Full-time',
-    salary: tailor?.salary || '',
-    work_hours_per_day: tailor?.work_hours_per_day || 8,
+    salary: tailor?.salary ? String(tailor.salary) : '',
+    work_hours_per_day: tailor?.work_hours_per_day ? String(tailor.work_hours_per_day) : '8',
     id_proof_type: tailor?.id_proof_type || '',
     id_proof_number: tailor?.id_proof_number || '',
     id_proof_image_url: tailor?.id_proof_image_url || '',
@@ -71,16 +71,94 @@ export function TailorForm({ tailor, onSuccess, onCancel }: TailorFormProps) {
 
   const { toast } = useToast();
 
+  // Update form data when tailor prop changes (for editing)
   useEffect(() => {
-    fetchBatches();
-    if (tailor?.avatar_url) {
-      setAvatarPreview(tailor.avatar_url);
-    }
-    // Auto-generate tailor code for new tailors only
-    if (!tailor) {
+    if (tailor) {
+      // Populate form with existing tailor data
+      setFormData({
+        tailor_code: tailor.tailor_code || '',
+        full_name: tailor.full_name || '',
+        avatar_url: tailor.avatar_url || '',
+        tailor_type: tailor.tailor_type || '',
+        skill_level: tailor.skill_level || 'beginner',
+        batch_id: tailor.batch_id || '',
+        is_batch_leader: tailor.is_batch_leader || false,
+        status: tailor.status || 'active',
+        personal_phone: tailor.personal_phone || '',
+        personal_email: tailor.personal_email || '',
+        date_of_birth: tailor.date_of_birth || '',
+        gender: tailor.gender || '',
+        address_line1: tailor.address_line1 || '',
+        city: tailor.city || '',
+        state: tailor.state || '',
+        pincode: tailor.pincode || '',
+        joining_date: tailor.joining_date || '',
+        employment_type: tailor.employment_type || 'Full-time',
+        salary: tailor.salary ? String(tailor.salary) : '',
+        work_hours_per_day: tailor.work_hours_per_day ? String(tailor.work_hours_per_day) : '8',
+        id_proof_type: tailor.id_proof_type || '',
+        id_proof_number: tailor.id_proof_number || '',
+        id_proof_image_url: tailor.id_proof_image_url || '',
+        id_proof_back_image_url: tailor.id_proof_back_image_url || '',
+        bank_name: tailor.bank_name || '',
+        account_holder_name: tailor.account_holder_name || '',
+        account_number: tailor.account_number || '',
+        ifsc_code: tailor.ifsc_code || '',
+        passbook_image_url: tailor.passbook_image_url || ''
+      });
+      
+      // Set avatar preview if available
+      if (tailor.avatar_url) {
+        setAvatarPreview(tailor.avatar_url);
+      } else {
+        setAvatarPreview(null);
+      }
+      
+      // Clear any selected avatar file when editing
+      setAvatarFile(null);
+    } else {
+      // Reset form for new tailor
+      setFormData({
+        tailor_code: '',
+        full_name: '',
+        avatar_url: '',
+        tailor_type: '',
+        skill_level: 'beginner',
+        batch_id: '',
+        is_batch_leader: false,
+        status: 'active',
+        personal_phone: '',
+        personal_email: '',
+        date_of_birth: '',
+        gender: '',
+        address_line1: '',
+        city: '',
+        state: '',
+        pincode: '',
+        joining_date: '',
+        employment_type: 'Full-time',
+        salary: '',
+        work_hours_per_day: 8,
+        id_proof_type: '',
+        id_proof_number: '',
+        id_proof_image_url: '',
+        id_proof_back_image_url: '',
+        bank_name: '',
+        account_holder_name: '',
+        account_number: '',
+        ifsc_code: '',
+        passbook_image_url: ''
+      });
+      setAvatarPreview(null);
+      setAvatarFile(null);
+      // Auto-generate tailor code for new tailors
       generateNextTailorCode();
     }
   }, [tailor]);
+
+  useEffect(() => {
+    fetchBatches();
+  }, []);
 
   const fetchBatches = async () => {
     try {

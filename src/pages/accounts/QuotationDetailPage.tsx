@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { calculateSizeBasedTotal } from '@/utils/priceCalculation';
-import { getSortedSizes, sortSizesQuantities as sortSizesQuantitiesUtil } from '@/utils/sizeSorting';
+import { getSortedSizes, sortSizesQuantities as sortSizesQuantitiesUtil, sortSizesByMasterOrder } from '@/utils/sizeSorting';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -225,28 +225,38 @@ export default function QuotationDetailPage() {
     return `SO/${fyStr}/${month}/${seqStr}`;
   };
 
-  // Helper: sort sizes in proper order (S, M, L, XL, XXL, etc.)
-  function sortSizes(sizes: { [key: string]: number }): Array<[string, number]> {
-    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', '28', '30', '32', '34', '36', '38', '40', '42', '44', '46', '48', '50'];
+  // Helper: sort sizes using master order configuration
+  function sortSizes(sizes: { [key: string]: number }, sizeTypeId?: string | null): Array<[string, number]> {
+    const filteredEntries = Object.entries(sizes).filter(([_, qty]) => (qty as number) > 0);
     
-    return Object.entries(sizes)
-      .filter(([_, qty]) => (qty as number) > 0)
-      .sort(([a], [b]) => {
-        const indexA = sizeOrder.indexOf(a.toUpperCase());
-        const indexB = sizeOrder.indexOf(b.toUpperCase());
-        
-        // If both sizes are in the predefined order, sort by that order
-        if (indexA !== -1 && indexB !== -1) {
-          return indexA - indexB;
-        }
-        
-        // If only one is in the predefined order, prioritize it
-        if (indexA !== -1) return -1;
-        if (indexB !== -1) return 1;
-        
-        // If neither is in the predefined order, sort alphabetically
-        return a.localeCompare(b);
-      });
+    if (filteredEntries.length === 0) return [];
+    
+    // Convert sizeTypes map to array format
+    const sizeTypesArray = Object.values(sizeTypes);
+    
+    // Get size names from entries
+    const sizeNames = filteredEntries.map(([size]) => size);
+    
+    // Sort size names using master order
+    const sortedSizeNames = sortSizesByMasterOrder(sizeNames, sizeTypeId || null, sizeTypesArray);
+    
+    // Rebuild entries in sorted order
+    const sortedMap = new Map(filteredEntries);
+    const sorted: Array<[string, number]> = [];
+    
+    sortedSizeNames.forEach(sizeName => {
+      if (sortedMap.has(sizeName)) {
+        sorted.push([sizeName, sortedMap.get(sizeName)!]);
+        sortedMap.delete(sizeName);
+      }
+    });
+    
+    // Add any remaining sizes that weren't in the sorted order
+    sortedMap.forEach((qty, sizeName) => {
+      sorted.push([sizeName, qty]);
+    });
+    
+    return sorted;
   }
 
   // Helper function to sort sizes based on size type
@@ -1282,7 +1292,7 @@ export default function QuotationDetailPage() {
                                         </div>
                                         {specs.sizes_quantities && typeof specs.sizes_quantities === 'object' && Object.keys(specs.sizes_quantities).length > 0 && (
                                           <div className="text-sm text-gray-600 mt-1">
-                                            Size-wise: {sortSizes(specs.sizes_quantities)
+                                            Size-wise: {sortSizes(specs.sizes_quantities, item.size_type_id || specs.size_type_id)
                                               .map(([size, qty]) => `${size}(${qty})`)
                                               .join(', ')}
                                           </div>
@@ -1667,7 +1677,7 @@ export default function QuotationDetailPage() {
                                 </div>
                                 {specs.sizes_quantities && typeof specs.sizes_quantities === 'object' && Object.keys(specs.sizes_quantities).length > 0 && (
                                           <div className="text-sm text-gray-600 mt-1">
-                                    Size-wise: {sortSizes(specs.sizes_quantities)
+                                    Size-wise: {sortSizes(specs.sizes_quantities, item.size_type_id || specs.size_type_id)
                                       .map(([size, qty]) => `${size}(${qty})`)
                                       .join(', ')}
                                   </div>

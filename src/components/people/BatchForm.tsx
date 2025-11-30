@@ -53,25 +53,36 @@ export function BatchForm({ batch, onSuccess, onCancel }: BatchFormProps) {
   const fetchAvailableTailors = async () => {
     try {
       // Only fetch tailors who are not assigned to any batch (or assigned to current batch if editing)
-      const query = supabase
+      let query = supabase
         .from('tailors')
         .select('*')
-        .eq('status', 'active')
-        .order('full_name');
+        .eq('status', 'active');
 
       if (batch) {
-        // If editing, include tailors from this batch
-        query.or(`batch_id.is.null,batch_id.eq.${batch.id}`);
+        // If editing, include tailors from this batch or unassigned tailors
+        query = query.or(`batch_id.is.null,batch_id.eq.${batch.id}`);
       } else {
-        // If creating new, only include unassigned tailors
-        query.is('batch_id', null);
+        // If creating new, only include unassigned tailors (not part of any batch)
+        query = query.is('batch_id', null);
       }
 
-      const { data, error } = await query;
+      // Apply ordering after all filters
+      const { data, error } = await query.order('full_name');
       if (error) throw error;
-      setAvailableTailors(data || []);
+      
+      // Additional client-side filter to ensure no tailors with batch_id are shown when creating
+      const filteredData = batch 
+        ? (data || [])
+        : (data || []).filter(tailor => !tailor.batch_id);
+      
+      setAvailableTailors(filteredData);
     } catch (error) {
       console.error('Error fetching tailors:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load available tailors.",
+        variant: "destructive",
+      });
     }
   };
 

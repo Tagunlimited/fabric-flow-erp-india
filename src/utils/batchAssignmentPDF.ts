@@ -394,6 +394,16 @@ function createHTMLTemplate(data: BatchAssignmentPDFData, images: ImageCache): s
                             <div>
                               <div style="font-size: 11px; font-weight: bold;">${label}:</div>
                               <div style="font-size: 10px; color: #666;">${value}</div>
+                              ${cust.colors && cust.colors.length > 0 ? `
+                                <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;">
+                                  ${cust.colors.map((color: any) => `
+                                    <div style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 9px; background: white;">
+                                      <div style="width: 12px; height: 12px; border-radius: 50%; border: 1px solid #999; background-color: ${color.hex || '#FFFFFF'};"></div>
+                                      <span>${color.colorName}</span>
+                                    </div>
+                                  `).join('')}
+                                </div>
+                              ` : ''}
                             </div>
                           </div>
                         `;

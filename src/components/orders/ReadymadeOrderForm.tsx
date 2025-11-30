@@ -20,7 +20,7 @@ import { toast } from 'sonner';
 import { cn, formatCurrency } from '@/lib/utils';
 import { usePageState } from '@/contexts/AppCacheContext';
 import { initializeSizePrices, calculateSizeBasedTotal, calculateAverageUnitPrice } from '@/utils/priceCalculation';
-import { getSortedSizes } from '@/utils/sizeSorting';
+import { getSortedSizes, sortSizesByMasterOrder } from '@/utils/sizeSorting';
 
 interface Customer {
   id: string;
@@ -539,22 +539,22 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
     const classProducts = products.filter(p => p.class === className && p.is_active && p.size);
     const uniqueSizes = Array.from(new Set(classProducts.map(p => p.size).filter(Boolean) as string[]));
     
-    // Sort sizes in proper order
-    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 
-                       '20', '22', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44', '46', '48', '50',
-                       '0-2 Yrs', '3-4 Yrs', '5-6 Yrs', '7-8 Yrs', '9-10 Yrs', '11-12 Yrs', '13-14 Yrs', '15-16 Yrs'];
+    // Try to detect size type from the sizes
+    // Match against known size types to find the best match
+    let bestMatchSizeTypeId: string | null = null;
+    let bestMatchCount = 0;
     
-    return uniqueSizes.sort((a, b) => {
-      const indexA = sizeOrder.indexOf(a);
-      const indexB = sizeOrder.indexOf(b);
-      if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-      if (indexA !== -1) return -1;
-      if (indexB !== -1) return 1;
-      const numA = parseInt(a);
-      const numB = parseInt(b);
-      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-      return a.localeCompare(b);
-    });
+    for (const sizeType of sizeTypes) {
+      if (!sizeType.available_sizes || sizeType.available_sizes.length === 0) continue;
+      const matchCount = uniqueSizes.filter(s => sizeType.available_sizes.includes(s)).length;
+      if (matchCount > bestMatchCount && matchCount >= uniqueSizes.length * 0.7) {
+        bestMatchSizeTypeId = sizeType.id;
+        bestMatchCount = matchCount;
+      }
+    }
+    
+    // Sort sizes using master order
+    return sortSizesByMasterOrder(uniqueSizes, bestMatchSizeTypeId, sizeTypes);
   };
 
   // Initialize sizes_quantities when class is selected

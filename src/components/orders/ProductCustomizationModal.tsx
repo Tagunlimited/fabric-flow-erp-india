@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Plus, Minus, X, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
@@ -39,6 +40,7 @@ interface Customization {
   customValue?: string;
   quantity?: number;
   priceImpact?: number;
+  colors?: Array<{ colorId: string; colorName: string; hex: string }>;
 }
 
 interface ProductCustomizationModalProps {
@@ -47,6 +49,8 @@ interface ProductCustomizationModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (customizations: Customization[]) => void;
+  initialCustomizations?: Customization[];
+  fabricColor?: string;
 }
 
 export function ProductCustomizationModal({
@@ -54,12 +58,18 @@ export function ProductCustomizationModal({
   productCategoryId,
   isOpen,
   onClose,
-  onSave
+  onSave,
+  initialCustomizations,
+  fabricColor
 }: ProductCustomizationModalProps) {
   const [parts, setParts] = useState<ProductPart[]>([]);
   const [addons, setAddons] = useState<PartAddon[]>([]);
   const [customizations, setCustomizations] = useState<Customization[]>([]);
   const [loading, setLoading] = useState(false);
+  const [colors, setColors] = useState<Array<{id: string; color: string; hex: string}>>([]);
+  const [showColorPicker, setShowColorPicker] = useState(false);
+  const [currentCustomizationIndex, setCurrentCustomizationIndex] = useState<number | null>(null);
+  const [selectedColorsForPicker, setSelectedColorsForPicker] = useState<string[]>([]);
   const [selectedPart, setSelectedPart] = useState<string>('');
   const [selectedAddon, setSelectedAddon] = useState<string>('');
   const [numberValue, setNumberValue] = useState<string>('');
@@ -80,8 +90,8 @@ export function ProductCustomizationModal({
   const [showAddonSelection, setShowAddonSelection] = useState(false);
   const [selectedPartForAddon, setSelectedPartForAddon] = useState<ProductPart | null>(null);
 
-  const resetFormState = () => {
-    setCustomizations([]);
+  const resetFormState = (initial: Customization[] = []) => {
+    setCustomizations(initial);
     setSelectedPart('');
     setSelectedAddon('');
     setNumberValue('');
@@ -102,10 +112,30 @@ export function ProductCustomizationModal({
   useEffect(() => {
     if (isOpen && productCategoryId) {
       fetchPartsForCategory();
+      fetchColors();
       // Reset form state when modal opens
-      resetFormState();
+      if (initialCustomizations && initialCustomizations.length > 0) {
+        resetFormState(initialCustomizations);
+      } else {
+        resetFormState([]);
+      }
     }
-  }, [isOpen, productCategoryId]);
+  }, [isOpen, productCategoryId, initialCustomizations]);
+
+  const fetchColors = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('colors')
+        .select('*')
+        .order('color', { ascending: true });
+      
+      if (error) throw error;
+      setColors((data || []) as Array<{id: string; color: string; hex: string}>);
+    } catch (error) {
+      console.error('Error fetching colors:', error);
+      toast.error('Failed to fetch colors');
+    }
+  };
 
   const fetchPartsForCategory = async () => {
     try {
@@ -272,7 +302,8 @@ export function ProductCustomizationModal({
         selectedAddonName: addon.addon_name,
         selectedAddonImageUrl: addon.image_url || undefined,
         selectedAddonImageAltText: addon.image_alt_text || undefined,
-        priceImpact: addon.price_adjustment
+        priceImpact: addon.price_adjustment,
+        colors: getInitialColors()
       };
 
       setCustomizations([...customizations, newCustomization]);
@@ -288,7 +319,8 @@ export function ProductCustomizationModal({
         partName: part.part_name,
         partType: 'number',
         customValue: quantity.toString(),
-        quantity: quantity
+        quantity: quantity,
+        colors: getInitialColors()
       };
 
       setCustomizations([...customizations, newCustomization]);
@@ -306,7 +338,7 @@ export function ProductCustomizationModal({
 
   const handleSave = () => {
     onSave(customizations);
-    resetFormState();
+    resetFormState([]);
     onClose();
   };
 
@@ -318,9 +350,110 @@ export function ProductCustomizationModal({
     return customizations.reduce((total, c) => total + (c.priceImpact || 0), 0);
   };
 
+  // Helper function to get initial colors array with fabric color as default
+  const getInitialColors = (): Array<{ colorId: string; colorName: string; hex: string }> => {
+    if (!fabricColor) return [];
+    
+    // Try to find fabric color in colors master
+    const fabricColorMatch = colors.find(
+      c => c.color.toLowerCase().trim() === fabricColor.toLowerCase().trim()
+    );
+    
+    if (fabricColorMatch) {
+      return [{
+        colorId: fabricColorMatch.id,
+        colorName: fabricColorMatch.color,
+        hex: fabricColorMatch.hex
+      }];
+    }
+    
+    // If fabric color not found in master, create a temporary entry
+    return [{
+      colorId: '',
+      colorName: fabricColor,
+      hex: '#FFFFFF' // Default white if hex not available
+    }];
+  };
+
   const handleClose = () => {
-    resetFormState();
+    resetFormState(initialCustomizations || []);
     onClose();
+  };
+
+  // Color selection functions
+  const handleOpenColorPicker = (customizationIndex: number) => {
+    setCurrentCustomizationIndex(customizationIndex);
+    const currentColors = customizations[customizationIndex]?.colors || [];
+    const selectedIds: string[] = [];
+    
+    currentColors.forEach(color => {
+      if (color.colorId) {
+        selectedIds.push(color.colorId);
+      } else if (fabricColor && color.colorName.toLowerCase() === fabricColor.toLowerCase()) {
+        // Fabric color without colorId - use empty string marker
+        selectedIds.push('');
+      }
+    });
+    
+    setSelectedColorsForPicker(selectedIds);
+    setShowColorPicker(true);
+  };
+
+  const handleColorSelect = (colorId: string) => {
+    setSelectedColorsForPicker(prev => {
+      if (prev.includes(colorId)) {
+        return prev.filter(id => id !== colorId);
+      } else {
+        return [...prev, colorId];
+      }
+    });
+  };
+
+  const handleConfirmColorSelection = () => {
+    if (currentCustomizationIndex === null) return;
+    
+    const selectedColorsData = colors
+      .filter(c => selectedColorsForPicker.includes(c.id))
+      .map(c => ({
+        colorId: c.id,
+        colorName: c.color,
+        hex: c.hex
+      }));
+
+    // Also include fabric color if it was selected but not in colors master
+    if (fabricColor && selectedColorsForPicker.includes('')) {
+      const fabricColorInSelected = selectedColorsData.find(
+        c => c.colorName.toLowerCase() === fabricColor.toLowerCase()
+      );
+      if (!fabricColorInSelected) {
+        selectedColorsData.push({
+          colorId: '',
+          colorName: fabricColor,
+          hex: '#FFFFFF'
+        });
+      }
+    }
+
+    setCustomizations(prev => prev.map((cust, idx) => 
+      idx === currentCustomizationIndex 
+        ? { ...cust, colors: selectedColorsData }
+        : cust
+    ));
+
+    setShowColorPicker(false);
+    setCurrentCustomizationIndex(null);
+    setSelectedColorsForPicker([]);
+  };
+
+  const handleRemoveColor = (customizationIndex: number, colorIndex: number) => {
+    setCustomizations(prev => prev.map((cust, idx) => 
+      idx === customizationIndex 
+        ? { 
+            ...cust, 
+            colors: (cust.colors || []).filter((_, cIdx) => cIdx !== colorIndex)
+          }
+        : cust
+    ));
   };
 
   // Addon selection dialog functions
@@ -340,7 +473,8 @@ export function ProductCustomizationModal({
       selectedAddonName: selectedAddon.addon_name,
       selectedAddonImageUrl: selectedAddon.image_url || undefined,
       selectedAddonImageAltText: selectedAddon.image_alt_text || undefined,
-      priceImpact: selectedAddon.price_adjustment
+      priceImpact: selectedAddon.price_adjustment,
+      colors: getInitialColors()
       // Note: quantity is intentionally not set for dropdown type parts
     };
 
@@ -729,7 +863,8 @@ export function ProductCustomizationModal({
                                   partName: part.part_name,
                                   partType: 'number',
                                   customValue: quantity.toString(),
-                                  quantity: quantity
+                                  quantity: quantity,
+                                  colors: getInitialColors()
                                 };
 
                                 setCustomizations([...customizations, newCustomization]);
@@ -759,13 +894,13 @@ export function ProductCustomizationModal({
               {customizations.length > 0 && (
                 <div className="border rounded-lg p-4 space-y-3">
                   <h3 className="font-medium">Current Customizations</h3>
-                  {customizations.map((customization) => {
+                  {customizations.map((customization, customizationIndex) => {
                     const selectedAddon = customization.partType === 'dropdown' 
                       ? addons.find(a => a.id === customization.selectedAddonId)
                       : null;
                     
                     return (
-                      <div key={customization.partId} className="flex items-center gap-4 p-4 border rounded-lg bg-white shadow-sm">
+                      <div key={customization.partId} className="flex items-start gap-4 p-4 border rounded-lg bg-white shadow-sm">
                         {selectedAddon?.image_url && (
                           <img 
                             src={selectedAddon.image_url} 
@@ -797,6 +932,41 @@ export function ProductCustomizationModal({
                             ₹{customization.priceImpact > 0 ? '+' : ''}{customization.priceImpact}
                           </Badge>
                         )}
+                          {/* Color Selection */}
+                          <div className="mt-2 space-y-2">
+                            <div className="text-xs font-medium text-gray-700">Colors:</div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {(customization.colors || []).map((color, colorIndex) => (
+                                <Badge 
+                                  key={colorIndex}
+                                  variant="outline"
+                                  className="flex items-center gap-1.5 px-2 py-1"
+                                >
+                                  <div 
+                                    className="w-3 h-3 rounded-full border border-gray-300"
+                                    style={{ backgroundColor: color.hex || '#FFFFFF' }}
+                                  />
+                                  <span className="text-xs">{color.colorName}</span>
+                                  <button
+                                    onClick={() => handleRemoveColor(customizationIndex, colorIndex)}
+                                    className="ml-1 hover:bg-gray-200 rounded-full p-0.5"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </Badge>
+                              ))}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleOpenColorPicker(customizationIndex)}
+                                className="h-7 text-xs"
+                              >
+                                <Plus className="w-3 h-3 mr-1" />
+                                Add Color
+                              </Button>
+                            </div>
+                          </div>
                       </div>
                       <Button
                         variant="outline"
@@ -849,6 +1019,91 @@ export function ProductCustomizationModal({
           partName={selectedPartForAddon.part_name}
         />
       )}
+
+      {/* Color Picker Dialog */}
+      <Dialog open={showColorPicker} onOpenChange={(open) => {
+        if (!open) {
+          setShowColorPicker(false);
+          setCurrentCustomizationIndex(null);
+          setSelectedColorsForPicker([]);
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Select Colors</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 max-h-[400px] overflow-y-auto">
+            {/* Include fabric color option if available and not in colors master */}
+            {fabricColor && !colors.some(c => c.color.toLowerCase().trim() === fabricColor.toLowerCase().trim()) && (
+              <div className="flex items-center space-x-2 p-2 border rounded-lg">
+                <Checkbox
+                  id="fabric-color"
+                  checked={selectedColorsForPicker.includes('')}
+                  onCheckedChange={(checked) => {
+                    if (checked) {
+                      setSelectedColorsForPicker(prev => {
+                        if (!prev.includes('')) {
+                          return [...prev, ''];
+                        }
+                        return prev;
+                      });
+                    } else {
+                      setSelectedColorsForPicker(prev => prev.filter(id => id !== ''));
+                    }
+                  }}
+                />
+                <label
+                  htmlFor="fabric-color"
+                  className="flex items-center gap-2 flex-1 cursor-pointer"
+                >
+                  <div className="w-6 h-6 rounded-full border border-gray-300 bg-gray-100" />
+                  <span className="text-sm font-medium">{fabricColor} (Fabric Color)</span>
+                </label>
+              </div>
+            )}
+            {/* Colors from master */}
+            {colors.map((color) => {
+              const isSelected = selectedColorsForPicker.includes(color.id);
+              return (
+                <div key={color.id} className="flex items-center space-x-2 p-2 border rounded-lg hover:bg-gray-50">
+                  <Checkbox
+                    id={`color-${color.id}`}
+                    checked={isSelected}
+                    onCheckedChange={(checked) => handleColorSelect(color.id)}
+                  />
+                  <label
+                    htmlFor={`color-${color.id}`}
+                    className="flex items-center gap-2 flex-1 cursor-pointer"
+                  >
+                    <div 
+                      className="w-6 h-6 rounded-full border border-gray-300"
+                      style={{ backgroundColor: color.hex || '#FFFFFF' }}
+                    />
+                    <span className="text-sm font-medium">{color.color}</span>
+                  </label>
+                </div>
+              );
+            })}
+            {colors.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center py-4">
+                No colors available. Please add colors in the Color Master.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setShowColorPicker(false);
+              setCurrentCustomizationIndex(null);
+              setSelectedColorsForPicker([]);
+            }}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmColorSelection}>
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

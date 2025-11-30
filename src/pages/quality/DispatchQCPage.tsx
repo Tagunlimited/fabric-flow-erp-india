@@ -10,6 +10,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Search } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { useSizeTypes } from "@/hooks/useSizeTypes";
+import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
 
 interface OrderCard {
   order_id: string;
@@ -24,59 +26,8 @@ interface OrderCard {
   hasPendingChallan?: boolean; // Flag to track if order has a pending challan that needs to be marked as shipped
 }
 
-// Helper function to sort sizes in a logical order
-const sortSizes = (sizes: Array<{ size_name: string; [key: string]: any }>) => {
-  const sizeOrder: { [key: string]: number } = {
-    'xxs': 1, '2xs': 1,
-    'xs': 2,
-    's': 3, 'small': 3,
-    'm': 4, 'medium': 4,
-    'l': 5, 'large': 5,
-    'xl': 6,
-    'xxl': 7, '2xl': 7,
-    'xxxl': 8, '3xl': 8,
-    'xxxxl': 9, '4xl': 9,
-    'xxxxxl': 10, '5xl': 10
-  };
-
-  return [...sizes].sort((a, b) => {
-    const sizeA = a.size_name.toLowerCase().trim();
-    const sizeB = b.size_name.toLowerCase().trim();
-
-    // Check for standard sizes
-    const orderA = sizeOrder[sizeA];
-    const orderB = sizeOrder[sizeB];
-
-    if (orderA !== undefined && orderB !== undefined) {
-      return orderA - orderB;
-    }
-    if (orderA !== undefined) return -1;
-    if (orderB !== undefined) return 1;
-
-    // Check for numeric sizes
-    const numA = parseFloat(sizeA);
-    const numB = parseFloat(sizeB);
-    if (!isNaN(numA) && !isNaN(numB)) {
-      return numA - numB;
-    }
-    if (!isNaN(numA)) return -1;
-    if (!isNaN(numB)) return 1;
-
-    // Age ranges (e.g., "2-3Y", "4-5Y")
-    const agePatternA = sizeA.match(/^(\d+)-(\d+)y?$/i);
-    const agePatternB = sizeB.match(/^(\d+)-(\d+)y?$/i);
-    if (agePatternA && agePatternB) {
-      const avgA = (parseInt(agePatternA[1]) + parseInt(agePatternA[2])) / 2;
-      const avgB = (parseInt(agePatternB[1]) + parseInt(agePatternB[2])) / 2;
-      return avgA - avgB;
-    }
-
-    // Alphabetical fallback
-    return sizeA.localeCompare(sizeB);
-  });
-};
-
 export default function DispatchQCPage() {
+  const { sizeTypes } = useSizeTypes();
   const [orders, setOrders] = useState<OrderCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
@@ -145,6 +96,9 @@ export default function DispatchQCPage() {
       }
 
       // Approved per assignment
+      // Note: approved_quantity in qc_reviews is cumulative across all QC sessions
+      // When QC approves replacement picks after rejection, they accumulate with previous approvals
+      // So summing all approved_quantity gives us total approved quantity for dispatch
       let approvedByAssignment: Record<string, number> = {};
       if (assignmentIds.length > 0) {
         try {
@@ -154,6 +108,7 @@ export default function DispatchQCPage() {
             .in('order_batch_assignment_id', assignmentIds as any);
           (qcs || []).forEach((q: any) => {
             const id = q?.order_batch_assignment_id as string | undefined; if (!id) return;
+            // Sum approved quantities (already cumulative per size, so this gives total approved)
             approvedByAssignment[id] = (approvedByAssignment[id] || 0) + Number(q.approved_quantity || 0);
           });
         } catch {}
@@ -517,6 +472,8 @@ export default function DispatchQCPage() {
       // Load per-size approved and already dispatched (for custom orders)
       try {
         // Approved by size from qc_reviews
+        // Note: approved_quantity is cumulative across all QC sessions (including replacements after rejection)
+        // Summing across all assignments for the order gives total approved per size
         const { data: qc } = await (supabase as any)
           .from('qc_reviews')
           .select('size_name, approved_quantity, order_batch_assignment_id')
@@ -528,7 +485,9 @@ export default function DispatchQCPage() {
           ).data?.map((r: any) => r.id) || []);
         const approvedMap: Record<string, number> = {};
         (qc || []).forEach((r: any) => {
-          const k = r.size_name as string; approvedMap[k] = (approvedMap[k] || 0) + Number(r.approved_quantity || 0);
+          const k = r.size_name as string; 
+          // Sum approved quantities (already cumulative per assignment-size, so this gives total approved per size)
+          approvedMap[k] = (approvedMap[k] || 0) + Number(r.approved_quantity || 0);
         });
         // Dispatched by size
         const { data: disp } = await (supabase as any)
@@ -547,8 +506,21 @@ export default function DispatchQCPage() {
           return { size_name: size, approved, dispatched, to_dispatch };
         }).filter(r => r.to_dispatch > 0);
         
-        // Sort sizes in logical order (S, M, L, XL, 2XL, etc.)
-        const sortedRows = sortSizes(rows);
+        // Sort sizes using master order
+        // Try to get size_type_id from order items
+        let sizeTypeId: string | null = null;
+        try {
+          const { data: orderItems } = await (supabase as any)
+            .from('order_items')
+            .select('size_type_id')
+            .eq('order_id', o.order_id)
+            .limit(1);
+          if (orderItems && orderItems.length > 0 && orderItems[0].size_type_id) {
+            sizeTypeId = orderItems[0].size_type_id;
+          }
+        } catch {}
+        
+        const sortedRows = sortSizeDistributionsByMasterOrder(rows, sizeTypeId, sizeTypes);
         setSizeRows(sortedRows);
         // Pre-fill dispatch quantities with remaining to dispatch so Generate Challan works immediately
         const prefill: Record<string, number> = {};

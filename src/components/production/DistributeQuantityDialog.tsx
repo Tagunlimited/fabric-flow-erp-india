@@ -11,6 +11,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { generateBatchAssignmentPDF } from '@/utils/batchAssignmentPDF';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
+import { useSizeTypes } from '@/hooks/useSizeTypes';
+import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
 
 interface Batch {
   id: string;
@@ -68,16 +70,26 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
   const [loading, setLoading] = useState(false);
   const [filteredOrderSizes, setFilteredOrderSizes] = useState<OrderSize[]>([]);
   const { toast } = useToast();
+  const { sizeTypes } = useSizeTypes();
 
   // Filter order sizes to show only sizes with quantities > 0
   useEffect(() => {
     if (isOpen && orderSizes.length > 0) {
       // Filter out sizes with zero quantities - only show sizes that have quantities
       const filtered = orderSizes.filter(size => size.total_quantity > 0);
-      const sorted = sortSizes(filtered);
+      
+      // Get size_type_id from orderItems if available
+      let sizeTypeId: string | null = null;
+      if (orderItems && orderItems.length > 0) {
+        const firstItem = orderItems[0];
+        sizeTypeId = firstItem.size_type_id || (firstItem.specifications && typeof firstItem.specifications === 'object' && firstItem.specifications.size_type_id) || null;
+      }
+      
+      // Sort using master order
+      const sorted = sortSizeDistributionsByMasterOrder(filtered, sizeTypeId, sizeTypes);
       setFilteredOrderSizes(sorted);
     }
-  }, [isOpen, orderSizes]);
+  }, [isOpen, orderSizes, orderItems, sizeTypes]);
 
   // Initialize batch quantities when dialog opens
   useEffect(() => {
@@ -129,22 +141,6 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
   };
 
 
-  const sortSizes = (sizes: OrderSize[]) => {
-    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
-    return sizes.sort((a, b) => {
-      const indexA = sizeOrder.indexOf(a.size_name);
-      const indexB = sizeOrder.indexOf(b.size_name);
-      
-      if (indexA !== -1 && indexB !== -1) {
-        return indexA - indexB;
-      }
-      if (indexA !== -1) return -1;
-      if (indexB !== -1) return 1;
-      
-      // For sizes not in the predefined order, sort alphabetically
-      return a.size_name.localeCompare(b.size_name);
-    });
-  };
 
   const validateDistribution = () => {
     for (const size of filteredOrderSizes) {
