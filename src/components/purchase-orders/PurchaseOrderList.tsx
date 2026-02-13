@@ -100,10 +100,9 @@ const PurchaseOrderRow = memo(function PurchaseOrderRow({
         <div className="text-sm space-y-1">
           {items.slice(0, 2).map((item, idx) => (
             <div key={idx} className="border-b border-gray-100 pb-1 last:border-b-0">
-              <div className="font-medium">{item.item_name || 'N/A'}</div>
+              <div className="font-medium">{(item.item_type === 'fabric' && item.fabric_for_supplier) ? item.fabric_for_supplier : (item.item_name || 'N/A')}</div>
               {item.item_type === 'fabric' && (
                 <div className="text-xs text-muted-foreground">
-                  {item.fabric_name && `${item.fabric_name} - `}
                   {item.fabric_color && `${item.fabric_color}, `}
                   {item.fabric_gsm && `${item.fabric_gsm} GSM`}
                 </div>

@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import { Loader2, Edit, Trash, Plus, Users, User } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ErpLayout } from '@/components/ErpLayout';
+import { BackButton } from '@/components/common/BackButton';
 
 interface Department {
   id: string;
@@ -146,6 +147,9 @@ export default function DepartmentsPage() {
   return (
     <ErpLayout>
       <div className="space-y-6">
+        <div className="flex items-center">
+          <BackButton to="/people" label="Back to People" />
+        </div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-3xl font-bold flex items-center gap-2"><Users className="w-7 h-7" /> Departments</h1>
         <Button onClick={() => handleOpenDialog()}><Plus className="w-4 h-4 mr-2" />Add Department</Button>

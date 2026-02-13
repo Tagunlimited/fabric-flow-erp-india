@@ -106,8 +106,8 @@ export const ReassignCuttingMasterDialog: React.FC<ReassignCuttingMasterDialogPr
 
   // Filter workers to show only cutting masters/managers, excluding the old master
   const availableWorkers = workers.filter(w => {
-    const designation = (w as any).designation;
-    const isCuttingMaster = designation === 'Cutting Master' || designation === 'Cutting Manager';
+    const designation = (w as any).designation?.toLowerCase() || '';
+    const isCuttingMaster = designation.includes('cutting master') || designation.includes('cutting manager');
     // Exclude the old cutting master by comparing cutting_master_id
     const isNotOldMaster = selectedOldMaster ? w.id !== selectedOldMaster.cuttingMasterId : true;
     return isCuttingMaster && isNotOldMaster;

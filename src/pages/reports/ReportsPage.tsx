@@ -9,6 +9,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { CalendarIcon, Download, FileText, BarChart3, PieChart, TrendingUp, Users, Package, DollarSign, Clock, Filter } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { ErpLayout } from '@/components/ErpLayout';
+import { BackButton } from '@/components/common/BackButton';
 
 const ReportsPage = () => {
   const [dateFrom, setDateFrom] = useState<Date>();
@@ -45,7 +47,11 @@ const ReportsPage = () => {
   };
 
   return (
+    <ErpLayout>
     <div className="w-full space-y-6">
+        <div className="flex items-center">
+          <BackButton to="/dashboard" label="Back to Dashboard" />
+        </div>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -322,6 +328,7 @@ const ReportsPage = () => {
         </CardContent>
       </Card>
     </div>
+    </ErpLayout>
   );
 };
 

@@ -42,6 +42,7 @@ import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleB
 import { UpdateCuttingQuantityDialog } from "@/components/production/UpdateCuttingQuantityDialog";
 import { ReassignBatchDialog } from "@/components/production/ReassignBatchDialog";
 import { generateBatchAssignmentPDF } from "@/utils/batchAssignmentPDF";
+import { BackButton } from '@/components/common/BackButton';
 
 interface CuttingJob {
   id: string;
@@ -874,6 +875,9 @@ const CuttingManagerPage = () => {
   return (
     <ErpLayout>
       <div className="space-y-6">
+        <div className="flex items-center">
+          <BackButton to="/production" label="Back to Production" />
+        </div>
         <div className="flex justify-between items-start">
         <div>
           <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">

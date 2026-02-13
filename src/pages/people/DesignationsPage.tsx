@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, Edit, Trash, Plus, Award, Building, Search, Users } from 'lucide-react';
 import { ErpLayout } from '@/components/ErpLayout';
+import { BackButton } from '@/components/common/BackButton';
 
 interface Designation {
   id: string;
@@ -234,6 +235,9 @@ export default function DesignationsPage() {
   return (
     <ErpLayout>
       <div className="space-y-6">
+        <div className="flex items-center">
+          <BackButton to="/people" label="Back to People" />
+        </div>
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold flex items-center gap-2">

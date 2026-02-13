@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Check Sidebar Items</title>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <h1>Sidebar Items Check</h1>
+    <div id="output"></div>
+    
+    <script>
+        // You'll need to replace these with your actual Supabase credentials
+        const supabaseUrl = 'YOUR_SUPABASE_URL';
+        const supabaseKey = 'YOUR_SUPABASE_ANON_KEY';
+        
+        const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+        
+        async function checkSidebarItems() {
+            const output = document.getElementById('output');
+            
+            try {
+                console.log('Checking sidebar_items table...');
+                
+                const { data, error } = await supabase
+                    .from('sidebar_items')
+                    .select('*')
+                    .limit(10);
+                    
+                if (error) {
+                    output.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+                    console.error('Error:', error);
+                } else {
+                    output.innerHTML = `
+                        <p>Sidebar items found: ${data?.length || 0}</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                    console.log('Sidebar items found:', data?.length || 0);
+                    console.log('Sample items:', data);
+                }
+            } catch (err) {
+                output.innerHTML = `<p style="color: red;">Exception: ${err.message}</p>`;
+                console.error('Exception:', err);
+            }
+        }
+        
+        // Run the check when page loads
+        checkSidebarItems();
+    </script>
+</body>
+</html>

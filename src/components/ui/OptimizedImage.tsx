@@ -35,8 +35,11 @@ export function OptimizedImage({
     setImageError(false);
   }, []);
 
-  // If no src or error occurred, show fallback
+  // If no src or error occurred, show fallback or return null
   if (!src || imageError) {
+    if (!showFallback) {
+      return null;
+    }
     return (
       <div 
         className={cn(
@@ -44,7 +47,7 @@ export function OptimizedImage({
           containerClassName
         )}
       >
-        {showFallback ? fallbackText : null}
+        {fallbackText}
       </div>
     );
   }

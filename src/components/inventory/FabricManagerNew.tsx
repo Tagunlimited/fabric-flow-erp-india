@@ -17,6 +17,7 @@ interface FabricMaster {
   fabric_code: string;
   fabric_description?: string;
   fabric_name: string;
+  fabric_for_supplier?: string;
   type?: string;
   color?: string;
   hex?: string;
@@ -38,6 +39,7 @@ const DEFAULT_FABRIC: FabricMaster = {
   fabric_code: '',
   fabric_description: '',
   fabric_name: '',
+  fabric_for_supplier: '',
   type: '',
   color: '',
   hex: '',
@@ -57,6 +59,7 @@ const BULK_TEMPLATE_HEADERS = [
   'fabric_code',
   'fabric_description', 
   'fabric_name',
+  'fabric_for_supplier',
   'type',
   'color',
   'hex',
@@ -390,6 +393,7 @@ export function FabricManagerNew() {
           fabric_code: fabricCode,
           fabric_description: get('fabric_description'),
           fabric_name: fabricName,
+          fabric_for_supplier: get('fabric_for_supplier'),
           type: get('type'),
           color: get('color'),
           hex: get('hex'),
@@ -583,6 +587,22 @@ export function FabricManagerNew() {
                       className="mt-1"
                       placeholder="e.g., Cotton Jersey"
                     />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="fabric_for_supplier" className="text-sm font-medium">Fabric for Supplier</Label>
+                    <Input
+                      id="fabric_for_supplier"
+                      value={formData.fabric_for_supplier || ''}
+                      onChange={(e) => setFormData(prev => ({ ...prev, fabric_for_supplier: e.target.value }))}
+                      className="mt-1"
+                      placeholder="Supplier-specific fabric name (for purchase orders)"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      This name will be shown in purchase orders instead of the fabric name
+                    </p>
                   </div>
                 </div>
 
@@ -1014,7 +1034,7 @@ export function FabricManagerNew() {
                       <TableCell className="font-medium">{fabric.fabric_code}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          {fabric.image ? (
+                          {fabric.image && (
                             <img 
                               src={fabric.image} 
                               alt={fabric.fabric_name} 
@@ -1043,10 +1063,6 @@ export function FabricManagerNew() {
                                 e.currentTarget.style.display = 'none';
                               }}
                             />
-                          ) : (
-                            <div className="w-10 h-10 bg-gray-100 rounded border shadow-sm flex-shrink-0 flex items-center justify-center">
-                              <span className="text-xs text-gray-500">No Image</span>
-                            </div>
                           )}
                           <div className="flex flex-col min-w-0 flex-1">
                             <span className="font-medium text-sm truncate">{fabric.fabric_name}</span>

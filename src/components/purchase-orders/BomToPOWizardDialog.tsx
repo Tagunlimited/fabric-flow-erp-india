@@ -326,11 +326,8 @@ export function BomToPOWizardDialog({
             }
           }
           
-          // Use BOM product image as fallback if no specific image found
-          if (!imageUrl && bomRecord?.product_image_url) {
-            imageUrl = bomRecord.product_image_url;
-            console.log('🔄 Using BOM product image as fallback:', imageUrl);
-          }
+          // DO NOT use BOM product_image_url as fallback - it may be a mockup image
+          // Only use fabric/item images from master tables
           
           const result = {
             bom_id: bomId,

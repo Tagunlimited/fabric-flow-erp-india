@@ -596,7 +596,8 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                   let displaySize: string;
                   
                   if (item.item_type === 'FABRIC' && fabricMaster) {
-                    displayImage = fabricMaster.image || item.grn_item?.item_image_url;
+                    // Only use fabric image from database (fabric_master table), no fallback to mockup images
+                    displayImage = fabricMaster.image || null;
                     // Always use fabric_code from fabric_master, never fallback to item_code which might be URL
                     displayCode = fabricMaster.fabric_code || '-';
                     displayName = fabricMaster.fabric_name || item.item_name;
@@ -629,7 +630,12 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                     displaySize = product.size || '-';
                   } else {
                     // Fallback to GRN item data - but check if item_code looks like a URL
-                    displayImage = item.grn_item?.item_image_url;
+                    // For fabric items, don't show mockup images - only show if fabric image exists in database
+                    if (item.item_type === 'FABRIC') {
+                      displayImage = null; // Don't show mockup images for fabric items
+                    } else {
+                      displayImage = item.grn_item?.item_image_url;
+                    }
                     // If item_code looks like a URL, don't use it
                     const itemCode = item.item_code || '';
                     displayCode = (itemCode.startsWith('http://') || itemCode.startsWith('https://')) ? '-' : itemCode;
@@ -652,25 +658,17 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                   return (
                     <TableRow key={`${item.id}-${item.bin_id}`}>
                       <TableCell>
-                        {displayImage ? (
+                        {displayImage && (
                           <img
                             src={displayImage}
                             alt={displayName}
                             className="w-16 h-16 object-cover rounded border"
                             onError={(e) => { 
-                              // Replace image with NA when it fails to load
+                              // Hide image container when it fails to load
                               const img = e.currentTarget as HTMLImageElement;
                               img.style.display = 'none';
-                              const naDiv = document.createElement('div');
-                              naDiv.className = 'w-16 h-16 flex items-center justify-center bg-muted rounded border text-xs text-muted-foreground font-medium';
-                              naDiv.textContent = 'NA';
-                              img.parentElement?.appendChild(naDiv);
                             }}
                           />
-                        ) : (
-                          <div className="w-16 h-16 flex items-center justify-center bg-muted rounded border text-xs text-muted-foreground font-medium">
-                            NA
-                          </div>
                         )}
                       </TableCell>
                       <TableCell>

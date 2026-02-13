@@ -187,10 +187,10 @@ export function BomItemSelectionStep({
                     />
                   </div>
 
-                  {/* Item Image */}
-                  <div className="flex-shrink-0">
-                    <div className="w-20 h-20 rounded-lg border overflow-hidden bg-muted/30">
-                      {item.image_url ? (
+                  {/* Item Image - Only show if image exists */}
+                  {item.image_url ? (
+                    <div className="flex-shrink-0">
+                      <div className="w-20 h-20 rounded-lg border overflow-hidden bg-muted/30">
                         <img
                           src={item.image_url}
                           alt={item.itemName}
@@ -201,24 +201,21 @@ export function BomItemSelectionStep({
                           onError={(e) => {
                             console.log('Image failed to load:', item.image_url, 'for item:', item.itemName);
                             e.currentTarget.style.display = 'none';
+                            e.currentTarget.parentElement!.style.display = 'none';
                           }}
                         />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-                          <Package className="w-8 h-8" />
+                      </div>
+                      {item.category && (
+                        <div className="text-xs text-center mt-1 text-muted-foreground">
+                          {item.category}
                         </div>
                       )}
-                    </div>
-                    {item.category && (
-                      <div className="text-xs text-center mt-1 text-muted-foreground">
-                        {item.category}
+                      {/* Debug info */}
+                      <div className="text-xs text-center mt-1 text-red-500">
+                        {item.image_url ? 'Has URL' : 'No URL'}
                       </div>
-                    )}
-                    {/* Debug info */}
-                    <div className="text-xs text-center mt-1 text-red-500">
-                      {item.image_url ? 'Has URL' : 'No URL'}
                     </div>
-                  </div>
+                  ) : null}
 
                   {/* Item Details */}
                   <div className="flex-1 min-w-0">

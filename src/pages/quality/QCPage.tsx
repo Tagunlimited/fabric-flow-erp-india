@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import QCReviewDialog from "@/components/quality/QCReviewDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { BackButton } from '@/components/common/BackButton';
 
 interface BatchAvatarInfo {
   avatar_url: string;
@@ -360,6 +361,9 @@ export default function QCPage() {
   return (
     <ErpLayout>
       <div className="space-y-6">
+        <div className="flex items-center">
+          <BackButton to="/quality" label="Back to Quality" />
+        </div>
         <div>
           <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">QC</h1>
           <p className="text-muted-foreground mt-1">Review and QC picked orders</p>

@@ -19,6 +19,7 @@ export interface PendingItem {
   remaining_quantity: number;
   unit: string | null;
   fabric_name: string | null;
+  fabric_for_supplier: string | null;
   fabric_color: string | null;
   fabric_gsm: string | null;
   image_url: string | null;
@@ -180,9 +181,14 @@ export const buildPendingItemGroups = (rows: PendingItem[]): PendingItemGroup[] 
       existing.totalRemaining += totalRemaining;
       existing.bomBreakdowns.push(item);
     } else {
+      // For fabric items, use fabric_for_supplier if available, otherwise use item_name
+      const displayName = isFabric && item.fabric_for_supplier 
+        ? item.fabric_for_supplier 
+        : item.item_name;
+      
       groupsMap.set(key, {
         key,
-        displayName: item.item_name,
+        displayName,
         type: item.item_type || item.category || '-',
         unit: item.unit || null,
         imageUrl: item.image_url || PLACEHOLDER_IMAGE,
@@ -281,6 +287,7 @@ export const usePendingPoItems = () => {
               total_allocated: totalAllocated,
               remaining_quantity: remainingQuantity,
               fabric_name: row.fabric_name,
+              fabric_for_supplier: null, // Will be fetched separately
               fabric_color: row.fabric_color,
               fabric_gsm: row.fabric_gsm,
               fabric_id: row.fabric_id,
@@ -291,6 +298,38 @@ export const usePendingPoItems = () => {
               bom_created_at: row.bom_records?.created_at || null
             } as PendingItem;
           }).filter((row: PendingItem | null): row is PendingItem => row !== null);
+          
+          // Fetch fabric_for_supplier for fabric items in fallback data
+          const fabricItems = pendingData.filter(item => 
+            (item.item_type || item.category || '').toLowerCase() === 'fabric' && item.fabric_id
+          );
+          const fabricIds = fabricItems.map(item => item.fabric_id).filter(Boolean);
+          
+          if (fabricIds.length > 0) {
+            try {
+              const { data: fabricsData, error: fabricsError } = await supabase
+                .from('fabric_master')
+                .select('id, fabric_for_supplier')
+                .in('id', fabricIds);
+              
+              if (!fabricsError && fabricsData) {
+                const fabricForSupplierMap = new Map<string, string | null>();
+                fabricsData.forEach((fabric: any) => {
+                  fabricForSupplierMap.set(fabric.id, fabric.fabric_for_supplier || null);
+                });
+                
+                // Update pending data with fabric_for_supplier
+                pendingData = pendingData.map(item => {
+                  if (item.fabric_id && fabricForSupplierMap.has(item.fabric_id)) {
+                    return { ...item, fabric_for_supplier: fabricForSupplierMap.get(item.fabric_id) || null };
+                  }
+                  return item;
+                });
+              }
+            } catch (error) {
+              console.warn('Failed to fetch fabric_for_supplier in fallback:', error);
+            }
+          }
         } else {
           throw error;
         }

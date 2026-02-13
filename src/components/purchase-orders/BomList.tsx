@@ -485,13 +485,8 @@ export function BomList({ refreshTrigger }: BomListProps) {
 
         console.log('Processing BOM item for display:', item);
 
-        // Fetch image for the item
-        let imageUrl =
-          item.item_image_url ||
-          item.image_url ||
-          item.item?.image_url ||
-          item.item?.image ||
-          null;
+        // ALWAYS fetch fresh image from master tables - ignore stored image_url (may be mockup)
+        let imageUrl = null;
         const fabricCode =
           item.fabric_code ||
           item.item?.fabric_code ||
@@ -513,7 +508,8 @@ export function BomList({ refreshTrigger }: BomListProps) {
           totalAllocatedFromInventory: Number(stockInfo?.totalAllocatedFromInventory ?? 0)
         };
         
-        if (!imageUrl && item.category === 'Fabric') {
+        // Always fetch fresh image from master tables
+        if (item.category === 'Fabric') {
           // Fetch fabric image
           try {
             const fabricName = item.fabric_name || item.item_name?.split(' - ')[0] || '';
