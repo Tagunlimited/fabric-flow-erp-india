@@ -651,11 +651,58 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
   const fetchData = async () => {
     try {
-      const [customersRes, categoriesRes, sizeTypesRes, fabricsRes, employeesRes, brandingTypesRes] = await Promise.all([
+      // Fetch fabrics with pagination to get ALL records (Supabase has a 1000 record limit per query)
+      const fetchAllFabrics = async () => {
+        let allFabrics: any[] = [];
+        let from = 0;
+        const pageSize = 1000;
+        let hasMore = true;
+
+        while (hasMore) {
+          const { data, error, count } = await supabase
+            .from('fabric_master')
+            .select('*', { count: 'exact' })
+            .order('fabric_name')
+            .range(from, from + pageSize - 1);
+
+          if (error) {
+            console.error('Error fetching fabrics:', error);
+            throw error;
+          }
+
+          if (data) {
+            allFabrics = [...allFabrics, ...data];
+            console.log(`📦 Fetched ${data.length} fabrics (batch ${Math.floor(from / pageSize) + 1}), total so far: ${allFabrics.length}`);
+            
+            // Check if we've fetched all records
+            if (count !== null) {
+              console.log(`📊 Total fabrics in database: ${count}`);
+              if (allFabrics.length >= count) {
+                hasMore = false;
+              } else {
+                from += pageSize;
+              }
+            } else {
+              // If count is not available, check if we got less than pageSize (last page)
+              if (data.length < pageSize) {
+                hasMore = false;
+              } else {
+                from += pageSize;
+              }
+            }
+          } else {
+            hasMore = false;
+          }
+        }
+
+        return allFabrics;
+      };
+
+      const [customersRes, categoriesRes, sizeTypesRes, allFabrics, employeesRes, brandingTypesRes] = await Promise.all([
         supabase.from('customers').select('*').order('company_name'),
         supabase.from('product_categories').select('*').order('category_name'),
         supabase.from('size_types').select('*').order('size_name'),
-        supabase.from('fabric_master').select('*').order('fabric_name'),
+        fetchAllFabrics(), // Fetch all fabrics with pagination
         supabase.from('employees').select('*').order('full_name'),
         supabase.from('branding_types').select('*').order('name')
       ]);
@@ -663,7 +710,18 @@ const getSelectedFabricVariant = (productIndex: number) => {
       if (customersRes.data) setCustomers(customersRes.data as any);
       if (categoriesRes.data) setProductCategories(categoriesRes.data as any);
       if (sizeTypesRes.data) setSizeTypes(sizeTypesRes.data as any);
-      if (fabricsRes.data) setFabrics(fabricsRes.data as any);
+      if (allFabrics) {
+        const fabricsData = allFabrics as any;
+        console.log(`📦 Loaded ${fabricsData.length} fabrics from database (all records)`);
+        const activeFabrics = fabricsData.filter((f: any) => f.status === 'active');
+        console.log(`✅ Active fabrics: ${activeFabrics.length}`);
+        const uniqueNames = new Set(fabricsData.map((f: any) => f.fabric_name)).size;
+        console.log(`📝 Unique fabric names: ${uniqueNames}`);
+        const uniqueNameGsmCombos = new Set(fabricsData.map((f: any) => `${f.fabric_name}|${f.gsm || ''}`)).size;
+        console.log(`🔢 Unique fabric_name × GSM combinations: ${uniqueNameGsmCombos}`);
+        console.log(`📋 All unique fabric names:`, Array.from(new Set(fabricsData.map((f: any) => f.fabric_name))).sort());
+        setFabrics(fabricsData);
+      }
       if (employeesRes.data) {
         console.log('Employees fetched:', employeesRes.data);
         // Filter employees to only show those from Sales Department
@@ -752,29 +810,80 @@ const getSelectedFabricVariant = (productIndex: number) => {
     }));
   };
 
-  // Get unique fabric names filtered by selected product category
+  // Get unique fabric names - show all active fabrics regardless of category association
+  // Returns all unique fabric_name × GSM combinations
   const getFilteredFabricNames = (productIndex: number) => {
-    const product = formData.products[productIndex];
+    // Show all active fabrics, not filtered by category
+    const allActiveFabrics = fabrics.filter(f => f.status === 'active');
     
-    let filteredFabrics = fabrics.filter(f => f.status === 'active');
+    // Create a map to store unique fabric_name × GSM combinations
+    // Key format: "fabric_name|gsm" to ensure uniqueness
+    const fabricMap = new Map<string, typeof allActiveFabrics[0]>();
     
-    if (product.product_category_id) {
-      const category = productCategories.find(c => c.id === product.product_category_id);
+    allActiveFabrics.forEach(fabric => {
+      // Create unique key: fabric_name + GSM (empty string if no GSM)
+      const fabricName = (fabric.fabric_name || '').trim();
+      const gsm = (fabric.gsm || '').trim();
       
-      if (category && category.fabrics && category.fabrics.length > 0) {
-        filteredFabrics = fabrics.filter(fabric => 
-          category.fabrics.includes(fabric.id) && fabric.status === 'active'
-        );
+      // Only process if fabric has a name
+      if (!fabricName) {
+        console.warn('Skipping fabric without name:', fabric);
+        return;
       }
-    }
+      
+      const key = `${fabricName}|${gsm}`;
+      
+      // Store each unique fabric_name × GSM combination
+      // If same fabric_name + GSM already exists, keep the first one
+      if (!fabricMap.has(key)) {
+        fabricMap.set(key, fabric);
+      }
+    });
     
-    // Get unique fabric names
-    const uniqueFabricNames = [...new Set(filteredFabrics.map(f => f.fabric_name))];
+    // Convert to array and sort
+    const result = Array.from(fabricMap.values()).sort((a, b) => {
+      // Sort by fabric name first, then by GSM (numeric if possible)
+      const nameCompare = (a.fabric_name || '').localeCompare(b.fabric_name || '');
+      if (nameCompare !== 0) return nameCompare;
+      
+      // Try numeric comparison for GSM, fallback to string
+      const aGsm = a.gsm || '';
+      const bGsm = b.gsm || '';
+      const aGsmNum = parseInt(aGsm);
+      const bGsmNum = parseInt(bGsm);
+      
+      if (!isNaN(aGsmNum) && !isNaN(bGsmNum)) {
+        return aGsmNum - bGsmNum;
+      }
+      return aGsm.localeCompare(bGsm);
+    });
     
-    // Return the first fabric of each unique fabric name for display
-    return uniqueFabricNames.map(fabricName => 
-      filteredFabrics.find(f => f.fabric_name === fabricName)!
-    );
+    // Detailed logging for debugging
+    const uniqueFabricNames = new Set(result.map(f => f.fabric_name || '')).size;
+    const gsmCounts = new Map<string, number>();
+    result.forEach(f => {
+      const name = f.fabric_name || '';
+      gsmCounts.set(name, (gsmCounts.get(name) || 0) + 1);
+    });
+    
+    // Also check what's in the fabrics array
+    const totalFabricsInState = fabrics.length;
+    const activeInState = fabrics.filter(f => f.status === 'active').length;
+    const uniqueNamesInState = new Set(fabrics.map(f => f.fabric_name || '')).size;
+    
+    console.log(`📊 Product Dropdown Statistics:`);
+    console.log(`   Total fabrics in state: ${totalFabricsInState}`);
+    console.log(`   Active fabrics in state: ${activeInState}`);
+    console.log(`   Unique fabric names in state: ${uniqueNamesInState}`);
+    console.log(`   Active fabrics after filter: ${allActiveFabrics.length}`);
+    console.log(`   Unique fabric names in result: ${uniqueFabricNames}`);
+    console.log(`   Total fabric_name × GSM combinations: ${result.length}`);
+    console.log(`   Breakdown by fabric name:`, Array.from(gsmCounts.entries()).map(([name, count]) => `${name}: ${count} GSM${count > 1 ? 's' : ''}`));
+    
+    // Log all fabric names to see what we have
+    console.log(`   All fabric names in database:`, Array.from(new Set(fabrics.map(f => f.fabric_name || ''))).sort());
+    
+    return result;
   };
 
   const handleSizeTypeSelect = (productIndex: number, sizeTypeId: string) => {
@@ -1696,7 +1805,17 @@ const getSelectedFabricVariant = (productIndex: number) => {
       {/* Product - Only show when product category is selected */}
       {product.product_category_id && (
         <div>
-          <Label className="text-base font-semibold text-gray-700 mb-2 block">Product</Label>
+          <Label className="text-base font-semibold text-gray-700 mb-2 block">
+            Product
+            {(() => {
+              const filteredFabrics = getFilteredFabricNames(productIndex);
+              return filteredFabrics.length > 0 && (
+                <span className="ml-2 text-sm font-normal text-muted-foreground">
+                  ({filteredFabrics.length} {filteredFabrics.length === 1 ? 'option' : 'options'})
+                </span>
+              );
+            })()}
+          </Label>
           <Select
             value={product.fabric_base_id || product.fabric_id}
             onValueChange={(value) => handleFabricSelect(productIndex, value)}
@@ -1706,16 +1825,15 @@ const getSelectedFabricVariant = (productIndex: number) => {
               <SelectValue placeholder="Select product" />
             </SelectTrigger>
             <SelectContent>
-              {getFilteredFabricNames(productIndex).map((fabric) => (
+              {(() => {
+                const filteredFabrics = getFilteredFabricNames(productIndex);
+                console.log(`Product dropdown: ${filteredFabrics.length} products visible`);
+                return filteredFabrics.map((fabric) => (
                 <SelectItem key={fabric.id} value={fabric.id}>
-                  <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{fabric.fabric_name}</span>
-                      {fabric.gsm && <span className="text-muted-foreground">({fabric.gsm} GSM)</span>}
-                    </div>
-                  </div>
+                  {fabric.gsm ? `${fabric.fabric_name}(${fabric.gsm})` : fabric.fabric_name}
                 </SelectItem>
-              ))}
+                ));
+              })()}
             </SelectContent>
           </Select>
         </div>

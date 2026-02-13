@@ -59,7 +59,7 @@ export function NotificationCenter() {
 
       if (error) throw error;
 
-      if (!messages || messages.length === 0) return;
+      if (!messages || messages.length === 0) return [];
 
       // Check which mentions are already marked as read for this user
       const messageIds = messages.map((m) => m.id);
@@ -97,13 +97,22 @@ export function NotificationCenter() {
     setUnreadCount(0);
 
     const loadNotifications = async () => {
+      try {
       // Load chat mentions
       const mentionNotifications = await fetchChatMentions();
+        
+        // Ensure mentionNotifications is an array
+        const safeMentionNotifications = Array.isArray(mentionNotifications) ? mentionNotifications : [];
       
       // Combine with other notifications
-      const allNotifications = [...mentionNotifications];
+        const allNotifications = [...safeMentionNotifications];
       setNotifications(allNotifications);
       setUnreadCount(allNotifications.filter(n => !n.read).length);
+      } catch (error) {
+        console.error('Error loading notifications:', error);
+        setNotifications([]);
+        setUnreadCount(0);
+      }
     };
 
     loadNotifications();

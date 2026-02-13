@@ -511,7 +511,7 @@ export function ProductCustomizationModal({
             <div className="space-y-4">
               <div className="text-center py-4 text-muted-foreground border-b">
                 <p className="font-medium">No customization parts available for this product category.</p>
-                <p className="text-sm mt-2">
+              <p className="text-sm mt-2">
                   Create a new part below to get started.
                 </p>
               </div>

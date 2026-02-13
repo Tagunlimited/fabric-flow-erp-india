@@ -666,14 +666,14 @@ export function ProductCategoryManager() {
                                         <div key={index} className="flex items-center gap-2 bg-muted/50 rounded-full px-3 py-2 text-xs border">
                                           {/* Fabric Icon - Only show if image exists */}
                                           {fabric.image && (
-                                            <div className="w-4 h-4 rounded-full overflow-hidden border">
+                                          <div className="w-4 h-4 rounded-full overflow-hidden border">
                                               <img 
                                                 src={fabric.image} 
                                                 alt={fabric.fabric_name} 
                                                 className="w-full h-full object-cover"
                                               />
-                                            </div>
-                                          )}
+                                              </div>
+                                            )}
                                           <span className="font-medium">{fabricName}</span>
                                           <span className="text-muted-foreground">({colorCount})</span>
                                         </div>

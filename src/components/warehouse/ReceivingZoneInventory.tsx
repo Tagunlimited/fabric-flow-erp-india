@@ -634,7 +634,7 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                     if (item.item_type === 'FABRIC') {
                       displayImage = null; // Don't show mockup images for fabric items
                     } else {
-                      displayImage = item.grn_item?.item_image_url;
+                    displayImage = item.grn_item?.item_image_url;
                     }
                     // If item_code looks like a URL, don't use it
                     const itemCode = item.item_code || '';
