@@ -290,13 +290,13 @@ export function BomForm() {
     if (orderParam && !id) {
       // Check if orderParam is a JSON string or just an order ID
       const processOrderData = async () => {
-        try {
-          const decodedOrderData = JSON.parse(decodeURIComponent(orderParam));
-          setOrderData(decodedOrderData);
-          
-          // Pre-fill BOM data from order
-          if (decodedOrderData.order_item) {
-            console.log('Setting BOM data from decoded order data:', decodedOrderData);
+      try {
+        const decodedOrderData = JSON.parse(decodeURIComponent(orderParam));
+        setOrderData(decodedOrderData);
+        
+        // Pre-fill BOM data from order
+        if (decodedOrderData.order_item) {
+          console.log('Setting BOM data from decoded order data:', decodedOrderData);
             // Get fabric/image URL instead of mockup image
             let productImageUrl = null;
             if (decodedOrderData.order_item.fabric_id) {
@@ -313,20 +313,20 @@ export function BomForm() {
               }
             }
             
-            setBom(prev => ({
-              ...prev,
-              order_id: decodedOrderData.order_id,
-              order_item_id: decodedOrderData.order_item_id,
-              product_name: decodedOrderData.order_item.product_description || '',
+          setBom(prev => ({
+            ...prev,
+            order_id: decodedOrderData.order_id,
+            order_item_id: decodedOrderData.order_item_id,
+            product_name: decodedOrderData.order_item.product_description || '',
               product_image_url: productImageUrl,
-              total_order_qty: decodedOrderData.order_item.quantity || 0,
-            }));
-          }
-        } catch (error) {
-          // If parsing fails, treat it as an order ID
-          console.log('Order param is not JSON, treating as order ID:', orderParam);
-          fetchOrderData(orderParam);
+            total_order_qty: decodedOrderData.order_item.quantity || 0,
+          }));
         }
+      } catch (error) {
+        // If parsing fails, treat it as an order ID
+        console.log('Order param is not JSON, treating as order ID:', orderParam);
+        fetchOrderData(orderParam);
+      }
       };
       
       processOrderData();
@@ -1754,17 +1754,17 @@ export function BomForm() {
                       {/* Fabric Image - Only show if image exists */}
                       {item.item_image_url ? (
                         <div className="w-20 h-20 bg-muted rounded overflow-hidden flex items-center justify-center">
-                          <img 
-                            src={item.item_image_url} 
-                            className="w-full h-full object-cover" 
-                            onError={(e) => {
-                              console.log('Image failed to load:', item.item_image_url);
-                              e.currentTarget.style.display = 'none';
+                        <img 
+                          src={item.item_image_url} 
+                          className="w-full h-full object-cover" 
+                          onError={(e) => {
+                            console.log('Image failed to load:', item.item_image_url);
+                            e.currentTarget.style.display = 'none';
                               e.currentTarget.parentElement!.style.display = 'none';
-                            }}
-                            onLoad={() => console.log('Image loaded successfully:', item.item_image_url)}
-                          />
-                        </div>
+                          }}
+                          onLoad={() => console.log('Image loaded successfully:', item.item_image_url)}
+                        />
+                    </div>
                       ) : null}
 
                       {/* Fabric Details */}
@@ -1792,21 +1792,21 @@ export function BomForm() {
                                   {item.fabric_name || fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName || 'N/A'}
                                 </div>
                               )}
-                              <Select
-                                value={fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName || ''}
-                                onValueChange={(value) => handleFabricNameSelection(getItemIndex(item.id), value)}
-                              >
-                                <SelectTrigger className="w-full">
-                                  <SelectValue placeholder="Select Fabric" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {getUniqueFabricNames().map(name => (
-                                    <SelectItem key={name} value={name}>
-                                      {name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
+                            <Select
+                              value={fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName || ''}
+                              onValueChange={(value) => handleFabricNameSelection(getItemIndex(item.id), value)}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Select Fabric" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {getUniqueFabricNames().map(name => (
+                                  <SelectItem key={name} value={name}>
+                                    {name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                             </div>
                           )}
                         </div>
@@ -1961,7 +1961,7 @@ export function BomForm() {
                     return (
                     <div key={item.id || `item-${index}`} className="flex items-center gap-4 p-4 border rounded-lg">
                       {/* Item Image - Only show if image exists */}
-                      {item.item_image_url ? (
+                        {item.item_image_url ? (
                         <div className="w-20 h-20 bg-muted rounded overflow-hidden flex items-center justify-center">
                           <img 
                             src={item.item_image_url} 
@@ -1973,7 +1973,7 @@ export function BomForm() {
                             }}
                             onLoad={() => console.log('Item image loaded successfully:', item.item_image_url)}
                           />
-                        </div>
+                      </div>
                       ) : null}
 
                       {/* Item Details */}

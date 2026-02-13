@@ -5,13 +5,14 @@ This guide explains how to use the bulk upload feature for the new Fabric Master
 
 ## Template Structure
 
-The CSV template includes the following 15 fields:
+The CSV template includes the following 16 fields:
 
 | Field | Required | Description | Example |
 |-------|----------|-------------|---------|
 | `fabric_code` | ✅ Yes | Unique identifier for the fabric | FAB001 |
 | `fabric_description` | ❌ No | Detailed description of the fabric | Premium Cotton Jersey Fabric for T-shirts |
 | `fabric_name` | ✅ Yes | Name of the fabric | Cotton Jersey |
+| `fabric_for_supplier` | ❌ No | Supplier-specific fabric name (shown in purchase orders) | Cotton Jersey PO Name |
 | `type` | ❌ No | Type or category of fabric | Cotton, Polyester, Denim |
 | `color` | ❌ No | Color name | Black, White, Blue |
 | `hex` | ❌ No | Hexadecimal color code | #000000, #FFFFFF |
@@ -28,10 +29,10 @@ The CSV template includes the following 15 fields:
 ## Sample Data
 
 ```csv
-fabric_code,fabric_description,fabric_name,type,color,hex,gsm,uom,rate,hsn_code,gst,image,inventory,supplier1,supplier2
-FAB001,Premium Cotton Jersey Fabric for T-shirts,Cotton Jersey,Cotton,Black,#000000,180,meters,150.00,5208,18.00,,100,ABC Textiles,XYZ Fabrics
-FAB002,Soft Polyester Blend Material,Poly Blend,Polyester,White,#FFFFFF,200,meters,120.00,5407,18.00,,75,DEF Suppliers,GHI Textiles
-FAB003,Heavy Denim Fabric for Jeans,Denim Fabric,Denim,Blue,#0066CC,250,meters,200.00,5209,18.00,,50,JKL Denim Mills,MNO Textiles
+fabric_code,fabric_description,fabric_name,fabric_for_supplier,type,color,hex,gsm,uom,rate,hsn_code,gst,image,inventory,supplier1,supplier2
+FAB001,Premium Cotton Jersey Fabric for T-shirts,Cotton Jersey,,Cotton,Black,#000000,180,meters,150.00,5208,18.00,,100,ABC Textiles,XYZ Fabrics
+FAB002,Soft Polyester Blend Material,Poly Blend,Poly Blend Supplier Name,Polyester,White,#FFFFFF,200,meters,120.00,5407,18.00,,75,DEF Suppliers,GHI Textiles
+FAB003,Heavy Denim Fabric for Jeans,Denim Fabric,,Denim,Blue,#0066CC,250,meters,200.00,5209,18.00,,50,JKL Denim Mills,MNO Textiles
 ```
 
 ## Field Guidelines
@@ -42,6 +43,7 @@ FAB003,Heavy Denim Fabric for Jeans,Denim Fabric,Denim,Blue,#0066CC,250,meters,2
 
 ### Optional Fields
 - **fabric_description**: Detailed description of the fabric properties and use cases
+- **fabric_for_supplier**: Supplier-specific name for the fabric. This will be displayed in purchase orders instead of the fabric name. Leave empty if not needed.
 - **type**: Common fabric types include Cotton, Polyester, Denim, Silk, Wool, etc.
 - **color**: Standard color names (Black, White, Red, Blue, Green, etc.)
 - **hex**: Color code in hexadecimal format (#RRGGBB). Use online color pickers to get accurate codes.

@@ -480,13 +480,14 @@ export function FabricManagerNew() {
 
   const handleDownloadTemplate = () => {
     // Create a comprehensive template with examples
+    // Note: fabric_for_supplier is included in headers and should be in each row (can be empty)
     const templateData = [
       BULK_TEMPLATE_HEADERS.join(','),
-      'FAB001,Premium Cotton Jersey Fabric for T-shirts,Cotton Jersey,Cotton,Black,#000000,180,meters,150.00,5208,18.00,,100,ABC Textiles,XYZ Fabrics',
-      'FAB002,Soft Polyester Blend Material,Poly Blend,Polyester,White,#FFFFFF,200,meters,120.00,5407,18.00,,75,DEF Suppliers,GHI Textiles',
-      'FAB003,Heavy Denim Fabric for Jeans,Denim Fabric,Denim,Blue,#0066CC,250,meters,200.00,5209,18.00,,50,JKL Denim Mills,MNO Textiles',
-      'FAB004,Lightweight Cotton Voile,Cotton Voile,Cotton,Red,#FF0000,120,meters,80.00,5208,18.00,,200,PQR Cotton Mills,STU Fabrics',
-      'FAB005,Stretchable Spandex Material,Spandex Fabric,Spandex,Green,#00FF00,150,meters,180.00,5407,18.00,,30,VWX Stretch Co,YZA Materials'
+      'FAB001,Premium Cotton Jersey Fabric for T-shirts,Cotton Jersey,,Cotton,Black,#000000,180,meters,150.00,5208,18.00,,100,ABC Textiles,XYZ Fabrics',
+      'FAB002,Soft Polyester Blend Material,Poly Blend,Poly Blend Supplier Name,Polyester,White,#FFFFFF,200,meters,120.00,5407,18.00,,75,DEF Suppliers,GHI Textiles',
+      'FAB003,Heavy Denim Fabric for Jeans,Denim Fabric,,Denim,Blue,#0066CC,250,meters,200.00,5209,18.00,,50,JKL Denim Mills,MNO Textiles',
+      'FAB004,Lightweight Cotton Voile,Cotton Voile,,Cotton,Red,#FF0000,120,meters,80.00,5208,18.00,,200,PQR Cotton Mills,STU Fabrics',
+      'FAB005,Stretchable Spandex Material,Spandex Fabric,Spandex Supplier,Spandex,Green,#00FF00,150,meters,180.00,5407,18.00,,30,VWX Stretch Co,YZA Materials'
     ].join('\n');
     
     const blob = new Blob([templateData], { type: 'text/csv' });

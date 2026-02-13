@@ -811,14 +811,14 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
                       <CardContent>
                         <div className="flex items-start space-x-4 mb-6">
                       {fabric.image && (
-                        <div className="w-20 h-20 rounded-lg overflow-hidden border-2 border-gray-200">
+                      <div className="w-20 h-20 rounded-lg overflow-hidden border-2 border-gray-200">
                           <img 
                             src={fabric.image} 
                             alt={fabric.fabric_name}
                             className="w-full h-full object-cover"
                           />
-                        </div>
-                      )}
+                          </div>
+                        )}
                       <div className="flex-1">
                         <CardTitle className="text-sm">{fabric.fabric_name}</CardTitle>
                         <div className="flex items-center space-x-2 text-xs text-gray-500">

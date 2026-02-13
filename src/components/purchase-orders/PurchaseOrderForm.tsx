@@ -2354,12 +2354,12 @@ export function PurchaseOrderForm() {
                     >
                       <div className="flex items-center gap-4">
                         {item.item_image_url ? (
-                          <ProductImage
-                            src={item.item_image_url}
-                            alt={item.item_name}
-                            className="h-16 w-16 rounded object-cover"
+                        <ProductImage
+                          src={item.item_image_url}
+                          alt={item.item_name}
+                          className="h-16 w-16 rounded object-cover"
                             showFallback={false}
-                          />
+                        />
                         ) : null}
                         <div>
                           <div className="text-lg font-semibold">
@@ -2437,12 +2437,12 @@ export function PurchaseOrderForm() {
                     <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
                       {/* Fabric Image - Only show if image exists */}
                       {it.item_image_url && (
-                        <ProductImage 
-                          src={it.item_image_url} 
-                          alt={it.item_name}
-                          className="w-20 h-20 object-cover rounded"
+                      <ProductImage 
+                        src={it.item_image_url} 
+                        alt={it.item_name}
+                        className="w-20 h-20 object-cover rounded"
                           showFallback={false}
-                        />
+                      />
                       )}
 
                       {/* Fabric Details */}
@@ -2563,12 +2563,12 @@ export function PurchaseOrderForm() {
                     <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
                       {/* Item Image - Only show if image exists */}
                       {it.item_image_url ? (
-                        <ProductImage 
-                          src={it.item_image_url} 
-                          alt={it.item_name}
-                          className="w-20 h-20 object-cover rounded"
+                      <ProductImage 
+                        src={it.item_image_url} 
+                        alt={it.item_name}
+                        className="w-20 h-20 object-cover rounded"
                           showFallback={false}
-                        />
+                      />
                       ) : null}
 
                       {/* Item Details */}
