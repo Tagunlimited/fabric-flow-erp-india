@@ -15,6 +15,7 @@ import { Package, Search, Image as ImageIcon, X, ChevronLeft, ChevronRight, Sett
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { BackButton } from '@/components/common/BackButton';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { createInventoryAdjustment, getProductBySKU, getProductStock, getBinsForProduct } from '@/utils/inventoryAdjustmentAPI';
@@ -647,6 +648,9 @@ const ProductInventoryPage: React.FC = () => {
         }
       `}</style>
       <div className="w-full px-6 py-6 space-y-6">
+        <div className="flex items-center">
+          <BackButton to="/inventory" label="Back to Inventory" />
+        </div>
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>

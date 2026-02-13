@@ -1,2 +1,0 @@
-# Remove temporary deployment files
-deploy-reset-password-function.txt

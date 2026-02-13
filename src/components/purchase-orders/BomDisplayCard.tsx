@@ -69,24 +69,22 @@ export function BomDisplayCard({
   return (
     <Card className="w-full max-w-5xl mx-auto">
       <CardContent className="p-6">
-        <div className="grid gap-6 lg:grid-cols-3">
-          {/* Product Image */}
-          <div className="flex flex-col items-center">
-            <div className="w-48 h-60 bg-gray-100 rounded-lg overflow-hidden flex items-center justify-center">
-              {productImageUrl ? (
+        <div className={`grid gap-6 ${productImageUrl ? 'lg:grid-cols-3' : 'lg:grid-cols-1'}`}>
+          {/* Product Image - Only show if image exists */}
+          {productImageUrl && (
+            <div className="flex flex-col items-center">
+              <div className="w-48 h-60 bg-gray-100 rounded-lg overflow-hidden flex items-center justify-center">
                 <img
                   src={productImageUrl}
                   alt={productName}
                   className="w-full h-full object-contain bg-white"
                 />
-              ) : (
-                <span className="text-gray-500 text-sm">No Image</span>
-              )}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Order Summary + BOM */}
-          <div className="flex flex-col gap-6 lg:col-span-2">
+          <div className={`flex flex-col gap-6 ${productImageUrl ? 'lg:col-span-2' : 'lg:col-span-1'}`}>
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div className="space-y-1">
                 <div className="text-sm text-gray-600">ORDER ID: {orderId}</div>
@@ -140,22 +138,20 @@ export function BomDisplayCard({
                           return (
                             <tr key={item.id || index} className="border-b last:border-b-0">
                               <td className="py-3 px-3">
-                                <div className="w-16 h-16 bg-gray-100 rounded flex items-center justify-center overflow-hidden">
-                                  {item.image_url ? (
+                                {item.image_url ? (
+                                  <div className="w-16 h-16 bg-gray-100 rounded flex items-center justify-center overflow-hidden">
                                     <img 
                                       src={item.image_url} 
                                       alt={item.item_name}
                                       className="w-full h-full object-contain"
                                       onError={(e) => {
                                         console.log('BOM Display Card - Image failed to load:', item.image_url);
-                                        e.currentTarget.onerror = null;
-                                        e.currentTarget.src = 'https://placehold.co/64x64?text=IMG';
+                                        e.currentTarget.style.display = 'none';
+                                        e.currentTarget.parentElement!.style.display = 'none';
                                       }}
                                     />
-                                  ) : (
-                                    <span className="text-sm text-gray-400">IMG</span>
-                                  )}
-                                </div>
+                                  </div>
+                                ) : null}
                               </td>
                               <td className="py-3 px-3 text-sm">
                                 <div className="font-medium">{item.item_name}</div>

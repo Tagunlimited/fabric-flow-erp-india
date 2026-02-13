@@ -508,11 +508,71 @@ export function ProductCustomizationModal({
         <div className="space-y-6">
           {/* Available Parts */}
           {parts.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <p>No customization parts available for this product category.</p>
-              <p className="text-sm mt-2">
-                Go to Masters → Product Parts Manager to create parts and link them to this category.
-              </p>
+            <div className="space-y-4">
+              <div className="text-center py-4 text-muted-foreground border-b">
+                <p className="font-medium">No customization parts available for this product category.</p>
+                <p className="text-sm mt-2">
+                  Create a new part below to get started.
+                </p>
+              </div>
+              
+              {/* Create New Part Form - Show directly when no parts exist */}
+              <div className="space-y-3 p-4 border rounded-lg bg-gray-50">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium">Create Your First Customization Part</h4>
+                </div>
+                
+                <div>
+                  <Label htmlFor="new-part-name">Part Name *</Label>
+                  <Input
+                    id="new-part-name"
+                    value={newPartForm.part_name}
+                    onChange={(e) => setNewPartForm(prev => ({ ...prev, part_name: e.target.value }))}
+                    placeholder="e.g., Sleeve Length, Collar Type, etc."
+                  />
+                </div>
+                
+                <div>
+                  <Label htmlFor="new-part-type">Part Type *</Label>
+                  <Select 
+                    value={newPartForm.part_type} 
+                    onValueChange={(value: 'dropdown' | 'number') => 
+                      setNewPartForm(prev => ({ ...prev, part_type: value }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="dropdown">Dropdown (with options)</SelectItem>
+                      <SelectItem value="number">Number Input</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Dropdown: Select from predefined options. Number: Enter a numeric value.
+                  </p>
+                </div>
+                
+                <div>
+                  <Label htmlFor="new-part-description">Description (Optional)</Label>
+                  <Input
+                    id="new-part-description"
+                    value={newPartForm.description}
+                    onChange={(e) => setNewPartForm(prev => ({ ...prev, description: e.target.value }))}
+                    placeholder="Optional description for this part"
+                  />
+                </div>
+                
+                <Button
+                  type="button"
+                  onClick={handleCreatePart}
+                  disabled={!newPartForm.part_name.trim()}
+                  className="w-full"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create Part
+                </Button>
+              </div>
             </div>
           ) : (
             <>

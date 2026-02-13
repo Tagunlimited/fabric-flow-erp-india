@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizesByMasterOrder, sortSizeDistributionsByMasterOrder, getFallbackSizeOrder } from "@/utils/sizeSorting";
+import { BackButton } from '@/components/common/BackButton';
 
 interface TailorListItem {
   id: string;
@@ -729,7 +730,7 @@ export default function PickerPage() {
               // Fetch order items with images
               const { data: orderItems } = await (supabase as any)
                 .from('order_items')
-                .select('order_id, specifications, category_image_url')
+                .select('order_id, specifications, mockup_images')
                 .in('order_id', orderIds);
               
               const images: string[] = [];
@@ -739,21 +740,31 @@ export default function PickerPage() {
                 if (processedOrders.has(item.order_id)) return; // One image per order
                 
                 let imageUrl = null;
-                // Try mockup image from specifications
+                
+                // Priority 1: Check mockup_images column (TEXT[] array)
+                if (item.mockup_images && Array.isArray(item.mockup_images) && item.mockup_images.length > 0) {
+                  const firstMockup = item.mockup_images[0];
+                  if (firstMockup && typeof firstMockup === 'string' && firstMockup.trim()) {
+                    imageUrl = firstMockup.trim();
+                  }
+                }
+                
+                // Priority 2: Try mockup image from specifications
+                if (!imageUrl) {
                 try {
                   const specs = typeof item.specifications === 'string' 
                     ? JSON.parse(item.specifications) 
                     : item.specifications;
                   if (specs?.mockup_images && Array.isArray(specs.mockup_images) && specs.mockup_images.length > 0) {
-                    imageUrl = specs.mockup_images[0];
+                      const firstMockup = specs.mockup_images[0];
+                      if (firstMockup && typeof firstMockup === 'string' && firstMockup.trim()) {
+                        imageUrl = firstMockup.trim();
+                      }
                   }
                 } catch {}
-                
-                // Fallback to category image
-                if (!imageUrl && item.category_image_url) {
-                  imageUrl = item.category_image_url;
                 }
                 
+                // Only add image if it's a mockup (do NOT fall back to category image)
                 if (imageUrl) {
                   images.push(imageUrl);
                   processedOrders.add(item.order_id);
@@ -1051,7 +1062,7 @@ export default function PickerPage() {
       orderNumber: assignment.order_number,
       customerName: assignment.customer_name,
       sizeDistributions: assignment.size_distributions || [],
-      productImage: assignment.mockup_image || assignment.category_image,
+      productImage: assignment.mockup_image || undefined,
     });
     setPickerOpen(true);
   };
@@ -1065,6 +1076,9 @@ export default function PickerPage() {
   return (
     <ErpLayout>
       <div className="w-full px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-4 sm:space-y-6">
+        <div className="flex items-center gap-4">
+          <BackButton to="/production" label="Back to Production" />
+        </div>
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
             Picker
@@ -1265,7 +1279,7 @@ export default function PickerPage() {
                                       <div className="flex-shrink-0">
                                         <Avatar className="w-16 h-16 sm:w-20 sm:h-20 border-2 border-slate-200 shadow-sm">
                                           <AvatarImage 
-                                            src={o.mockup_image || o.category_image || undefined} 
+                                            src={o.mockup_image || undefined} 
                                             alt={o.order_number}
                                             className="object-cover"
                                           />
@@ -1575,7 +1589,7 @@ export default function PickerPage() {
                             <div className="flex-shrink-0">
                               <Avatar className="w-16 h-16 sm:w-20 sm:h-20 border-2 border-slate-200 shadow-sm">
                                 <AvatarImage 
-                                  src={o.mockup_image || o.category_image || undefined} 
+                                  src={o.mockup_image || undefined} 
                                   alt={o.order_number}
                                   className="object-cover"
                                 />

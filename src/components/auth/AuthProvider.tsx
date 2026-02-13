@@ -296,24 +296,59 @@ export function AuthProvider({ children }: AuthProviderProps) {
               profileRef.current = fallbackProfile as any;
               
               // Try to create in DB in background (non-blocking)
+              // Use upsert to handle cases where profile already exists
               if (retryCount === 0) {
                 supabase
                   .from('profiles')
-                  .insert({
-                    id: actualUserId,
+                  .upsert({
                     user_id: actualUserId,
                     email: userData.email || '',
                     full_name: userData.user_metadata?.name || userData.email?.split('@')[0] || 'User',
-                    role: 'user',
-                    status: 'active'
-                  } as any)
+                    role: 'sales manager', // Use valid role enum value
+                    status: 'approved', // Use valid status
+                    phone: '',
+                    department: ''
+                  } as any, {
+                    onConflict: 'user_id',
+                    ignoreDuplicates: false
+                  })
                   .select()
                   .single()
                   .then(({ data: newProfile, error: createError }) => {
                     if (!createError && newProfile) {
-                      console.log('✅ Profile created in DB successfully:', newProfile);
+                      console.log('✅ Profile created/updated in DB successfully:', newProfile);
                       setProfile(newProfile as any);
                       profileRef.current = newProfile as any;
+                    } else if (createError?.code === '23505' || createError?.message?.includes('409')) {
+                      // Profile already exists, try to fetch it by user_id or email
+                      console.log('Profile already exists, fetching...');
+                      // Try by user_id first
+                      supabase
+                        .from('profiles')
+                        .select('*')
+                        .eq('user_id', actualUserId)
+                        .maybeSingle()
+                        .then(({ data: existingProfile, error: fetchError }) => {
+                          if (!fetchError && existingProfile) {
+                            console.log('✅ Fetched existing profile by user_id:', existingProfile);
+                            setProfile(existingProfile as any);
+                            profileRef.current = existingProfile as any;
+                          } else {
+                            // Try by email as fallback
+                            supabase
+                              .from('profiles')
+                              .select('*')
+                              .eq('email', userData.email || '')
+                              .maybeSingle()
+                              .then(({ data: emailProfile, error: emailError }) => {
+                                if (!emailError && emailProfile) {
+                                  console.log('✅ Fetched existing profile by email:', emailProfile);
+                                  setProfile(emailProfile as any);
+                                  profileRef.current = emailProfile as any;
+                                }
+                              });
+                          }
+                        });
                     } else {
                       console.warn('⚠️ Failed to create profile in DB (non-critical):', createError);
                     }

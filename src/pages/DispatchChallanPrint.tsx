@@ -23,6 +23,8 @@ interface OrderItem {
   gsm?: string;
   mockup_images?: string[];
   category_image_url?: string;
+  fabric_id?: string;
+  fabric_name?: string;
 }
 
 export default function DispatchChallanPrint() {
@@ -95,14 +97,37 @@ export default function DispatchChallanPrint() {
       const thisTotal = (itemsData || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
       setThisDispatchTotal(thisTotal);
 
-      // Fetch order items with product details
+      // Fetch order items with product details including fabric_id
       const { data: orderItemsData, error: orderItemsError } = await (supabase as any)
         .from('order_items')
-        .select('id, product_category_id, product_description, quantity, color, gsm, mockup_images, category_image_url')
+        .select('id, product_category_id, product_description, quantity, color, gsm, mockup_images, category_image_url, fabric_id')
         .eq('order_id', dispatchData.order_id);
 
       if (orderItemsError) throw orderItemsError;
-      setOrderItems(orderItemsData || []);
+      
+      // Fetch fabric names for items with fabric_id
+      const fabricIds = Array.from(new Set((orderItemsData || []).map((item: any) => item.fabric_id).filter(Boolean)));
+      let fabricMap: { [key: string]: { fabric_name: string } } = {};
+      if (fabricIds.length > 0) {
+        const { data: fabricsData, error: fabricsError } = await supabase
+          .from('fabric_master')
+          .select('id, fabric_name')
+          .in('id', fabricIds as any);
+        
+        if (!fabricsError && fabricsData) {
+          fabricsData.forEach((fabric: any) => {
+            fabricMap[fabric.id] = { fabric_name: fabric.fabric_name };
+          });
+        }
+      }
+      
+      // Enrich order items with fabric_name
+      const enrichedOrderItems = (orderItemsData || []).map((item: any) => ({
+        ...item,
+        fabric_name: item.fabric_id ? (fabricMap[item.fabric_id]?.fabric_name || null) : null
+      }));
+      
+      setOrderItems(enrichedOrderItems);
 
       // Fetch product categories for names
       const categoryIds = Array.from(new Set((orderItemsData || []).map((item: any) => item.product_category_id).filter(Boolean)));
@@ -312,8 +337,22 @@ export default function DispatchChallanPrint() {
                         <td className="border border-gray-300 px-2 py-1 text-xs align-top">
                           <div className="break-words">
                             <div className="font-medium mb-0.5">{item.product_description}</div>
+                            {item.fabric_name && <div className="text-gray-600 font-medium">Fabric: {item.fabric_name}</div>}
                             {item.color && <div className="text-gray-600">Color: {item.color}</div>}
                             {item.gsm && <div className="text-gray-600">GSM: {item.gsm}</div>}
+                            {/* Show mockup image if available */}
+                            {item.mockup_images && Array.isArray(item.mockup_images) && item.mockup_images.length > 0 && (
+                              <div className="mt-2">
+                                <img
+                                  src={item.mockup_images[0]}
+                                  alt="Product Mockup"
+                                  className="w-20 h-20 object-cover rounded border"
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = 'none';
+                                  }}
+                                />
+                              </div>
+                            )}
                           </div>
                         </td>
                         <td className="border border-gray-300 px-2 py-1 text-xs align-top">

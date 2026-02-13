@@ -33,6 +33,7 @@ import { useToast } from "@/hooks/use-toast";
 import { TailorForm } from "@/components/people/TailorForm";
 import { BatchForm } from "@/components/people/BatchForm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { BackButton } from '@/components/common/BackButton';
 
 interface Tailor {
   id: string;
@@ -465,6 +466,9 @@ const TailorManagementPage = () => {
   return (
     <ErpLayout>
       <div className="space-y-6">
+        <div className="flex items-center">
+          <BackButton to="/people/production-team" label="Back to Production Team" />
+        </div>
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>

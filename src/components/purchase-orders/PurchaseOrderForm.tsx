@@ -203,6 +203,7 @@ export function PurchaseOrderForm() {
         total_quantity: number;
         item_image_url?: string | null;
         fabric_name?: string;
+        fabric_for_supplier?: string | null;
         fabric_color?: string;
         fabric_gsm?: string;
         item_color?: string | null;
@@ -246,6 +247,9 @@ export function PurchaseOrderForm() {
         if (!existing.fabric_color && item.fabric_color) {
           existing.fabric_color = item.fabric_color;
         }
+        if (!existing.fabric_for_supplier && item.fabric_for_supplier) {
+          existing.fabric_for_supplier = item.fabric_for_supplier;
+        }
         if (!existing.item_id && item.item_id) {
           existing.item_id = item.item_id;
         }
@@ -267,6 +271,7 @@ export function PurchaseOrderForm() {
           total_quantity: qty,
           item_image_url: item.item_image_url,
           fabric_name: item.fabric_name,
+          fabric_for_supplier: item.fabric_for_supplier || null,
           fabric_color: item.fabric_color,
           fabric_gsm: item.fabric_gsm,
           item_color: resolvedColor,
@@ -301,6 +306,7 @@ export function PurchaseOrderForm() {
       item_category: pending.category || (isFabric ? 'Fabric' : null),
       item_color: pending.item_color || null,
       fabric_name: isFabric ? pending.fabric_name || pending.item_name : undefined,
+      fabric_for_supplier: isFabric ? (pending as any).fabric_for_supplier || null : undefined,
       fabric_color: isFabric ? pending.fabric_color || undefined : undefined,
       fabric_gsm: isFabric ? pending.fabric_gsm || undefined : undefined,
       bom_item_id: pending.bom_item_id,
@@ -678,6 +684,7 @@ export function PurchaseOrderForm() {
             unit_of_measure: item.unit_of_measure || 'Kgs',
             // Store fabric-specific data with parsed values
             fabric_name: fabricName || 'Unknown Fabric',
+            fabric_for_supplier: fabricOption?.fabric_for_supplier || null,
             fabric_color: fabricColor || 'N/A',
             fabric_gsm: fabricGsm || 'N/A',
             fabricSelections: fabricSelections,
@@ -819,7 +826,8 @@ export function PurchaseOrderForm() {
           ...(item.item_type === 'fabric' && {
             fabric_color: item.fabric_color || fabricOption?.color || 'N/A',
             fabric_gsm: item.fabric_gsm || fabricOption?.gsm || 'N/A',
-            fabric_name: item.fabric_name || fabricOption?.fabric_name || item.item_name
+            fabric_name: item.fabric_name || fabricOption?.fabric_name || item.item_name,
+            fabric_for_supplier: item.fabric_for_supplier || fabricOption?.fabric_for_supplier || null
           })
         };
       });
@@ -936,6 +944,7 @@ export function PurchaseOrderForm() {
         item_category: item.item_category,
         fabric_color: item.fabric_color,
         fabric_gsm: item.fabric_gsm,
+        fabric_for_supplier: item.fabric_for_supplier || null,
         item_color: item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null),
         quantity: item.quantity,
         unit_of_measure: item.unit_of_measure
@@ -945,9 +954,14 @@ export function PurchaseOrderForm() {
         // Debug logging for fabric items
         console.log('PDF - Aggregated item data:', item);
         
+        // For fabric items, use fabric_for_supplier if available, otherwise use item_name
+        const displayName = item.item_type === 'fabric' && item.fabric_for_supplier 
+          ? item.fabric_for_supplier 
+          : (item.item_name || 'N/A');
+        
         return `
         <tr>
-          <td>${item.item_name || 'N/A'}</td>
+          <td>${displayName}</td>
           <td>${item.remarks || '-'}</td>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A')}</td>
@@ -1140,6 +1154,7 @@ export function PurchaseOrderForm() {
         item_category: item.item_category,
         fabric_color: item.fabric_color,
         fabric_gsm: item.fabric_gsm,
+        fabric_for_supplier: item.fabric_for_supplier || null,
         item_color: item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null),
         quantity: item.quantity,
         unit_of_measure: item.unit_of_measure
@@ -1149,9 +1164,14 @@ export function PurchaseOrderForm() {
         // Debug logging for fabric items
         console.log('Print - Aggregated item data:', item);
         
+        // For fabric items, use fabric_for_supplier if available, otherwise use item_name
+        const displayName = item.item_type === 'fabric' && item.fabric_for_supplier 
+          ? item.fabric_for_supplier 
+          : (item.item_name || 'N/A');
+        
         return `
         <tr>
-          <td>${item.item_name || 'N/A'}</td>
+          <td>${displayName}</td>
           <td>${item.remarks || '-'}</td>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A')}</td>
@@ -1510,7 +1530,7 @@ export function PurchaseOrderForm() {
       // Fetch fabrics with comprehensive error handling
       const { data: fabrics, error: fabricError } = await supabase
         .from('fabric_master')
-        .select('id, fabric_name, color, gsm, image, fabric_description')
+        .select('id, fabric_name, color, gsm, image, fabric_description, fabric_for_supplier')
         .order('fabric_name');
       
       if (fabricError) {
@@ -1523,6 +1543,7 @@ export function PurchaseOrderForm() {
         label: `${f.fabric_name || 'Unknown'} - ${f.color || 'N/A'} - ${f.gsm || 'N/A'} GSM`,
         image_url: f.image || null,
         fabric_name: f.fabric_name || 'Unknown',
+        fabric_for_supplier: f.fabric_for_supplier || null,
         color: f.color || 'N/A',
         gsm: f.gsm || 'N/A',
         description: f.fabric_description || '',
@@ -1661,14 +1682,98 @@ export function PurchaseOrderForm() {
         console.warn('Unhandled error while loading BOM tracking for PO', trackingException);
       }
 
+      // Fetch fabric_for_supplier for fabric items
+      const fabricItems = (lineItems || []).filter(item => item.item_type === 'fabric');
+      
+      let fabricForSupplierMap = new Map<string, string | null>();
+      if (fabricItems.length > 0) {
+        try {
+          // Try to fetch by item_id first (if it exists and is a fabric_id)
+          const fabricIds = fabricItems
+            .map(item => item.item_id)
+            .filter(Boolean);
+          
+          if (fabricIds.length > 0) {
+            const { data: fabricsDataById, error: fabricsErrorById } = await supabase
+              .from('fabric_master')
+              .select('id, fabric_for_supplier')
+              .in('id', fabricIds);
+            
+            if (!fabricsErrorById && fabricsDataById) {
+              fabricsDataById.forEach((fabric: any) => {
+                fabricForSupplierMap.set(fabric.id, fabric.fabric_for_supplier || null);
+              });
+            }
+          }
+          
+          // Also fetch by fabric_name, color, and gsm for items without item_id
+          const fabricsToFetch = fabricItems.filter(item => {
+            const hasId = item.item_id && fabricForSupplierMap.has(item.item_id);
+            return !hasId && item.fabric_name;
+          });
+          
+          if (fabricsToFetch.length > 0) {
+            // Group by fabric_name, color, gsm to avoid duplicate queries
+            const uniqueFabrics = new Map<string, { name: string; color: string | null; gsm: string | null }>();
+            fabricsToFetch.forEach(item => {
+              const key = `${item.fabric_name || ''}|${item.fabric_color || ''}|${item.fabric_gsm || ''}`;
+              if (!uniqueFabrics.has(key)) {
+                uniqueFabrics.set(key, {
+                  name: item.fabric_name || '',
+                  color: item.fabric_color || null,
+                  gsm: item.fabric_gsm || null
+                });
+              }
+            });
+            
+            // Fetch each unique fabric combination
+            for (const [key, fabric] of uniqueFabrics.entries()) {
+              let query = supabase
+                .from('fabric_master')
+                .select('fabric_for_supplier')
+                .eq('fabric_name', fabric.name);
+              
+              if (fabric.color) {
+                query = query.eq('color', fabric.color);
+              }
+              if (fabric.gsm) {
+                query = query.eq('gsm', fabric.gsm);
+              }
+              
+              const { data: fabricData, error: fabricError } = await query.limit(1).maybeSingle();
+              
+              if (!fabricError && fabricData) {
+                // Store in map using the key so we can look it up later
+                fabricForSupplierMap.set(key, (fabricData as any).fabric_for_supplier || null);
+              }
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to fetch fabric_for_supplier:', error);
+        }
+      }
+
       const processedItems = (lineItems || []).map(item => {
         const tracking = trackingMap.get(item.id);
         const bomRecord = tracking?.bom_record_items;
+        
+        // Get fabric_for_supplier - try by item_id first, then by fabric details
+        let fabricForSupplier = null;
+        if (item.item_type === 'fabric') {
+          if (item.item_id && fabricForSupplierMap.has(item.item_id)) {
+            fabricForSupplier = fabricForSupplierMap.get(item.item_id);
+          } else if (item.fabric_name) {
+            const key = `${item.fabric_name || ''}|${item.fabric_color || ''}|${item.fabric_gsm || ''}`;
+            fabricForSupplier = fabricForSupplierMap.get(key) || null;
+          }
+        }
+        
         return {
           ...item,
           item_type: item.item_type || 'item', // Ensure item_type is set
           // Map fabric-specific fields from database or BOM linkage
           fabric_name: item.fabric_name || bomRecord?.fabric_name || null,
+          fabric_for_supplier: fabricForSupplier || null,
           fabric_color: item.fabric_color || bomRecord?.fabric_color || null,
           fabric_gsm: item.fabric_gsm || bomRecord?.fabric_gsm || null,
           item_color: item.item_color || null,
@@ -2248,14 +2353,20 @@ export function PurchaseOrderForm() {
                       className="flex flex-col gap-4 rounded-lg border p-4 md:flex-row md:items-center md:justify-between"
                     >
                       <div className="flex items-center gap-4">
-                        <ProductImage
-                          src={item.item_image_url}
-                          alt={item.item_name}
-                          className="h-16 w-16 rounded object-cover"
-                          fallbackText="IMG"
-                        />
+                        {item.item_image_url ? (
+                          <ProductImage
+                            src={item.item_image_url}
+                            alt={item.item_name}
+                            className="h-16 w-16 rounded object-cover"
+                            showFallback={false}
+                          />
+                        ) : null}
                         <div>
-                          <div className="text-lg font-semibold">{item.item_name}</div>
+                          <div className="text-lg font-semibold">
+                            {item.item_type?.toLowerCase() === 'fabric' && item.fabric_for_supplier
+                              ? item.fabric_for_supplier
+                              : item.item_name}
+                          </div>
                           <div className="text-xs uppercase tracking-wide text-muted-foreground">
                             {item.item_type}
                           </div>
@@ -2324,13 +2435,15 @@ export function PurchaseOrderForm() {
                   if (it.item_type !== 'fabric' || it.bom_item_id) return null;
                   return (
                     <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
-                      {/* Fabric Image */}
-                      <ProductImage 
-                        src={it.item_image_url} 
-                        alt={it.item_name}
-                        className="w-20 h-20 object-cover rounded"
-                        fallbackText="FAB"
-                      />
+                      {/* Fabric Image - Only show if image exists */}
+                      {it.item_image_url && (
+                        <ProductImage 
+                          src={it.item_image_url} 
+                          alt={it.item_name}
+                          className="w-20 h-20 object-cover rounded"
+                          showFallback={false}
+                        />
+                      )}
 
                       {/* Fabric Details */}
                       <div className="flex-1 grid grid-cols-12 gap-4 items-center">
@@ -2338,7 +2451,7 @@ export function PurchaseOrderForm() {
                         <div className="col-span-2">
                           <Label className="text-sm font-medium">Fabric</Label>
                           <div className="text-sm font-medium">
-                            {it.fabric_name || it.item_name || 'N/A'}
+                            {it.fabric_for_supplier || it.fabric_name || it.item_name || 'N/A'}
                           </div>
                         </div>
 
@@ -2448,13 +2561,15 @@ export function PurchaseOrderForm() {
                   if (it.item_type !== 'item' || it.bom_item_id) return null;
                   return (
                     <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
-                      {/* Item Image */}
-                      <ProductImage 
-                        src={it.item_image_url} 
-                        alt={it.item_name}
-                        className="w-20 h-20 object-cover rounded"
-                        fallbackText="ITEM"
-                      />
+                      {/* Item Image - Only show if image exists */}
+                      {it.item_image_url ? (
+                        <ProductImage 
+                          src={it.item_image_url} 
+                          alt={it.item_name}
+                          className="w-20 h-20 object-cover rounded"
+                          showFallback={false}
+                        />
+                      ) : null}
 
                       {/* Item Details */}
                       <div className="flex-1 grid grid-cols-8 gap-4 items-center">

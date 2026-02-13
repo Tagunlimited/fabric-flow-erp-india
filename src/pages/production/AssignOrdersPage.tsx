@@ -28,6 +28,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { formatDueDateIndian } from '@/lib/utils';
 import { ReassignCuttingMasterDialog } from '@/components/production/ReassignCuttingMasterDialog';
+import { BackButton } from '@/components/common/BackButton';
 
 interface OrderAssignment {
   id: string;
@@ -212,6 +213,45 @@ const AssignOrdersPage = () => {
   useEffect(() => {
     const loadProductionTeam = async () => {
       try {
+        // First, fetch all employees to see what designations exist
+        const { data: allEmployees } = await supabase
+          .from('employees' as any)
+          .select('id, full_name, designation, avatar_url')
+          .not('designation', 'is', null);
+        
+        if (allEmployees && allEmployees.length > 0) {
+          // Get unique designations to see what's actually in the database
+          const uniqueDesignations = [...new Set(allEmployees.map((e: any) => e.designation))];
+          console.log('All available designations in employees table:', uniqueDesignations);
+          
+          // Find cutting-related designations (case-insensitive)
+          const cuttingDesignations = uniqueDesignations.filter((d: string) => 
+            d && typeof d === 'string' && d.toLowerCase().includes('cutting')
+          );
+          console.log('Cutting-related designations found:', cuttingDesignations);
+          
+          // Filter employees by cutting-related designations (case-insensitive)
+          const cuttingMasters = allEmployees.filter((e: any) => {
+            if (!e.designation) return false;
+            const designation = e.designation.toLowerCase();
+            return designation.includes('cutting master') || designation.includes('cutting manager');
+          });
+          
+          console.log(`Found ${cuttingMasters.length} cutting masters with designations:`, 
+            cuttingMasters.map((e: any) => `${e.full_name} (${e.designation})`));
+          
+          const list = cuttingMasters.map((row: any) => ({
+            id: row.id,
+            name: row.full_name,
+            designation: row.designation,
+            avatar_url: row.avatar_url,
+          }));
+          
+          setWorkers(list);
+          return;
+        }
+        
+        // Fallback: Try exact match if no employees found
         const { data, error } = await supabase
           .from('employees' as any)
           .select('id, full_name, designation, avatar_url')
@@ -1007,6 +1047,9 @@ const AssignOrdersPage = () => {
   return (
     <ErpLayout>
       <div className="space-y-4">
+        <div className="flex items-center">
+          <BackButton to="/production" label="Back to Production" />
+        </div>
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
@@ -1645,7 +1688,10 @@ const AssignOrdersPage = () => {
             <div className="space-y-4">
               <div className="max-h-60 overflow-y-auto">
                 {workers
-                  .filter(w => ['Cutting Manager', 'Cutting Master'].includes((w as any).designation))
+                  .filter(w => {
+                    const designation = (w as any).designation?.toLowerCase() || '';
+                    return designation.includes('cutting master') || designation.includes('cutting manager');
+                  })
                   .map(worker => (
                     <div key={worker.id} className="flex items-center space-x-3 p-3 border rounded-lg">
                       <Avatar className="w-12 h-12">

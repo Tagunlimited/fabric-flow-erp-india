@@ -810,19 +810,15 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
                     <Card key={fabric.fabric_id} className="border-2 border-gray-200 rounded-lg p-6">
                       <CardContent>
                         <div className="flex items-start space-x-4 mb-6">
-                      <div className="w-20 h-20 rounded-lg overflow-hidden border-2 border-gray-200">
-                        {fabric.image ? (
+                      {fabric.image && (
+                        <div className="w-20 h-20 rounded-lg overflow-hidden border-2 border-gray-200">
                           <img 
                             src={fabric.image} 
                             alt={fabric.fabric_name}
                             className="w-full h-full object-cover"
                           />
-                        ) : (
-                          <div className="w-full h-full bg-gray-100 flex items-center justify-center">
-                            <Package className="w-8 h-8 text-gray-400" />
-                          </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
                       <div className="flex-1">
                         <CardTitle className="text-sm">{fabric.fabric_name}</CardTitle>
                         <div className="flex items-center space-x-2 text-xs text-gray-500">

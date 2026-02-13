@@ -12,6 +12,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
+import { BackButton } from '@/components/common/BackButton';
 
 interface OrderCard {
   order_id: string;
@@ -594,8 +595,22 @@ export default function DispatchQCPage() {
       // Refresh orders list to update dispatched quantities
       await loadApprovedOrders();
       
-      // Open challan for printing
-      try { window.open(`/dispatch/challan/${newId}`, '_blank'); } catch {}
+      // Open challan for printing - use navigate with a small delay to ensure data is saved
+      setTimeout(() => {
+        try {
+          const challanUrl = `/dispatch/challan/${newId}`;
+          // Try window.open first, fallback to navigate if blocked
+          const newWindow = window.open(challanUrl, '_blank');
+          if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+            // Popup blocked, use navigate instead
+            window.location.href = challanUrl;
+          }
+        } catch (error) {
+          console.error('Error opening challan:', error);
+          // Fallback: navigate to the challan page
+          window.location.href = `/dispatch/challan/${newId}`;
+        }
+      }, 100);
       // keep dialog open; user can print challan and then dispatch
     } catch (error: any) {
       console.error('Error generating challan:', error);
@@ -846,6 +861,9 @@ export default function DispatchQCPage() {
   return (
     <ErpLayout>
       <div className="space-y-6">
+        <div className="flex items-center">
+          <BackButton to="/quality" label="Back to Quality" />
+        </div>
         <div>
           <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">Dispatch</h1>
           <p className="text-muted-foreground mt-1">Orders approved by QC, ready for dispatch</p>
@@ -1086,7 +1104,20 @@ export default function DispatchQCPage() {
                 <Button onClick={handleGenerateChallan} disabled={savingDispatch}>Generate Challan</Button>
               ) : (
                 <>
-                  <Button variant="outline" onClick={() => { if (dispatchOrderId) window.open(`/dispatch/challan/${dispatchOrderId}`, '_blank'); }}>View/Print Challan</Button>
+                  <Button variant="outline" onClick={() => { 
+                    if (dispatchOrderId) {
+                      try {
+                        const challanUrl = `/dispatch/challan/${dispatchOrderId}`;
+                        const newWindow = window.open(challanUrl, '_blank');
+                        if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+                          window.location.href = challanUrl;
+                        }
+                      } catch (error) {
+                        console.error('Error opening challan:', error);
+                        window.location.href = `/dispatch/challan/${dispatchOrderId}`;
+                      }
+                    }
+                  }}>View/Print Challan</Button>
                   <Button onClick={handleMarkDispatch} disabled={savingDispatch}>Mark Dispatched</Button>
                 </>
               )}
@@ -1182,7 +1213,16 @@ export default function DispatchQCPage() {
                       // Open challan using dispatch order ID
                       const dispatchId = selectedOrder.id || selectedOrder.dispatch_order_id;
                       if (dispatchId) {
-                        window.open(`/dispatch/challan/${dispatchId}`, '_blank');
+                        try {
+                          const challanUrl = `/dispatch/challan/${dispatchId}`;
+                          const newWindow = window.open(challanUrl, '_blank');
+                          if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+                            window.location.href = challanUrl;
+                          }
+                        } catch (error) {
+                          console.error('Error opening challan:', error);
+                          window.location.href = `/dispatch/challan/${dispatchId}`;
+                        }
                       } else if (selectedOrder.order_id) {
                         // If no dispatch ID, try to find the latest dispatch order
                         try {
@@ -1195,7 +1235,16 @@ export default function DispatchQCPage() {
                             .maybeSingle();
                           
                           if (dispatchOrder?.id) {
-                            window.open(`/dispatch/challan/${dispatchOrder.id}`, '_blank');
+                            try {
+                              const challanUrl = `/dispatch/challan/${dispatchOrder.id}`;
+                              const newWindow = window.open(challanUrl, '_blank');
+                              if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+                                window.location.href = challanUrl;
+                              }
+                            } catch (error) {
+                              console.error('Error opening challan:', error);
+                              window.location.href = `/dispatch/challan/${dispatchOrder.id}`;
+                            }
                           } else {
                             toast.error('No delivery challan found for this order');
                           }

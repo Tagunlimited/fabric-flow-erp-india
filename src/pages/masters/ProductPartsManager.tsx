@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Plus, Edit, Trash2, Settings, Save, X, Upload, Image as ImageIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
+import { BackButton } from '@/components/common/BackButton';
 
 interface ProductPart {
   id: string;
@@ -535,6 +536,9 @@ export default function ProductPartsManager() {
   return (
     <ErpLayout fullPage>
       <div className="space-y-6">
+        <div className="flex items-center">
+          <BackButton to="/masters" label="Back to Masters" />
+        </div>
         <div className="flex justify-between items-center">
           <h1 className="text-3xl font-bold">Product Parts Manager</h1>
           <Button onClick={() => setShowPartDialog(true)}>

@@ -1,0 +1,15 @@
+batch_assignments
+calendar_events
+customer_activity_log
+customer_portal_settings
+customer_users
+order_assignments
+page_items
+part_addons
+product_category_parts
+product_parts
+product_master
+purchase_order_attachments
+purchase_order_deliveries
+qc_reviews
+user_page_permissions

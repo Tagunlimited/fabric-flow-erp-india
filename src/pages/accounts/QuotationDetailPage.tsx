@@ -449,10 +449,10 @@ export default function QuotationDetailPage() {
       const pdfHeight = 297;
       
       // Reduced PDF margins for better fit
-      const marginLeft = 2;
-      const marginRight = 2;
-      const marginTop = 2;
-      const marginBottom = 2;
+      const marginLeft = 1;
+      const marginRight = 1;
+      const marginTop = 1;
+      const marginBottom = 1;
       
       // Calculate available content area
       const contentWidth = pdfWidth - marginLeft - marginRight; // 200mm
@@ -970,7 +970,7 @@ export default function QuotationDetailPage() {
               /* Match PDF export: 3mm margins on all sides */
               @page { 
                 size: A4 portrait; 
-                margin: 3mm 3mm 3mm 3mm; 
+                margin: 1mm 1mm 1mm 1mm; 
               }
               
               @media print {
@@ -987,7 +987,7 @@ export default function QuotationDetailPage() {
                   max-width: 100% !important;
                   height: auto !important;
                   /* Match PDF export: 3mm padding (same as PDF margins) */
-                  padding: 3mm !important; 
+                  padding: 2mm !important; 
                   margin: 0 !important;
                   /* Reduced font size for A4 fit */
                   font-size: 12px !important;
@@ -1016,71 +1016,87 @@ export default function QuotationDetailPage() {
                   top: 0 !important;
                 }
                 
-                /* Reduced spacing for A4 fit */
-                #quotation-print .mb-6 { margin-bottom: 12px !important; }
-                #quotation-print .mb-4 { margin-bottom: 10px !important; }
-                #quotation-print .mb-3 { margin-bottom: 8px !important; }
-                #quotation-print .mb-2 { margin-bottom: 4px !important; }
-                #quotation-print .mt-6 { margin-top: 12px !important; }
+                /* Reduced spacing for A4 fit - very compact */
+                #quotation-print .mb-6 { margin-bottom: 6px !important; }
+                #quotation-print .mb-4 { margin-bottom: 5px !important; }
+                #quotation-print .mb-3 { margin-bottom: 4px !important; }
+                #quotation-print .mb-2 { margin-bottom: 2px !important; }
+                #quotation-print .mt-6 { margin-top: 6px !important; }
+                #quotation-print .mt-4 { margin-top: 4px !important; }
+                #quotation-print .mt-3 { margin-top: 3px !important; }
+                #quotation-print .pt-4 { padding-top: 4px !important; }
+                #quotation-print .pt-3 { padding-top: 3px !important; }
+                #quotation-print .pb-4 { padding-bottom: 4px !important; }
+                #quotation-print .p-4 { padding: 8px !important; }
+                #quotation-print .p-2 { padding: 4px !important; }
+                #quotation-print .space-y-2 > * + * { margin-top: 2px !important; }
                 #quotation-print .mt-4 { margin-top: 10px !important; }
                 #quotation-print .mt-3 { margin-top: 8px !important; }
                 #quotation-print .mt-2 { margin-top: 4px !important; }
-                #quotation-print .pt-4 { padding-top: 10px !important; }
-                #quotation-print .pt-3 { padding-top: 8px !important; }
-                #quotation-print .pt-2 { padding-top: 4px !important; }
-                #quotation-print .pb-4 { padding-bottom: 10px !important; }
-                #quotation-print .pb-3 { padding-bottom: 8px !important; }
-                #quotation-print .pb-2 { padding-bottom: 4px !important; }
-                #quotation-print .p-4 { padding: 10px !important; }
-                #quotation-print .p-6 { padding: 12px !important; }
-                #quotation-print .p-3 { padding: 8px !important; }
-                #quotation-print .p-2 { padding: 6px !important; }
+                #quotation-print .pt-4 { padding-top: 4px !important; }
+                #quotation-print .pt-3 { padding-top: 3px !important; }
+                #quotation-print .pt-2 { padding-top: 2px !important; }
+                #quotation-print .pb-4 { padding-bottom: 4px !important; }
+                #quotation-print .pb-3 { padding-bottom: 3px !important; }
+                #quotation-print .pb-2 { padding-bottom: 2px !important; }
+                #quotation-print .p-4 { padding: 6px !important; }
+                #quotation-print .p-6 { padding: 8px !important; }
+                #quotation-print .p-3 { padding: 4px !important; }
+                #quotation-print .p-2 { padding: 3px !important; }
+                #quotation-print .p-1 { padding: 2px !important; }
                 
-                /* Reduced table styling for A4 fit */
+                /* Reduced table styling for A4 fit - very compact */
                 #quotation-print table { 
-                  font-size: 12px !important;
+                  font-size: 9px !important;
                   border-collapse: collapse !important;
                   width: 100% !important;
-                  margin: 8px 0 !important;
+                  margin: 3px 0 !important;
                 }
                 #quotation-print table th, 
                 #quotation-print table td { 
-                  padding: 6px 10px !important; 
+                  padding: 2px 4px !important; 
                   border: 1px solid #000 !important;
-                  font-size: 12px !important;
-                  line-height: 1.3 !important; 
+                  font-size: 9px !important;
+                  line-height: 1.15 !important; 
                   vertical-align: top !important;
                 }
                 #quotation-print table td {
-                  min-height: 35px !important;
+                  min-height: auto !important;
                 }
+                #quotation-print table .w-16 { width: 25px !important; }
+                #quotation-print table .h-16 { height: 25px !important; }
                 
-                /* Reduced text sizes for A4 fit */
-                #quotation-print h1 { font-size: 20px !important; margin: 6px 0 !important; }
-                #quotation-print h2 { font-size: 24px !important; margin: 6px 0 !important; }
-                #quotation-print h3 { font-size: 16px !important; margin: 6px 0 !important; }
-                #quotation-print .text-2xl { font-size: 20px !important; }
-                #quotation-print .text-3xl { font-size: 24px !important; }
-                #quotation-print .text-lg { font-size: 16px !important; }
-                #quotation-print .text-base { font-size: 14px !important; }
-                #quotation-print .text-sm { font-size: 12px !important; }
-                #quotation-print .text-xs { font-size: 10px !important; }
+                /* Reduced text sizes for A4 fit - very compact */
+                #quotation-print h1 { font-size: 14px !important; margin: 2px 0 !important; }
+                #quotation-print h2 { font-size: 18px !important; margin: 2px 0 !important; }
+                #quotation-print h3 { font-size: 12px !important; margin: 2px 0 !important; }
+                #quotation-print .text-2xl { font-size: 14px !important; }
+                #quotation-print .text-3xl { font-size: 18px !important; }
+                #quotation-print .text-lg { font-size: 12px !important; }
+                #quotation-print .text-base { font-size: 11px !important; }
+                #quotation-print .text-sm { font-size: 10px !important; }
+                #quotation-print .text-xs { font-size: 8px !important; }
                 
-                /* Reduced image sizes for A4 fit */
+                /* Logo sizes for A4 fit - compact logo */
                 #quotation-print img { 
-                  max-width: 90px !important; 
-                  max-height: 90px !important; 
+                  max-width: 100px !important; 
+                  max-height: 100px !important; 
                 }
-                #quotation-print .w-28 { width: 90px !important; }
-                #quotation-print .h-28 { height: 90px !important; }
+                #quotation-print .w-40 { width: 100px !important; }
+                #quotation-print .h-40 { height: 100px !important; }
+                #quotation-print .w-56 { width: 100px !important; }
+                #quotation-print .h-56 { height: 100px !important; }
+                #quotation-print .w-28 { width: 140px !important; }
+                #quotation-print .h-28 { height: 140px !important; }
                 #quotation-print .w-16 { width: 50px !important; }
                 #quotation-print .h-16 { height: 50px !important; }
                 #quotation-print .w-44 { width: 140px !important; }
                 #quotation-print .h-36 { height: 115px !important; }
                 
                 /* Reduced borders and spacing for A4 fit */
-                #quotation-print .border-b-2 { border-bottom-width: 2px !important; padding-bottom: 8px !important; }
-                #quotation-print .border-t-2 { border-top-width: 2px !important; padding-top: 8px !important; }
+                #quotation-print .border-b-2 { border-bottom-width: 1px !important; padding-bottom: 3px !important; }
+                #quotation-print .border-t-2 { border-top-width: 1px !important; padding-top: 3px !important; }
+                #quotation-print .border-t { border-top-width: 1px !important; padding-top: 2px !important; }
                 #quotation-print .space-x-4 > * + * { margin-left: 10px !important; }
                 #quotation-print .space-y-2 > * + * { margin-top: 4px !important; }
                 #quotation-print .space-y-0\.5 > * + * { margin-top: 2px !important; }
@@ -1113,7 +1129,7 @@ export default function QuotationDetailPage() {
                       <img 
                         src={(company as any).logo_url} 
                         alt="Company Logo" 
-                        className="w-28 h-28 object-contain"
+                        className="w-56 h-56 object-contain"
                       />
                     )}
                     <div>
@@ -1255,7 +1271,7 @@ export default function QuotationDetailPage() {
                             })
                             .sort((a, b) => a.price - b.price);
                           
-                          // Parse specifications for readymade orders
+                          // Parse specifications for all order types
                           let specs: any = {};
                           try {
                             specs = typeof item.specifications === 'string' 
@@ -1266,6 +1282,17 @@ export default function QuotationDetailPage() {
                           }
                           
                           const isReadymade = order?.order_type === 'readymade';
+                          
+                          // Extract branding items from specifications (works for all order types)
+                          // Check multiple sources: specifications.branding_items, item.branding_items, or item.specifications.branding_items
+                          let brandingItems: any[] = [];
+                          if (specs.branding_items && Array.isArray(specs.branding_items) && specs.branding_items.length > 0) {
+                            brandingItems = specs.branding_items;
+                          } else if ((item as any).branding_items && Array.isArray((item as any).branding_items) && (item as any).branding_items.length > 0) {
+                            brandingItems = (item as any).branding_items;
+                          } else if (item.specifications && typeof item.specifications === 'object' && (item.specifications as any).branding_items && Array.isArray((item.specifications as any).branding_items) && (item.specifications as any).branding_items.length > 0) {
+                            brandingItems = (item.specifications as any).branding_items;
+                          }
                           
                           return (
                             <tr key={item.id}>
@@ -1297,13 +1324,6 @@ export default function QuotationDetailPage() {
                                               .join(', ')}
                                           </div>
                                         )}
-                                        {specs.branding_items && Array.isArray(specs.branding_items) && specs.branding_items.length > 0 && (
-                                          <div className="text-sm text-gray-600 mt-1">
-                                            Branding: {specs.branding_items.map((b: any, i: number) => 
-                                              `${b.branding_type}${b.placement ? ` (${b.placement})` : ''}`
-                                            ).join(', ')}
-                                          </div>
-                                        )}
                                       </>
                                     ) : (
                                       <>
@@ -1320,6 +1340,30 @@ export default function QuotationDetailPage() {
                                           </div>
                                         )}
                                       </>
+                                    )}
+                                    
+                                    {/* Branding Details - Show for all order types */}
+                                    {brandingItems.length > 0 && (
+                                      <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded">
+                                        <div className="text-sm font-semibold text-blue-900 mb-1">Branding Details:</div>
+                                        <div className="space-y-1">
+                                          {brandingItems.map((b: any, i: number) => (
+                                            <div key={i} className="text-xs text-blue-800 bg-white p-2 rounded border border-blue-100">
+                                              <div className="grid grid-cols-3 gap-2">
+                                                <div>
+                                                  <span className="font-medium">Type:</span> {b.branding_type || 'N/A'}
+                                                </div>
+                                                <div>
+                                                  <span className="font-medium">Placement:</span> {b.placement || 'N/A'}
+                                                </div>
+                                                <div>
+                                                  <span className="font-medium">Size:</span> {b.measurement || 'N/A'}
+                                                </div>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
                                     )}
                                   </div>
                                 </div>
@@ -1480,7 +1524,7 @@ export default function QuotationDetailPage() {
               ref={printRef}
               className="bg-white print-only"
               style={{
-                padding: '3mm',
+                padding: '2mm',
                 width: '210mm',
                 maxWidth: '210mm',
                 margin: '0',
@@ -1492,13 +1536,13 @@ export default function QuotationDetailPage() {
             >
               <div style={{ maxWidth: '100%' }}>
               {/* Company Header with Logo */}
-              <div className="flex justify-between items-start border-b-2 border-gray-800 pb-4 mb-6">
+              <div className="flex justify-between items-start border-b-2 border-gray-800 pb-2 mb-3">
                 <div className="flex items-center space-x-4">
                     {company?.logo_url && (
                     <img 
                         src={company.logo_url} 
                       alt="Company Logo" 
-                        className="w-28 h-28 object-contain"
+                        className="w-56 h-56 object-contain"
                     />
                   )}
                   <div>
@@ -1525,7 +1569,7 @@ export default function QuotationDetailPage() {
                   {/* Customer Information */}
                 <div>
                     <h3 className="text-lg font-semibold text-gray-800 mb-2">Bill To:</h3>
-                    <div className="bg-gray-50 p-4 rounded">
+                    <div className="bg-gray-50 p-2 rounded">
                       <p className="font-semibold text-gray-800">{customer?.company_name || 'Client Name'}</p>
                       <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
                       <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
@@ -1640,7 +1684,7 @@ export default function QuotationDetailPage() {
                           })
                           .sort((a, b) => a.price - b.price);
                         
-                        // Parse specifications for readymade orders
+                        // Parse specifications for all order types
                           let specs: any = {};
                           try {
                             specs = typeof item.specifications === 'string' 
@@ -1651,6 +1695,17 @@ export default function QuotationDetailPage() {
                           }
                         
                         const isReadymade = order?.order_type === 'readymade';
+                        
+                        // Extract branding items from specifications (works for all order types)
+                        // Check multiple sources: specifications.branding_items, item.branding_items, or item.specifications.branding_items
+                        let brandingItems: any[] = [];
+                        if (specs.branding_items && Array.isArray(specs.branding_items) && specs.branding_items.length > 0) {
+                          brandingItems = specs.branding_items;
+                        } else if ((item as any).branding_items && Array.isArray((item as any).branding_items) && (item as any).branding_items.length > 0) {
+                          brandingItems = (item as any).branding_items;
+                        } else if (item.specifications && typeof item.specifications === 'object' && (item.specifications as any).branding_items && Array.isArray((item.specifications as any).branding_items) && (item.specifications as any).branding_items.length > 0) {
+                          brandingItems = (item.specifications as any).branding_items;
+                        }
                         
                         return (
                           <tr key={item.id}>
@@ -1682,13 +1737,6 @@ export default function QuotationDetailPage() {
                                       .join(', ')}
                                   </div>
                                 )}
-                                {specs.branding_items && Array.isArray(specs.branding_items) && specs.branding_items.length > 0 && (
-                                          <div className="text-sm text-gray-600 mt-1">
-                                            Branding: {specs.branding_items.map((b: any, i: number) => 
-                                      `${b.branding_type}${b.placement ? ` (${b.placement})` : ''}`
-                                    ).join(', ')}
-                                  </div>
-                                )}
                               </>
                             ) : (
                               <>
@@ -1705,6 +1753,30 @@ export default function QuotationDetailPage() {
                                   </div>
                                 )}
                               </>
+                            )}
+                            
+                            {/* Branding Details - Show for all order types */}
+                            {brandingItems.length > 0 && (
+                              <div className="mt-1 p-1 bg-blue-50 border border-blue-200 rounded">
+                                <div className="text-xs font-semibold text-blue-900 mb-0.5">Branding:</div>
+                                <div className="space-y-0.5">
+                                  {brandingItems.map((b: any, i: number) => (
+                                    <div key={i} className="text-xs text-blue-800 bg-white p-1 rounded border border-blue-100">
+                                      <div className="grid grid-cols-3 gap-1">
+                                        <div>
+                                          <span className="font-medium">Type:</span> {b.branding_type || 'N/A'}
+                                        </div>
+                                        <div>
+                                          <span className="font-medium">Placement:</span> {b.placement || 'N/A'}
+                                        </div>
+                                        <div>
+                                          <span className="font-medium">Size:</span> {b.measurement || 'N/A'}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
                             )}
                                   </div>
                                 </div>

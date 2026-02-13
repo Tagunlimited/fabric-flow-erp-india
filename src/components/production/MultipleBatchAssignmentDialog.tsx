@@ -16,6 +16,7 @@ import { useToast } from '@/hooks/use-toast';
 import { DistributeQuantityDialog } from './DistributeQuantityDialog';
 import { useSizeTypes } from '@/hooks/useSizeTypes';
 import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 
 interface Batch {
   id: string;
@@ -285,17 +286,20 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
                 <div className="flex space-x-6">
                     {/* Product Image */}
                     <div className="w-24 h-24 bg-blue-100 rounded-lg overflow-hidden flex items-center justify-center">
-                      {orderItems[0]?.product_category?.category_image_url || orderItems[0]?.category_image_url ? (
-                        <img 
-                          src={orderItems[0].product_category?.category_image_url || orderItems[0].category_image_url} 
-                          alt={orderItems[0].product_category?.category_name}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-12 h-12 bg-blue-200 rounded flex items-center justify-center">
-                          <span className="text-blue-600 text-xs">IMG</span>
-                        </div>
-                      )}
+                      {(() => {
+                        const displayImage = orderItems[0] ? getOrderItemDisplayImage(orderItems[0]) : null;
+                        return displayImage ? (
+                          <img 
+                            src={displayImage} 
+                            alt={orderItems[0]?.product_category?.category_name || 'Product'}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-12 h-12 bg-blue-200 rounded flex items-center justify-center">
+                            <span className="text-blue-600 text-xs">IMG</span>
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div className="flex-1 space-y-1">
                       <p className="text-sm"><span className="font-medium">Order:</span> {orderNumber}</p>

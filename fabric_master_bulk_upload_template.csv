@@ -1,6 +1,0 @@
-fabric_code,fabric_description,fabric_name,type,color,hex,gsm,uom,rate,hsn_code,gst,image,inventory,supplier1,supplier2
-FAB001,Premium Cotton Jersey Fabric for T-shirts,Cotton Jersey,Cotton,Black,#000000,180,meters,150.00,5208,18.00,,100,ABC Textiles,XYZ Fabrics
-FAB002,Soft Polyester Blend Material,Poly Blend,Polyester,White,#FFFFFF,200,meters,120.00,5407,18.00,,75,DEF Suppliers,GHI Textiles
-FAB003,Heavy Denim Fabric for Jeans,Denim Fabric,Denim,Blue,#0066CC,250,meters,200.00,5209,18.00,,50,JKL Denim Mills,MNO Textiles
-FAB004,Lightweight Cotton Voile,Cotton Voile,Cotton,Red,#FF0000,120,meters,80.00,5208,18.00,,200,PQR Cotton Mills,STU Fabrics
-FAB005,Stretchable Spandex Material,Spandex Fabric,Spandex,Green,#00FF00,150,meters,180.00,5407,18.00,,30,VWX Stretch Co,YZA Materials

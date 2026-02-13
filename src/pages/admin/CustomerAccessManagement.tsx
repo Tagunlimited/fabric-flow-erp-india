@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { BackButton } from '@/components/common/BackButton';
 
 interface Customer {
   id: string;
@@ -241,6 +242,9 @@ export function CustomerAccessManagement() {
   return (
     <ErpLayout>
     <div className="space-y-6">
+      <div className="flex items-center">
+        <BackButton to="/configuration" label="Back to Configuration" />
+      </div>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Customer Access Management</h1>

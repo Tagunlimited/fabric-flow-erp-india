@@ -5,11 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { UserPlus, Search, Filter, Phone, Edit } from "lucide-react";
+import { UserPlus, Search, Filter, Phone, Edit, Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { EmployeeForm } from "./EmployeeForm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useNavigate } from "react-router-dom";
 
 interface Employee {
@@ -47,6 +48,7 @@ export function EmployeeCardList() {
   const [searchTerm, setSearchTerm] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -117,6 +119,37 @@ export function EmployeeCardList() {
 
   const handleCardClick = (employeeId: string) => {
     navigate(`/people/employees/${employeeId}`);
+  };
+
+  const handleDeleteEmployee = async (employeeId: string, employeeName: string) => {
+    try {
+      setDeleteLoading(employeeId);
+      
+      // Delete employee from database
+      const { error } = await supabase
+        .from('employees')
+        .delete()
+        .eq('id', employeeId);
+
+      if (error) throw error;
+
+      // Remove from local state
+      setEmployees(prev => prev.filter(emp => emp.id !== employeeId));
+      
+      toast({
+        title: "Success",
+        description: `Employee ${employeeName} has been deleted successfully.`,
+      });
+    } catch (error) {
+      console.error('Error deleting employee:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete employee. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleteLoading(null);
+    }
   };
 
   if (loading) {
@@ -194,7 +227,7 @@ export function EmployeeCardList() {
               {filteredEmployees.map((employee) => (
                 <Card 
                   key={employee.id} 
-                  className="cursor-pointer hover:shadow-lg transition-all duration-300 border-0 bg-gradient-to-r from-card to-card/80"
+                  className="cursor-pointer hover:shadow-lg transition-all duration-300 border-0 bg-gradient-to-r from-card to-card/80 relative group"
                   onClick={() => handleCardClick(employee.id)}
                 >
                   <CardContent className="p-4">
@@ -226,8 +259,47 @@ export function EmployeeCardList() {
                         </div>
                       </div>
                       
-                      {/* Edit Icon */}
-                      <Edit className="w-4 h-4 text-muted-foreground hover:text-primary flex-shrink-0" />
+                      {/* Action Icons */}
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <Edit 
+                          className="w-4 h-4 text-muted-foreground hover:text-primary transition-colors" 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/people/employees/${employee.id}`);
+                          }}
+                        />
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                              }}
+                              className="text-muted-foreground hover:text-red-500 transition-colors"
+                              disabled={deleteLoading === employee.id}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete Employee</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Are you sure you want to delete <strong>{employee.full_name}</strong>? This action cannot be undone and will permanently remove all employee data.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => handleDeleteEmployee(employee.id, employee.full_name)}
+                                className="bg-red-600 hover:bg-red-700"
+                                disabled={deleteLoading === employee.id}
+                              >
+                                {deleteLoading === employee.id ? "Deleting..." : "Delete"}
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>

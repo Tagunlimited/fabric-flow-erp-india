@@ -110,7 +110,8 @@ export const authService = {
       // Fetch profile - explicitly include avatar_url
       // Use maybeSingle() which returns null if no row found (doesn't throw error)
       // Add timeout to the query itself
-      const queryPromise = supabase
+      // Try by user_id first
+      let queryPromise = supabase
         .from('profiles')
         .select('id, user_id, full_name, email, role, phone, department, status, avatar_url, created_at, updated_at')
         .eq('user_id', userId)
@@ -123,7 +124,27 @@ export const authService = {
       });
       
       const result = await Promise.race([queryPromise, queryTimeout]);
-      const { data, error } = result;
+      let { data, error } = result;
+
+      // If query failed or returned no data, try fetching by email as fallback
+      if ((error || !data) && error?.code !== 'TIMEOUT') {
+        const currentUser = await this.getCurrentUser();
+        if (currentUser?.email) {
+          console.log('Profile not found by user_id, trying by email...');
+          const emailQuery = supabase
+            .from('profiles')
+            .select('id, user_id, full_name, email, role, phone, department, status, avatar_url, created_at, updated_at')
+            .eq('email', currentUser.email)
+            .maybeSingle();
+          
+          const emailResult = await Promise.race([emailQuery, queryTimeout]);
+          if (!emailResult.error && emailResult.data) {
+            console.log('✅ Profile found by email:', emailResult.data);
+            data = emailResult.data;
+            error = null;
+          }
+        }
+      }
 
       // FIX: Handle "No rows found" and timeout as normal cases, not errors
       if (error) {
@@ -134,7 +155,8 @@ export const authService = {
         }
         
         // PGRST116 = "No rows found" - this is normal if profile doesn't exist
-        if (error.code === 'PGRST116' || error.message?.includes('No rows found')) {
+        // 406 = Not Acceptable (often RLS policy issue) - treat as not found
+        if (error.code === 'PGRST116' || error.code === '406' || error.message?.includes('No rows found') || error.message?.includes('Not Acceptable')) {
           console.log('ℹ️ No profile found for user (this is normal if profile not created yet)');
           return null; // Return null immediately, don't treat as error
         }
@@ -237,9 +259,49 @@ export const authService = {
   async createUserProfile(userId: string, email: string, name: string): Promise<UserProfile> {
     console.log('Creating profile for:', { userId, email, name });
     
+    // First, try to fetch existing profile by user_id or email
+    const { data: existingByUserId } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+    
+    const { data: existingByEmail } = existingByUserId ? null : await supabase
+      .from('profiles')
+      .select('*')
+      .eq('email', email)
+      .maybeSingle();
+    
+    const existingProfile = existingByUserId || existingByEmail;
+    
+    if (existingProfile) {
+      console.log('Profile already exists, updating if needed:', existingProfile);
+      // Update the profile if user_id doesn't match (fix orphaned profiles)
+      if (existingProfile.user_id !== userId) {
+        const { data: updatedProfile, error: updateError } = await supabase
+          .from('profiles')
+          .update({
+            user_id: userId,
+            full_name: name,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existingProfile.id)
+          .select()
+          .single();
+        
+        if (!updateError && updatedProfile) {
+          console.log('Updated profile with correct user_id:', updatedProfile);
+          return updatedProfile as UserProfile;
+        }
+      }
+      return existingProfile as UserProfile;
+    }
+    
+    // Profile doesn't exist, create it
+    // Use upsert with onConflict on user_id to handle race conditions
     const { data, error } = await supabase
       .from('profiles')
-      .insert({
+      .upsert({
         user_id: userId,
         email: email,
         full_name: name,
@@ -247,18 +309,46 @@ export const authService = {
         status: 'approved', // Set to approved to avoid approval issues
         phone: '', // Add required fields with defaults
         department: '',
-        created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
+      }, {
+        onConflict: 'user_id',
+        ignoreDuplicates: false // Update if exists
       })
       .select()
       .single();
 
     if (error) {
+      // If it's a conflict error (email or user_id), try to fetch the existing profile
+      if (error.code === '23505' || error.message?.includes('duplicate') || error.message?.includes('409')) {
+        console.log('Profile conflict detected, fetching existing profile...');
+        // Try by user_id first
+        let { data: existingProfile, error: fetchError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('user_id', userId)
+          .maybeSingle();
+        
+        // If not found by user_id, try by email
+        if (fetchError || !existingProfile) {
+          const emailResult = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('email', email)
+            .maybeSingle();
+          existingProfile = emailResult.data;
+          fetchError = emailResult.error;
+        }
+        
+        if (!fetchError && existingProfile) {
+          console.log('Fetched existing profile:', existingProfile);
+          return existingProfile as UserProfile;
+        }
+      }
       console.error('Profile creation error:', error);
       throw error;
     }
     
-    console.log('Profile created successfully:', data);
+    console.log('Profile created/updated successfully:', data);
     return data;
   },
 

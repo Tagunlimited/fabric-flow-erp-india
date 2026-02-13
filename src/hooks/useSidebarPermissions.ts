@@ -69,14 +69,26 @@ export function useSidebarPermissions() {
     try {
       setPermissions(prev => ({ ...prev, loading: true, error: null }));
 
+      // Check for pre-configured admin email first
+      const isPreConfiguredAdmin = user?.email === 'ecom@tagunlimitedclothing.com';
+      
       // Get user's profile to determine their role
+      // Use maybeSingle() to avoid errors when profile doesn't exist
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('role')
         .eq('user_id', user.id as any)
-        .single();
+        .maybeSingle();
 
-      if (profileError) {
+      // Check if user is admin by profile role
+      const isAdminByProfile = (profile as any)?.role === 'admin';
+      
+      // Determine if user is admin (either pre-configured or by profile)
+      const isAdminUser = isPreConfiguredAdmin || isAdminByProfile;
+
+      // Only log error if not a pre-configured admin and it's a real error (not just "not found")
+      if (profileError && !isPreConfiguredAdmin && profileError.code !== 'PGRST116') {
+        // PGRST116 is "not found" which is okay - user might not have profile yet
         console.error('Error fetching user profile:', profileError);
         setPermissions(prev => ({ 
           ...prev, 
@@ -88,11 +100,16 @@ export function useSidebarPermissions() {
         return;
       }
 
-      // If user is admin, bypass all permission checks and return empty array
+      // If user is admin (pre-configured or by profile), bypass all permission checks
       // The sidebar will use static items for admin users
       // IMPORTANT: Set permissionsSetup to false so PermissionAwareRedirect bypasses the check
-      if ((profile as any)?.role === 'admin') {
-        console.log('👑 Admin user - bypassing permission system');
+      if (isAdminUser) {
+        console.log('👑 Admin user - bypassing permission system', { 
+          isPreConfiguredAdmin, 
+          isAdminByProfile, 
+          userEmail: user?.email,
+          profileRole: (profile as any)?.role
+        });
         setPermissions({
           items: [],
           loading: false,
@@ -233,8 +250,10 @@ export function useSidebarPermissions() {
         
         // If there are sidebar items but no permissions, this means the user has no access
         if (allSidebarItems && allSidebarItems.length > 0) {
-          // For admin users, give them access to all sidebar items
-          if ((profile as any)?.role === 'admin') {
+          // For admin users (pre-configured or by profile), give them access to all sidebar items
+          const isPreConfiguredAdmin = user?.email === 'ecom@tagunlimitedclothing.com';
+          const isAdminByProfile = (profile as any)?.role === 'admin';
+          if (isPreConfiguredAdmin || isAdminByProfile) {
             console.log('Admin user with no specific permissions - granting access to all items');
             
             // Get all sidebar items for admin

@@ -10,6 +10,7 @@ import { useOrdersWithReceipts } from "@/hooks/useOrdersWithReceipts";
 import { supabase } from "@/integrations/supabase/client";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Eye, Receipt } from "lucide-react";
+import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
 
 const ProductionPage = () => {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -90,7 +91,9 @@ const ProductionPage = () => {
               id,
               quantity,
               category_image_url,
-              product_description
+              product_description,
+              mockup_images,
+              specifications
             `)
             .eq("order_id", order.id);
 
@@ -355,24 +358,25 @@ const ProductionPage = () => {
                           </TableCell>
                           <TableCell>
                             <div className="flex flex-wrap gap-2 justify-start">
-                              {order.order_items?.map((item: any, index: number) => (
-                                <div key={index} className="flex flex-col items-center gap-1 min-w-0">
-                                  {item.category_image_url ? (
-                                    <img
-                                      src={item.category_image_url}
-                                      alt={item.product_description || 'Product'}
-                                      className="w-12 h-12 rounded object-cover border shadow-sm flex-shrink-0"
-                                    />
-                                  ) : (
-                                    <div className="w-12 h-12 rounded bg-gray-100 border flex items-center justify-center shadow-sm flex-shrink-0">
-                                      <span className="text-xs text-gray-500">IMG</span>
-                                    </div>
-                                  )}
-                                  <span className="text-xs text-muted-foreground text-center w-16 truncate">
-                                    {item.product_description || 'Product'}
-                                  </span>
-                                </div>
-                              ))}
+                              {order.order_items?.map((item: any, index: number) => {
+                                // Only show mockup images, not category images
+                                const displayImage = getOrderItemDisplayImage(item, order);
+                                
+                                return (
+                                  <div key={index} className="flex flex-col items-center gap-1 min-w-0">
+                                    {displayImage ? (
+                                      <img
+                                        src={displayImage}
+                                        alt={item.product_description || 'Product'}
+                                        className="w-12 h-12 rounded object-cover border shadow-sm flex-shrink-0"
+                                      />
+                                    ) : null}
+                                    <span className="text-xs text-muted-foreground text-center w-16 truncate">
+                                      {item.product_description || 'Product'}
+                                    </span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </TableCell>
                           <TableCell className="font-medium">

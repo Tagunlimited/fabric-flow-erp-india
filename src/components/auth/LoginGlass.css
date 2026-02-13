@@ -1,0 +1,328 @@
+/* Glass Effect Styles for Login Page */
+
+.glass-login-container {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  background: linear-gradient(
+    135deg,
+    hsla(223, 90%, 20%, 0.1) 0%,
+    hsla(268, 90%, 20%, 0.1) 100%
+  );
+}
+
+.glass-video-overlay {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.glass-card {
+  background: hsla(0, 0%, 100%, 0.85);
+  backdrop-filter: blur(1.5em);
+  -webkit-backdrop-filter: blur(1.5em);
+  -moz-backdrop-filter: blur(1.5em);
+  border: 0.1em solid hsla(0, 0%, 100%, 0.5);
+  box-shadow: 
+    0 0.5em 1.5em hsla(223, 10%, 10%, 0.2),
+    0 0 0 0.1em hsla(0, 0%, 100%, 0.3) inset,
+    0.5em -0.5em 1em hsla(223, 10%, 10%, 0.15);
+  border-radius: 1.5em;
+  transition: 
+    transform 0.3s cubic-bezier(0.83, 0, 0.17, 1),
+    box-shadow 0.3s cubic-bezier(0.83, 0, 0.17, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.glass-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0.1em;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsla(0, 0%, 100%, 0.5),
+    transparent
+  );
+  opacity: 0.6;
+}
+
+.glass-card:hover {
+  transform: translateY(-0.2em);
+  box-shadow: 
+    0 0.75em 2em hsla(223, 10%, 10%, 0.25),
+    0 0 0 0.1em hsla(0, 0%, 100%, 0.3) inset,
+    0.5em -0.5em 1.25em hsla(223, 10%, 10%, 0.2);
+}
+
+.glass-input {
+  background: hsla(0, 0%, 100%, 0.7);
+  backdrop-filter: blur(0.5em);
+  -webkit-backdrop-filter: blur(0.5em);
+  -moz-backdrop-filter: blur(0.5em);
+  border: 0.1em solid hsla(0, 0%, 0%, 0.2);
+  border-radius: 0.75em;
+  transition: 
+    background 0.3s cubic-bezier(0.83, 0, 0.17, 1),
+    border-color 0.3s cubic-bezier(0.83, 0, 0.17, 1),
+    box-shadow 0.3s cubic-bezier(0.83, 0, 0.17, 1);
+  color: hsla(0, 0%, 0%, 0.9);
+}
+
+.glass-input:focus {
+  background: hsla(0, 0%, 100%, 0.9);
+  border-color: hsla(223, 90%, 50%, 0.6);
+  box-shadow: 
+    0 0 0 0.2em hsla(223, 90%, 50%, 0.2),
+    0 0 0.5em hsla(223, 90%, 50%, 0.1);
+  outline: none;
+}
+
+.glass-input::placeholder {
+  color: hsla(0, 0%, 0%, 0.5);
+}
+
+.glass-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.glass-button {
+  background: linear-gradient(
+    135deg,
+    hsla(223, 90%, 50%, 0.8),
+    hsla(208, 90%, 50%, 0.8)
+  );
+  backdrop-filter: blur(0.5em);
+  -webkit-backdrop-filter: blur(0.5em);
+  -moz-backdrop-filter: blur(0.5em);
+  border: 0.1em solid hsla(0, 0%, 100%, 0.3);
+  box-shadow: 
+    0 0.25em 0.75em hsla(223, 10%, 10%, 0.2),
+    0 0 0 0.05em hsla(0, 0%, 100%, 0.2) inset;
+  border-radius: 0.75em;
+  transition: 
+    transform 0.3s cubic-bezier(0.83, 0, 0.17, 1),
+    box-shadow 0.3s cubic-bezier(0.83, 0, 0.17, 1),
+    background 0.3s cubic-bezier(0.83, 0, 0.17, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.glass-button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsla(0, 0%, 100%, 0.3),
+    transparent
+  );
+  transition: left 0.5s cubic-bezier(0.83, 0, 0.17, 1);
+}
+
+.glass-button:hover {
+  transform: translateY(-0.1em);
+  box-shadow: 
+    0 0.5em 1em hsla(223, 10%, 10%, 0.3),
+    0 0 0 0.05em hsla(0, 0%, 100%, 0.3) inset;
+  background: linear-gradient(
+    135deg,
+    hsla(223, 90%, 55%, 0.9),
+    hsla(208, 90%, 55%, 0.9)
+  );
+}
+
+.glass-button:hover::before {
+  left: 100%;
+}
+
+.glass-button:active {
+  transform: translateY(0);
+}
+
+.glass-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.glass-button:disabled:hover {
+  transform: none;
+  box-shadow: 
+    0 0.25em 0.75em hsla(223, 10%, 10%, 0.2),
+    0 0 0 0.05em hsla(0, 0%, 100%, 0.2) inset;
+}
+
+.glass-label {
+  color: hsla(0, 0%, 0%, 0.9);
+  text-shadow: 0 0.1em 0.2em hsla(0, 0%, 100%, 0.3);
+}
+
+.glass-card-header {
+  position: relative;
+}
+
+.glass-logo-container {
+  position: relative;
+  padding: 1em;
+  background: hsla(0, 0%, 100%, 0.7);
+  backdrop-filter: blur(0.5em);
+  -webkit-backdrop-filter: blur(0.5em);
+  -moz-backdrop-filter: blur(0.5em);
+  border-radius: 1em;
+  border: none;
+  display: inline-block;
+  margin: 0 auto;
+}
+
+.glass-footer {
+  background: hsla(0, 0%, 100%, 0.7);
+  backdrop-filter: blur(0.5em);
+  -webkit-backdrop-filter: blur(0.5em);
+  -moz-backdrop-filter: blur(0.5em);
+  border: 0.1em solid hsla(0, 0%, 0%, 0.2);
+  border-radius: 0.75em;
+}
+
+.glass-link {
+  color: hsla(223, 90%, 60%, 1);
+  text-shadow: 0 0.1em 0.2em hsla(223, 10%, 10%, 0.2);
+  transition: color 0.3s cubic-bezier(0.83, 0, 0.17, 1);
+}
+
+.glass-link:hover {
+  color: hsla(223, 90%, 70%, 1);
+}
+
+.glass-title {
+  color: hsla(0, 0%, 0%, 0.95);
+  text-shadow: 0 0.1em 0.3em hsla(0, 0%, 100%, 0.3);
+}
+
+.glass-description {
+  color: hsla(0, 0%, 0%, 0.8);
+  text-shadow: 0 0.1em 0.2em hsla(0, 0%, 100%, 0.3);
+}
+
+.glass-text {
+  color: hsla(0, 0%, 0%, 0.85);
+  text-shadow: 0 0.1em 0.2em hsla(0, 0%, 100%, 0.3);
+}
+
+/* Responsive adjustments - Mobile: Completely transparent for full video visibility */
+@media (max-width: 768px) {
+  .glass-card {
+    border-radius: 1.25em;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    -moz-backdrop-filter: none !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+  
+  .glass-card:hover {
+    transform: none;
+  }
+
+  .glass-card::before {
+    display: none;
+  }
+
+  .glass-input {
+    background: hsla(0, 0%, 100%, 0.1) !important;
+    backdrop-filter: blur(0.3em) !important;
+    -webkit-backdrop-filter: blur(0.3em) !important;
+    -moz-backdrop-filter: blur(0.3em) !important;
+    border: 0.1em solid hsla(0, 0%, 100%, 0.3) !important;
+    color: hsla(0, 0%, 0%, 0.95) !important;
+  }
+
+  .glass-input::placeholder {
+    color: hsla(0, 0%, 0%, 0.5) !important;
+  }
+
+  .glass-input:focus {
+    background: hsla(0, 0%, 100%, 0.2) !important;
+    border-color: hsla(0, 0%, 100%, 0.5) !important;
+    color: hsla(0, 0%, 0%, 1) !important;
+  }
+
+  .glass-label {
+    color: hsla(0, 0%, 100%, 0.95) !important;
+    text-shadow: 0 0.1em 0.3em hsla(0, 0%, 0%, 0.5) !important;
+  }
+
+  .glass-title {
+    color: hsla(0, 0%, 100%, 0.95) !important;
+    text-shadow: 0 0.1em 0.3em hsla(0, 0%, 0%, 0.5) !important;
+  }
+
+  .glass-description {
+    color: hsla(0, 0%, 100%, 0.9) !important;
+    text-shadow: 0 0.1em 0.2em hsla(0, 0%, 0%, 0.5) !important;
+  }
+
+  .glass-text {
+    color: hsla(0, 0%, 100%, 0.9) !important;
+    text-shadow: 0 0.1em 0.2em hsla(0, 0%, 0%, 0.5) !important;
+  }
+
+  .glass-logo-container {
+    background: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    -moz-backdrop-filter: none !important;
+    border: none !important;
+    padding: 0 !important;
+  }
+
+  .glass-footer {
+    background: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    -moz-backdrop-filter: none !important;
+    border: none !important;
+  }
+
+  .glass-link {
+    color: hsla(223, 90%, 70%, 1) !important;
+    text-shadow: 0 0.1em 0.2em hsla(0, 0%, 0%, 0.5) !important;
+  }
+
+  .glass-button {
+    background: linear-gradient(
+      135deg,
+      hsla(223, 90%, 50%, 0.9),
+      hsla(208, 90%, 50%, 0.9)
+    ) !important;
+    border: 0.1em solid hsla(0, 0%, 100%, 0.4) !important;
+  }
+}
+
+/* Animation for card entrance */
+@keyframes glassFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(1em) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.glass-card {
+  animation: glassFadeIn 0.6s cubic-bezier(0.83, 0, 0.17, 1);
+}

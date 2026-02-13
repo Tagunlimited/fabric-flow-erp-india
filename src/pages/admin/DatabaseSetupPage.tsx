@@ -1,10 +1,14 @@
 import { ErpLayout } from "@/components/ErpLayout";
 import { DatabaseInitializer } from "@/components/DatabaseInitializer";
+import { BackButton } from '@/components/common/BackButton';
 
 const DatabaseSetupPage = () => {
   return (
     <ErpLayout>
       <div className="container mx-auto py-8">
+        <div className="mb-4">
+          <BackButton to="/configuration" label="Back to Configuration" />
+        </div>
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-primary mb-2">
             Database Setup

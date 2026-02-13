@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Loader2, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import './LoginGlass.css';
 
 export function LoginForm() {
   const [email, setEmail] = useState('');
@@ -128,10 +129,32 @@ export function LoginForm() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 to-purple-900 p-4">
-      <Card className="w-full max-w-md bg-background/90 backdrop-blur-sm shadow-erp-xl">
-        <CardHeader className="text-center space-y-4">
+    <div className="glass-login-container min-h-screen flex relative">
+      {/* Video Section - Full Screen Background on Mobile, Left Side on Desktop */}
+      <div className="absolute inset-0 lg:relative lg:w-1/2 overflow-hidden z-0">
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover z-10"
+          onError={(e) => {
+            console.error('Video failed to load:', e);
+          }}
+        >
+          <source src={`/Navy cut.mp4`} type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+        {/* Minimal overlay - no blur */}
+        <div className="glass-video-overlay"></div>
+      </div>
+
+      {/* Login Form Section - Right Side on Desktop, Centered on Mobile */}
+      <div className="relative z-10 w-full lg:w-1/2 flex items-center justify-center p-4 lg:p-8">
+        <Card className="glass-card w-full max-w-md">
+          <CardHeader className="glass-card-header text-center space-y-4">
           <div className="mx-auto">
+              <div className="glass-logo-container">
             <img 
               src="https://i.postimg.cc/4NKq0Rq5/tag-logo-pdf-pdf-(1000-x-1000-px).png"
               alt="Scissors ERP" 
@@ -140,23 +163,24 @@ export function LoginForm() {
                 (e.target as HTMLImageElement).src = '/placeholder.svg';
               }}
             />
+              </div>
           </div>
           <div>
-            <CardTitle className="text-2xl font-bold">Scissors ERP</CardTitle>
-            <CardDescription>Apparel Manufacturing Management</CardDescription>
+              <CardTitle className="glass-title text-2xl font-bold">Scissors ERP</CardTitle>
+              <CardDescription className="glass-description">Apparel Manufacturing Management</CardDescription>
           </div>
         </CardHeader>
 
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <Alert variant="destructive" className="animate-fade-in">
-                <AlertDescription>{error}</AlertDescription>
+                <Alert variant="destructive" className="animate-fade-in glass-input border-red-400/50 bg-red-500/20">
+                  <AlertDescription className="glass-text">{error}</AlertDescription>
               </Alert>
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+                <Label htmlFor="email" className="glass-label">Email</Label>
               <Input
                 id="email"
                 type="email"
@@ -165,11 +189,12 @@ export function LoginForm() {
                 placeholder="admin@yourcompany.com"
                 required
                 disabled={isLoading}
+                  className="glass-input"
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+                <Label htmlFor="password" className="glass-label">Password</Label>
               <div className="relative">
                 <Input
                   id="password"
@@ -179,6 +204,7 @@ export function LoginForm() {
                   placeholder="••••••••"
                   required
                   disabled={isLoading}
+                    className="glass-input"
                 />
                 <Button
                   type="button"
@@ -206,7 +232,7 @@ export function LoginForm() {
               />
               <Label
                 htmlFor="rememberMe"
-                className="text-sm font-normal cursor-pointer"
+                  className="glass-label text-sm font-normal cursor-pointer"
               >
                 Remember me
               </Label>
@@ -214,7 +240,7 @@ export function LoginForm() {
 
             <Button 
               type="submit" 
-              className="w-full bg-primary hover:bg-primary/90 transition-colors"
+                className="glass-button w-full text-white font-semibold"
               disabled={isLoading}
             >
               {isLoading ? (
@@ -225,11 +251,11 @@ export function LoginForm() {
           </form>
 
           <div className="mt-6 text-center text-sm">
-            <p className="text-muted-foreground">
+              <p className="glass-text">
               Need an account?{' '}
               <Button
                 variant="link"
-                className="p-0 text-primary underline"
+                  className="glass-link p-0 underline"
                 onClick={() => navigate('/signup')}
               >
                 Contact admin
@@ -237,13 +263,14 @@ export function LoginForm() {
             </p>
           </div>
 
-          <div className="mt-4 p-3 bg-muted rounded-lg">
-            <p className="text-xs text-muted-foreground text-center">
+            <div className="glass-footer mt-4 p-3">
+              <p className="glass-text text-xs text-center">
               Powered by: BlackMatter Technologies
             </p>
           </div>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useSizeTypes } from '@/hooks/useSizeTypes';
 import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 
 interface OrderSize {
   size_name: string;
@@ -547,15 +548,18 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
             <div className="flex space-x-6">
               {/* Product Image */}
               <div className="w-20 h-20 bg-blue-100 rounded-lg overflow-hidden flex items-center justify-center">
-                {orderItems[0]?.product_category?.category_image_url || orderItems[0]?.category_image_url ? (
+                {(() => {
+                  const displayImage = orderItems[0] ? getOrderItemDisplayImage(orderItems[0]) : null;
+                  return displayImage ? (
                   <img 
-                    src={orderItems[0].product_category?.category_image_url || orderItems[0].category_image_url} 
-                    alt={orderItems[0].product_category?.category_name}
+                      src={displayImage} 
+                      alt={orderItems[0]?.product_category?.category_name || 'Product'}
                     className="w-full h-full object-cover"
                   />
                 ) : (
                   <Package className="w-10 h-10 text-blue-600" />
-                )}
+                  );
+                })()}
               </div>
               <div className="flex-1 space-y-1">
                 <p className="text-sm"><span className="font-medium">Order:</span> {orderNumber}</p>

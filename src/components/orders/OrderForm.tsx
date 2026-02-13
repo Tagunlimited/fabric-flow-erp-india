@@ -185,7 +185,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
     customer_id: preSelectedCustomer?.id || '',
     sales_manager: '',
     products: [createEmptyProduct()],
-    gst_rate: 18,
+    gst_rate: 5,
     payment_channel: '',
     reference_id: '',
     advance_amount: 0,
@@ -227,18 +227,86 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
       }
 
       const normalizedProducts = (next.products || []).map(product => {
+        const normalizedProduct = { ...product };
+        
+        // Filter out invalid File objects (File objects can't be serialized, so they become empty objects after refresh)
+        if (product.reference_images && Array.isArray(product.reference_images)) {
+          const validReferenceImages = product.reference_images.filter(img => 
+            img instanceof File || (typeof img === 'string' && img.trim() !== '')
+          );
+          if (validReferenceImages.length !== product.reference_images.length) {
+            normalizedProduct.reference_images = validReferenceImages;
+            changed = true;
+          }
+        }
+        
+        if (product.mockup_images && Array.isArray(product.mockup_images)) {
+          const validMockupImages = product.mockup_images.filter(img => 
+            img instanceof File || (typeof img === 'string' && img.trim() !== '')
+          );
+          if (validMockupImages.length !== product.mockup_images.length) {
+            normalizedProduct.mockup_images = validMockupImages;
+            changed = true;
+          }
+        }
+        
+        if (product.attachments && Array.isArray(product.attachments)) {
+          const validAttachments = product.attachments.filter(att => 
+            att instanceof File || (typeof att === 'string' && att.trim() !== '')
+          );
+          if (validAttachments.length !== product.attachments.length) {
+            normalizedProduct.attachments = validAttachments;
+            changed = true;
+          }
+        }
+        
         if (product.customizations && Array.isArray(product.customizations)) {
-          return product;
+          return normalizedProduct;
         }
         changed = true;
         return {
-          ...product,
+          ...normalizedProduct,
           customizations: product.customizations || []
         };
       });
 
       if (changed) {
         next.products = normalizedProducts;
+        // Also clear mainImages if they reference removed files
+        setMainImages(prev => {
+          const updated: typeof prev = {};
+          let mainImagesChanged = false;
+          Object.keys(prev).forEach(key => {
+            const productIdx = parseInt(key);
+            const product = normalizedProducts[productIdx];
+            if (product) {
+              const mainMockup = prev[productIdx]?.mockup;
+              const mainReference = prev[productIdx]?.reference;
+              
+              // Check if main images still exist in the product
+              const mockupExists = !mainMockup || product.mockup_images?.some(img => {
+                const imgUrl = getImageUrl(img);
+                return imgUrl === mainMockup;
+              });
+              const referenceExists = !mainReference || product.reference_images?.some(img => {
+                const imgUrl = getImageUrl(img);
+                return imgUrl === mainReference;
+              });
+              
+              if (mockupExists && referenceExists) {
+                updated[productIdx] = prev[productIdx];
+              } else {
+                mainImagesChanged = true;
+                updated[productIdx] = {
+                  mockup: mockupExists ? mainMockup : null,
+                  reference: referenceExists ? mainReference : null,
+                  category: prev[productIdx]?.category || null
+                };
+              }
+            }
+          });
+          return mainImagesChanged ? updated : prev;
+        });
         return next;
       }
 
@@ -251,6 +319,12 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
 
   const resetData = useCallback(() => {
     resetFormState();
+    setMainImages({});
+    setSelectedCustomer(null);
+    setSelectedCategoryImage('');
+    setIsCategoryLocked(false);
+    setSelectedSizesForPriceEdit({});
+    toast.success('Form reset successfully');
   }, [resetFormState]);
 
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -442,13 +516,26 @@ const getSelectedFabricVariant = (productIndex: number) => {
     return mainImages[productIndex]?.[imageType] || null;
   };
 
+  // Helper function to safely get image URL from File or string
+  const getImageUrl = (fileOrUrl: File | string | undefined | null): string | null => {
+    if (!fileOrUrl) return null;
+    if (typeof fileOrUrl === 'string') return fileOrUrl;
+    if (fileOrUrl instanceof File) return URL.createObjectURL(fileOrUrl);
+    return null;
+  };
+
   // Set first image as main image when images are uploaded
   const handleImageUpload = (productIndex: number, imageType: 'reference' | 'mockup', files: File[]) => {
     setFormData(prev => ({
       ...prev,
-      products: prev.products.map((p, i) => 
-        i === productIndex ? { ...p, [imageType === 'reference' ? 'reference_images' : 'mockup_images']: files.slice(0, 5) } : p
-      )
+      products: prev.products.map((p, i) => {
+        if (i === productIndex) {
+          const existingImages = imageType === 'reference' ? p.reference_images : p.mockup_images;
+          const newFiles = [...existingImages, ...files].slice(0, 5);
+          return { ...p, [imageType === 'reference' ? 'reference_images' : 'mockup_images']: newFiles };
+        }
+        return p;
+      })
     }));
 
     // Set first image as main image if no main image is set
@@ -461,6 +548,62 @@ const getSelectedFabricVariant = (productIndex: number) => {
         }
       }));
     }
+  };
+
+  // Remove a specific image from the product
+  const handleRemoveImage = (productIndex: number, imageType: 'reference' | 'mockup', imageIndex: number) => {
+    // Get current product data
+    const currentProduct = formData.products[productIndex];
+    const images = imageType === 'reference' ? currentProduct.reference_images : currentProduct.mockup_images;
+    
+    // Get the image being removed to check if it's the main image
+    const imageToRemove = images[imageIndex];
+    const currentMainImageUrl = getMainImage(productIndex, imageType);
+    const imageToRemoveUrl = getImageUrl(imageToRemove);
+    
+    // Filter out the removed image
+    const updatedImages = images.filter((_, idx) => idx !== imageIndex);
+    
+    // Update form data
+    setFormData(prev => ({
+      ...prev,
+      products: prev.products.map((p, i) => {
+        if (i === productIndex) {
+          return { ...p, [imageType === 'reference' ? 'reference_images' : 'mockup_images']: updatedImages };
+        }
+        return p;
+      })
+    }));
+    
+    // Update main image separately
+    if (updatedImages.length > 0) {
+      // If we removed the main image, set the first remaining image as main
+      if (currentMainImageUrl === imageToRemoveUrl) {
+        const firstImageUrl = getImageUrl(updatedImages[0]);
+        if (firstImageUrl) {
+          setMainImages(prev => ({
+            ...prev,
+            [productIndex]: {
+              ...prev[productIndex],
+              [imageType]: firstImageUrl
+            }
+          }));
+        }
+      }
+      // If we didn't remove the main image, keep the current main image
+      // (mainImages state doesn't need to change)
+    } else {
+      // No images left, clear main image
+      setMainImages(prev => ({
+        ...prev,
+        [productIndex]: {
+          ...prev[productIndex],
+          [imageType]: null
+        }
+      }));
+    }
+    
+    toast.success(`${imageType === 'mockup' ? 'Mockup' : 'Reference'} image removed`);
   };
 
   const scrollLeft = () => {
@@ -501,7 +644,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
       branding_items: [
         { branding_type: '', placement: '', measurement: '' }
       ],
-      gst_rate: 18, // default
+      gst_rate: 5, // default
       customizations: []
     };
   }
@@ -746,7 +889,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
       additional_charges: [...prev.additional_charges, {
         particular: '',
         rate: 0,
-        gst_percentage: 18,
+        gst_percentage: 5,
         amount_incl_gst: 0
       }]
     }));
@@ -1151,22 +1294,23 @@ const getSelectedFabricVariant = (productIndex: number) => {
         <CardHeader>
           <div className="flex justify-between items-center">
             <CardTitle>Create New Order</CardTitle>
-            {hasSavedFormState && (
               <div className="flex items-center gap-2">
+              {hasSavedFormState && (
                 <Badge variant="secondary" className="bg-green-100 text-green-800">
                   Saved Progress
                 </Badge>
+              )}
                 <Button 
                   type="button" 
                   variant="outline" 
-                  size="sm"
+                size="default"
                   onClick={resetData}
-                  className="text-red-600 hover:text-red-700"
+                className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
                 >
-                  Clear Saved Data
+                <Trash2 className="w-4 h-4 mr-2" />
+                Reset Form
                 </Button>
               </div>
-            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -1378,22 +1522,71 @@ const getSelectedFabricVariant = (productIndex: number) => {
                          {/* Mockup Image Display - Extended height container */}
                          {product.mockup_images && product.mockup_images.length > 0 ? (
                            <div className="mt-4 flex-1 flex flex-col">
-                             <Label className="text-sm font-medium text-gray-600 mb-2 block">Uploaded Mockup</Label>
+                             <div className="flex justify-between items-center mb-2">
+                               <Label className="text-sm font-medium text-gray-600 block">Uploaded Mockup</Label>
+                             </div>
                              <div className="border-2 border-gray-200 rounded-lg p-3 bg-gray-50 flex-1 flex flex-col min-h-[400px]">
-                               <div className="flex-1 flex items-center justify-center">
+                               <div className="flex-1 flex items-center justify-center relative">
+                                 {(() => {
+                                   const mainImageUrl = getMainImage(productIndex, 'mockup') || getImageUrl(product.mockup_images[0]);
+                                   return mainImageUrl ? (
                                  <img 
-                                   src={getMainImage(productIndex, 'mockup') || URL.createObjectURL(product.mockup_images[0])} 
+                                       src={mainImageUrl} 
                                    alt="Mockup Preview"
                                    className="max-w-full max-h-full object-contain rounded cursor-pointer hover:opacity-90 transition-opacity"
                                    onClick={() => {
-                                     const mainImage = getMainImage(productIndex, 'mockup') || URL.createObjectURL(product.mockup_images[0]);
-                                     window.open(mainImage, '_blank');
+                                         window.open(mainImageUrl, '_blank');
                                    }}
                                  />
+                                   ) : null;
+                                 })()}
                                </div>
                                <p className="text-center text-xs text-muted-foreground mt-2">
                                  {product.mockup_images.length} file(s) uploaded • Click to view full size
                                </p>
+                               {/* Thumbnail Gallery for this section */}
+                               {product.mockup_images.length > 1 && (
+                                 <div className="flex gap-2 overflow-x-auto pb-2 mt-3">
+                                   {product.mockup_images.map((file, idx) => (
+                                     <div 
+                                       key={idx} 
+                                       className="flex-shrink-0 relative group"
+                                     >
+                                       <div
+                                         className="cursor-pointer hover:scale-105 transition-transform duration-200"
+                                         onClick={() => {
+                                           const imageUrl = getImageUrl(file);
+                                           if (imageUrl) {
+                                             setMainImages(prev => ({
+                                               ...prev,
+                                               [productIndex]: {
+                                                 ...prev[productIndex],
+                                                 mockup: imageUrl
+                                               }
+                                             }));
+                                           }
+                                         }}
+                                       >
+                                         {(() => {
+                                           const fileUrl = getImageUrl(file);
+                                           const mainImageUrl = getMainImage(productIndex, 'mockup') || getImageUrl(product.mockup_images[0]);
+                                           return fileUrl ? (
+                                             <img 
+                                               src={fileUrl} 
+                                               alt={`Mockup ${idx + 1}`}
+                                               className={`w-16 h-16 object-cover rounded border-2 ${
+                                                 mainImageUrl === fileUrl 
+                                                   ? 'border-primary' 
+                                                   : 'border-gray-200'
+                                               }`}
+                                             />
+                                           ) : null;
+                                         })()}
+                                       </div>
+                                     </div>
+                                   ))}
+                                 </div>
+                               )}
                              </div>
                            </div>
                          ) : (
@@ -2046,7 +2239,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                               {/* Main Image Display */}
                               <div className="mb-3 p-2 border-2 border-primary/30 rounded-lg bg-white">
                                 <img 
-                                  src={getMainImage(productIndex, 'reference') || URL.createObjectURL(product.reference_images[0])} 
+                                  src={getMainImage(productIndex, 'reference') || getImageUrl(product.reference_images[0]) || ''} 
                                   alt="Main Reference"
                                   className="w-full h-64 object-contain rounded cursor-pointer hover:scale-105 transition-transform duration-200"
                                 />
@@ -2058,18 +2251,45 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                 {product.reference_images.map((file, idx) => (
                                   <div 
                                     key={idx} 
-                                    className="flex-shrink-0 cursor-pointer hover:scale-105 transition-transform duration-200"
-                                    onClick={() => handleImageClick(productIndex, 'reference', URL.createObjectURL(file))}
+                                    className="flex-shrink-0 relative group"
                                   >
-                                    <img 
-                                      src={URL.createObjectURL(file)} 
+                                    <div
+                                      className="cursor-pointer hover:scale-105 transition-transform duration-200"
+                                      onClick={() => {
+                                        const fileUrl = getImageUrl(file);
+                                        if (fileUrl) {
+                                          handleImageClick(productIndex, 'reference', fileUrl);
+                                        }
+                                      }}
+                                    >
+                                      {(() => {
+                                        const fileUrl = getImageUrl(file);
+                                        const mainImageUrl = getMainImage(productIndex, 'reference');
+                                        return fileUrl ? (
+                                          <img 
+                                            src={fileUrl} 
                                       alt={`Reference ${idx + 1}`}
                                       className={`w-16 h-16 object-cover rounded border-2 ${
-                                        getMainImage(productIndex, 'reference') === URL.createObjectURL(file) 
+                                              mainImageUrl === fileUrl 
                                           ? 'border-primary' 
                                           : 'border-gray-200'
                                       }`}
                                     />
+                                        ) : null;
+                                      })()}
+                                    </div>
+                                    {/* Remove button */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRemoveImage(productIndex, 'reference', idx);
+                                      }}
+                                      className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 shadow-lg z-10"
+                                      title="Remove image"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
                                   </div>
                                 ))}
                               </div>
@@ -2269,7 +2489,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
                           multiple
                           onChange={(e) => {
                             const files = Array.from(e.target.files || []);
+                            if (files.length > 0) {
                             handleImageUpload(productIndex, 'mockup', files);
+                              // Reset the input so the same file can be selected again
+                              e.target.value = '';
+                            }
                           }}
                           className="hidden"
                           id={`mockup-images-${productIndex}`}
@@ -2287,13 +2511,69 @@ const getSelectedFabricVariant = (productIndex: number) => {
                             </Badge>
                             
                             {/* Main Image Display */}
-                            <div className="mb-3 p-2 border-2 border-primary/30 rounded-lg bg-white">
-                              <img 
-                                src={getMainImage(productIndex, 'mockup') || URL.createObjectURL(product.mockup_images[0])} 
+                            <div className="mb-3">
+                              <Label className="text-sm font-medium text-gray-600 flex items-center gap-2 mb-2">
+                                <Image className="w-4 h-4" />
+                                Main Mockup
+                              </Label>
+                              <div className="p-2 border-2 border-primary/30 rounded-lg bg-white relative min-h-[256px] flex items-center justify-center">
+                                {(() => {
+                                  const mainImageUrl = getMainImage(productIndex, 'mockup') || getImageUrl(product.mockup_images[0]);
+                                  return mainImageUrl ? (
+                                    <>
+                                      <img 
+                                        src={mainImageUrl} 
                                 alt="Main Mockup"
                                 className="w-full h-64 object-contain rounded cursor-pointer hover:scale-105 transition-transform duration-200"
-                              />
-                              <p className="text-center text-sm text-muted-foreground mt-2">Click to see full view</p>
+                                        onClick={() => {
+                                          window.open(mainImageUrl, '_blank');
+                                        }}
+                                        onError={(e) => {
+                                          console.error('Failed to load mockup image:', mainImageUrl);
+                                          e.currentTarget.style.display = 'none';
+                                        }}
+                                      />
+                                      {/* Remove button for main image */}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          const currentMainImageUrl = getMainImage(productIndex, 'mockup') || getImageUrl(product.mockup_images[0]);
+                                          if (currentMainImageUrl && product.mockup_images.length > 0) {
+                                            // Find the index of the image that matches the current main image
+                                            let imageIndex = -1;
+                                            for (let i = 0; i < product.mockup_images.length; i++) {
+                                              const fileUrl = getImageUrl(product.mockup_images[i]);
+                                              if (fileUrl === currentMainImageUrl) {
+                                                imageIndex = i;
+                                                break;
+                                              }
+                                            }
+                                            // If not found by URL, use the first image
+                                            if (imageIndex === -1) {
+                                              imageIndex = 0;
+                                            }
+                                            handleRemoveImage(productIndex, 'mockup', imageIndex);
+                                          }
+                                        }}
+                                        className="absolute top-4 right-4 bg-red-500 hover:bg-red-600 text-white rounded-full p-2 shadow-lg z-10 transition-colors duration-200"
+                                        title="Remove this image"
+                                      >
+                                        <X className="w-4 h-4" />
+                                      </button>
+                                      <p className="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-center text-sm text-muted-foreground bg-white/80 px-2 py-1 rounded">
+                                        Click to see full view
+                                      </p>
+                                    </>
+                                  ) : (
+                                    <div className="text-center text-muted-foreground py-8">
+                                      <Image className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                                      <p className="text-sm">No preview available</p>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
                             </div>
                             
                             {/* Thumbnail Gallery */}
@@ -2301,18 +2581,45 @@ const getSelectedFabricVariant = (productIndex: number) => {
                               {product.mockup_images.map((file, idx) => (
                                 <div 
                                   key={idx} 
-                                  className="flex-shrink-0 cursor-pointer hover:scale-105 transition-transform duration-200"
-                                  onClick={() => handleImageClick(productIndex, 'mockup', URL.createObjectURL(file))}
+                                  className="flex-shrink-0 relative group"
                                 >
-                                  <img 
-                                    src={URL.createObjectURL(file)} 
+                                  <div
+                                    className="cursor-pointer hover:scale-105 transition-transform duration-200"
+                                    onClick={() => {
+                                      const fileUrl = getImageUrl(file);
+                                      if (fileUrl) {
+                                        handleImageClick(productIndex, 'mockup', fileUrl);
+                                      }
+                                    }}
+                                  >
+                                    {(() => {
+                                      const fileUrl = getImageUrl(file);
+                                      const mainImageUrl = getMainImage(productIndex, 'mockup');
+                                      return fileUrl ? (
+                                        <img 
+                                          src={fileUrl} 
                                     alt={`Mockup ${idx + 1}`}
                                     className={`w-16 h-16 object-cover rounded border-2 ${
-                                      getMainImage(productIndex, 'mockup') === URL.createObjectURL(file) 
+                                            mainImageUrl === fileUrl 
                                         ? 'border-primary' 
                                         : 'border-gray-200'
                                     }`}
                                   />
+                                      ) : null;
+                                    })()}
+                                  </div>
+                                  {/* Remove button */}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveImage(productIndex, 'mockup', idx);
+                                    }}
+                                    className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 shadow-lg z-10"
+                                    title="Remove image"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
                                 </div>
                               ))}
                             </div>
@@ -2388,7 +2695,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                     
                                     // Handle File object (before upload)
                                     if (firstMockup instanceof File) {
-                                      imageSrc = URL.createObjectURL(firstMockup);
+                                      imageSrc = getImageUrl(firstMockup) || '';
                                     }
                                     // Handle URL string (after upload)
                                     else if (typeof firstMockup === 'string' && firstMockup.trim()) {

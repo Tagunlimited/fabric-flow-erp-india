@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ErpLayout } from '@/components/ErpLayout';
+import { BackButton } from '@/components/common/BackButton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -1178,6 +1179,9 @@ export default function ReceiptPage() {
   return (
     <ErpLayout>
       <div className="space-y-6">
+        <div className="flex items-center">
+          <BackButton to="/accounts/invoices" label="Back to Accounts" />
+        </div>
         <Tabs defaultValue={initialTab} className="w-full">
           <TabsList>
             <TabsTrigger value="view">View Txn</TabsTrigger>

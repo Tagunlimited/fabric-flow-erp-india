@@ -121,6 +121,14 @@ export function ProductCategoryManager() {
     fetchFabrics();
   }, []);
 
+  // Reset form when dialog opens for a new category (not editing)
+  useEffect(() => {
+    if (dialogOpen && !editingCategory) {
+      setFormData({ category_name: '', description: '', selectedFabrics: [], category_images: [] });
+      setImageFiles({ front: null, back: null, side: null, detail: null });
+    }
+  }, [dialogOpen, editingCategory]);
+
   const uploadImages = async (): Promise<CategoryImage[]> => {
     const uploadedImages: CategoryImage[] = [...formData.category_images];
     
@@ -280,6 +288,19 @@ export function ProductCategoryManager() {
     setDialogOpen(true);
   };
 
+  const handleDialogOpenChange = (open: boolean) => {
+    setDialogOpen(open);
+    // Reset form when dialog closes
+    if (!open) {
+      // Small delay to ensure state updates complete
+      setTimeout(() => {
+        setFormData({ category_name: '', description: '', selectedFabrics: [], category_images: [] });
+        setImageFiles({ front: null, back: null, side: null, detail: null });
+        setEditingCategory(null);
+      }, 100);
+    }
+  };
+
   // Carousel navigation functions
   const nextSlide = () => {
     const maxSlides = Math.ceil(categories.length / itemsPerSlide) - 1;
@@ -314,7 +335,7 @@ export function ProductCategoryManager() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-foreground">Product Categories</h2>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
           <DialogTrigger asChild>
             <Button onClick={openDialog} className="bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary/80">
               <Plus className="w-4 h-4 mr-2" />
@@ -643,20 +664,16 @@ export function ProductCategoryManager() {
                                       
                                       return (
                                         <div key={index} className="flex items-center gap-2 bg-muted/50 rounded-full px-3 py-2 text-xs border">
-                                          {/* Fabric Icon */}
-                                          <div className="w-4 h-4 rounded-full overflow-hidden border">
-                                            {fabric.image ? (
+                                          {/* Fabric Icon - Only show if image exists */}
+                                          {fabric.image && (
+                                            <div className="w-4 h-4 rounded-full overflow-hidden border">
                                               <img 
                                                 src={fabric.image} 
                                                 alt={fabric.fabric_name} 
                                                 className="w-full h-full object-cover"
                                               />
-                                            ) : (
-                                              <div className="w-full h-full bg-gradient-to-br from-orange-200 to-orange-300 flex items-center justify-center">
-                                                <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
-                                              </div>
-                                            )}
-                                          </div>
+                                            </div>
+                                          )}
                                           <span className="font-medium">{fabricName}</span>
                                           <span className="text-muted-foreground">({colorCount})</span>
                                         </div>
