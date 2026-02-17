@@ -130,10 +130,10 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                   }
 
                   if (matchKey) {
-                    const current = warehouseInventoryMap[matchKey] || { quantity: 0, unit: item.unit || 'meters' };
+                    const current = warehouseInventoryMap[matchKey] || { quantity: 0, unit: item.unit || 'kgs' };
                     warehouseInventoryMap[matchKey] = {
                       quantity: current.quantity + Number(item.quantity || 0),
-                      unit: item.unit || current.unit || 'meters'
+                      unit: item.unit || current.unit || 'kgs'
                     };
                   }
                 });
@@ -145,9 +145,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                 const inventoryQty = warehouseInv 
                   ? warehouseInv.quantity 
                   : Number(fabric.inventory || 0);
-                const inventoryUnit = warehouseInv 
-                  ? warehouseInv.unit 
-                  : (fabric.uom || 'meters');
+                // Prefer fabric_master.uom (source of truth); fallback to kgs to match DB
+                const inventoryUnit = (fabric.uom || warehouseInv?.unit || 'kgs');
 
                 return {
                   fabric_id: fabric.id,
@@ -358,7 +357,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
       if (fabricUsage.fabric_id && fabricUsage.used_quantity > 0) {
         const { data: { user } } = await supabase.auth.getUser();
         const selectedFabric = availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id);
-        const fabricUnit = selectedFabric?.unit || 'meters';
+        const fabricUnit = selectedFabric?.unit || 'kgs';
         
         // Verify fabric exists in fabric_master before inserting
         const { data: fabricCheck, error: fabricCheckError } = await supabase
@@ -491,7 +490,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                       item_id: bestMatch.item_id || undefined,
                       item_name: bestMatch.item_name || fabricUsage.fabric_name || 'Unknown',
                       item_code: bestMatch.item_code || bestMatch.item_name || 'Unknown',
-                      unit: bestMatch.unit || 'meters',
+                      unit: bestMatch.unit || 'kgs',
                     },
                     fabricUsage.used_quantity,
                     currentQty,
@@ -686,7 +685,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                           placeholder="Enter fabric quantity used"
                         />
                         <span className="text-sm text-gray-500">
-                          {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'meters'}
+                          {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'kgs'}
                         </span>
                       </div>
                       {fabricUsage.fabric_id && (
@@ -694,7 +693,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                           Available: {(() => {
                             const fabric = availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id);
                             return fabric ? fabric.available_quantity.toFixed(2) : '0';
-                          })()} {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'meters'}
+                          })()} {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'kgs'}
                         </div>
                       )}
                     </div>
@@ -703,7 +702,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                   {fabricUsage.fabric_id && fabricUsage.used_quantity > 0 && (
                     <div className="mt-3 p-3 bg-green-100 border border-green-200 rounded">
                       <div className="text-sm text-green-800">
-                        ✓ Will record usage of {fabricUsage.used_quantity.toFixed(2)} {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'meters'} 
+                        ✓ Will record usage of {fabricUsage.used_quantity.toFixed(2)} {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'kgs'} 
                         of {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.fabric_name || 'fabric'} 
                         for {getTotalAdditionalCutQuantity()} pieces and deduct from inventory
                       </div>

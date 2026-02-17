@@ -1,0 +1,36 @@
+# Runs the Supabase keep-alive Edge Function every 24 hours
+# so the project doesn't get paused due to inactivity.
+#
+# Setup: Add these repository secrets in GitHub:
+#   - SUPABASE_URL: your project URL (e.g. https://xxxxx.supabase.co)
+#   - SUPABASE_ANON_KEY: anon/public key from Supabase Dashboard → Settings → API
+
+name: Keep Supabase alive
+
+on:
+  schedule:
+    # Every day at 00:00 UTC (adjust cron if you prefer another time)
+    - cron: "0 0 * * *"
+  workflow_dispatch: # Allow manual run from Actions tab
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call keep-alive Edge Function
+        run: |
+          url="${{ secrets.SUPABASE_URL }}/functions/v1/keep-alive"
+          echo "Calling: $url"
+          res=$(curl -s -w "\n%{http_code}" -X POST "$url" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Content-Type: application/json")
+          body=$(echo "$res" | head -n -1)
+          code=$(echo "$res" | tail -n 1)
+          echo "Response ($code): $body"
+          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            echo "Keep-alive succeeded."
+            exit 0
+          else
+            echo "Keep-alive failed with HTTP $code"
+            exit 1
+          fi

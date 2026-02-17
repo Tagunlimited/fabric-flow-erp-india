@@ -92,6 +92,7 @@ export default function QuotationDetailPage() {
   const [additionalCharges, setAdditionalCharges] = useState<AdditionalCharge[]>([]);
   const [salesManager, setSalesManager] = useState<SalesManager | null>(null);
   const [sizeTypes, setSizeTypes] = useState<{ [key: string]: any }>({});
+  const [totalReceipts, setTotalReceipts] = useState<number>(0);
 
   useEffect(() => {
     if (id) fetchData(id);
@@ -190,6 +191,19 @@ export default function QuotationDetailPage() {
       // Fetch additional charges if available (optional: you may need to fetch from order or another table)
       // For now, we'll just set it to an empty array as it's not directly linked to order_items in this schema
       setAdditionalCharges([]);
+      // Fetch receipts for this order to compute amount received and pending
+      const orderNumber = (orderData as any).order_number;
+      if (orderNumber) {
+        const { data: receiptsData } = await supabase
+          .from('receipts')
+          .select('amount')
+          .eq('reference_type', 'order')
+          .eq('reference_number', orderNumber);
+        const received = (receiptsData || []).reduce((s, r) => s + Number((r as any).amount || 0), 0);
+        setTotalReceipts(received);
+      } else {
+        setTotalReceipts(0);
+      }
       // Generate quotation number
       const qNum = await generateQuotationNumber();
       setQuotationNumber(qNum);
@@ -1293,6 +1307,17 @@ export default function QuotationDetailPage() {
                           } else if (item.specifications && typeof item.specifications === 'object' && (item.specifications as any).branding_items && Array.isArray((item.specifications as any).branding_items) && (item.specifications as any).branding_items.length > 0) {
                             brandingItems = (item.specifications as any).branding_items;
                           }
+                          // Only show branding section when at least one item has real data (not all N/A)
+                          const hasBranding = brandingItems.some((b: any) => b && typeof b === 'object' && (
+                            (b.branding_type && String(b.branding_type).trim() !== '') ||
+                            (b.placement && String(b.placement).trim() !== '') ||
+                            (b.measurement && String(b.measurement).trim() !== '')
+                          ));
+                          const validBrandingItems = hasBranding ? brandingItems.filter((b: any) => b && typeof b === 'object' && (
+                            (b.branding_type && String(b.branding_type).trim() !== '') ||
+                            (b.placement && String(b.placement).trim() !== '') ||
+                            (b.measurement && String(b.measurement).trim() !== '')
+                          )) : [];
                           
                           return (
                             <tr key={item.id}>
@@ -1342,24 +1367,14 @@ export default function QuotationDetailPage() {
                                       </>
                                     )}
                                     
-                                    {/* Branding Details - Show for all order types */}
-                                    {brandingItems.length > 0 && (
-                                      <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded">
-                                        <div className="text-sm font-semibold text-blue-900 mb-1">Branding Details:</div>
-                                        <div className="space-y-1">
-                                          {brandingItems.map((b: any, i: number) => (
-                                            <div key={i} className="text-xs text-blue-800 bg-white p-2 rounded border border-blue-100">
-                                              <div className="grid grid-cols-3 gap-2">
-                                                <div>
-                                                  <span className="font-medium">Type:</span> {b.branding_type || 'N/A'}
-                                                </div>
-                                                <div>
-                                                  <span className="font-medium">Placement:</span> {b.placement || 'N/A'}
-                                                </div>
-                                                <div>
-                                                  <span className="font-medium">Size:</span> {b.measurement || 'N/A'}
-                                                </div>
-                                              </div>
+                                    {/* Branding Details - Show only when branding is available (not all N/A) */}
+                                    {validBrandingItems.length > 0 && (
+                                      <div className="mt-2">
+                                        <div className="text-sm font-bold text-gray-900 mb-1">Branding Details:</div>
+                                        <div className="space-y-1 text-sm text-gray-800">
+                                          {validBrandingItems.map((b: any, i: number) => (
+                                            <div key={i}>
+                                              Type: {b.branding_type || 'N/A'} · Placement: {b.placement || 'N/A'} · Size: {b.measurement || 'N/A'}
                                             </div>
                                           ))}
                                         </div>
@@ -1446,6 +1461,14 @@ export default function QuotationDetailPage() {
                           <span>{formatCurrency(grandTotal)}</span>
                         </div>
                       </div>
+                      <div className="flex justify-between text-sm">
+                        <span>Amount Received:</span>
+                        <span className="text-green-700">{formatCurrency(totalReceipts)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm font-semibold">
+                        <span>Pending Amount:</span>
+                        <span className="text-amber-700">{formatCurrency(Math.max(0, grandTotal - totalReceipts))}</span>
+                      </div>
                     </div>
                   </div>
                   
@@ -1467,12 +1490,8 @@ export default function QuotationDetailPage() {
                     </div>
                     <div className="space-y-0.5">
                       <div>• Subject to change without notice</div>
-                      <div>• Quality as per industry standards</div>
-                      <div>• Return policy as per guidelines</div>
                     </div>
                     <div className="space-y-0.5">
-                      <div>• Installation & training included</div>
-                      <div>• Warranty: 1 year from delivery</div>
                       <div>• Support: 9am–6pm, Mon–Sat</div>
                     </div>
                   </div>
@@ -1706,6 +1725,17 @@ export default function QuotationDetailPage() {
                         } else if (item.specifications && typeof item.specifications === 'object' && (item.specifications as any).branding_items && Array.isArray((item.specifications as any).branding_items) && (item.specifications as any).branding_items.length > 0) {
                           brandingItems = (item.specifications as any).branding_items;
                         }
+                        // Only show branding section when at least one item has real data (not all N/A)
+                        const hasBrandingPdf = brandingItems.some((b: any) => b && typeof b === 'object' && (
+                          (b.branding_type && String(b.branding_type).trim() !== '') ||
+                          (b.placement && String(b.placement).trim() !== '') ||
+                          (b.measurement && String(b.measurement).trim() !== '')
+                        ));
+                        const validBrandingItemsPdf = hasBrandingPdf ? brandingItems.filter((b: any) => b && typeof b === 'object' && (
+                          (b.branding_type && String(b.branding_type).trim() !== '') ||
+                          (b.placement && String(b.placement).trim() !== '') ||
+                          (b.measurement && String(b.measurement).trim() !== '')
+                        )) : [];
                         
                         return (
                           <tr key={item.id}>
@@ -1755,24 +1785,14 @@ export default function QuotationDetailPage() {
                               </>
                             )}
                             
-                            {/* Branding Details - Show for all order types */}
-                            {brandingItems.length > 0 && (
-                              <div className="mt-1 p-1 bg-blue-50 border border-blue-200 rounded">
-                                <div className="text-xs font-semibold text-blue-900 mb-0.5">Branding:</div>
-                                <div className="space-y-0.5">
-                                  {brandingItems.map((b: any, i: number) => (
-                                    <div key={i} className="text-xs text-blue-800 bg-white p-1 rounded border border-blue-100">
-                                      <div className="grid grid-cols-3 gap-1">
-                                        <div>
-                                          <span className="font-medium">Type:</span> {b.branding_type || 'N/A'}
-                                        </div>
-                                        <div>
-                                          <span className="font-medium">Placement:</span> {b.placement || 'N/A'}
-                                        </div>
-                                        <div>
-                                          <span className="font-medium">Size:</span> {b.measurement || 'N/A'}
-                                        </div>
-                                      </div>
+                            {/* Branding Details - Show only when branding is available (not all N/A) */}
+                            {validBrandingItemsPdf.length > 0 && (
+                              <div className="mt-1">
+                                <div className="text-xs font-bold text-gray-900 mb-0.5">Branding Details:</div>
+                                <div className="space-y-0.5 text-xs text-gray-800">
+                                  {validBrandingItemsPdf.map((b: any, i: number) => (
+                                    <div key={i}>
+                                      Type: {b.branding_type || 'N/A'} · Placement: {b.placement || 'N/A'} · Size: {b.measurement || 'N/A'}
                                     </div>
                                   ))}
                                 </div>
@@ -1865,6 +1885,14 @@ export default function QuotationDetailPage() {
                           <span>{formatCurrency(grandTotal)}</span>
                       </div>
                     </div>
+                    <div className="flex justify-between text-sm">
+                      <span>Amount Received:</span>
+                      <span className="text-green-700">{formatCurrency(totalReceipts)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm font-semibold">
+                      <span>Pending Amount:</span>
+                      <span className="text-amber-700">{formatCurrency(Math.max(0, grandTotal - totalReceipts))}</span>
+                    </div>
                   </div>
                 </div>
                 
@@ -1886,12 +1914,8 @@ export default function QuotationDetailPage() {
                   </div>
                   <div className="space-y-0.5">
                     <div>• Subject to change without notice</div>
-                    <div>• Quality as per industry standards</div>
-                    <div>• Return policy as per guidelines</div>
                   </div>
                   <div className="space-y-0.5">
-                    <div>• Installation & training included</div>
-                    <div>• Warranty: 1 year from delivery</div>
                     <div>• Support: 9am–6pm, Mon–Sat</div>
                   </div>
                 </div>

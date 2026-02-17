@@ -49,6 +49,40 @@ interface Customer {
   gstin: string | null;
 }
 
+/** Compute order total from items (+ optional additional charges) and pending = total - receipts. Matches quotation total. */
+async function getOrderCalculatedTotals(orderId: string, orderNumber: string): Promise<{ calculatedTotal: number; totalReceipts: number; pendingAmount: number }> {
+  const { data: order } = await supabase
+    .from('orders')
+    .select('id, final_amount, gst_rate')
+    .eq('id', orderId)
+    .single();
+  const { data: orderItems } = await supabase
+    .from('order_items')
+    .select('*, size_prices, sizes_quantities, specifications')
+    .eq('order_id', orderId);
+  const { data: existingReceipts } = await supabase
+    .from('receipts')
+    .select('amount')
+    .eq('reference_id', orderId)
+    .eq('reference_type', 'order');
+  const { data: additionalCharges } = await supabase
+    .from('order_additional_charges')
+    .select('amount_incl_gst')
+    .eq('order_id', orderId);
+
+  let calculatedTotal = order?.final_amount ?? 0;
+  if (orderItems && orderItems.length > 0 && order) {
+    const summary = calculateOrderSummary(orderItems, order);
+    calculatedTotal = summary.grandTotal;
+  }
+  const additionalTotal = (additionalCharges || []).reduce((s, c) => s + Number((c as any).amount_incl_gst || 0), 0);
+  calculatedTotal += additionalTotal;
+
+  const totalReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  const pendingAmount = Math.max(0, calculatedTotal - totalReceipts);
+  return { calculatedTotal, totalReceipts, pendingAmount };
+}
+
 export default function ReceiptPage() {
   const printRef = useRef<HTMLDivElement>(null);
   const { config: company } = useCompanySettings();
@@ -130,37 +164,13 @@ export default function ReceiptPage() {
     const prefillFromQuotation = async () => {
       if (!prefill || prefill.type !== 'order' || !prefill.id) return;
       try {
-        // Fetch order and customer to prefill
         const { data: ord } = await supabase
           .from('orders')
-          .select('id, order_number, order_date, customer_id, final_amount, balance_amount, gst_rate')
+          .select('id, order_number, order_date, customer_id')
           .eq('id', prefill.id)
           .single();
         if (!ord) return;
-        
-        // Fetch order items to calculate correct total
-        const { data: orderItems } = await supabase
-          .from('order_items')
-          .select('*, size_prices, sizes_quantities, specifications')
-          .eq('order_id', ord.id);
-        
-        // Calculate correct total using size-based pricing
-        let calculatedTotal = ord.final_amount; // Fallback to final_amount
-        if (orderItems && orderItems.length > 0) {
-          const summary = calculateOrderSummary(orderItems, ord);
-          calculatedTotal = summary.grandTotal;
-        }
-        
-        // Calculate pending amount (calculated total - existing receipts)
-        const { data: existingReceipts } = await supabase
-          .from('receipts')
-          .select('amount')
-          .eq('reference_number', ord.order_number)
-          .eq('reference_type', 'order');
-        
-        const totalReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
-        const pendingAmount = calculatedTotal - totalReceipts;
-        
+        const { calculatedTotal, pendingAmount } = await getOrderCalculatedTotals(ord.id, ord.order_number);
         const { data: cust } = await supabase
           .from('customers')
           .select('*')
@@ -168,19 +178,18 @@ export default function ReceiptPage() {
           .single();
         setCustomer((cust || null) as Customer | null);
         setCustomerId(ord.customer_id);
-        const sel = {
+        setSelected({
           id: ord.id,
-          type: 'order' as const,
+          type: 'order',
           number: ord.order_number,
           date: ord.order_date,
           customer_id: ord.customer_id,
           customer_name: cust?.company_name,
           total_amount: calculatedTotal,
           balance_amount: pendingAmount,
-        };
-        setSelected(sel);
+        });
         setReceiptReference(ord.order_number);
-        setAmount(String(prefill.amount ?? pendingAmount ?? ''));
+        setAmount(String(pendingAmount ?? ''));
       } catch (e) {
         // ignore prefill errors
       }
@@ -195,7 +204,7 @@ export default function ReceiptPage() {
       // First try: full select with status and join to customers
       let query = supabase
         .from('receipts')
-        .select('id, created_at, receipt_number, reference_number, reference_type, amount, payment_mode, payment_type, customer_id, customers(company_name)')
+        .select('id, created_at, receipt_number, reference_id, reference_number, reference_type, amount, payment_mode, payment_type, customer_id, customers(company_name)')
         .order('created_at', { ascending: false })
         .limit(50);
       let resp: any = customerId ? await query.eq('customer_id', customerId) : await query;
@@ -204,7 +213,7 @@ export default function ReceiptPage() {
         console.warn('Receipts select with join/status failed, falling back:', resp.error.message);
         let fallback = supabase
           .from('receipts')
-          .select('id, created_at, receipt_number, reference_number, reference_type, amount, payment_mode, payment_type, customer_id')
+          .select('id, created_at, receipt_number, reference_id, reference_number, reference_type, amount, payment_mode, payment_type, customer_id')
           .order('created_at', { ascending: false })
           .limit(50);
         resp = customerId ? await fallback.eq('customer_id', customerId) : await fallback;
@@ -273,7 +282,7 @@ export default function ReceiptPage() {
             const { data: existingReceipts } = await supabase
               .from('receipts')
               .select('amount')
-              .eq('reference_number', o.order_number)
+              .eq('reference_id', o.id)
               .eq('reference_type', 'order');
             
             const totalReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
@@ -335,25 +344,14 @@ export default function ReceiptPage() {
 
         if (order) {
           console.log('Order found:', order);
-          
-          // Fetch order items to calculate correct total
-          const { data: orderItems } = await supabase
-            .from('order_items')
-            .select('*, size_prices, sizes_quantities, specifications')
-            .eq('order_id', order.id);
-          
-          // Calculate correct total using size-based pricing
-          let calculatedTotal = order.final_amount; // Fallback to final_amount
-          if (orderItems && orderItems.length > 0) {
-            const summary = calculateOrderSummary(orderItems, order);
-            calculatedTotal = summary.grandTotal;
-          }
-          
-          // Calculate total existing receipts for this order
+          const { calculatedTotal: orderTotal } = await getOrderCalculatedTotals(order.id, selected.number);
+          const calculatedTotal = orderTotal;
+
+          // Calculate total existing receipts for this order (match by order id for accuracy)
           const { data: existingReceipts, error: receiptsError } = await supabase
             .from('receipts')
             .select('amount')
-            .eq('reference_number', selected.number)
+            .eq('reference_id', order.id)
             .eq('reference_type', 'order');
 
           if (receiptsError) {
@@ -451,73 +449,29 @@ export default function ReceiptPage() {
 
       console.log('Receipt created successfully:', newReceipt);
 
-      // Update order balance if reference is order
+      // Update order balance if reference is order (use same calculated total as quotation)
       if (selected.type === 'order') {
         console.log('Updating order balance...');
-          const { data: order, error: orderUpdateError } = await supabase
-            .from('orders')
-            .select('id, final_amount, balance_amount, order_type, status, gst_rate')
-            .eq('order_number', selected.number)
-            .single();
+        const { data: order, error: orderUpdateError } = await supabase
+          .from('orders')
+          .select('id, order_type, status')
+          .eq('order_number', selected.number)
+          .single();
 
         if (orderUpdateError) {
           console.error('Error fetching order for balance update:', orderUpdateError);
         } else if (order) {
-          // Fetch order items to calculate correct total
-          const { data: orderItems } = await supabase
-            .from('order_items')
-            .select('*, size_prices, sizes_quantities, specifications')
-            .eq('order_id', order.id);
-          
-          // Calculate correct total using size-based pricing
-          let calculatedTotal = order.final_amount; // Fallback to final_amount
-          if (orderItems && orderItems.length > 0) {
-            const summary = calculateOrderSummary(orderItems, order);
-            calculatedTotal = summary.grandTotal;
+          const { pendingAmount: newBalance } = await getOrderCalculatedTotals(order.id, selected.number);
+          const updateData: any = { balance_amount: newBalance };
+          if (order.order_type === 'readymade' && order.status === 'pending') {
+            updateData.status = 'confirmed';
           }
-          
-          // Calculate total receipts for this order (including the new one)
-          const { data: allReceipts, error: receiptsError } = await supabase
-            .from('receipts')
-            .select('amount')
-            .eq('reference_number', selected.number)
-            .eq('reference_type', 'order');
-
-          if (receiptsError) {
-            console.error('Error fetching receipts for balance calculation:', receiptsError);
-          } else {
-            const totalReceipts = (allReceipts || []).reduce((sum, r) => sum + Number(r.amount), 0);
-            const newBalance = calculatedTotal - totalReceipts;
-            
-            console.log('Balance calculation:', {
-              calculatedTotal,
-              finalAmount: Number(order.final_amount),
-              totalReceipts,
-              newBalance
-            });
-
-            // Prepare update object
-            const updateData: any = { balance_amount: newBalance };
-            
-            // For readymade orders, update status from 'pending' to 'confirmed' when receipt is created
-            if (order.order_type === 'readymade' && order.status === 'pending') {
-              updateData.status = 'confirmed';
-              console.log('Updating readymade order status from pending to confirmed');
-            }
-
-            const { error: balanceUpdateError } = await supabase
-              .from('orders')
-              .update(updateData)
-              .eq('id', order.id);
-
-            if (balanceUpdateError) {
-              console.error('Error updating order balance:', balanceUpdateError);
-            } else {
-              console.log('Order balance updated successfully');
-              if (updateData.status === 'confirmed') {
-                console.log('Order status updated to confirmed');
-              }
-            }
+          const { error: balanceUpdateError } = await supabase
+            .from('orders')
+            .update(updateData)
+            .eq('id', order.id);
+          if (balanceUpdateError) {
+            console.error('Error updating order balance:', balanceUpdateError);
           }
         }
       }
@@ -1043,39 +997,20 @@ export default function ReceiptPage() {
         .eq('id', r.id);
       if (error) throw error;
 
-      // Attempt to restore order balance if reference is order
+      // Recalculate order balance after cancel (receipt already deleted; use same calculated total as quotation)
       if (r.reference_type === 'order') {
-        // Fetch order id by reference_number if needed
         const { data: ord } = await supabase
           .from('orders')
-          .select('id, final_amount, balance_amount')
+          .select('id')
           .eq('order_number', r.reference_number)
           .single();
         if (ord) {
-          // Calculate total receipts for this order (excluding the cancelled receipt)
-          const { data: remainingReceipts } = await supabase
-            .from('receipts')
-            .select('amount')
-            .eq('reference_number', r.reference_number)
-            .eq('reference_type', 'order')
-            .neq('id', r.id);
-
-          const totalRemainingReceipts = (remainingReceipts || []).reduce((sum, receipt) => sum + Number(receipt.amount), 0);
-          const newBalance = Number(ord.final_amount) - totalRemainingReceipts;
-
-          console.log('Cancel balance calculation:', {
-            finalAmount: Number(ord.final_amount),
-            cancelledAmount: Number(r.amount),
-            totalRemainingReceipts,
-            newBalance
-          });
-
+          const { pendingAmount: newBalance } = await getOrderCalculatedTotals(ord.id, r.reference_number);
           await supabase
             .from('orders')
             .update({ balance_amount: newBalance })
             .eq('id', ord.id);
         }
-        // Customer pending will be recalculated by trigger if migration applied
       }
       toast.success('Receipt cancelled');
       
@@ -1098,13 +1033,23 @@ export default function ReceiptPage() {
         setCustomer((cust || null) as any);
       }
       let ord: any = null;
-      if (r.reference_type === 'order' && r.reference_number) {
-        const { data } = await supabase
-          .from('orders')
-          .select('id, customer_id, order_number, order_date, final_amount, balance_amount')
-          .eq('order_number', r.reference_number)
-          .single();
-        ord = data;
+      if (r.reference_type === 'order') {
+        if (r.reference_number) {
+          const { data } = await supabase
+            .from('orders')
+            .select('id, customer_id, order_number, order_date, final_amount, balance_amount')
+            .eq('order_number', r.reference_number)
+            .single();
+          ord = data;
+        }
+        if (!ord && r.reference_id) {
+          const { data } = await supabase
+            .from('orders')
+            .select('id, customer_id, order_number, order_date, final_amount, balance_amount')
+            .eq('id', r.reference_id)
+            .single();
+          ord = data;
+        }
       }
       setReceiptNumber(r.receipt_number || '');
       setAmount(String(r.amount || ''));
@@ -1117,6 +1062,7 @@ export default function ReceiptPage() {
       setDate(new Date(r.created_at));
       setReceiptReference(r.reference_number || '');
       if (ord) {
+        const { calculatedTotal, pendingAmount } = await getOrderCalculatedTotals(ord.id, ord.order_number);
         setSelected({
           id: ord.id,
           type: 'order',
@@ -1124,8 +1070,8 @@ export default function ReceiptPage() {
           date: ord.order_date,
           customer_id: ord.customer_id,
           customer_name: customer?.company_name,
-          total_amount: ord.final_amount,
-          balance_amount: ord.balance_amount,
+          total_amount: calculatedTotal,
+          balance_amount: pendingAmount,
         });
       } else {
         setSelected({
@@ -1145,32 +1091,31 @@ export default function ReceiptPage() {
     }
   };
 
-  // Refresh order data to update UI state
+  // Refresh order data to update UI state (use calculated total and pending to match quotation)
   const refreshOrderData = async (orderNumber: string) => {
     try {
       const { data: order } = await supabase
         .from('orders')
-        .select('id, order_number, customer_id, order_date, final_amount, balance_amount')
+        .select('id, order_number, customer_id, order_date')
         .eq('order_number', orderNumber)
         .single();
 
-      if (order && selected && selected.number === orderNumber) {
-        // Update the selected order with fresh data
+      if (!order) return;
+      const { calculatedTotal, pendingAmount } = await getOrderCalculatedTotals(order.id, orderNumber);
+
+      if (selected && selected.number === orderNumber) {
         setSelected({
           ...selected,
-          total_amount: order.final_amount,
-          balance_amount: order.balance_amount,
+          total_amount: calculatedTotal,
+          balance_amount: pendingAmount,
         });
-
-        // Also update the results array to reflect the new balance
-        setResults(prevResults => 
-          prevResults.map(r => 
-            r.number === orderNumber 
-              ? { ...r, total_amount: order.final_amount, balance_amount: order.balance_amount }
-              : r
-          )
-        );
       }
+      setResults(prevResults =>
+        prevResults.map(r =>
+          r.number === orderNumber
+            ? { ...r, total_amount: calculatedTotal, balance_amount: pendingAmount }
+            : r
+        ));
     } catch (error) {
       console.error('Error refreshing order data:', error);
     }
@@ -1463,6 +1408,12 @@ export default function ReceiptPage() {
                 </div>
                 <div className="space-y-1 text-right">
                   <div><span className="font-medium">Amount:</span> {formatCurrency(receiptAmount)}</div>
+                  {selected?.type === 'order' && selected?.total_amount != null && (
+                    <>
+                      <div><span className="font-medium">Order Total:</span> {formatCurrency(selected.total_amount)}</div>
+                      <div><span className="font-medium">Pending Amount:</span> <span className="text-amber-700 font-semibold">{formatCurrency(selected.balance_amount ?? 0)}</span></div>
+                    </>
+                  )}
                   {referenceId && <div><span className="font-medium">Reference ID:</span> {referenceId}</div>}
                   {verifiedBy && <div><span className="font-medium">Verified By:</span> {verifiedBy}</div>}
                 </div>
