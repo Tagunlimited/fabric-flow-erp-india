@@ -357,51 +357,75 @@ const AssignOrdersPage = () => {
           .in('bom_id', bomIds as any);
         if (bomItemsErr) throw bomItemsErr;
 
-        // NEW: Fetch all POs created from these BOMs
+        // Fetch POs linked to these BOMs: 1) purchase_orders.bom_id 2) bom_po_items (in case PO has no bom_id set)
         const { data: posFromBoms } = await supabase
           .from('purchase_orders')
           .select('id, bom_id')
           .in('bom_id', bomIds);
 
-        const poIds = (posFromBoms || []).map(po => po.id);
+        let bomIdToPoIds: Record<string, Set<string>> = {};
+        (posFromBoms || []).forEach((po: any) => {
+          if (po?.bom_id) {
+            if (!bomIdToPoIds[po.bom_id]) bomIdToPoIds[po.bom_id] = new Set();
+            bomIdToPoIds[po.bom_id].add(po.id);
+          }
+        });
 
-        // NEW: Fetch GRN items for these POs (approved items only)
+        const { data: bomPoItems } = await supabase
+          .from('bom_po_items')
+          .select('bom_id, po_id')
+          .in('bom_id', bomIds);
+        (bomPoItems || []).forEach((row: any) => {
+          if (row?.bom_id && row?.po_id) {
+            if (!bomIdToPoIds[row.bom_id]) bomIdToPoIds[row.bom_id] = new Set();
+            bomIdToPoIds[row.bom_id].add(row.po_id);
+          }
+        });
+
+        const poIds = Array.from(new Set([
+          ...(posFromBoms || []).map((po: any) => po.id),
+          ...(bomPoItems || []).map((row: any) => row.po_id)
+        ].filter(Boolean)));
+
+        // Fetch GRN masters for these POs (with po_id to link back to BOM)
+        let grnMasterData: any[] = [];
         let grnItemsData: any[] = [];
         if (poIds.length > 0) {
-          const { data: grnMasterData } = await supabase
+          const { data: grnMasters } = await supabase
             .from('grn_master')
-            .select('id')
+            .select('id, po_id')
             .in('po_id', poIds);
-          
-          const grnIds = (grnMasterData || []).map(g => g.id);
-          
+          grnMasterData = grnMasters || [];
+
+          const grnIds = grnMasterData.map(g => g.id);
           if (grnIds.length > 0) {
             const { data: grnItems } = await supabase
               .from('grn_items')
-              .select('po_item_id, approved_quantity, item_name')
+              .select('grn_id, po_item_id, approved_quantity, item_name')
               .in('grn_id', grnIds)
               .eq('quality_status', 'approved');
             grnItemsData = grnItems || [];
           }
         }
 
-        // Build mapping: BOM item_name → total approved quantity
-        const approvedQtyByItemName = new Map<string, number>();
-        grnItemsData.forEach(gi => {
-          const current = approvedQtyByItemName.get(gi.item_name) || 0;
-          approvedQtyByItemName.set(gi.item_name, current + (gi.approved_quantity || 0));
+        // BOM has material available if: there is a PO for that BOM and that PO has a GRN with at least one approved item
+        const grnIdsWithApprovedItems = new Set((grnItemsData || []).map((gi: any) => gi.grn_id));
+        const poIdsWithApprovedGrn = new Set(
+          (grnMasterData || [])
+            .filter((g: any) => grnIdsWithApprovedItems.has(g.id))
+            .map((g: any) => g.po_id)
+        );
+        const bomIdsWithGrn: Set<string> = new Set();
+        Object.entries(bomIdToPoIds).forEach(([bomId, poIdSet]) => {
+          const hasApprovedGrn = Array.from(poIdSet).some(poId => poIdsWithApprovedGrn.has(poId));
+          if (hasApprovedGrn) bomIdsWithGrn.add(bomId);
         });
 
-        // Check availability by matching BOM item names with GRN approved items
-        const reqByItemName: Record<string, Record<string, number>> = {};
-        (bomItems || []).forEach((bi: any) => {
-          const orderId = bomIdToOrderId[bi.bom_id];
-          if (!orderId) return;
-          const reqQty = Number(bi.qty_total || 0) || 0;
-          const itemName = bi.item_name;
-          (reqByItemName[orderId] ||= {});
-          reqByItemName[orderId][itemName] = (reqByItemName[orderId][itemName] || 0) + reqQty;
-        });
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[Material Status] BOMs:', bomIds.length, 'POs from purchase_orders:', (posFromBoms || []).length, 'POs from bom_po_items:', (bomPoItems || []).length, 'total poIds:', poIds.length);
+          console.log('[Material Status] GRN masters:', grnMasterData.length, 'GRN items (approved):', grnItemsData.length);
+          console.log('[Material Status] BOMs with approved GRN:', Array.from(bomIdsWithGrn));
+        }
 
         // 4) Build assignments from orders + grouped BOMs
         const mapStatusToAssignment = (orderStatus: string): OrderAssignment['status'] => {
@@ -536,24 +560,10 @@ const AssignOrdersPage = () => {
           const quantity = bomList.reduce((sum: number, b: any) => sum + (b?.total_order_qty || 0), 0);
           const due = o.expected_delivery_date || '';
 
-          // Determine material availability by comparing required vs available quantities
-          const required = reqByItemName[o.id] || {};
-          let allOk = true;
-          for (const itemName of Object.keys(required)) {
-            const req = required[itemName];
-            const avail = approvedQtyByItemName.get(itemName) || 0;
-            if (avail < req) {
-              allOk = false;
-              break;
-            }
-          }
-          const materialStatus: OrderAssignment['materialStatus'] = allOk ? 'Available' : 'Not Available';
-
-          // Debug logging
-          console.log('Order:', o.order_number);
-          console.log('Required materials:', required);
-          console.log('Available materials:', Array.from(approvedQtyByItemName.entries()));
-          console.log('Material Status:', materialStatus);
+          // Material status: Available if order has a BOM and that BOM has a GRN (PO created for BOM + GRN with approved items)
+          const orderBomIds = (bomsByOrder[o.id] || []).map((b: any) => b.id).filter(Boolean);
+          const hasBomWithGrn = orderBomIds.length > 0 && orderBomIds.some((bomId: string) => bomIdsWithGrn.has(bomId));
+          const materialStatus: OrderAssignment['materialStatus'] = hasBomWithGrn ? 'Available' : 'Not Available';
 
           const base: OrderAssignment = {
             id: o.id,

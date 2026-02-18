@@ -380,30 +380,6 @@ const WarehouseInventoryPage: React.FC = () => {
             Dispatch Zone ({totals.dispatch})
           </TabsTrigger>
         </TabsList>
-        
-        {/* Debug Information */}
-        {totals.all === 0 && (
-          <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-            <div className="flex items-center gap-2 text-yellow-700 mb-2">
-              <Package className="w-4 h-4" />
-              <span className="font-medium">No items found in warehouse inventory</span>
-            </div>
-            <div className="text-sm text-yellow-600 space-y-1">
-              <p>This could mean:</p>
-              <ul className="list-disc list-inside ml-4 space-y-1">
-                <li>No GRNs have been approved yet</li>
-                <li>Warehouse inventory tables need to be set up</li>
-                <li>Approved GRN items haven't been moved to warehouse inventory</li>
-              </ul>
-              <p className="mt-2 font-medium">To fix this:</p>
-              <ol className="list-decimal list-inside ml-4 space-y-1">
-                <li>Run the <code className="bg-yellow-100 px-1 rounded">setup_warehouse_inventory_complete.sql</code> script in Supabase</li>
-                <li>Approve some GRNs using the GRN approval workflow</li>
-                <li>Check that approved items are being inserted into warehouse_inventory table</li>
-              </ol>
-            </div>
-          </div>
-        )}
 
         <TabsContent value="receiving" className="space-y-4">
           <ReceivingZoneInventory

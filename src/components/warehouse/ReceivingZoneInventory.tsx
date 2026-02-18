@@ -138,7 +138,7 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
       if (fabricIds.length > 0) {
         const { data: fabricsData, error: fabricsError } = await supabase
           .from('fabric_master')
-          .select('id, fabric_code, fabric_name, color, type, gsm, image')
+          .select('id, fabric_code, fabric_name, color, type, gsm, image, hex, fabric_for_supplier')
           .in('id', fabricIds);
         
         if (!fabricsError && fabricsData) {
@@ -167,7 +167,7 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
         if (fabricNames.length > 0) {
           const { data: fabricsByNameData, error: fabricsByNameError } = await supabase
             .from('fabric_master')
-            .select('id, fabric_code, fabric_name, color, type, gsm, image')
+            .select('id, fabric_code, fabric_name, color, type, gsm, image, hex, fabric_for_supplier')
             .in('fabric_name', fabricNames);
           
           if (!fabricsByNameError && fabricsByNameData) {
@@ -567,6 +567,7 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                   <TableHead>Code</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
+                  <TableHead>Fabric</TableHead>
                   <TableHead>Color</TableHead>
                   <TableHead>Material/GSM</TableHead>
                   <TableHead>Brand</TableHead>
@@ -585,25 +586,39 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                   const itemMaster = (item as any).item_master;
                   const product = (item as any).product;
                   
-                  // Determine display values based on item type
                   let displayImage: string | undefined;
                   let displayCode: string;
                   let displayName: string;
                   let displayType: string;
+                  let displayFabric: string;
                   let displayColor: string;
+                  let displayColorHex: string | null = null;
                   let displayMaterialGsm: string;
                   let displayBrand: string;
                   let displaySize: string;
-                  
+
+                  const colorNameToHex: Record<string, string> = {
+                    peach: '#FFCBA4', blank: '#E8E8E8', white: '#FFFFFF', black: '#1a1a1a',
+                    grey: '#9ca3af', gray: '#9ca3af', red: '#dc2626', blue: '#2563eb',
+                    green: '#16a34a', yellow: '#eab308', navy: '#1e3a8a', cotton: '#fafafa'
+                  };
+                  const resolveColorHex = (colorName: string, hexFromMaster?: string | null): string => {
+                    if (hexFromMaster && String(hexFromMaster).trim()) {
+                      const h = String(hexFromMaster).trim();
+                      return h.startsWith('#') ? h : `#${h}`;
+                    }
+                    const key = (colorName || '').toLowerCase().trim();
+                    return colorNameToHex[key] || '#E5E7EB';
+                  };
+
                   if (item.item_type === 'FABRIC' && fabricMaster) {
-                    // Only use fabric image from database (fabric_master table), no fallback to mockup images
                     displayImage = fabricMaster.image || null;
-                    // Always use fabric_code from fabric_master, never fallback to item_code which might be URL
                     displayCode = fabricMaster.fabric_code || '-';
                     displayName = fabricMaster.fabric_name || item.item_name;
-                    displayType = 'Fabric'; // Always show "Fabric" for fabric items
+                    displayType = 'Fabric';
+                    displayFabric = fabricMaster.fabric_for_supplier || '-';
                     displayColor = item.grn_item?.fabric_color || fabricMaster.color || '-';
-                    // Combine material (type) and GSM: e.g., "Cotton 240 GSM"
+                    displayColorHex = displayColor !== '-' ? resolveColorHex(displayColor, fabricMaster.hex) : null;
                     const material = fabricMaster.type || '';
                     const gsm = fabricMaster.gsm || '';
                     displayMaterialGsm = material && gsm ? `${material} ${gsm} GSM` : material || gsm || '-';
@@ -611,11 +626,12 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                     displaySize = '-';
                   } else if (item.item_type === 'ITEM' && itemMaster) {
                     displayImage = itemMaster.image || item.grn_item?.item_image_url;
-                    // Always use item_code from item_master
                     displayCode = itemMaster.item_code || '-';
                     displayName = itemMaster.item_name || item.item_name;
                     displayType = itemMaster.item_type || '-';
+                    displayFabric = '-';
                     displayColor = item.grn_item?.item_color || itemMaster.color || '-';
+                    displayColorHex = displayColor !== '-' ? resolveColorHex(displayColor, null) : null;
                     displayMaterialGsm = itemMaster.material || '-';
                     displayBrand = itemMaster.brand || '-';
                     displaySize = itemMaster.size || '-';
@@ -624,26 +640,25 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                     displayCode = product.sku || '-';
                     displayName = product.name || item.item_name;
                     displayType = product.class || '-';
+                    displayFabric = '-';
                     displayColor = '-';
+                    displayColorHex = null;
                     displayMaterialGsm = '-';
                     displayBrand = product.brand || '-';
                     displaySize = product.size || '-';
                   } else {
-                    // Fallback to GRN item data - but check if item_code looks like a URL
-                    // For fabric items, don't show mockup images - only show if fabric image exists in database
                     if (item.item_type === 'FABRIC') {
-                      displayImage = null; // Don't show mockup images for fabric items
+                      displayImage = null;
                     } else {
                     displayImage = item.grn_item?.item_image_url;
                     }
-                    // If item_code looks like a URL, don't use it
                     const itemCode = item.item_code || '';
                     displayCode = (itemCode.startsWith('http://') || itemCode.startsWith('https://')) ? '-' : itemCode;
                     displayName = item.item_name;
-                    // For fabric items, show "Fabric" in Type column
                     displayType = item.item_type === 'FABRIC' ? 'Fabric' : item.item_type || '-';
+                    displayFabric = '-';
                     displayColor = item.grn_item?.fabric_color || item.grn_item?.item_color || '-';
-                    // For fabric items, try to combine material and GSM if available
+                    displayColorHex = displayColor !== '-' ? resolveColorHex(displayColor, null) : null;
                     if (item.item_type === 'FABRIC') {
                       // Try to get material from fabric_name or other sources if available
                       const fabricGsm = item.grn_item?.fabric_gsm || '';
@@ -685,12 +700,16 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                         )}
                       </TableCell>
                       <TableCell>
+                        {displayFabric !== '-' ? displayFabric : '-'}
+                      </TableCell>
+                      <TableCell>
                         <div className="flex items-center gap-2">
                           <span>{displayColor !== '-' ? displayColor : '-'}</span>
                           {displayColor !== '-' && (
-                            <div 
-                              className="w-4 h-4 rounded-full border border-gray-300"
-                              style={{ backgroundColor: displayColor.toLowerCase() }}
+                            <div
+                              className="w-4 h-4 shrink-0 rounded-full border border-gray-300"
+                              style={{ backgroundColor: displayColorHex ?? resolveColorHex(displayColor, null) }}
+                              title={displayColor}
                             />
                           )}
                         </div>

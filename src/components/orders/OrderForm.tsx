@@ -431,7 +431,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
     }));
   };
 
-  // Handle color selection
+  // Handle color selection by color name (kept for any other callers)
   const handleColorSelect = (productIndex: number, color: string) => {
   setFormData(prev => {
     const product = prev.products[productIndex];
@@ -462,6 +462,27 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
       )
     };
   });
+  };
+
+  // Handle color selection by fabric id (unique value – prevents duplicate display in Select)
+  const handleColorSelectByFabricId = (productIndex: number, fabricId: string) => {
+    const fabric = fabrics.find(f => f.id === fabricId);
+    if (!fabric) return;
+    setFormData(prev => ({
+      ...prev,
+      products: prev.products.map((p, i) =>
+        i === productIndex
+          ? {
+              ...p,
+              color: fabric.color,
+              fabric_id: fabric.id,
+              fabric_base_id: p.fabric_base_id || p.fabric_id,
+              gsm: fabric.gsm || p.gsm,
+              price: fabric.rate ?? p.price
+            }
+          : p
+      )
+    }));
   };
 
   // Get available colors for selected fabric
@@ -1844,15 +1865,15 @@ const getSelectedFabricVariant = (productIndex: number) => {
         <Label className="text-base font-semibold text-gray-700 mb-2 block">Color</Label>
         {product.fabric_id ? (
           <Select
-            value={product.color}
-            onValueChange={(value) => handleColorSelect(productIndex, value)}
+            value={product.fabric_id}
+            onValueChange={(value) => handleColorSelectByFabricId(productIndex, value)}
           >
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Select color" />
             </SelectTrigger>
             <SelectContent>
               {getAvailableColors(productIndex).map((fabric) => (
-                <SelectItem key={fabric.id} value={fabric.color}>
+                <SelectItem key={fabric.id} value={fabric.id}>
                   <div className="flex items-center gap-2">
                     {fabric.hex && (
                       <div
@@ -1866,7 +1887,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
                       />
                     )}
                     <span>{fabric.color}</span>
-                    {fabric.hex && <span className="text-muted-foreground text-xs">({fabric.hex})</span>}
                   </div>
                 </SelectItem>
               ))}

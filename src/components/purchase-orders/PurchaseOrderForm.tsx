@@ -49,6 +49,7 @@ type LineItem = {
   item_category?: string | null;
   // Fabric-specific fields
   fabric_name?: string;
+  fabric_for_supplier?: string | null;
   fabric_color?: string;
   fabric_gsm?: string;
   // Pending BOM linkage
@@ -368,7 +369,10 @@ export function PurchaseOrderForm() {
     });
   };
 
-  const renderPendingSection = (title: string, groups: PendingItemGroup[]) => (
+  const renderPendingSection = (title: string, groups: PendingItemGroup[]) => {
+    const isFabric = title === 'Fabric';
+
+    return (
     <Card key={title} className="border border-primary/20">
       <CardHeader>
         <div className="flex items-center justify-between gap-4">
@@ -395,6 +399,7 @@ export function PurchaseOrderForm() {
 
               return (
               <div key={group.key} className="rounded-lg border border-dashed border-primary/30 p-4">
+                {!isFabric && (
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                   <div className="flex items-center gap-4">
                     <Checkbox
@@ -434,20 +439,33 @@ export function PurchaseOrderForm() {
                     </div>
                   </div>
                 </div>
+                )}
 
-                <div className="mt-4 overflow-x-auto">
+                <div className={`${isFabric ? '' : 'mt-4'} overflow-x-auto`}>
                   <Table>
                     <TableHeader>
                       <TableRow className="[&>th]:align-middle">
                         <TableHead className="w-[5%] text-center">Select</TableHead>
-                        <TableHead className="w-[24%] text-left">BOM</TableHead>
-                        <TableHead className="w-[10%] text-right">Required</TableHead>
-                        <TableHead className="w-[10%] text-right">Ordered</TableHead>
-                        <TableHead className="w-[10%] text-right">Remaining</TableHead>
-                        <TableHead className="w-[12%] text-right">Order Qty</TableHead>
-                        <TableHead className="w-[9%] text-center">UOM</TableHead>
-                        <TableHead className="w-[15%] text-left">Remark</TableHead>
-                        <TableHead className="w-[15%] text-center">Actions</TableHead>
+                        {isFabric ? (
+                          <>
+                            <TableHead className="text-left">Fabric (for supplier)</TableHead>
+                            <TableHead className="text-left">Color</TableHead>
+                            <TableHead className="text-left">GSM</TableHead>
+                            <TableHead className="w-[15%] text-right">Order Qty</TableHead>
+                            <TableHead className="w-[15%] text-center">Actions</TableHead>
+                          </>
+                        ) : (
+                          <>
+                            <TableHead className="w-[24%] text-left">BOM</TableHead>
+                            <TableHead className="w-[10%] text-right">Required</TableHead>
+                            <TableHead className="w-[10%] text-right">Ordered</TableHead>
+                            <TableHead className="w-[10%] text-right">Remaining</TableHead>
+                            <TableHead className="w-[12%] text-right">Order Qty</TableHead>
+                            <TableHead className="w-[9%] text-center">UOM</TableHead>
+                            <TableHead className="w-[15%] text-left">Remark</TableHead>
+                            <TableHead className="w-[15%] text-center">Actions</TableHead>
+                          </>
+                        )}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -463,6 +481,63 @@ export function PurchaseOrderForm() {
                           const unitValue =
                             selectedItem?.unit_of_measure || item.unit || group.unit || '';
                           const remarkValue = selectedItem?.remarks || '';
+
+                          if (isFabric) {
+                            return (
+                              <TableRow key={item.bom_item_id} className="[&>td]:align-middle">
+                                <TableCell className="text-center">
+                                  <Checkbox
+                                    checked={isSelected}
+                                    onCheckedChange={value =>
+                                      handleTogglePendingSelection(item, value === true)
+                                    }
+                                    disabled={isReadOnly}
+                                  />
+                                </TableCell>
+                                <TableCell className="font-medium">
+                                  {item.fabric_for_supplier || item.fabric_name || item.item_name || 'N/A'}
+                                </TableCell>
+                                <TableCell>{item.fabric_color ?? 'N/A'}</TableCell>
+                                <TableCell>{item.fabric_gsm ? `${item.fabric_gsm} GSM` : 'N/A'}</TableCell>
+                                <TableCell className="text-right">
+                                  <Input
+                                    type="number"
+                                    value={quantityValue}
+                                    onChange={e => {
+                                      if (!isSelected) return;
+                                      const value = parseFloat(e.target.value);
+                                      updateLineItemByBom(item.bom_item_id, {
+                                        quantity: Number.isFinite(value) ? value : 0
+                                      });
+                                    }}
+                                    disabled={!isSelected || isReadOnly}
+                                    className="text-right w-24"
+                                    min={0}
+                                  />
+                                </TableCell>
+                                <TableCell className="text-center">
+                                  <div className="flex items-center justify-center gap-2">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => navigate(`/bom/${item.bom_id}`)}
+                                    >
+                                      View BOM
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => removeLineItemByBom(item.bom_item_id)}
+                                      disabled={!isSelected || isReadOnly}
+                                      className="text-red-600 hover:text-red-700"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          }
 
                           return (
                             <TableRow key={item.bom_item_id} className="[&>td]:align-middle">
@@ -561,6 +636,16 @@ export function PurchaseOrderForm() {
                     </TableBody>
                   </Table>
                 </div>
+                {isFabric && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <Checkbox
+                      checked={groupChecked}
+                      onCheckedChange={value => handleGroupSelection(group, value === true)}
+                      disabled={isReadOnly}
+                    />
+                    <span className="text-sm text-muted-foreground">Select all in this group</span>
+                  </div>
+                )}
               </div>
             );
             })}
@@ -569,6 +654,7 @@ export function PurchaseOrderForm() {
       </CardContent>
     </Card>
   );
+  };
 
   // Process BOM data from URL params
   useEffect(() => {
@@ -927,8 +1013,8 @@ export function PurchaseOrderForm() {
       tempDiv.style.lineHeight = '1.4';
       
       const companyLogo = logoBase64 ? 
-        `<img src="${logoBase64}" alt="Company Logo" style="max-height: 60px; max-width: 200px; display: block;">` : 
-        `<div style="height: 60px; width: 200px; background-color: #f0f0f0; display: flex; align-items: center; justify-content: center; font-weight: bold;">LOGO</div>`;
+        `<img src="${logoBase64}" alt="Company Logo" style="max-height: 100px; max-width: 280px; display: block; object-fit: contain;">` : 
+        `<div style="height: 100px; width: 280px; background-color: #f0f0f0; display: flex; align-items: center; justify-content: center; font-weight: bold;">LOGO</div>`;
       
       const companyAddress = companySettings ? 
         `${companySettings.address || ''}${companySettings.city ? ', ' + companySettings.city : ''}${companySettings.state ? ', ' + companySettings.state : ''}${companySettings.pincode ? ' - ' + companySettings.pincode : ''}`.replace(/^,\s*/, '') : 
@@ -1137,8 +1223,8 @@ export function PurchaseOrderForm() {
       console.log('Selected Supplier:', suppliersMap[po.supplier_id]);
       
       const companyLogo = logoBase64 ? 
-        `<img src="${logoBase64}" alt="Company Logo" style="max-height: 60px; max-width: 200px; display: block;">` : 
-        `<div style="height: 60px; width: 200px; background-color: #f0f0f0; display: flex; align-items: center; justify-content: center; font-weight: bold;">LOGO</div>`;
+        `<img src="${logoBase64}" alt="Company Logo" style="max-height: 100px; max-width: 280px; display: block; object-fit: contain;">` : 
+        `<div style="height: 100px; width: 280px; background-color: #f0f0f0; display: flex; align-items: center; justify-content: center; font-weight: bold;">LOGO</div>`;
       
       const companyAddress = companySettings ? 
         `${companySettings.address || ''}${companySettings.city ? ', ' + companySettings.city : ''}${companySettings.state ? ', ' + companySettings.state : ''}${companySettings.pincode ? ' - ' + companySettings.pincode : ''}`.replace(/^,\s*/, '') : 
@@ -2435,100 +2521,57 @@ export function PurchaseOrderForm() {
                   if (it.item_type !== 'fabric' || it.bom_item_id) return null;
                   return (
                     <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
-                      {/* Fabric Image - Only show if image exists */}
-                      {it.item_image_url && (
-                      <ProductImage 
-                        src={it.item_image_url} 
-                        alt={it.item_name}
-                        className="w-20 h-20 object-cover rounded"
-                          showFallback={false}
-                      />
-                      )}
-
-                      {/* Fabric Details */}
+                      {/* Fabric: only fabric_for_supplier, color, gsm */}
                       <div className="flex-1 grid grid-cols-12 gap-4 items-center">
-                        {/* Fabric Name */}
-                        <div className="col-span-2">
-                          <Label className="text-sm font-medium">Fabric</Label>
+                        <div className="col-span-4">
+                          <Label className="text-sm font-medium">Fabric (for supplier)</Label>
                           <div className="text-sm font-medium">
                             {it.fabric_for_supplier || it.fabric_name || it.item_name || 'N/A'}
                           </div>
                         </div>
-
-                        {/* Color */}
-                        <div className="col-span-1">
+                        <div className="col-span-2">
                           <Label className="text-sm font-medium">Color</Label>
                           <div className="text-sm">
                             {it.fabric_color || 'N/A'}
                           </div>
                         </div>
-
-                        {/* GSM */}
-                        <div className="col-span-1">
+                        <div className="col-span-2">
                           <Label className="text-sm font-medium">GSM</Label>
                           <div className="text-sm">
                             {it.fabric_gsm ? `${it.fabric_gsm} GSM` : 'N/A'}
                           </div>
                         </div>
-
-                        {/* Quantity */}
-                        <div className="col-span-1">
+                        <div className="col-span-2">
                           <Label className="text-sm font-medium">Qty</Label>
                           <Input
                             type="number"
-                            value={it.quantity} 
+                            value={it.quantity}
                             onChange={(e) => {
                               const qty = parseFloat(e.target.value) || 0;
                               updateItem(idx, { quantity: qty });
                             }}
                             disabled={isReadOnly}
-                            className="w-full text-right" 
+                            className="w-full text-right"
                             placeholder="Qty"
                           />
                         </div>
-
-                        {/* UOM */}
-                        <div className="col-span-1">
-                          <Label className="text-sm font-medium">UOM</Label>
-                          <Input 
-                            value={it.unit_of_measure || ''} 
-                            onChange={(e) => {
-                              updateItem(idx, { unit_of_measure: e.target.value });
-                            }} 
-                            className="w-full" 
-                            disabled={isReadOnly} 
-                            placeholder="UOM"
-                          />
-                        </div>
-
-                        {/* Remarks */}
-                        <div className="col-span-6">
-                          <Label className="text-sm font-medium">Remarks</Label>
-                          <Input 
-                            value={it.remarks || ''} 
-                            onChange={(e) => updateItem(idx, { remarks: e.target.value })}
-                            className="w-full" 
-                            disabled={isReadOnly} 
-                            placeholder="Enter remarks for this fabric"
-                          />
-                        </div>
+                        {!isReadOnly && (
+                          <div className="col-span-2 flex items-end">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => removeItem(idx)}
+                              className="text-red-600 hover:text-red-700"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
                       </div>
-
-                      {/* Remove Button */}
-                                  {!isReadOnly && (
-                                  <Button
-                                    variant="outline"
-                          size="sm"
-                          onClick={() => removeItem(idx)}
-                          className="text-red-600 hover:text-red-700"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                                  </Button>
-                                  )}
-                                </div>
+                    </div>
                   );
                 })}
-                              </div>
+              </div>
             )}
           </CardContent>
         </Card>

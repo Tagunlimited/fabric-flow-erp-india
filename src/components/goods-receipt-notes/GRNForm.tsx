@@ -86,6 +86,8 @@ type GRNItem = {
   fabric_color?: string;
   fabric_gsm?: string;
   fabric_name?: string;
+  fabric_for_supplier?: string | null;
+  fabric_hex?: string | null;
   item_color?: string;
 };
 
@@ -440,6 +442,37 @@ const GRNForm = () => {
         } else {
           console.log('✅ Item already has image URL:', item.item_name, item.item_image_url);
         }
+
+        // For fabric items, ensure fabric_for_supplier and fabric_hex for display (from fabric_master)
+        if (item.item_type === 'fabric') {
+          try {
+            if (item.item_id) {
+              const { data: fabricDisplay } = await supabase
+                .from('fabric_master')
+                .select('fabric_for_supplier, hex')
+                .eq('id', item.item_id)
+                .single();
+              if (fabricDisplay) {
+                (enrichedItem as any).fabric_for_supplier = (fabricDisplay as any).fabric_for_supplier ?? (item as any).fabric_for_supplier ?? null;
+                (enrichedItem as any).fabric_hex = (fabricDisplay as any).hex ?? (item as any).fabric_hex ?? null;
+              }
+            }
+            // Fallback: get fabric_for_supplier by fabric name (e.g. Captain Polo -> AIRTEX-ST) when still missing
+            if (!(enrichedItem as any).fabric_for_supplier && (item.fabric_name || item.item_name)) {
+              const baseFabricName = ((item.fabric_name || (item.item_name || '').split(' - ')[0] || '').trim());
+              if (baseFabricName) {
+                const { data: fallbackRow } = await supabase
+                  .from('fabric_master')
+                  .select('fabric_for_supplier')
+                  .ilike('fabric_name', `%${baseFabricName}%`)
+                  .not('fabric_for_supplier', 'is', null)
+                  .limit(1)
+                  .maybeSingle();
+                if ((fallbackRow as any)?.fabric_for_supplier) (enrichedItem as any).fabric_for_supplier = (fallbackRow as any).fabric_for_supplier;
+              }
+            }
+          } catch (_) { /* ignore */ }
+        }
         
         return enrichedItem;
       }));
@@ -544,6 +577,8 @@ const GRNForm = () => {
         let fabricGsm = item.fabric_gsm;
         let fabricName = item.fabric_name;
         let itemImageUrl = item.item_image_url;
+        let fabricForSupplier: string | null = (item as any).fabric_for_supplier ?? null;
+        let fabricHex: string | null = null;
         
         // Use the data that's already in the purchase order item first
         // Only fetch additional data if the PO item doesn't have it
@@ -566,13 +601,15 @@ const GRNForm = () => {
           // Use the PO item data directly since it's already correct after our SQL fix
           // Only search by name if we're missing critical data
           if (item.item_type === 'fabric' && (!fabricColor || !fabricGsm || !fabricName)) {
-            console.log('Searching fabric by name for:', item.item_name);
+            const searchName = fabricName || (item.item_name || '').split(' - ')[0]?.trim() || item.item_name || '';
+            console.log('Searching fabric by name for:', searchName);
             try {
               const { data: fabricByName, error: nameError } = await supabase
                 .from('fabric_master')
-                .select('id, color, gsm, fabric_name, image')
-                .ilike('fabric_name', `%${item.item_name}%`)
-                .single();
+                .select('id, color, gsm, fabric_name, image, fabric_for_supplier, hex')
+                .ilike('fabric_name', `%${searchName}%`)
+                .limit(1)
+                .maybeSingle();
               
               console.log('Fabric search by name result:', { fabricByName, nameError });
               
@@ -582,6 +619,8 @@ const GRNForm = () => {
                 fabricName = (fabricByName as any).fabric_name;
                 itemColor = (fabricByName as any).color;
                 itemImageUrl = (fabricByName as any).image;
+                if ((fabricByName as any).fabric_for_supplier) fabricForSupplier = (fabricByName as any).fabric_for_supplier;
+                if ((fabricByName as any).hex) fabricHex = (fabricByName as any).hex;
                 console.log('Updated fabric details from name search:', { fabricColor, fabricGsm, fabricName, itemColor });
               }
             } catch (error) {
@@ -612,14 +651,15 @@ const GRNForm = () => {
             }
           }
           
-          // Only fetch by item_id as a last resort if we still don't have data
-          if (item.item_id && (!fabricColor || !fabricGsm || !fabricName || !itemImageUrl)) {
+          // Only fetch by item_id/fabric_id as a last resort if we still don't have data
+          const poFabricId = (item as any).fabric_id || item.item_id;
+          if (poFabricId && (!fabricColor || !fabricGsm || !fabricName || !itemImageUrl)) {
             if (item.item_type === 'fabric') {
-              console.log('Fetching additional fabric data for item_id:', item.item_id);
+              console.log('Fetching additional fabric data for fabric_id:', poFabricId);
               const { data: fabricData, error: fabricError } = await supabase
                 .from('fabric_master')
-                .select('color, gsm, fabric_name, image')
-                .eq('id', item.item_id)
+                .select('color, gsm, fabric_name, image, fabric_for_supplier, hex')
+                .eq('id', poFabricId)
                 .single();
               
               console.log('Additional fabric data result:', { fabricData, fabricError });
@@ -630,6 +670,8 @@ const GRNForm = () => {
                 if (!fabricName) fabricName = (fabricData as any).fabric_name;
                 if (!itemColor) itemColor = (fabricData as any).color;
                 if (!itemImageUrl) itemImageUrl = (fabricData as any).image;
+                if ((fabricData as any).fabric_for_supplier) fabricForSupplier = (fabricData as any).fabric_for_supplier;
+                if ((fabricData as any).hex) fabricHex = (fabricData as any).hex;
                 console.log('Updated missing fabric details:', { fabricColor, fabricGsm, fabricName, itemColor });
               }
             } else {
@@ -651,6 +693,38 @@ const GRNForm = () => {
           }
         } catch (error) {
           console.error('Error fetching item/fabric data:', error);
+        }
+
+        // For fabric items, ensure we have fabric_for_supplier and hex for display (from fabric_master)
+        const fabricId = (item as any).fabric_id || item.item_id;
+        if (item.item_type === 'fabric' && fabricId && (fabricForSupplier == null || fabricHex == null)) {
+          try {
+            const { data: fabricDisplay } = await supabase
+              .from('fabric_master')
+              .select('fabric_for_supplier, hex')
+              .eq('id', fabricId)
+              .single();
+            if (fabricDisplay) {
+              if (fabricForSupplier == null && (fabricDisplay as any).fabric_for_supplier) fabricForSupplier = (fabricDisplay as any).fabric_for_supplier;
+              if (fabricHex == null && (fabricDisplay as any).hex) fabricHex = (fabricDisplay as any).hex;
+            }
+          } catch (_) { /* ignore */ }
+        }
+        // Fallback: get fabric_for_supplier by fabric name (e.g. "Captain Polo" -> "AIRTEX-ST") when still missing
+        if (item.item_type === 'fabric' && fabricForSupplier == null && (fabricName || item.item_name)) {
+          try {
+            const baseFabricName = (fabricName || (item.item_name || '').split(' - ')[0]?.trim() || '').trim();
+            if (baseFabricName) {
+              const { data: fallbackRow } = await supabase
+                .from('fabric_master')
+                .select('fabric_for_supplier')
+                .ilike('fabric_name', `%${baseFabricName}%`)
+                .not('fabric_for_supplier', 'is', null)
+                .limit(1)
+                .maybeSingle();
+              if ((fallbackRow as any)?.fabric_for_supplier) fabricForSupplier = (fallbackRow as any).fabric_for_supplier;
+            }
+          } catch (_) { /* ignore */ }
         }
         
         console.log('Final GRN item data:', {
@@ -715,6 +789,8 @@ const GRNForm = () => {
           fabric_color: fabricColor,
           fabric_gsm: fabricGsm,
           fabric_name: fabricName,
+          fabric_for_supplier: fabricForSupplier,
+          fabric_hex: fabricHex,
           item_color: itemColor
         };
       }));
@@ -1965,9 +2041,15 @@ const GRNForm = () => {
                                 console.warn('ProductImage failed to load for item:', item.item_name, error);
                               }}
                             />
-                            <div className="flex-1">
-                              <h4 className="font-semibold text-lg">{item.item_name}</h4>
-                              {item.fabric_name && (
+                            <div className="flex-1 min-w-0">
+                              <h4 className="font-semibold text-lg">{item.item_name || 'N/A'}</h4>
+                              {item.item_type === 'fabric' && (item.fabric_for_supplier || item.fabric_name) && (
+                                <p className="text-sm text-muted-foreground">
+                                  <span className="font-medium text-foreground">Fabric for Supplier: </span>
+                                  {item.fabric_for_supplier || item.fabric_name}
+                                </p>
+                              )}
+                              {item.item_type !== 'fabric' && item.fabric_name && (
                                 <p className="text-sm text-muted-foreground">{item.fabric_name}</p>
                               )}
                               <Badge variant="outline" className="mt-1">
@@ -1985,10 +2067,20 @@ const GRNForm = () => {
                               <div className="text-sm font-medium flex items-center gap-2">
                                 {item.item_color || item.fabric_color || '-'}
                                 {(item.item_color || item.fabric_color) && (
-                                  <div 
-                                    className="w-4 h-4 rounded-full border border-gray-300"
-                                    style={{ 
-                                      backgroundColor: (item.item_color || item.fabric_color)?.toLowerCase() || 'transparent'
+                                  <div
+                                    className="w-4 h-4 shrink-0 rounded-full border border-gray-300"
+                                    style={{
+                                      backgroundColor: (() => {
+                                        const hex = item.fabric_hex || (item as any).fabric_hex;
+                                        if (hex) return hex.startsWith('#') ? hex : `#${hex}`;
+                                        const name = (item.item_color || item.fabric_color || '').toLowerCase();
+                                        const fallbacks: Record<string, string> = {
+                                          peach: '#FFCBA4', blank: '#E8E8E8', white: '#FFFFFF', black: '#1a1a1a',
+                                          grey: '#9ca3af', gray: '#9ca3af', red: '#dc2626', blue: '#2563eb',
+                                          green: '#16a34a', yellow: '#eab308', navy: '#1e3a8a'
+                                        };
+                                        return fallbacks[name] || '#E5E7EB';
+                                      })()
                                     }}
                                     title={item.item_color || item.fabric_color}
                                   />
