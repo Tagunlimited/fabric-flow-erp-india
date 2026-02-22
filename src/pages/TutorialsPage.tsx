@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { BookOpen, ArrowLeft, UserCog, Users, Palette, ShoppingBag, Scissors, Hand, CheckCircle, Truck, DollarSign, Play, X } from "lucide-react";
+import { BookOpen, ArrowLeft, UserCog, Users, Palette, ShoppingBag, Scissors, Hand, CheckCircle, Truck, DollarSign, Play, X, Plus } from "lucide-react";
 import StarBorder from "@/components/ui/StarBorder";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { supabase } from "@/integrations/supabase/client";
@@ -83,6 +83,10 @@ interface Tutorial {
   description: string | null;
   video_url: string | null;
   order_index: number;
+  parent_tutorial_id?: string | null;
+  option_name?: string | null;
+  written_steps?: string | null;
+  is_main_tutorial?: boolean;
 }
 
 export default function TutorialsPage() {
@@ -168,14 +172,32 @@ export default function TutorialsPage() {
               </Button>
               <h2 className="text-3xl font-bold">{content.title}</h2>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleBack}
-              className="rounded-full"
-            >
-              <X className="w-5 h-5" />
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => {
+                  if (isAdmin) {
+                    // This will be handled by AdminTutorialManager
+                    const event = new CustomEvent('openMainTutorialDialog');
+                    window.dispatchEvent(event);
+                  } else {
+                    toast.error('Only admins can create tutorials');
+                  }
+                }}
+                className="shadow-lg"
+                disabled={!isAdmin}
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Create Main Tutorial
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleBack}
+                className="rounded-full"
+              >
+                <X className="w-5 h-5" />
+              </Button>
+            </div>
           </div>
 
           {/* Scrollable Content */}
