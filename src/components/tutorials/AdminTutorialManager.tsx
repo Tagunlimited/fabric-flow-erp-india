@@ -5,10 +5,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Trash2, Plus, Edit, X, Image as ImageIcon } from 'lucide-react';
+import { Trash2, Plus, Edit, X, Play } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { VideoPlayerModal } from './VideoPlayerModal';
+import { VideoThumbnail } from './VideoThumbnail';
 
 interface Tutorial {
   id: string;
@@ -35,6 +37,7 @@ export function AdminTutorialManager({ sectionId, sectionTitle }: AdminTutorialM
   const [uploading, setUploading] = useState(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreview, setVideoPreview] = useState<string | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<{ url: string; title: string } | null>(null);
 
   const [formData, setFormData] = useState({
     title: '',
@@ -197,7 +200,6 @@ export function AdminTutorialManager({ sectionId, sectionTitle }: AdminTutorialM
       description: tutorial.description || ''
     });
     setVideoPreview(tutorial.video_url);
-    setThumbnailPreview(tutorial.thumbnail_url);
     setIsDialogOpen(true);
   };
 
@@ -343,16 +345,36 @@ export function AdminTutorialManager({ sectionId, sectionTitle }: AdminTutorialM
       ) : (
         <div className="space-y-3">
           {tutorials.map((tutorial) => (
-            <Card key={tutorial.id}>
+            <Card 
+              key={tutorial.id}
+              className={tutorial.video_url ? "cursor-pointer hover:shadow-md transition-shadow" : ""}
+              onClick={() => {
+                if (tutorial.video_url) {
+                  setSelectedVideo({ url: tutorial.video_url, title: tutorial.title });
+                }
+              }}
+            >
               <CardContent className="p-4">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
+                <div className="flex items-center gap-4">
+                  {/* Thumbnail */}
+                  {tutorial.video_url ? (
+                    <VideoThumbnail
+                      videoUrl={tutorial.video_url}
+                      title={tutorial.title}
+                      className="flex-shrink-0 w-32 h-20"
+                    />
+                  ) : (
+                    <div className="flex-shrink-0 w-32 h-20 bg-muted rounded flex items-center justify-center">
+                      <Play className="w-6 h-6 text-muted-foreground" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
                     <h3 className="font-semibold text-lg mb-1">{tutorial.title}</h3>
                     {tutorial.description && (
                       <p className="text-sm text-muted-foreground">{tutorial.description}</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 ml-4">
+                  <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -374,6 +396,16 @@ export function AdminTutorialManager({ sectionId, sectionTitle }: AdminTutorialM
             </Card>
           ))}
         </div>
+      )}
+
+      {/* Video Player Modal */}
+      {selectedVideo && (
+        <VideoPlayerModal
+          videoUrl={selectedVideo.url}
+          title={selectedVideo.title}
+          isOpen={!!selectedVideo}
+          onClose={() => setSelectedVideo(null)}
+        />
       )}
     </div>
   );

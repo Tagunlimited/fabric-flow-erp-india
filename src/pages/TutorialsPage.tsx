@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BookOpen, ArrowLeft, UserCog, Users, Palette, ShoppingBag, Scissors, Hand, CheckCircle, Truck, DollarSign, Play } from "lucide-react";
 import StarBorder from "@/components/ui/StarBorder";
@@ -187,52 +187,58 @@ export default function TutorialsPage() {
               sectionTitle={content.title}
             />
           ) : (
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-3">
-                  {card?.icon}
-                  <CardTitle className="text-2xl">{content.title}</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {loadingTutorials ? (
-                  <div className="text-center py-8">Loading tutorials...</div>
-                ) : tutorials.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold">{content.title}</h2>
+              </div>
+
+              {loadingTutorials ? (
+                <div className="text-center py-8">Loading tutorials...</div>
+              ) : tutorials.length === 0 ? (
+                <Card>
+                  <CardContent className="py-8 text-center text-muted-foreground">
                     No tutorials available for this section yet.
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {tutorials.map((tutorial) => (
-                      <div
-                        key={tutorial.id}
-                        className="p-4 border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer flex items-center gap-4"
-                        onClick={() => tutorial.video_url && handlePlayVideo(tutorial.video_url, tutorial.title)}
-                      >
-                        {/* Thumbnail from video */}
-                        {tutorial.video_url ? (
-                          <VideoThumbnail
-                            videoUrl={tutorial.video_url}
-                            title={tutorial.title}
-                            className="flex-shrink-0 w-32 h-20"
-                          />
-                        ) : (
-                          <div className="flex-shrink-0 w-32 h-20 bg-muted rounded flex items-center justify-center">
-                            <Play className="w-6 h-6 text-muted-foreground" />
-                          </div>
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-semibold text-lg mb-1">{tutorial.title}</h3>
-                          {tutorial.description && (
-                            <p className="text-sm text-muted-foreground">{tutorial.description}</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="space-y-3">
+                  {tutorials.map((tutorial) => (
+                    <Card 
+                      key={tutorial.id}
+                      className={tutorial.video_url ? "cursor-pointer hover:shadow-md transition-shadow" : ""}
+                      onClick={() => {
+                        if (tutorial.video_url) {
+                          handlePlayVideo(tutorial.video_url, tutorial.title);
+                        }
+                      }}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex items-center gap-4">
+                          {/* Thumbnail */}
+                          {tutorial.video_url ? (
+                            <VideoThumbnail
+                              videoUrl={tutorial.video_url}
+                              title={tutorial.title}
+                              className="flex-shrink-0 w-32 h-20"
+                            />
+                          ) : (
+                            <div className="flex-shrink-0 w-32 h-20 bg-muted rounded flex items-center justify-center">
+                              <Play className="w-6 h-6 text-muted-foreground" />
+                            </div>
                           )}
+                          <div className="flex-1 min-w-0">
+                            <h3 className="font-semibold text-lg mb-1">{tutorial.title}</h3>
+                            {tutorial.description && (
+                              <p className="text-sm text-muted-foreground">{tutorial.description}</p>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
 

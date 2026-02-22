@@ -5,7 +5,7 @@ VALUES (
   'tutorials',
   true,
   52428800, -- 50MB limit
-  ARRAY['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime', 'image/jpeg', 'image/png', 'image/webp']
+  ARRAY['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime']
 )
 ON CONFLICT (id) DO NOTHING;
 

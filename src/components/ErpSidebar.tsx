@@ -45,7 +45,8 @@ import {
   Box,
   FileEdit,
   Wallet,
-  List
+  List,
+  BookOpen
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -169,7 +170,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       ]
     },
     { title: "Reports", url: "/reports", icon: FileText },
-    { title: "Configuration", url: "/configuration", icon: Settings }
+    { title: "Configuration", url: "/configuration", icon: Settings },
+    { title: "Tutorials", url: "/tutorials", icon: BookOpen }
   ];
 }
 
@@ -472,7 +474,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
     Award, AlertTriangle, Scissors, Shirt, Contact, UserPlus, DollarSign, Receipt,
     CreditCard, Quote, FileText, PackageCheck, Boxes, PackageSearch, PackageX,
     LayoutDashboard, UserCheck, UsersRound, CheckSquare, ClipboardCheck, Hand,
-    Box, FileEdit, Wallet, List
+    Box, FileEdit, Wallet, List, BookOpen
   };
 
   // Convert dynamic sidebar items to the old format
