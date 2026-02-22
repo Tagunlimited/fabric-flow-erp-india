@@ -63,6 +63,7 @@ import { GRNList } from "./components/goods-receipt-notes/GRNList";
 import { GRNForm } from "./components/goods-receipt-notes/GRNForm";
 import CompanyConfigPage from "./pages/admin/CompanyConfigPage";
 import ReportsPage from "./pages/reports/ReportsPage";
+import TutorialsPage from "./pages/TutorialsPage";
 import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
 import EmployeeDetailPage from "./pages/people/EmployeeDetailPage";
@@ -559,6 +560,13 @@ const App = () => {
                 <Route path="/configuration" element={
                   <ProtectedRouteWithCompanySettings requiredRole={['admin']}>
                     <CompanyConfigPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/tutorials" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ErpLayout>
+                      <TutorialsPage />
+                    </ErpLayout>
                   </ProtectedRouteWithCompanySettings>
                 } />
                 
