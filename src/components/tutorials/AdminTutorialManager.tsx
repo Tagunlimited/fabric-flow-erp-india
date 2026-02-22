@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Trash2, Plus, Edit, X, Play } from 'lucide-react';
+import { Trash2, Plus, Edit, X, Play, BookOpen } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -26,9 +26,10 @@ interface Tutorial {
 interface AdminTutorialManagerProps {
   sectionId: string;
   sectionTitle: string;
+  showEditDelete?: boolean;
 }
 
-export function AdminTutorialManager({ sectionId, sectionTitle }: AdminTutorialManagerProps) {
+export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete = true }: AdminTutorialManagerProps) {
   const { user } = useAuth();
   const [tutorials, setTutorials] = useState<Tutorial[]>([]);
   const [loading, setLoading] = useState(true);
@@ -243,21 +244,24 @@ export function AdminTutorialManager({ sectionId, sectionTitle }: AdminTutorialM
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">Manage Tutorials - {sectionTitle}</h2>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={() => {
-              setEditingTutorial(null);
-              setFormData({ title: '', description: '' });
-              setVideoFile(null);
-              setVideoPreview(null);
-            }}>
-              <Plus className="w-4 h-4 mr-2" />
-              Add Tutorial
-            </Button>
-          </DialogTrigger>
+    <div className="space-y-6">
+      {showEditDelete && (
+        <div className="flex items-center justify-end">
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button 
+                onClick={() => {
+                  setEditingTutorial(null);
+                  setFormData({ title: '', description: '' });
+                  setVideoFile(null);
+                  setVideoPreview(null);
+                }}
+                className="shadow-lg"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Add Tutorial
+              </Button>
+            </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
@@ -332,65 +336,74 @@ export function AdminTutorialManager({ sectionId, sectionTitle }: AdminTutorialM
             </form>
           </DialogContent>
         </Dialog>
-      </div>
+        </div>
+      )}
 
       {loading ? (
-        <div className="text-center py-8">Loading tutorials...</div>
+        <div className="text-center py-16">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading tutorials...</p>
+        </div>
       ) : tutorials.length === 0 ? (
-        <Card>
-          <CardContent className="py-8 text-center text-muted-foreground">
-            No tutorials yet. Click "Add Tutorial" to create one.
+        <Card className="border-dashed">
+          <CardContent className="py-16 text-center">
+            <BookOpen className="w-16 h-16 text-muted-foreground mx-auto mb-4 opacity-50" />
+            <p className="text-lg text-muted-foreground mb-4">No tutorials yet.</p>
+            <p className="text-sm text-muted-foreground">Click "Add Tutorial" to create one.</p>
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {tutorials.map((tutorial) => (
             <Card 
               key={tutorial.id}
-              className={tutorial.video_url ? "cursor-pointer hover:shadow-md transition-shadow" : ""}
+              className={tutorial.video_url ? "cursor-pointer hover:shadow-lg transition-all hover:scale-[1.02] border-2" : "border-2"}
               onClick={() => {
                 if (tutorial.video_url) {
                   setSelectedVideo({ url: tutorial.video_url, title: tutorial.title });
                 }
               }}
             >
-              <CardContent className="p-4">
-                <div className="flex items-center gap-4">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-6">
                   {/* Thumbnail */}
                   {tutorial.video_url ? (
                     <VideoThumbnail
                       videoUrl={tutorial.video_url}
                       title={tutorial.title}
-                      className="flex-shrink-0 w-32 h-20"
+                      className="flex-shrink-0 w-48 h-32 rounded-lg shadow-md"
                     />
                   ) : (
-                    <div className="flex-shrink-0 w-32 h-20 bg-muted rounded flex items-center justify-center">
-                      <Play className="w-6 h-6 text-muted-foreground" />
+                    <div className="flex-shrink-0 w-48 h-32 bg-muted rounded-lg flex items-center justify-center border-2 border-dashed">
+                      <Play className="w-10 h-10 text-muted-foreground" />
                     </div>
                   )}
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-lg mb-1">{tutorial.title}</h3>
+                    <h3 className="font-bold text-xl mb-2">{tutorial.title}</h3>
                     {tutorial.description && (
-                      <p className="text-sm text-muted-foreground">{tutorial.description}</p>
+                      <p className="text-base text-muted-foreground leading-relaxed">{tutorial.description}</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleEdit(tutorial)}
-                    >
-                      <Edit className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleDelete(tutorial.id)}
-                      className="text-red-600 hover:text-red-700"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
+                  {showEditDelete && (
+                    <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleEdit(tutorial)}
+                        className="h-10 w-10 hover:bg-primary/10"
+                      >
+                        <Edit className="w-5 h-5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDelete(tutorial.id)}
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50 h-10 w-10"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>

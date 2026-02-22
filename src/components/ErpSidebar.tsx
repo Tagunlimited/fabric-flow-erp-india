@@ -508,10 +508,20 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   // Debug logging removed for performance
   let filteredItems = sidebarItems.filter(item => !item.adminOnly || userRole === 'admin');
 
+  // Always ensure Tutorials is available (get it from static items)
+  const tutorialsItem = staticSidebarItems.find(item => item.title === 'Tutorials');
+  if (tutorialsItem && !filteredItems.find(item => item.title === 'Tutorials')) {
+    filteredItems.push(tutorialsItem);
+  }
+
   if (userRole === 'customer' && portalSettings !== null) {
     // Only hide items/tabs; do not change labels or structure beyond filtering
     const allowedTopTitles = new Set(["Orders", "Accounts"]);
     const mapItem = (item: SidebarItem): SidebarItem | null => {
+      // Always keep Tutorials for customers
+      if (item.title === 'Tutorials') {
+        return item;
+      }
       // Hide dashboard and all non-customer sections
       if (!allowedTopTitles.has(item.title)) {
         return null;
@@ -544,6 +554,16 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
     filteredItems = filteredItems
       .map(mapItem)
       .filter((x): x is SidebarItem => x !== null);
+    
+    // Always ensure Tutorials is available for customers too (bypass customer portal filtering)
+    if (tutorialsItem && !filteredItems.find(item => item.title === 'Tutorials')) {
+      filteredItems.push(tutorialsItem);
+    }
+  } else {
+    // For non-customer roles, ensure Tutorials is still present after all filtering
+    if (tutorialsItem && !filteredItems.find(item => item.title === 'Tutorials')) {
+      filteredItems.push(tutorialsItem);
+    }
   }
 
   // Initialize and update open menu based on current route

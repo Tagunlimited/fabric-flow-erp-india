@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { BookOpen, ArrowLeft, UserCog, Users, Palette, ShoppingBag, Scissors, Hand, CheckCircle, Truck, DollarSign, Play } from "lucide-react";
+import { BookOpen, ArrowLeft, UserCog, Users, Palette, ShoppingBag, Scissors, Hand, CheckCircle, Truck, DollarSign, Play, X } from "lucide-react";
 import StarBorder from "@/components/ui/StarBorder";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { supabase } from "@/integrations/supabase/client";
@@ -98,9 +98,7 @@ export default function TutorialsPage() {
 
   const handleCardClick = (sectionId: TutorialSection) => {
     setSelectedSection(sectionId);
-    if (!isAdmin) {
-      fetchTutorials(sectionId);
-    }
+    fetchTutorials(sectionId);
   };
 
   const handleBack = () => {
@@ -131,115 +129,63 @@ export default function TutorialsPage() {
     setSelectedVideo({ url: videoUrl, title });
   };
 
+  // Prevent body scroll when tutorial section is open
+  useEffect(() => {
+    if (selectedSection) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [selectedSection]);
+
   if (selectedSection) {
     const content = tutorialContent[selectedSection];
     const card = tutorialCards.find(c => c.id === selectedSection);
     
     return (
-      <div className="w-full relative min-h-screen">
-        {/* Abstract Background Pattern */}
+      <div className="fixed inset-0 z-[9998] flex items-center justify-center">
+        {/* Blurred Background Overlay */}
         <div 
-          className="absolute inset-0 -z-10"
-          style={{
-            background: 'linear-gradient(135deg, #f5f5f5 0%, #e8e8e8 100%)',
-          }}
-        >
-          {/* Abstract Lines */}
-          <svg className="absolute inset-0 w-full h-full opacity-30" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <pattern id="grid-detail" width="40" height="40" patternUnits="userSpaceOnUse">
-                <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#d1d5db" strokeWidth="1"/>
-              </pattern>
-              <pattern id="dots-detail" width="60" height="60" patternUnits="userSpaceOnUse">
-                <circle cx="30" cy="30" r="2" fill="#cbd5e1" opacity="0.4"/>
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#grid-detail)" />
-            <rect width="100%" height="100%" fill="url(#dots-detail)" />
-          </svg>
-          
-          {/* Abstract Curved Lines */}
-          <div className="absolute top-0 left-0 w-full h-full overflow-hidden">
-            <svg className="absolute top-20 left-0 w-96 h-96 opacity-20" viewBox="0 0 200 200">
-              <path d="M 0 100 Q 50 50 100 100 T 200 100" stroke="#9ca3af" strokeWidth="2" fill="none" />
-            </svg>
-            <svg className="absolute bottom-20 right-0 w-96 h-96 opacity-20" viewBox="0 0 200 200">
-              <path d="M 0 100 Q 50 150 100 100 T 200 100" stroke="#9ca3af" strokeWidth="2" fill="none" />
-            </svg>
-          </div>
-        </div>
+          className="absolute inset-0 bg-black/40 backdrop-blur-md"
+          onClick={handleBack}
+        />
 
-        <div className="relative z-10">
-          <div className="mb-6 flex items-center gap-4">
+        {/* Centered Content Container */}
+        <div className="relative z-10 w-full max-w-6xl max-h-[90vh] mx-4 bg-background rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between p-6 border-b bg-card">
+            <div className="flex items-center gap-4">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleBack}
+                className="flex items-center gap-2"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </Button>
+              <h2 className="text-3xl font-bold">{content.title}</h2>
+            </div>
             <Button
               variant="ghost"
+              size="icon"
               onClick={handleBack}
-              className="flex items-center gap-2"
+              className="rounded-full"
             >
-              <ArrowLeft className="w-4 h-4" />
-              Back to Categories
+              <X className="w-5 h-5" />
             </Button>
           </div>
 
-          {isAdmin ? (
+          {/* Scrollable Content */}
+          <div className="flex-1 overflow-y-auto p-6">
             <AdminTutorialManager 
               sectionId={selectedSection} 
               sectionTitle={content.title}
+              showEditDelete={isAdmin}
             />
-          ) : (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold">{content.title}</h2>
-              </div>
-
-              {loadingTutorials ? (
-                <div className="text-center py-8">Loading tutorials...</div>
-              ) : tutorials.length === 0 ? (
-                <Card>
-                  <CardContent className="py-8 text-center text-muted-foreground">
-                    No tutorials available for this section yet.
-                  </CardContent>
-                </Card>
-              ) : (
-                <div className="space-y-3">
-                  {tutorials.map((tutorial) => (
-                    <Card 
-                      key={tutorial.id}
-                      className={tutorial.video_url ? "cursor-pointer hover:shadow-md transition-shadow" : ""}
-                      onClick={() => {
-                        if (tutorial.video_url) {
-                          handlePlayVideo(tutorial.video_url, tutorial.title);
-                        }
-                      }}
-                    >
-                      <CardContent className="p-4">
-                        <div className="flex items-center gap-4">
-                          {/* Thumbnail */}
-                          {tutorial.video_url ? (
-                            <VideoThumbnail
-                              videoUrl={tutorial.video_url}
-                              title={tutorial.title}
-                              className="flex-shrink-0 w-32 h-20"
-                            />
-                          ) : (
-                            <div className="flex-shrink-0 w-32 h-20 bg-muted rounded flex items-center justify-center">
-                              <Play className="w-6 h-6 text-muted-foreground" />
-                            </div>
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <h3 className="font-semibold text-lg mb-1">{tutorial.title}</h3>
-                            {tutorial.description && (
-                              <p className="text-sm text-muted-foreground">{tutorial.description}</p>
-                            )}
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          </div>
         </div>
 
         {/* Video Player Modal */}
