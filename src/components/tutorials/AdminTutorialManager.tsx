@@ -65,8 +65,8 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
 
   // Listen for custom event to open dialog from TutorialsPage header button
   useEffect(() => {
-    const handleOpenDialog = () => {
-      console.log('Received openMainTutorialDialog event');
+    const handleOpenDialog = (event: Event) => {
+      console.log('Received openMainTutorialDialog event', event);
       setEditingTutorial(null);
       setMainFormData({ title: '', description: '' });
       setIsMainDialogOpen(true);
@@ -84,13 +84,14 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
     style.id = 'tutorial-dialog-z-index-fix';
     style.textContent = `
       [data-radix-portal] {
-        z-index: 100000 !important;
+        z-index: 10000 !important;
       }
       [data-radix-dialog-overlay] {
-        z-index: 100000 !important;
+        z-index: 10000 !important;
+        position: fixed !important;
       }
       [data-radix-dialog-content] {
-        z-index: 100001 !important;
+        z-index: 10001 !important;
         position: fixed !important;
       }
     `;
@@ -104,22 +105,47 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
     };
   }, []);
 
+  // Force z-index update when main dialog opens
+  useEffect(() => {
+    if (isMainDialogOpen) {
+      // Small delay to ensure DOM is updated
+      const timeoutId = setTimeout(() => {
+        const portals = document.querySelectorAll('[data-radix-portal]');
+        portals.forEach(portal => {
+          (portal as HTMLElement).style.zIndex = '10000';
+        });
+        const overlays = document.querySelectorAll('[data-radix-dialog-overlay]');
+        overlays.forEach(overlay => {
+          (overlay as HTMLElement).style.zIndex = '10000';
+        });
+        const contents = document.querySelectorAll('[data-radix-dialog-content]');
+        contents.forEach(content => {
+          (content as HTMLElement).style.zIndex = '10001';
+        });
+      }, 50);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [isMainDialogOpen]);
+
   // Ensure option dialog appears on top when it opens
   useEffect(() => {
     if (isOptionDialogOpen) {
       // Force update z-index when option dialog opens
-      const portals = document.querySelectorAll('[data-radix-portal]');
-      portals.forEach(portal => {
-        (portal as HTMLElement).style.zIndex = '100000';
-      });
-      const overlays = document.querySelectorAll('[data-radix-dialog-overlay]');
-      overlays.forEach(overlay => {
-        (overlay as HTMLElement).style.zIndex = '100000';
-      });
-      const contents = document.querySelectorAll('[data-radix-dialog-content]');
-      contents.forEach(content => {
-        (content as HTMLElement).style.zIndex = '100002';
-      });
+      const timeoutId = setTimeout(() => {
+        const portals = document.querySelectorAll('[data-radix-portal]');
+        portals.forEach(portal => {
+          (portal as HTMLElement).style.zIndex = '10000';
+        });
+        const overlays = document.querySelectorAll('[data-radix-dialog-overlay]');
+        overlays.forEach(overlay => {
+          (overlay as HTMLElement).style.zIndex = '10000';
+        });
+        const contents = document.querySelectorAll('[data-radix-dialog-content]');
+        contents.forEach(content => {
+          (content as HTMLElement).style.zIndex = '10002';
+        });
+      }, 50);
+      return () => clearTimeout(timeoutId);
     }
   }, [isOptionDialogOpen]);
 
@@ -398,7 +424,7 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
 
   const mainTutorials = getMainTutorials();
 
-  console.log('AdminTutorialManager render - showEditDelete:', showEditDelete, 'isMainDialogOpen:', isMainDialogOpen);
+  console.log('AdminTutorialManager render - showEditDelete:', showEditDelete, 'isMainDialogOpen:', isMainDialogOpen, 'sectionId:', sectionId);
 
   return (
     <div className="space-y-6">
@@ -414,6 +440,7 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
       }}>
         <DialogContent 
           className="max-w-2xl max-h-[90vh] overflow-y-auto"
+          style={{ zIndex: 10001 }}
         >
               <DialogHeader>
                 <DialogTitle>
@@ -468,7 +495,20 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
           <CardContent className="py-16 text-center">
             <BookOpen className="w-16 h-16 text-muted-foreground mx-auto mb-4 opacity-50" />
             <p className="text-lg text-muted-foreground mb-4">No tutorials yet.</p>
-            <p className="text-sm text-muted-foreground">Click "Create Main Tutorial" in the header to get started.</p>
+            <p className="text-sm text-muted-foreground mb-4">Click "Create Main Tutorial" in the header to get started.</p>
+            {showEditDelete && (
+              <Button
+                onClick={() => {
+                  setEditingTutorial(null);
+                  setMainFormData({ title: '', description: '' });
+                  setIsMainDialogOpen(true);
+                }}
+                className="mt-4"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Create Main Tutorial
+              </Button>
+            )}
           </CardContent>
         </Card>
       ) : (
@@ -632,7 +672,7 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
         }}>
             <DialogContent 
               className="max-w-3xl max-h-[90vh] overflow-y-auto"
-              style={{ zIndex: 100002 }}
+              style={{ zIndex: 10002 }}
             >
               <DialogHeader>
                 <DialogTitle>
