@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogOverlay } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Trash2, Plus, Edit, X, Play, BookOpen, ChevronDown, ChevronRight, FileText } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
@@ -47,6 +47,7 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
   const [videoPreview, setVideoPreview] = useState<string | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<{ url: string; title: string } | null>(null);
   const [expandedTutorials, setExpandedTutorials] = useState<Set<string>>(new Set());
+  const videoFileInputRef = useRef<HTMLInputElement>(null);
 
   const [mainFormData, setMainFormData] = useState({
     title: '',
@@ -77,11 +78,8 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
     };
   }, []);
 
+  // Inject style to ensure dialogs appear above TutorialsPage overlay (z-[9998])
   useEffect(() => {
-    console.log('isMainDialogOpen state changed:', isMainDialogOpen);
-    
-    // Inject style to ensure dialog appears above TutorialsPage overlay (z-[9998])
-    // Use very high z-index to ensure it's always on top
     const style = document.createElement('style');
     style.id = 'tutorial-dialog-z-index-fix';
     style.textContent = `
@@ -105,6 +103,25 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
       }
     };
   }, []);
+
+  // Ensure option dialog appears on top when it opens
+  useEffect(() => {
+    if (isOptionDialogOpen) {
+      // Force update z-index when option dialog opens
+      const portals = document.querySelectorAll('[data-radix-portal]');
+      portals.forEach(portal => {
+        (portal as HTMLElement).style.zIndex = '100000';
+      });
+      const overlays = document.querySelectorAll('[data-radix-dialog-overlay]');
+      overlays.forEach(overlay => {
+        (overlay as HTMLElement).style.zIndex = '100000';
+      });
+      const contents = document.querySelectorAll('[data-radix-dialog-content]');
+      contents.forEach(content => {
+        (content as HTMLElement).style.zIndex = '100002';
+      });
+    }
+  }, [isOptionDialogOpen]);
 
   const fetchTutorials = async () => {
     try {
@@ -290,6 +307,10 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
       setVideoPreview(null);
       setEditingTutorial(null);
       setSelectedParentTutorial(null);
+      // Reset file input
+      if (videoFileInputRef.current) {
+        videoFileInputRef.current.value = '';
+      }
       setIsOptionDialogOpen(false);
       fetchTutorials();
     } catch (error: any) {
@@ -326,6 +347,10 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
     setOptionFormData({ option_name: '', written_steps: '' });
     setVideoFile(null);
     setVideoPreview(null);
+    // Reset file input
+    if (videoFileInputRef.current) {
+      videoFileInputRef.current.value = '';
+    }
     setIsOptionDialogOpen(true);
   };
 
@@ -377,26 +402,6 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
 
   return (
     <div className="space-y-6">
-      {showEditDelete && (
-        <div className="flex items-center justify-end gap-2 mb-4">
-          <Button 
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              console.log('Button clicked, opening dialog. Current state:', isMainDialogOpen);
-              setEditingTutorial(null);
-              setMainFormData({ title: '', description: '' });
-              setIsMainDialogOpen(true);
-              console.log('State set to true');
-            }}
-            className="shadow-lg"
-            type="button"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            Create Main Tutorial
-          </Button>
-        </div>
-      )}
       
       {/* Always render Dialog, control visibility with open prop */}
       <Dialog open={isMainDialogOpen} onOpenChange={(open) => {
@@ -408,8 +413,7 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
         }
       }}>
         <DialogContent 
-          className="max-w-2xl max-h-[90vh] overflow-y-auto" 
-          onOpenAutoFocus={(e) => e.preventDefault()}
+          className="max-w-2xl max-h-[90vh] overflow-y-auto"
         >
               <DialogHeader>
                 <DialogTitle>
@@ -464,23 +468,7 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
           <CardContent className="py-16 text-center">
             <BookOpen className="w-16 h-16 text-muted-foreground mx-auto mb-4 opacity-50" />
             <p className="text-lg text-muted-foreground mb-4">No tutorials yet.</p>
-            {showEditDelete ? (
-              <Button
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setEditingTutorial(null);
-                  setMainFormData({ title: '', description: '' });
-                  setIsMainDialogOpen(true);
-                }}
-                className="shadow-lg mt-4"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Create Main Tutorial
-              </Button>
-            ) : (
-              <p className="text-sm text-muted-foreground">Click "Create Main Tutorial" to get started.</p>
-            )}
+            <p className="text-sm text-muted-foreground">Click "Create Main Tutorial" in the header to get started.</p>
           </CardContent>
         </Card>
       ) : (
@@ -636,11 +624,15 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
             setOptionFormData({ option_name: '', written_steps: '' });
             setVideoFile(null);
             setVideoPreview(null);
+            // Reset file input when dialog closes
+            if (videoFileInputRef.current) {
+              videoFileInputRef.current.value = '';
+            }
           }
         }}>
             <DialogContent 
-              className="max-w-3xl max-h-[90vh] overflow-y-auto" 
-              onOpenAutoFocus={(e) => e.preventDefault()}
+              className="max-w-3xl max-h-[90vh] overflow-y-auto"
+              style={{ zIndex: 100002 }}
             >
               <DialogHeader>
                 <DialogTitle>
@@ -668,6 +660,7 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
                 <Label htmlFor="video">Video *</Label>
                 <div className="mt-2">
                   <Input
+                    ref={videoFileInputRef}
                     id="video"
                     type="file"
                     accept="video/*"
