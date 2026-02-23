@@ -248,6 +248,10 @@ export default function TutorialsPage() {
               sectionId={selectedSection} 
               sectionTitle={content.title}
               showEditDelete={isAdmin}
+              showAllSections={selectedSection === 'admin' && isAdmin}
+              sectionTitles={Object.fromEntries(
+                Object.entries(tutorialContent).map(([key, value]) => [key, value.title])
+              )}
             />
           </div>
         </div>

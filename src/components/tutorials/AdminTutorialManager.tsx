@@ -32,9 +32,11 @@ interface AdminTutorialManagerProps {
   sectionId: string;
   sectionTitle: string;
   showEditDelete?: boolean;
+  showAllSections?: boolean; // When true, show all tutorials grouped by section
+  sectionTitles?: Record<string, string>; // Map of section_id to section title
 }
 
-export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete = true }: AdminTutorialManagerProps) {
+export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete = true, showAllSections = false, sectionTitles = {} }: AdminTutorialManagerProps) {
   const { user } = useAuth();
   const [tutorials, setTutorials] = useState<Tutorial[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,7 +63,32 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
 
   useEffect(() => {
     fetchTutorials();
-  }, [sectionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionId, showAllSections]);
+
+  // Set up real-time subscription to automatically update when tutorials are created/updated
+  useEffect(() => {
+    const channel = supabase
+      .channel(`tutorials-changes-${sectionId}-${showAllSections}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tutorials'
+        },
+        () => {
+          // Refresh tutorials when any change occurs
+          fetchTutorials();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionId, showAllSections]);
 
   // Listen for custom event to open dialog from TutorialsPage header button
   useEffect(() => {
@@ -152,11 +179,19 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
   const fetchTutorials = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      let query = supabase
         .from('tutorials')
-        .select('*')
-        .eq('section_id', sectionId)
-        .order('order_index', { ascending: true });
+        .select('*');
+
+      if (showAllSections) {
+        // Fetch all tutorials when showing all sections
+        query = query.order('section_id', { ascending: true }).order('order_index', { ascending: true });
+      } else {
+        // Fetch tutorials for specific section
+        query = query.eq('section_id', sectionId).order('order_index', { ascending: true });
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       setTutorials(data || []);
@@ -168,12 +203,28 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
     }
   };
 
-  const getMainTutorials = () => {
-    return tutorials.filter(t => t.is_main_tutorial !== false && !t.parent_tutorial_id);
+  const getMainTutorials = (sectionIdFilter?: string) => {
+    let filtered = tutorials.filter(t => t.is_main_tutorial !== false && !t.parent_tutorial_id);
+    if (sectionIdFilter) {
+      filtered = filtered.filter(t => t.section_id === sectionIdFilter);
+    }
+    return filtered;
   };
 
   const getTutorialOptions = (parentId: string) => {
     return tutorials.filter(t => t.parent_tutorial_id === parentId);
+  };
+
+  // Group tutorials by section when showing all sections
+  const getTutorialsBySection = () => {
+    const grouped: Record<string, Tutorial[]> = {};
+    tutorials.forEach(tutorial => {
+      if (!grouped[tutorial.section_id]) {
+        grouped[tutorial.section_id] = [];
+      }
+      grouped[tutorial.section_id].push(tutorial);
+    });
+    return grouped;
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -423,8 +474,9 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
   };
 
   const mainTutorials = getMainTutorials();
+  const tutorialsBySection = showAllSections ? getTutorialsBySection() : {};
 
-  console.log('AdminTutorialManager render - showEditDelete:', showEditDelete, 'isMainDialogOpen:', isMainDialogOpen, 'sectionId:', sectionId);
+  console.log('AdminTutorialManager render - showEditDelete:', showEditDelete, 'isMainDialogOpen:', isMainDialogOpen, 'sectionId:', sectionId, 'showAllSections:', showAllSections);
 
   return (
     <div className="space-y-6">
@@ -490,6 +542,188 @@ export function AdminTutorialManager({ sectionId, sectionTitle, showEditDelete =
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
           <p className="text-muted-foreground">Loading tutorials...</p>
         </div>
+      ) : showAllSections ? (
+        // Show all tutorials grouped by section
+        Object.keys(tutorialsBySection).length === 0 ? (
+          <Card className="border-dashed">
+            <CardContent className="py-16 text-center">
+              <BookOpen className="w-16 h-16 text-muted-foreground mx-auto mb-4 opacity-50" />
+              <p className="text-lg text-muted-foreground mb-4">No tutorials yet.</p>
+              <p className="text-sm text-muted-foreground mb-4">Click "Create Main Tutorial" in the header to get started.</p>
+              {showEditDelete && (
+                <Button
+                  onClick={() => {
+                    setEditingTutorial(null);
+                    setMainFormData({ title: '', description: '' });
+                    setIsMainDialogOpen(true);
+                  }}
+                  className="mt-4"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create Main Tutorial
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-8">
+            {Object.entries(tutorialsBySection).map(([sectionId, sectionTutorials]) => {
+              const sectionMainTutorials = getMainTutorials(sectionId);
+              const sectionTitle = sectionTitles[sectionId] || sectionId;
+
+              if (sectionMainTutorials.length === 0) return null;
+
+              return (
+                <div key={sectionId} className="space-y-4">
+                  <div className="flex items-center gap-3 pb-2 border-b-2">
+                    <h2 className="text-2xl font-bold">{sectionTitle}</h2>
+                    <span className="text-sm text-muted-foreground">
+                      ({sectionMainTutorials.length} tutorial{sectionMainTutorials.length !== 1 ? 's' : ''})
+                    </span>
+                  </div>
+                  {sectionMainTutorials.map((mainTutorial) => {
+                    const options = getTutorialOptions(mainTutorial.id);
+                    const isExpanded = expandedTutorials.has(mainTutorial.id);
+
+                    return (
+                      <Card key={mainTutorial.id} className="border-2">
+                        <CardContent className="p-6">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-4 flex-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => toggleExpand(mainTutorial.id)}
+                                className="h-8 w-8"
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className="w-5 h-5" />
+                                ) : (
+                                  <ChevronRight className="w-5 h-5" />
+                                )}
+                              </Button>
+                              <div className="flex-1">
+                                <h3 className="font-bold text-xl mb-1">{mainTutorial.title}</h3>
+                                {mainTutorial.description && (
+                                  <p className="text-sm text-muted-foreground">{mainTutorial.description}</p>
+                                )}
+                                {options.length > 0 && (
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    {options.length} option{options.length !== 1 ? 's' : ''} available
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            {showEditDelete && (
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleAddOption(mainTutorial)}
+                                >
+                                  <Plus className="w-4 h-4 mr-2" />
+                                  Add Option
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleEditMainTutorial(mainTutorial)}
+                                  className="h-10 w-10"
+                                >
+                                  <Edit className="w-5 h-5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleDelete(mainTutorial.id)}
+                                  className="text-red-600 hover:text-red-700 hover:bg-red-50 h-10 w-10"
+                                >
+                                  <Trash2 className="w-5 h-5" />
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+
+                          <Collapsible open={isExpanded}>
+                            <CollapsibleContent>
+                              <div className="mt-4 ml-12 space-y-3">
+                                {options.length === 0 ? (
+                                  <div className="text-center py-8 text-muted-foreground border-2 border-dashed rounded-lg">
+                                    <p>No options yet. Click "Add Option" to create one.</p>
+                                  </div>
+                                ) : (
+                                  options.map((option) => (
+                                    <Card 
+                                      key={option.id}
+                                      className={option.video_url ? "cursor-pointer hover:shadow-lg transition-all hover:scale-[1.01] border" : "border"}
+                                      onClick={() => {
+                                        if (option.video_url) {
+                                          setSelectedVideo({ url: option.video_url, title: `${mainTutorial.title} - ${option.option_name}` });
+                                        }
+                                      }}
+                                    >
+                                      <CardContent className="p-4">
+                                        <div className="flex items-start gap-4">
+                                          {option.video_url ? (
+                                            <VideoThumbnail
+                                              videoUrl={option.video_url}
+                                              title={option.option_name || ''}
+                                              className="flex-shrink-0 w-40 h-24 rounded-lg shadow-md"
+                                            />
+                                          ) : (
+                                            <div className="flex-shrink-0 w-40 h-24 bg-muted rounded-lg flex items-center justify-center border-2 border-dashed">
+                                              <Play className="w-8 h-8 text-muted-foreground" />
+                                            </div>
+                                          )}
+                                          <div className="flex-1 min-w-0">
+                                            <h4 className="font-semibold text-lg mb-1">{option.option_name}</h4>
+                                            {option.written_steps && (
+                                              <div className="mt-2 p-3 bg-muted/50 rounded-lg">
+                                                <div className="flex items-center gap-2 mb-2">
+                                                  <FileText className="w-4 h-4 text-muted-foreground" />
+                                                  <span className="text-xs font-medium text-muted-foreground">Written Steps:</span>
+                                                </div>
+                                                <p className="text-sm text-muted-foreground whitespace-pre-line">{option.written_steps}</p>
+                                              </div>
+                                            )}
+                                          </div>
+                                          {showEditDelete && (
+                                            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={() => handleEditOption(option)}
+                                                className="h-8 w-8"
+                                              >
+                                                <Edit className="w-4 h-4" />
+                                              </Button>
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={() => handleDelete(option.id)}
+                                                className="text-red-600 hover:text-red-700 hover:bg-red-50 h-8 w-8"
+                                              >
+                                                <Trash2 className="w-4 h-4" />
+                                              </Button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </CardContent>
+                                    </Card>
+                                  ))
+                                )}
+                              </div>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )
       ) : mainTutorials.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-16 text-center">
