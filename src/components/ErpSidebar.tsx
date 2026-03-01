@@ -46,7 +46,8 @@ import {
   FileEdit,
   Wallet,
   List,
-  BookOpen
+  BookOpen,
+  UserSearch
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -78,6 +79,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       icon: Contact,
       children: [
         { title: "Create/View Customers", url: "/crm/customers", icon: UserPlus },
+        { title: "Leads", url: "/crm/leads", icon: UserSearch },
       ]
     },
     {

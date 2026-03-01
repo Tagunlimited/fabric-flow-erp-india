@@ -18,6 +18,7 @@ import { supabase } from "@/integrations/supabase/client";
 import Index from "./pages/Index";
 import CustomersPage from "./pages/crm/CustomersPage";
 import CustomerDetailPage from "./pages/crm/CustomerDetailPage";
+import LeadsPage from "./pages/crm/LeadsPage";
 import ProductCategoriesPage from "./pages/inventory/ProductCategoriesPage";
 import SizeTypesPage from "./pages/inventory/SizeTypesPage";
 // import FabricsPage from "./pages/inventory/FabricsPage"; // Removed - using new FabricManagerNew
@@ -298,6 +299,11 @@ const App = () => {
                 <Route path="/crm/customers/:id" element={
                   <ProtectedRouteWithCompanySettings>
                     <CustomerDetailPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/crm/leads" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <LeadsPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/orders" element={
