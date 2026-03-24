@@ -166,6 +166,14 @@ const extractImagesFromSpecifications = (specifications: any) => {
   }
 };
 
+const hasMockupInItem = (item: any): boolean => {
+  if (Array.isArray(item?.mockup_images) && item.mockup_images.length > 0) return true;
+  const specs = typeof item?.specifications === 'string'
+    ? JSON.parse(item.specifications || '{}')
+    : (item?.specifications || {});
+  return Array.isArray(specs?.mockup_images) && specs.mockup_images.length > 0;
+};
+
 // calculateOrderSummary is now imported from '@/utils/priceCalculation'
 
 // 2. Add a function to calculate GST rates breakdown
@@ -1365,8 +1373,6 @@ export default function OrderDetailPage() {
           handleBackNavigation();
           return;
         }
-        setOrder(orderData as unknown as Order);
-
         // Fetch customer details
         const { data: customerData, error: customerError } = await (supabase as any)
           .from('customers')
@@ -1429,6 +1435,22 @@ export default function OrderDetailPage() {
         }
         
         setOrderItems((itemsData as unknown as OrderItem[]) || []);
+
+        // Safety rule: if order is confirmed but mockups already exist, auto-move to Designing Done.
+        const hasAnyMockup = ((itemsData as any[]) || []).some((it) => hasMockupInItem(it));
+        if ((orderData as any).status === 'confirmed' && hasAnyMockup) {
+          const { error: statusErr } = await (supabase as any)
+            .from('orders')
+            .update({ status: 'designing_done' })
+            .eq('id', id as string);
+          if (!statusErr) {
+            setOrder({ ...(orderData as any), status: 'designing_done' } as unknown as Order);
+          } else {
+            setOrder(orderData as unknown as Order);
+          }
+        } else {
+          setOrder(orderData as unknown as Order);
+        }
 
         // Check if order has cutting master assigned
         try {
@@ -1927,6 +1949,26 @@ export default function OrderDetailPage() {
 
       const { error: updErr } = await (supabase as any).from('order_items').update({ specifications: updatedSpecs }).eq('id', orderItemId);
       if (updErr) throw updErr;
+
+      // Business rule: once mockup is uploaded after confirmation, move order to Designing Done.
+      if (type === 'mockup' && order?.id) {
+        const { data: latestOrder } = await (supabase as any)
+          .from('orders')
+          .select('status')
+          .eq('id', order.id)
+          .single();
+        if (latestOrder?.status === 'confirmed') {
+          const { error: statusErr } = await (supabase as any)
+            .from('orders')
+            .update({ status: 'designing_done' })
+            .eq('id', order.id);
+          if (!statusErr) {
+            setOrder({ ...order, status: 'designing_done' });
+          } else {
+            console.error('Failed to auto-update status to designing_done:', statusErr);
+          }
+        }
+      }
       
       // Log file upload activity for each uploaded file
       for (const url of uploadedUrls) {

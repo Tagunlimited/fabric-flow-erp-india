@@ -20,6 +20,11 @@ import { supabase } from '@/integrations/supabase/client';
 import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS, ITEM_TYPE_CONFIGS } from '@/types/warehouse-inventory';
 import { toast } from 'sonner';
 import { InventoryLogsModal } from './InventoryLogsModal';
+import {
+  hasMeaningfulColorLabel,
+  resolveSwatchHex,
+  resolveWarehouseFabricSwatch,
+} from '@/lib/grnColorSwatch';
 
 interface ReceivingZoneInventoryProps {
   onTransferItem?: (inventory: WarehouseInventory) => void;
@@ -597,19 +602,8 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                   let displayBrand: string;
                   let displaySize: string;
 
-                  const colorNameToHex: Record<string, string> = {
-                    peach: '#FFCBA4', blank: '#E8E8E8', white: '#FFFFFF', black: '#1a1a1a',
-                    grey: '#9ca3af', gray: '#9ca3af', red: '#dc2626', blue: '#2563eb',
-                    green: '#16a34a', yellow: '#eab308', navy: '#1e3a8a', cotton: '#fafafa'
-                  };
-                  const resolveColorHex = (colorName: string, hexFromMaster?: string | null): string => {
-                    if (hexFromMaster && String(hexFromMaster).trim()) {
-                      const h = String(hexFromMaster).trim();
-                      return h.startsWith('#') ? h : `#${h}`;
-                    }
-                    const key = (colorName || '').toLowerCase().trim();
-                    return colorNameToHex[key] || '#E5E7EB';
-                  };
+                  const lineFabricColor = item.grn_item?.fabric_color;
+                  const lineItemColor = item.grn_item?.item_color;
 
                   if (item.item_type === 'FABRIC' && fabricMaster) {
                     displayImage = fabricMaster.image || null;
@@ -617,8 +611,12 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                     displayName = fabricMaster.fabric_name || item.item_name;
                     displayType = 'Fabric';
                     displayFabric = fabricMaster.fabric_for_supplier || '-';
-                    displayColor = item.grn_item?.fabric_color || fabricMaster.color || '-';
-                    displayColorHex = displayColor !== '-' ? resolveColorHex(displayColor, fabricMaster.hex) : null;
+                    displayColor = lineFabricColor || fabricMaster.color || '-';
+                    if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
+                    displayColorHex =
+                      displayColor !== '-'
+                        ? resolveWarehouseFabricSwatch(displayColor, fabricMaster.hex, lineFabricColor)
+                        : null;
                     const material = fabricMaster.type || '';
                     const gsm = fabricMaster.gsm || '';
                     displayMaterialGsm = material && gsm ? `${material} ${gsm} GSM` : material || gsm || '-';
@@ -630,8 +628,10 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                     displayName = itemMaster.item_name || item.item_name;
                     displayType = itemMaster.item_type || '-';
                     displayFabric = '-';
-                    displayColor = item.grn_item?.item_color || itemMaster.color || '-';
-                    displayColorHex = displayColor !== '-' ? resolveColorHex(displayColor, null) : null;
+                    displayColor = lineItemColor || itemMaster.color || '-';
+                    if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
+                    displayColorHex =
+                      displayColor !== '-' ? resolveSwatchHex(displayColor, null) : null;
                     displayMaterialGsm = itemMaster.material || '-';
                     displayBrand = itemMaster.brand || '-';
                     displaySize = itemMaster.size || '-';
@@ -657,8 +657,10 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                     displayName = item.item_name;
                     displayType = item.item_type === 'FABRIC' ? 'Fabric' : item.item_type || '-';
                     displayFabric = '-';
-                    displayColor = item.grn_item?.fabric_color || item.grn_item?.item_color || '-';
-                    displayColorHex = displayColor !== '-' ? resolveColorHex(displayColor, null) : null;
+                    displayColor = lineFabricColor || lineItemColor || '-';
+                    if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
+                    displayColorHex =
+                      displayColor !== '-' ? resolveSwatchHex(displayColor, null) : null;
                     if (item.item_type === 'FABRIC') {
                       // Try to get material from fabric_name or other sources if available
                       const fabricGsm = item.grn_item?.fabric_gsm || '';
@@ -705,13 +707,13 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <span>{displayColor !== '-' ? displayColor : '-'}</span>
-                          {displayColor !== '-' && (
+                          {displayColorHex ? (
                             <div
-                              className="w-4 h-4 shrink-0 rounded-full border border-gray-300"
-                              style={{ backgroundColor: displayColorHex ?? resolveColorHex(displayColor, null) }}
+                              className="w-4 h-4 shrink-0 rounded-full border border-border"
+                              style={{ backgroundColor: displayColorHex }}
                               title={displayColor}
                             />
-                          )}
+                          ) : null}
                         </div>
                       </TableCell>
                       <TableCell>

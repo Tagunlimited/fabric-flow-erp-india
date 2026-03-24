@@ -239,15 +239,15 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
                   height: config.logo_sizes?.header_logo_height || '32px',
                   width: config.logo_sizes?.header_logo_width || 'auto'
                 }}
-                className="object-contain"
+                className="hidden sm:block object-contain"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';
                 }}
               />
-              <h1 className="text-base sm:text-xl font-bold text-primary truncate max-w-[100px] sm:max-w-none">Scissors ERP</h1>
+              <h1 className="hidden sm:block text-base sm:text-xl font-bold text-primary truncate max-w-[100px] sm:max-w-none">Scissors ERP</h1>
             </div>
-            {/* Center: Search Bar */}
-            <div className="flex-1 flex justify-center">
+            {/* Center: Search Bar (desktop/tablet only) */}
+            <div className="hidden md:flex flex-1 justify-center">
               <div className="w-full max-w-xl">
                 <UniversalSearchBar
                   value={searchQuery}
@@ -259,8 +259,18 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
             </div>
             {/* Right: Avatar + User Info, then icons */}
             <div className="flex items-center space-x-2 min-w-0">
+              {/* Mobile search icon (no input box) */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="md:hidden p-2 order-1"
+                title="Search"
+                aria-label="Search"
+              >
+                <Search className="w-5 h-5" />
+              </Button>
               {/* Avatar and User Info */}
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-2 order-3 md:order-none">
                 <div className="relative">
                   {user && (
                     <AvatarUploader
@@ -273,7 +283,7 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
                     />
                   )}
                 </div>
-                <div className="flex flex-col text-left">
+                <div className="hidden md:flex flex-col text-left">
                   <div className="font-medium text-sm text-foreground">{displayName}</div>
                   {profile?.department && (
                     <div className="text-xs text-muted-foreground">{profile.department}</div>
@@ -282,13 +292,15 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
                 </div>
               </div>
               {/* Notification, Install, Theme, Settings, Logout */}
-              <NotificationCenter />
+              <div className="order-2 md:order-none">
+                <NotificationCenter />
+              </div>
               {canInstall && !isInstalled && (
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleInstallClick}
-                  className="text-foreground hover:bg-primary hover:text-primary-foreground border-primary"
+                  className="order-5 md:order-none text-foreground hover:bg-primary hover:text-primary-foreground border-primary"
                   title="Install Scissors App"
                 >
                   <Download className="w-4 h-4 mr-1 sm:mr-2" />
@@ -299,13 +311,13 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
                 variant="ghost"
                 size="sm"
                 onClick={toggleTheme}
-                className="text-foreground hover:bg-muted hover:text-foreground"
+                className="hidden md:inline-flex text-foreground hover:bg-muted hover:text-foreground"
               >
                 {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm" className="p-1">
+                  <Button variant="ghost" size="sm" className="hidden md:inline-flex p-1">
                     <Settings className="w-4 h-4" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -351,9 +363,9 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
                 variant="ghost"
                 size="sm"
                 onClick={signOut}
-                className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                className="order-4 md:order-none text-red-600 hover:text-red-700 hover:bg-red-50 px-2 sm:px-3"
               >
-                <LogOut className="w-4 h-4 mr-2" />
+                <LogOut className="w-4 h-4 sm:mr-2" />
                 <span className="hidden sm:inline">Logout</span>
               </Button>
             </div>

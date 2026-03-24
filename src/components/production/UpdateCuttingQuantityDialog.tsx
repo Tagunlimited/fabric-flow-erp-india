@@ -11,6 +11,20 @@ import { toast } from 'sonner';
 import { useSizeTypes } from '@/hooks/useSizeTypes';
 import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
+import {
+  normalizeToByOrderItem,
+  buildStoredPayloadFromByOrderItem,
+  sumAllCutsInStoredJson,
+} from '@/utils/cutQuantitiesStorage';
+import { sizesFromOrderItem } from '@/utils/sizesFromOrderItem';
+import { resolveSwatchHex } from '@/lib/grnColorSwatch';
+import '@/components/purchase-orders/BomLinePicker.css';
+
+function fabricSwatchCss(fabric: { color?: string | null; hex?: string | null } | null | undefined): string {
+  if (!fabric) return '#e5e7eb';
+  const label = String(fabric.color ?? '').trim();
+  return resolveSwatchHex(label, fabric.hex ?? null) ?? '#e5e7eb';
+}
 
 interface OrderSize {
   size_name: string;
@@ -22,6 +36,7 @@ interface AvailableFabric {
   fabric_id: string;
   fabric_name: string;
   color: string;
+  hex?: string | null;
   gsm: number;
   image?: string;
   available_quantity: number;
@@ -55,181 +70,23 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
   customerName,
   productName,
   orderItems,
-  currentCutQuantities = {}
+  currentCutQuantities: _currentCutQuantities = {},
 }) => {
   const { sizeTypes } = useSizeTypes();
   const [additionalCutQuantities, setAdditionalCutQuantities] = useState<{ [size: string]: number }>({});
   const [existingCutQuantities, setExistingCutQuantities] = useState<{ [size: string]: number }>({});
   const [orderSizes, setOrderSizes] = useState<OrderSize[]>([]);
   const [availableFabrics, setAvailableFabrics] = useState<AvailableFabric[]>([]);
+  const [fullCutRaw, setFullCutRaw] = useState<unknown>({});
+  const [selectedOrderItemId, setSelectedOrderItemId] = useState<string | null>(null);
   const [fabricUsage, setFabricUsage] = useState<FabricUsage>({
     fabric_id: '',
     used_quantity: 0,
-    cutting_quantity: 0
+    cutting_quantity: 0,
   });
   const [loading, setLoading] = useState(false);
-
-  // Fetch order sizes, existing cut quantities, and picked fabrics
-  useEffect(() => {
-    const fetchOrderData = async () => {
-      if (!isOpen || !jobId) return;
-
-      try {
-        // First, fetch existing cut quantities from database
-        const { data: existingData, error: existingError } = await supabase
-          .from('order_assignments')
-          .select('cut_quantities_by_size')
-          .eq('order_id', jobId)
-          .single();
-
-        const existingCutQty = existingData?.cut_quantities_by_size || {};
-        setExistingCutQuantities(existingCutQty);
-
-        // Fetch available fabrics from order items and get their inventory
-        if (orderItems && orderItems.length > 0) {
-          const fabricIds = Array.from(new Set(
-            orderItems.map((item: any) => item.fabric_id).filter(Boolean)
-          ));
-
-          if (fabricIds.length > 0) {
-            // Fetch fabric details from fabric_master
-            const { data: fabricData, error: fabricError } = await supabase
-              .from('fabric_master')
-              .select('id, fabric_name, color, gsm, image, inventory, uom')
-              .in('id', fabricIds);
-
-            if (!fabricError && fabricData) {
-              // Also fetch from warehouse_inventory for more accurate inventory
-              const { data: warehouseInventory, error: warehouseError } = await supabase
-                .from('warehouse_inventory')
-                .select('item_id, item_name, quantity, unit')
-                .eq('item_type', 'FABRIC')
-                .in('status', ['IN_STORAGE', 'RECEIVED']);
-
-              // Create a map of fabric inventory from warehouse_inventory
-              const warehouseInventoryMap: Record<string, { quantity: number; unit: string }> = {};
-              if (!warehouseError && warehouseInventory) {
-                warehouseInventory.forEach((item: any) => {
-                  const fabricId = item.item_id;
-                  const fabricName = item.item_name;
-                  
-                  // Match by item_id first, then by item_name
-                  let matchKey: string | null = null;
-                  if (fabricId && fabricIds.includes(fabricId)) {
-                    matchKey = fabricId;
-                  } else if (fabricName) {
-                    // Try to match by fabric name
-                    const matchingFabric = fabricData.find((f: any) => 
-                      f.fabric_name === fabricName || 
-                      fabricName.includes(f.fabric_name) ||
-                      f.fabric_name.includes(fabricName.split(' - ')[0])
-                    );
-                    if (matchingFabric) {
-                      matchKey = matchingFabric.id;
-                    }
-                  }
-
-                  if (matchKey) {
-                    const current = warehouseInventoryMap[matchKey] || { quantity: 0, unit: item.unit || 'kgs' };
-                    warehouseInventoryMap[matchKey] = {
-                      quantity: current.quantity + Number(item.quantity || 0),
-                      unit: item.unit || current.unit || 'kgs'
-                    };
-                  }
-                });
-              }
-
-              const fabrics: AvailableFabric[] = fabricData.map((fabric: any) => {
-                // Prioritize warehouse_inventory if available, otherwise use fabric_master.inventory
-                const warehouseInv = warehouseInventoryMap[fabric.id];
-                const inventoryQty = warehouseInv 
-                  ? warehouseInv.quantity 
-                  : Number(fabric.inventory || 0);
-                // Prefer fabric_master.uom (source of truth); fallback to kgs to match DB
-                const inventoryUnit = (fabric.uom || warehouseInv?.unit || 'kgs');
-
-                return {
-                  fabric_id: fabric.id,
-                  fabric_name: fabric.fabric_name,
-                  color: fabric.color || '',
-                  gsm: fabric.gsm || 0,
-                  image: fabric.image,
-                  available_quantity: inventoryQty,
-                  unit: inventoryUnit
-                };
-              });
-
-              setAvailableFabrics(fabrics);
-              
-              // Set default fabric selection if only one fabric is available
-              if (fabrics.length === 1) {
-                setFabricUsage(prev => ({
-                  ...prev,
-                  fabric_id: fabrics[0].fabric_id
-                }));
-              }
-            }
-          }
-        }
-
-        // Try to get sizes from RPC function first
-        const { data: rpcData, error: rpcError } = await supabase
-          .rpc('get_order_sizes', { order_id_param: jobId });
-
-        if (!rpcError && rpcData && rpcData.length > 0) {
-          // Filter out sizes with zero quantities - only show sizes that have quantities
-          const filteredSizes = rpcData.filter(size => size.total_quantity > 0);
-          const sorted = sortSizes(filteredSizes);
-          setOrderSizes(sorted);
-          
-          // Initialize additional cut quantities to 0 (user will input how many more to cut)
-          const initialQuantities: { [size: string]: number } = {};
-          sorted.forEach(size => {
-            initialQuantities[size.size_name] = 0;
-          });
-          setAdditionalCutQuantities(initialQuantities);
-          return;
-        }
-
-          // Fallback to order items
-        if (orderItems && orderItems.length > 0) {
-          const sizesMap = new Map<string, number>();
-          
-          orderItems.forEach(item => {
-            if (item.sizes_quantities) {
-              Object.entries(item.sizes_quantities).forEach(([size, qty]: [string, any]) => {
-                const currentQty = sizesMap.get(size) || 0;
-                sizesMap.set(size, currentQty + Number(qty));
-              });
-            }
-          });
-
-          // Filter out sizes with zero quantities - only show sizes that have quantities
-          const sizesArray = Array.from(sizesMap.entries())
-            .filter(([_, total_quantity]) => total_quantity > 0)
-            .map(([size_name, total_quantity]) => ({
-              size_name,
-              total_quantity
-            }));
-
-          const sorted = sortSizes(sizesArray);
-          setOrderSizes(sorted);
-          
-          // Initialize additional cut quantities to 0 (user will input how many more to cut)
-          const initialQuantities: { [size: string]: number } = {};
-          sorted.forEach(size => {
-            initialQuantities[size.size_name] = 0;
-          });
-          setAdditionalCutQuantities(initialQuantities);
-        }
-        } catch (error) {
-          console.error('Error fetching order data:', error);
-          toast.error('Failed to fetch order data');
-        }
-      };
-
-      fetchOrderData();
-    }, [isOpen, jobId, orderItems]);
+  /** Bumped after fabric is deducted so we re-fetch availability while the dialog stays open (multi-line cutting). */
+  const [fabricAvailabilityTick, setFabricAvailabilityTick] = useState(0);
 
   const sortSizes = (sizes: OrderSize[], sizeTypeId?: string | null) => {
     if (!sizes || sizes.length === 0) return sizes;
@@ -244,6 +101,205 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
     // Use master-based sorting
     return sortSizeDistributionsByMasterOrder(sizes, typeId || null, sizeTypes);
   };
+
+  useEffect(() => {
+    if (!isOpen || !jobId) return;
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const { data: existingData, error: existingError } = await supabase
+          .from('order_assignments')
+          .select('cut_quantities_by_size')
+          .eq('order_id', jobId)
+          .maybeSingle();
+
+        if (existingError && (existingError as any).code !== 'PGRST116') {
+          console.warn('order_assignments fetch:', existingError);
+        }
+        if (!cancelled) {
+          setFullCutRaw(existingData?.cut_quantities_by_size ?? {});
+        }
+
+        if (!orderItems?.length) {
+          if (!cancelled) setAvailableFabrics([]);
+          return;
+        }
+
+        const fabricIds = Array.from(
+          new Set(orderItems.map((item: any) => item.fabric_id).filter(Boolean))
+        );
+
+        if (fabricIds.length === 0) {
+          if (!cancelled) setAvailableFabrics([]);
+          return;
+        }
+
+        const { data: fabricData, error: fabricError } = await supabase
+          .from('fabric_master')
+          .select('id, fabric_name, color, gsm, image, inventory, uom, hex')
+          .in('id', fabricIds);
+
+        if (fabricError || !fabricData) {
+          if (!cancelled) setAvailableFabrics([]);
+          return;
+        }
+
+        const { data: warehouseInventory, error: warehouseError } = await supabase
+          .from('warehouse_inventory')
+          .select('item_id, item_name, quantity, unit')
+          .eq('item_type', 'FABRIC')
+          .in('status', ['IN_STORAGE', 'RECEIVED']);
+
+        const warehouseInventoryMap: Record<string, { quantity: number; unit: string }> = {};
+        if (!warehouseError && warehouseInventory) {
+          warehouseInventory.forEach((invRow: any) => {
+            const fabricId = invRow.item_id;
+            const fabricName = invRow.item_name;
+
+            let matchKey: string | null = null;
+            if (fabricId && fabricIds.includes(fabricId)) {
+              matchKey = fabricId;
+            } else if (fabricName) {
+              const matchingFabric = fabricData.find(
+                (f: any) =>
+                  f.fabric_name === fabricName ||
+                  fabricName.includes(f.fabric_name) ||
+                  f.fabric_name.includes(fabricName.split(' - ')[0])
+              );
+              if (matchingFabric) matchKey = matchingFabric.id;
+            }
+
+            if (matchKey) {
+              const current = warehouseInventoryMap[matchKey] || {
+                quantity: 0,
+                unit: invRow.unit || 'kgs',
+              };
+              warehouseInventoryMap[matchKey] = {
+                quantity: current.quantity + Number(invRow.quantity || 0),
+                unit: invRow.unit || current.unit || 'kgs',
+              };
+            }
+          });
+        }
+
+        const fabrics: AvailableFabric[] = fabricData.map((fabric: any) => {
+          const warehouseInv = warehouseInventoryMap[fabric.id];
+          const masterQty = Number(fabric.inventory || 0);
+          const whQty = warehouseInv ? Number(warehouseInv.quantity || 0) : null;
+          // Prefer the tighter figure when warehouse totals and fabric_master diverge (e.g. after deduction).
+          let inventoryQty: number;
+          if (whQty != null && whQty > 0) {
+            inventoryQty = masterQty > 0 ? Math.min(masterQty, whQty) : whQty;
+          } else {
+            inventoryQty = masterQty;
+          }
+          const inventoryUnit = fabric.uom || warehouseInv?.unit || 'kgs';
+
+          return {
+            fabric_id: fabric.id,
+            fabric_name: fabric.fabric_name,
+            color: fabric.color || '',
+            hex: fabric.hex ?? null,
+            gsm: fabric.gsm || 0,
+            image: fabric.image,
+            available_quantity: inventoryQty,
+            unit: inventoryUnit,
+          };
+        });
+
+        if (!cancelled) {
+          setAvailableFabrics(fabrics);
+        }
+      } catch (error) {
+        console.error('Error fetching cutting dialog data:', error);
+        if (!cancelled) toast.error('Failed to fetch order data');
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, jobId, orderItems, fabricAvailabilityTick]);
+
+  useEffect(() => {
+    if (!isOpen || !orderItems?.length) return;
+    setSelectedOrderItemId(prev => {
+      if (prev && orderItems.some((i: any) => i.id === prev)) return prev;
+      return orderItems[0]?.id ?? null;
+    });
+  }, [isOpen, orderItems]);
+
+  useEffect(() => {
+    if (!isOpen || !jobId || !selectedOrderItemId || !orderItems?.length) return;
+
+    const item = orderItems.find((i: any) => i.id === selectedOrderItemId);
+    if (!item) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      let sizes = sizesFromOrderItem(item);
+
+      if (sizes.length === 0 && orderItems.length === 1) {
+        const { data: rpcData, error: rpcError } = await supabase.rpc('get_order_sizes', {
+          order_id_param: jobId,
+        });
+        if (!cancelled && !rpcError && rpcData && Array.isArray(rpcData) && rpcData.length > 0) {
+          sizes = rpcData
+            .filter((s: any) => Number(s.total_quantity) > 0)
+            .map((s: any) => ({
+              size_name: String(s.size_name),
+              total_quantity: Number(s.total_quantity),
+            }));
+        }
+      }
+
+      let specs = item.specifications;
+      if (typeof specs === 'string') {
+        try {
+          specs = JSON.parse(specs);
+        } catch {
+          specs = null;
+        }
+      }
+      const sizeTypeId =
+        item.size_type_id ||
+        (specs && typeof specs === 'object' ? (specs as { size_type_id?: string }).size_type_id : null);
+
+      const sorted = sortSizes(sizes, sizeTypeId || null);
+      const itemIds = orderItems.map((i: any) => i.id).filter(Boolean) as string[];
+      const byItem = normalizeToByOrderItem(fullCutRaw, itemIds);
+      const existing = { ...(byItem[selectedOrderItemId] || {}) };
+
+      if (!cancelled) {
+        setOrderSizes(sorted);
+        setExistingCutQuantities(existing);
+        const init: Record<string, number> = {};
+        sorted.forEach(s => {
+          init[s.size_name] = 0;
+        });
+        setAdditionalCutQuantities(init);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, jobId, selectedOrderItemId, fullCutRaw, orderItems, sizeTypes]);
+
+  useEffect(() => {
+    if (!selectedOrderItemId || !availableFabrics.length || !orderItems?.length) return;
+    const line = orderItems.find((i: any) => i.id === selectedOrderItemId);
+    const fid = line?.fabric_id ? String(line.fabric_id) : '';
+    const filtered = fid ? availableFabrics.filter(f => f.fabric_id === fid) : availableFabrics;
+    const pick = filtered[0]?.fabric_id || availableFabrics[0]?.fabric_id || '';
+    if (pick) {
+      setFabricUsage(prev => ({ ...prev, fabric_id: pick }));
+    }
+  }, [selectedOrderItemId, availableFabrics, orderItems]);
 
   const updateAdditionalQuantity = (size: string, quantity: number) => {
     const orderSize = orderSizes.find(s => s.size_name === size);
@@ -319,34 +375,51 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
         }
       }
 
-      // Calculate new total cut quantities by adding additional to existing
-      const newCutQuantities: { [size: string]: number } = {};
+      if (!selectedOrderItemId) {
+        toast.error('Select a product line before saving');
+        setLoading(false);
+        return;
+      }
+
+      const lineMerged: Record<string, number> = {};
       orderSizes.forEach(size => {
         const existing = existingCutQuantities[size.size_name] || 0;
         const additional = additionalCutQuantities[size.size_name] || 0;
-        newCutQuantities[size.size_name] = existing + additional;
+        lineMerged[size.size_name] = existing + additional;
       });
 
-      const totalCutQty = getTotalCutQuantityAfterUpdate();
-      
+      const itemIds = orderItems.map((i: any) => i.id).filter(Boolean) as string[];
+      const { data: freshRow } = await supabase
+        .from('order_assignments')
+        .select('cut_quantities_by_size')
+        .eq('order_id', jobId)
+        .maybeSingle();
+
+      const norm = normalizeToByOrderItem(freshRow?.cut_quantities_by_size ?? fullCutRaw, itemIds);
+      norm[selectedOrderItemId] = lineMerged;
+      const storedPayload = buildStoredPayloadFromByOrderItem(norm);
+      const totalCutAllLines = sumAllCutsInStoredJson(storedPayload);
+
       console.log('Saving cutting quantities:', {
         jobId,
-        existingCutQuantities,
-        additionalCutQuantities,
-        newCutQuantities,
-        totalCutQty,
-        fabricUsage
+        selectedOrderItemId,
+        lineMerged,
+        storedPayload,
+        totalCutAllLines,
+        fabricUsage,
       });
-      
-      // Update order_assignments table with new total cut quantities
+
       const { error } = await supabase
         .from('order_assignments')
-        .upsert({
-          order_id: jobId,
-          cut_quantity: totalCutQty,
-          cut_quantities_by_size: newCutQuantities, // Store updated size-wise quantities as JSONB
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'order_id' });
+        .upsert(
+          {
+            order_id: jobId,
+            cut_quantity: totalCutAllLines,
+            cut_quantities_by_size: storedPayload,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'order_id' }
+        );
 
       if (error) {
         console.error('Database error:', error);
@@ -515,11 +588,28 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
           console.error('Error processing warehouse inventory update:', warehouseError);
           // Don't throw - just log the error
         }
+
+        setFabricAvailabilityTick((t) => t + 1);
       }
 
-      toast.success(`Cutting quantities updated successfully! Added ${getTotalAdditionalCutQuantity()} pieces.`);
-      onSuccess();
-      onClose();
+      const addedPieces = getTotalAdditionalCutQuantity();
+      const lineIndex = orderItems.findIndex((i: any) => i.id === selectedOrderItemId);
+      const hasAnotherLine =
+        orderItems.length > 1 &&
+        lineIndex >= 0 &&
+        lineIndex < orderItems.length - 1;
+
+      if (hasAnotherLine) {
+        setFullCutRaw(storedPayload);
+        setFabricUsage({ fabric_id: '', used_quantity: 0, cutting_quantity: 0 });
+        setSelectedOrderItemId(orderItems[lineIndex + 1].id);
+        onSuccess();
+        toast.success(`Added ${addedPieces} pieces. Continue with the next product line.`);
+      } else {
+        toast.success(`Cutting quantities updated successfully! Added ${addedPieces} pieces.`);
+        onSuccess();
+        onClose();
+      }
     } catch (error: any) {
       console.error('Error saving cutting quantities:', error);
       toast.error(error.message || 'Failed to save cutting quantities');
@@ -527,6 +617,14 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
       setLoading(false);
     }
   };
+
+  const selectedLine =
+    orderItems.find((i: any) => i.id === selectedOrderItemId) || orderItems[0] || null;
+  const fabricsForPicker =
+    selectedLine?.fabric_id &&
+    availableFabrics.some(f => f.fabric_id === selectedLine.fabric_id)
+      ? availableFabrics.filter(f => f.fabric_id === selectedLine.fabric_id)
+      : availableFabrics;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -545,14 +643,13 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
           {/* Order Info */}
           <div className="bg-gray-50 p-4 rounded-lg">
             <div className="flex space-x-6">
-              {/* Product Image */}
               <div className="w-20 h-20 bg-blue-100 rounded-lg overflow-hidden flex items-center justify-center">
                 {(() => {
-                  const displayImage = orderItems[0] ? getOrderItemDisplayImage(orderItems[0]) : null;
+                  const displayImage = selectedLine ? getOrderItemDisplayImage(selectedLine) : null;
                   return displayImage ? (
                   <img 
                       src={displayImage} 
-                      alt={orderItems[0]?.product_category?.category_name || 'Product'}
+                      alt={selectedLine?.product_category?.category_name || 'Product'}
                     className="w-full h-full object-cover"
                   />
                 ) : (
@@ -563,24 +660,36 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
               <div className="flex-1 space-y-1">
                 <p className="text-sm"><span className="font-medium">Order:</span> {orderNumber}</p>
                 <p className="text-sm"><span className="font-medium">Customer:</span> {customerName}</p>
-                <p className="text-sm"><span className="font-medium">Product:</span> {productName}</p>
-                {orderItems[0]?.fabric && (
+                <p className="text-sm">
+                  <span className="font-medium">Product:</span>{' '}
+                  {selectedLine?.product_description || productName}
+                </p>
+                {selectedLine?.fabric && (
                   <div className="flex items-center space-x-2">
                     <span className="text-sm font-medium">Fabric:</span>
                     <div className="flex items-center space-x-2">
-                      {orderItems[0].fabric.image && (
+                      {selectedLine.fabric.image && (
                         <img 
-                          src={orderItems[0].fabric.image} 
+                          src={selectedLine.fabric.image} 
                           alt="Fabric"
                           className="rounded object-cover border border-gray-200"
                           style={{ width: '48px', height: '48px' }}
                         />
                       )}
-                      <div 
-                        className="w-5 h-5 rounded-full border border-gray-300"
-                        style={{ backgroundColor: orderItems[0].fabric.color?.toLowerCase() || '#cccccc' }}
+                      <div
+                        className="w-5 h-5 shrink-0 rounded-full border border-gray-300"
+                        style={{
+                          backgroundColor: fabricSwatchCss({
+                            color: selectedLine.fabric.color,
+                            hex:
+                              selectedLine.fabric.hex ??
+                              availableFabrics.find((f) => f.fabric_id === selectedLine.fabric_id)?.hex ??
+                              null,
+                          }),
+                        }}
+                        title={selectedLine.fabric.color || 'Fabric color'}
                       />
-                      <span className="text-sm">{orderItems[0].fabric.fabric_name} - {orderItems[0].fabric.gsm} GSM, {orderItems[0].fabric.color}</span>
+                      <span className="text-sm">{selectedLine.fabric.fabric_name} - {selectedLine.fabric.gsm} GSM, {selectedLine.fabric.color}</span>
                     </div>
                   </div>
                 )}
@@ -588,11 +697,44 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
             </div>
           </div>
 
+          {orderItems.length > 1 && (
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Product line</Label>
+              <p className="text-xs text-muted-foreground">
+                Select which product you are cutting. Only sizes for that line appear below.
+              </p>
+              <div className="bom-line-radio-inputs" role="radiogroup" aria-label="Product line">
+                {orderItems.map((it: any) => (
+                  <label key={it.id} className="cursor-pointer">
+                    <input
+                      type="radio"
+                      name="cutting-product-line"
+                      className="bom-line-radio-input"
+                      checked={selectedOrderItemId === it.id}
+                      onChange={() => setSelectedOrderItemId(it.id)}
+                    />
+                    <span className="bom-line-radio-tile">
+                      <span className="bom-line-radio-label">
+                        {it.product_description || 'Product'}
+                        <span className="block text-xs font-normal text-muted-foreground mt-0.5">
+                          {it.quantity ?? 0} pcs
+                        </span>
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Progress Summary */}
           <div className="grid grid-cols-4 gap-4">
+            <p className="col-span-4 text-xs text-muted-foreground -mb-2">
+              Figures below are for the selected product line only.
+            </p>
             <Card>
               <CardContent className="p-4">
-                <div className="text-sm text-gray-600">Total Order Qty</div>
+                <div className="text-sm text-gray-600">Line order qty</div>
                 <div className="text-2xl font-bold text-blue-600">{getTotalOrderQuantity()}</div>
               </CardContent>
             </Card>
@@ -617,7 +759,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
           </div>
 
           {/* Fabric Usage Tracking - Now mandatory when adding cut quantities */}
-          {availableFabrics.length > 0 && (
+          {fabricsForPicker.length > 0 && (
             <div>
               <h4 className="font-medium mb-4 flex items-center">
                 <Droplets className="w-5 h-5 mr-2 text-blue-600" />
@@ -642,7 +784,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                           <SelectValue placeholder="Choose fabric used for cutting" />
                         </SelectTrigger>
                         <SelectContent>
-                          {availableFabrics.map((fabric) => (
+                          {fabricsForPicker.map((fabric) => (
                             <SelectItem key={fabric.fabric_id} value={fabric.fabric_id}>
                               <div className="flex items-center space-x-3">
                                 {fabric.image && (
@@ -652,6 +794,11 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                                     className="w-6 h-6 rounded object-cover border"
                                   />
                                 )}
+                                <div
+                                  className={`shrink-0 rounded-full border border-gray-300 ${fabric.image ? 'w-4 h-4' : 'w-6 h-6'}`}
+                                  style={{ backgroundColor: fabricSwatchCss(fabric) }}
+                                  title={fabric.color || 'Color'}
+                                />
                                 <div>
                                   <div className="font-medium">{fabric.fabric_name}</div>
                                   <div className="text-xs text-gray-500">

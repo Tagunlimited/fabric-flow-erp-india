@@ -1,0 +1,109 @@
+/* Horizontal pill radios (adapted from Uiverse.io by Pankaj-Meharchandani) */
+.bom-line-radio-inputs {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: stretch;
+  gap: 0.75rem;
+  max-width: 100%;
+  user-select: none;
+}
+
+.bom-line-radio-input:checked + .bom-line-radio-tile {
+  border-color: #2260ff;
+  box-shadow: 0 5px 10px rgba(0, 0, 0, 0.1);
+  color: #2260ff;
+}
+
+.bom-line-radio-input:checked + .bom-line-radio-tile::before {
+  transform: scale(1);
+  opacity: 1;
+  background-color: #2260ff;
+  border-color: #2260ff;
+}
+
+.bom-line-radio-input:checked + .bom-line-radio-tile .bom-line-radio-label {
+  color: #2260ff;
+}
+
+.bom-line-radio-input:focus + .bom-line-radio-tile {
+  border-color: #2260ff;
+  box-shadow:
+    0 5px 10px rgba(0, 0, 0, 0.1),
+    0 0 0 4px #b5c9fc;
+}
+
+.bom-line-radio-input:focus + .bom-line-radio-tile::before {
+  transform: scale(1);
+  opacity: 1;
+}
+
+.bom-line-radio-tile {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 160px;
+  max-width: 320px;
+  min-height: 48px;
+  border-radius: 25px;
+  border: 2px solid #b5bfd9;
+  background-color: hsl(var(--background));
+  box-shadow: 0 5px 10px rgba(0, 0, 0, 0.06);
+  transition: 0.15s ease;
+  cursor: pointer;
+  position: relative;
+  padding: 0.5rem 1rem 0.5rem 2.75rem;
+}
+
+.bom-line-radio-tile::before {
+  content: "";
+  position: absolute;
+  display: block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #b5bfd9;
+  background-color: hsl(var(--background));
+  border-radius: 50%;
+  left: 14px;
+  transition: 0.25s ease;
+}
+
+.bom-line-radio-tile:hover {
+  border-color: #2260ff;
+}
+
+.bom-line-radio-tile:hover::before {
+  transform: scale(1);
+  opacity: 1;
+}
+
+.bom-line-radio-label {
+  color: hsl(var(--muted-foreground));
+  transition: 0.2s ease;
+  text-align: left;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.bom-line-radio-input {
+  clip: rect(0 0 0 0);
+  clip-path: inset(100%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.dark .bom-line-radio-tile {
+  border-color: hsl(var(--border));
+  box-shadow: none;
+}
+
+.dark .bom-line-radio-tile::before {
+  border-color: hsl(var(--border));
+  background-color: hsl(var(--background));
+}

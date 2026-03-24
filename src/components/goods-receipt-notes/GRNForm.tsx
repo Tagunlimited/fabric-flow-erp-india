@@ -34,6 +34,7 @@ import { toast } from 'sonner';
 import { ProductImage } from '@/components/ui/OptimizedImage';
 import { GRNPrintExport } from './GRNPrintExport';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { getGrnItemColorDisplay } from '@/lib/grnColorSwatch';
 
 type GRN = {
   id?: string;
@@ -2025,7 +2026,9 @@ const GRNForm = () => {
               </div>
             ) : (
               <div className="space-y-6">
-                {filteredItems.map((item, index) => (
+                {filteredItems.map((item, index) => {
+                  const { label: colorLabel, swatchHex } = getGrnItemColorDisplay(item);
+                  return (
                   <Card key={index} className="border border-gray-200 hover:border-gray-300 transition-colors">
                     <CardContent className="p-6">
                       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -2065,26 +2068,14 @@ const GRNForm = () => {
                             <div>
                               <Label className="text-xs font-medium text-muted-foreground">Color</Label>
                               <div className="text-sm font-medium flex items-center gap-2">
-                                {item.item_color || item.fabric_color || '-'}
-                                {(item.item_color || item.fabric_color) && (
+                                {colorLabel}
+                                {swatchHex ? (
                                   <div
-                                    className="w-4 h-4 shrink-0 rounded-full border border-gray-300"
-                                    style={{
-                                      backgroundColor: (() => {
-                                        const hex = item.fabric_hex || (item as any).fabric_hex;
-                                        if (hex) return hex.startsWith('#') ? hex : `#${hex}`;
-                                        const name = (item.item_color || item.fabric_color || '').toLowerCase();
-                                        const fallbacks: Record<string, string> = {
-                                          peach: '#FFCBA4', blank: '#E8E8E8', white: '#FFFFFF', black: '#1a1a1a',
-                                          grey: '#9ca3af', gray: '#9ca3af', red: '#dc2626', blue: '#2563eb',
-                                          green: '#16a34a', yellow: '#eab308', navy: '#1e3a8a'
-                                        };
-                                        return fallbacks[name] || '#E5E7EB';
-                                      })()
-                                    }}
-                                    title={item.item_color || item.fabric_color}
+                                    className="w-4 h-4 shrink-0 rounded-full border border-border"
+                                    style={{ backgroundColor: swatchHex }}
+                                    title={colorLabel}
                                   />
-                                )}
+                                ) : null}
                               </div>
                             </div>
                             {item.item_type === 'fabric' && (
@@ -2245,7 +2236,8 @@ const GRNForm = () => {
                       </div>
                     </CardContent>
                   </Card>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>

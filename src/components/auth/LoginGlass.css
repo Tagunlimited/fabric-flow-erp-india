@@ -20,21 +20,26 @@
 }
 
 .glass-card {
-  background: hsla(0, 0%, 100%, 0.85);
-  backdrop-filter: blur(1.5em);
-  -webkit-backdrop-filter: blur(1.5em);
-  -moz-backdrop-filter: blur(1.5em);
-  border: 0.1em solid hsla(0, 0%, 100%, 0.5);
+  background: linear-gradient(
+    135deg,
+    hsla(0, 0%, 100%, 0.06),
+    hsla(0, 0%, 100%, 0.015)
+  ) !important;
+  backdrop-filter: blur(1.8em) saturate(1.25) !important;
+  -webkit-backdrop-filter: blur(1.8em) saturate(1.25) !important;
+  -moz-backdrop-filter: blur(1.8em) saturate(1.25) !important;
+  border: 0.1em solid hsla(0, 0%, 100%, 0.25) !important;
   box-shadow: 
     0 0.5em 1.5em hsla(223, 10%, 10%, 0.2),
     0 0 0 0.1em hsla(0, 0%, 100%, 0.3) inset,
-    0.5em -0.5em 1em hsla(223, 10%, 10%, 0.15);
-  border-radius: 1.5em;
+    0.5em -0.5em 1em hsla(223, 10%, 10%, 0.15) !important;
+  border-radius: 2.25em;
   transition: 
     transform 0.3s cubic-bezier(0.83, 0, 0.17, 1),
     box-shadow 0.3s cubic-bezier(0.83, 0, 0.17, 1);
   position: relative;
   overflow: hidden;
+  isolation: isolate;
 }
 
 .glass-card::before {
@@ -62,7 +67,7 @@
 }
 
 .glass-input {
-  background: hsla(0, 0%, 100%, 0.7);
+  background: hsla(0, 0%, 100%, 0.28);
   backdrop-filter: blur(0.5em);
   -webkit-backdrop-filter: blur(0.5em);
   -moz-backdrop-filter: blur(0.5em);
@@ -76,7 +81,7 @@
 }
 
 .glass-input:focus {
-  background: hsla(0, 0%, 100%, 0.9);
+  background: hsla(0, 0%, 100%, 0.4);
   border-color: hsla(223, 90%, 50%, 0.6);
   box-shadow: 
     0 0 0 0.2em hsla(223, 90%, 50%, 0.2),
@@ -176,7 +181,7 @@
 .glass-logo-container {
   position: relative;
   padding: 1em;
-  background: hsla(0, 0%, 100%, 0.7);
+  background: hsla(0, 0%, 100%, 0.2);
   backdrop-filter: blur(0.5em);
   -webkit-backdrop-filter: blur(0.5em);
   -moz-backdrop-filter: blur(0.5em);
@@ -187,7 +192,7 @@
 }
 
 .glass-footer {
-  background: hsla(0, 0%, 100%, 0.7);
+  background: hsla(0, 0%, 100%, 0.16);
   backdrop-filter: blur(0.5em);
   -webkit-backdrop-filter: blur(0.5em);
   -moz-backdrop-filter: blur(0.5em);
@@ -308,6 +313,60 @@
       hsla(208, 90%, 50%, 0.9)
     ) !important;
     border: 0.1em solid hsla(0, 0%, 100%, 0.4) !important;
+  }
+}
+
+/* Desktop-only: match mobile "no visible box" style and right-side placement */
+@media (min-width: 1024px) {
+  .glass-card {
+    background: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    -moz-backdrop-filter: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+
+  .glass-card::before {
+    display: none !important;
+  }
+
+  .glass-card:hover {
+    transform: none !important;
+    box-shadow: none !important;
+  }
+
+  .glass-input {
+    background: hsla(0, 0%, 100%, 0.1) !important;
+    backdrop-filter: blur(0.3em) !important;
+    -webkit-backdrop-filter: blur(0.3em) !important;
+    -moz-backdrop-filter: blur(0.3em) !important;
+    border: 0.1em solid hsla(0, 0%, 100%, 0.3) !important;
+    color: hsla(0, 0%, 100%, 0.95) !important;
+  }
+
+  .glass-input::placeholder {
+    color: hsla(0, 0%, 100%, 0.55) !important;
+  }
+
+  .glass-input:focus {
+    background: hsla(0, 0%, 100%, 0.18) !important;
+    border-color: hsla(0, 0%, 100%, 0.5) !important;
+    color: hsla(0, 0%, 100%, 1) !important;
+  }
+
+  .glass-label,
+  .glass-title,
+  .glass-description,
+  .glass-text {
+    color: hsla(0, 0%, 100%, 0.95) !important;
+    text-shadow: 0 0.1em 0.3em hsla(0, 0%, 0%, 0.5) !important;
+  }
+
+  .glass-footer {
+    background: transparent !important;
+    border: none !important;
   }
 }
 

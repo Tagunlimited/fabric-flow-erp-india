@@ -51,6 +51,7 @@ interface Order {
   balance_amount: number;
   gst_rate?: number;
   calculatedAmount?: number;
+  calculatedBalance?: number;
 }
 
 const OrdersPage = () => {
@@ -107,6 +108,46 @@ const OrdersPage = () => {
 
       if (error) throw error;
 
+      const orderIds = (data || []).map((o) => o.id).filter(Boolean);
+      const orderNumbers = (data || []).map((o) => o.order_number).filter(Boolean);
+
+      let receiptRows: Array<{
+        id: string;
+        reference_id: string | null;
+        reference_number: string | null;
+        amount: number | null;
+      }> = [];
+
+      if (orderIds.length > 0 || orderNumbers.length > 0) {
+        const [{ data: receiptsById }, { data: receiptsByNumber }] = await Promise.all([
+          orderIds.length > 0
+            ? supabase
+                .from('receipts')
+                .select('id, reference_id, reference_number, amount')
+                .in('reference_id', orderIds as any)
+            : Promise.resolve({ data: [] as any[] }),
+          orderNumbers.length > 0
+            ? supabase
+                .from('receipts')
+                .select('id, reference_id, reference_number, amount')
+                .in('reference_number', orderNumbers as any)
+            : Promise.resolve({ data: [] as any[] }),
+        ]);
+
+        const receiptMap = new Map<string, {
+          id: string;
+          reference_id: string | null;
+          reference_number: string | null;
+          amount: number | null;
+        }>();
+
+        [...(receiptsById || []), ...(receiptsByNumber || [])].forEach((receipt: any) => {
+          if (!receipt?.id) return;
+          receiptMap.set(receipt.id, receipt);
+        });
+        receiptRows = Array.from(receiptMap.values());
+      }
+
       // Calculate correct amounts for each order using size-based pricing
       const ordersWithCalculatedAmounts = await Promise.all(
         (data || []).map(async (order) => {
@@ -120,22 +161,47 @@ const OrdersPage = () => {
             if (!itemsError && orderItems && orderItems.length > 0) {
               // Calculate the correct total using size-based pricing
               const { grandTotal } = calculateOrderSummary(orderItems, order);
+              const totalReceipts = receiptRows.reduce((sum, receipt) => {
+                const matchesOrder =
+                  receipt.reference_id === order.id ||
+                  receipt.reference_number === order.order_number;
+                return matchesOrder ? sum + Number(receipt.amount || 0) : sum;
+              }, 0);
+
               return {
                 ...order,
-                calculatedAmount: grandTotal
+                calculatedAmount: grandTotal,
+                calculatedBalance: Math.max(grandTotal - totalReceipts, 0),
               };
             } else {
               // Fallback to final_amount if no items found
+              const fallbackAmount = Number(order.final_amount || order.total_amount || 0);
+              const totalReceipts = receiptRows.reduce((sum, receipt) => {
+                const matchesOrder =
+                  receipt.reference_id === order.id ||
+                  receipt.reference_number === order.order_number;
+                return matchesOrder ? sum + Number(receipt.amount || 0) : sum;
+              }, 0);
+
               return {
                 ...order,
-                calculatedAmount: order.final_amount
+                calculatedAmount: fallbackAmount,
+                calculatedBalance: Math.max(fallbackAmount - totalReceipts, 0),
               };
             }
           } catch (error) {
             console.error(`Error calculating amount for order ${order.order_number}:`, error);
+            const fallbackAmount = Number(order.final_amount || order.total_amount || 0);
+            const totalReceipts = receiptRows.reduce((sum, receipt) => {
+              const matchesOrder =
+                receipt.reference_id === order.id ||
+                receipt.reference_number === order.order_number;
+              return matchesOrder ? sum + Number(receipt.amount || 0) : sum;
+            }, 0);
             return {
               ...order,
-              calculatedAmount: order.final_amount // Fallback to final_amount on error
+              calculatedAmount: fallbackAmount, // Fallback to final_amount on error
+              calculatedBalance: Math.max(fallbackAmount - totalReceipts, 0),
             };
           }
         })
@@ -511,7 +577,7 @@ const OrdersPage = () => {
                               </div>
                             </TableCell>
                             <TableCell>₹{(order.calculatedAmount ?? order.final_amount)?.toFixed(2) || '0.00'}</TableCell>
-                            <TableCell>₹{order.balance_amount?.toFixed(2) || '0.00'}</TableCell>
+                            <TableCell>₹{(order.calculatedBalance ?? order.balance_amount)?.toFixed(2) || '0.00'}</TableCell>
                             <TableCell>
                               <div className="flex space-x-2">
                                 {order.status !== 'completed' && order.status !== 'cancelled' && (
@@ -524,7 +590,7 @@ const OrdersPage = () => {
                                       handleStatusChange(order.id, 'completed');
                                     }}
                                   >
-                                    ✅ Complete
+                                    ✅ Mark Complete
                                   </Button>
                                 )}
                                 

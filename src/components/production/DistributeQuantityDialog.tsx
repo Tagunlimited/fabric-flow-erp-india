@@ -9,10 +9,20 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Minus, Plus } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { generateBatchAssignmentPDF } from '@/utils/batchAssignmentPDF';
+import {
+  buildBatchAssignmentDocumentData,
+  type BatchAssignmentDocumentData,
+} from '@/utils/batchAssignmentDocument';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { useSizeTypes } from '@/hooks/useSizeTypes';
 import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
+import { resolveSwatchHex } from '@/lib/grnColorSwatch';
+
+function fabricSwatchCss(fabric: { color?: string | null; hex?: string | null } | null | undefined): string {
+  if (!fabric) return '#e5e7eb';
+  const label = String(fabric.color ?? '').trim();
+  return resolveSwatchHex(label, fabric.hex ?? null) ?? '#e5e7eb';
+}
 
 interface Batch {
   id: string;
@@ -42,7 +52,10 @@ interface BatchQuantity {
 interface DistributeQuantityDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Called after assignments are saved (e.g. refresh list). */
   onSuccess: () => void;
+  /** Optional; when set, used after save instead of onSuccess for refresh-only side effects. */
+  onAssignmentsSaved?: () => void;
   onAddMoreBatches: () => void;
   orderId: string;
   orderNumber: string;
@@ -51,12 +64,17 @@ interface DistributeQuantityDialogProps {
   batches: Batch[];
   orderSizes: OrderSize[];
   orderItems: any[];
+  /** When set, header and size-type sorting follow this order line (multi-product orders). */
+  selectedOrderItemId?: string | null;
+  /** After save, opens A5 job card preview from parent (survives this dialog unmount). */
+  onJobCardDocumentReady?: (doc: BatchAssignmentDocumentData) => void;
 }
 
 export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> = ({
   isOpen,
   onClose,
   onSuccess,
+  onAssignmentsSaved,
   onAddMoreBatches,
   orderId,
   orderNumber,
@@ -64,8 +82,14 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
   selectedBatchIds,
   batches,
   orderSizes,
-  orderItems
+  orderItems,
+  selectedOrderItemId = null,
+  onJobCardDocumentReady,
 }) => {
+  const selectedLine =
+    (selectedOrderItemId && orderItems?.find((i: any) => i.id === selectedOrderItemId)) ||
+    orderItems?.[0] ||
+    null;
   const [batchQuantities, setBatchQuantities] = useState<BatchQuantity>({});
   const [loading, setLoading] = useState(false);
   const [filteredOrderSizes, setFilteredOrderSizes] = useState<OrderSize[]>([]);
@@ -74,22 +98,32 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
 
   // Filter order sizes to show only sizes with quantities > 0
   useEffect(() => {
-    if (isOpen && orderSizes.length > 0) {
-      // Filter out sizes with zero quantities - only show sizes that have quantities
-      const filtered = orderSizes.filter(size => size.total_quantity > 0);
-      
-      // Get size_type_id from orderItems if available
-      let sizeTypeId: string | null = null;
-      if (orderItems && orderItems.length > 0) {
-        const firstItem = orderItems[0];
-        sizeTypeId = firstItem.size_type_id || (firstItem.specifications && typeof firstItem.specifications === 'object' && firstItem.specifications.size_type_id) || null;
-      }
-      
-      // Sort using master order
-      const sorted = sortSizeDistributionsByMasterOrder(filtered, sizeTypeId, sizeTypes);
-      setFilteredOrderSizes(sorted);
+    if (!isOpen || orderSizes.length === 0) {
+      setFilteredOrderSizes([]);
+      return;
     }
-  }, [isOpen, orderSizes, orderItems, sizeTypes]);
+
+    const filtered = orderSizes.filter((size) => Number(size.total_quantity) > 0);
+
+    let sizeTypeId: string | null = null;
+    if (selectedLine) {
+      let specs = selectedLine.specifications;
+      if (typeof specs === 'string') {
+        try {
+          specs = JSON.parse(specs);
+        } catch {
+          specs = null;
+        }
+      }
+      sizeTypeId =
+        selectedLine.size_type_id ||
+        (specs && typeof specs === 'object' ? (specs as { size_type_id?: string }).size_type_id : null) ||
+        null;
+    }
+
+    const sorted = sortSizeDistributionsByMasterOrder(filtered, sizeTypeId, sizeTypes);
+    setFilteredOrderSizes(sorted);
+  }, [isOpen, orderSizes, selectedLine, sizeTypes]);
 
   // Initialize batch quantities when dialog opens
   useEffect(() => {
@@ -157,8 +191,8 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
     return true;
   };
 
-  const generateBatchAssignmentPDFAfterSave = async () => {
-    console.log('🚀 Starting PDF generation process...');
+  const buildJobCardDocumentAfterSave = async (): Promise<BatchAssignmentDocumentData | null> => {
+    console.log('🚀 Building stitching job card document...');
     try {
       // Fetch stitching prices from order_assignments
       console.log('📊 Fetching stitching prices...');
@@ -279,75 +313,61 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
       }
       console.log('✅ Company settings fetched:', companySettings);
 
-      // Prepare batch assignment data with proper structure
       console.log('🔧 Preparing batch assignment data...');
-      const batchAssignments = selectedBatchIds.map(batchId => {
-        const batch = batches.find(b => b.id === batchId);
+      const rawBatches = selectedBatchIds.map((batchId) => {
+        const batch = batches.find((b) => b.id === batchId);
         const batchQty = batchQuantities[batchId];
         const sizeDistributions = Object.entries(batchQty)
           .filter(([_, qty]) => typeof qty === 'number' && qty > 0)
           .map(([size, qty]) => ({ size, quantity: qty as number }));
 
         const assignedQuantity = sizeDistributions.reduce((sum, sd) => sum + sd.quantity, 0);
-        const snRate = (priceData && !priceError && !('error' in (priceData as any))) 
-          ? ((priceData as any).cutting_price_single_needle || 0)
-          : 0;
-        const ofRate = (priceData && !priceError && !('error' in (priceData as any)))
-          ? ((priceData as any).cutting_price_overlock_flatlock || 0)
-          : 0;
-        // Total earning = (SN + OF) × assigned quantity
-        const totalEarning = (snRate + ofRate) * assignedQuantity;
+        const snRate =
+          priceData && !priceError && !('error' in (priceData as any))
+            ? (priceData as any).cutting_price_single_needle || 0
+            : 0;
+        const ofRate =
+          priceData && !priceError && !('error' in (priceData as any))
+            ? (priceData as any).cutting_price_overlock_flatlock || 0
+            : 0;
 
-        // Fetch batch leader avatar if available
-        let batchLeaderAvatarUrl: string | undefined = undefined;
-        if (batch?.batch_leader_avatar_url) {
-          batchLeaderAvatarUrl = batch.batch_leader_avatar_url;
-        } else if (batch?.batch_leader_avatar) {
-          batchLeaderAvatarUrl = batch.batch_leader_avatar;
-        }
+        let batchLeaderAvatarUrl: string | undefined;
+        if (batch?.batch_leader_avatar_url) batchLeaderAvatarUrl = batch.batch_leader_avatar_url;
+        else if (batch?.batch_leader_avatar) batchLeaderAvatarUrl = batch.batch_leader_avatar;
 
         return {
           batchName: batch?.batch_name || '',
           batchLeaderName: batch?.batch_leader_name || '',
-          batchLeaderAvatarUrl: batchLeaderAvatarUrl,
-          tailorType: batch?.tailor_type as 'single_needle' | 'overlock_flatlock' || 'single_needle',
+          batchLeaderAvatarUrl,
+          tailorType: batch?.tailor_type || 'single_needle',
           sizeDistributions,
           snRate,
           ofRate,
-          totalEarning,
-          assignedQuantity
+          assignedQuantity,
         };
-      });
-      console.log('✅ Batch assignments prepared:', batchAssignments);
+      }).filter((b) => b.assignedQuantity > 0);
 
-      // Collect all customizations from all order items
-      const allCustomizations: any[] = [];
-      enrichedOrderItems.forEach((item: any) => {
-        if (item.customizations && Array.isArray(item.customizations)) {
-          item.customizations.forEach((cust: any) => {
-            allCustomizations.push(cust);
-          });
-        }
-      });
-      console.log('✅ Customizations prepared:', allCustomizations);
+      const itemsForDoc = selectedLine ? [selectedLine] : enrichedOrderItems;
+      const customizationsForDoc = itemsForDoc.flatMap((item: any) =>
+        item.customizations && Array.isArray(item.customizations) ? item.customizations : []
+      );
 
-      // Generate PDF
-      console.log('📄 Calling PDF generation function...');
-      await generateBatchAssignmentPDF({
+      const documentData = buildBatchAssignmentDocumentData({
         orderNumber,
         customerName,
-        orderItems: enrichedOrderItems,
-        batchAssignments,
+        orderItems: itemsForDoc,
+        rawBatches,
         companySettings: companySettings as any,
         salesManager,
-        customizations: allCustomizations,
-        dueDate: (orderData as any).expected_delivery_date
+        customizations: customizationsForDoc,
+        dueDate: (orderData as any).expected_delivery_date,
       });
-      console.log('🎉 PDF generation completed successfully!');
 
+      console.log('✅ Job card document prepared');
+      return documentData;
     } catch (error) {
-      console.error('❌ Error in PDF generation:', error);
-      throw error;
+      console.error('❌ Error building job card document:', error);
+      return null;
     }
   };
 
@@ -463,29 +483,39 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
       }
 
       toast({
-        title: "Success",
+        title: 'Success',
         description: `Batch assignments saved for order ${orderNumber}`,
       });
 
-      // Generate PDF after successful save
-      console.log('📄 Starting PDF generation after successful save...');
-      try {
-        await generateBatchAssignmentPDFAfterSave();
-        console.log('✅ PDF generation completed successfully');
-        toast({
-          title: "Success",
-          description: `Batch assignments saved and PDF generated for order ${orderNumber}`,
-        });
-      } catch (pdfError) {
-        console.error('❌ PDF generation failed:', pdfError);
-        toast({
-          title: "Warning",
-          description: "Batch assignments saved, but PDF generation failed. Check console for details.",
-          variant: "destructive",
-        });
-      }
+      console.log('📄 Building stitching job card preview...');
+      const doc = await buildJobCardDocumentAfterSave();
+      const persistCb = onAssignmentsSaved ?? onSuccess;
 
-      onSuccess();
+      if (doc && doc.batchAssignments.length > 0 && onJobCardDocumentReady) {
+        onJobCardDocumentReady(doc);
+        persistCb();
+        toast({
+          title: 'Job card ready',
+          description: 'Review the preview to print or export A5 landscape PDF.',
+        });
+        onClose();
+      } else if (doc && doc.batchAssignments.length > 0) {
+        toast({
+          title: 'Job card ready',
+          description: 'Assignments saved.',
+        });
+        persistCb();
+        onClose();
+      } else {
+        toast({
+          title: 'Warning',
+          description:
+            'Assignments saved, but the job card could not be prepared. Check console for details.',
+          variant: 'destructive',
+        });
+        persistCb();
+        onClose();
+      }
     } catch (error: any) {
       console.error('Error saving batch assignments:', error);
       console.error('Error details:', {
@@ -523,11 +553,11 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
               {/* Product Image */}
               <div className="w-24 h-24 bg-blue-100 rounded-lg overflow-hidden flex items-center justify-center">
                 {(() => {
-                  const displayImage = orderItems[0] ? getOrderItemDisplayImage(orderItems[0]) : null;
+                  const displayImage = selectedLine ? getOrderItemDisplayImage(selectedLine) : null;
                   return displayImage ? (
                     <img 
                       src={displayImage} 
-                      alt={orderItems[0]?.product_category?.category_name || 'Product'}
+                      alt={selectedLine?.product_category?.category_name || 'Product'}
                       className="w-full h-full object-cover"
                     />
                   ) : (
@@ -540,14 +570,14 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
               <div className="flex-1 space-y-1">
                 <p className="text-sm"><span className="font-medium">Order:</span> {orderNumber}</p>
                 <p className="text-sm"><span className="font-medium">Customer:</span> {customerName}</p>
-                <p className="text-sm"><span className="font-medium">Product:</span> {orderItems[0]?.product_category?.category_name || orderItems[0]?.product_description || 'Product'}</p>
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">Fabric:</span>
-                  <div className="flex items-center space-x-3">
-                    {/* Fabric image */}
-                    {orderItems[0]?.fabric?.image && (
+                <p className="text-sm"><span className="font-medium">Product:</span> {selectedLine?.product_description || selectedLine?.product_category?.category_name || 'Product'}</p>
+                {selectedLine?.fabric && (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium shrink-0">Fabric:</span>
+                  <div className="flex items-center space-x-3 flex-wrap justify-end">
+                    {selectedLine.fabric.image && (
                       <img 
-                        src={orderItems[0].fabric.image} 
+                        src={selectedLine.fabric.image} 
                         alt="Fabric"
                         className="rounded object-cover border border-gray-200"
                         style={{ width: '64px', height: '64px' }}
@@ -556,17 +586,20 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
                         }}
                       />
                     )}
-                    {/* Fabric color circle */}
                     <div 
-                      className="w-6 h-6 rounded-full border border-gray-300"
+                      className="w-6 h-6 shrink-0 rounded-full border border-gray-300"
                       style={{ 
-                        backgroundColor: orderItems[0]?.fabric?.color?.toLowerCase() || orderItems[0]?.color?.toLowerCase() || '#cccccc'
+                        backgroundColor: fabricSwatchCss({
+                          color: selectedLine.fabric.color,
+                          hex: selectedLine.fabric.hex ?? null,
+                        }),
                       }}
-                      title={orderItems[0]?.fabric?.color || orderItems[0]?.color || 'Unknown color'}
+                      title={selectedLine.fabric.color || 'Fabric color'}
                     />
-                    <span className="text-sm">{orderItems[0]?.fabric?.fabric_name || 'N/A'} - {orderItems[0]?.fabric?.gsm || orderItems[0]?.gsm || 'N/A'} GSM, {orderItems[0]?.fabric?.color || orderItems[0]?.color || 'N/A'}</span>
+                    <span className="text-sm">{selectedLine.fabric.fabric_name || 'N/A'} - {selectedLine.fabric.gsm || 'N/A'} GSM, {selectedLine.fabric.color || 'N/A'}</span>
                   </div>
                 </div>
+                )}
               </div>
             </div>
           </div>

@@ -15,7 +15,7 @@ import { Separator } from '@/components/ui/separator';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { CalendarIcon, Plus, Trash2, Upload, X, Image, ChevronLeft, ChevronRight, Lock, Unlock, Save, ChevronDown } from 'lucide-react';
+import { CalendarIcon, Plus, Trash2, Upload, X, Image, ChevronLeft, ChevronRight, Lock, Unlock, Save, ChevronDown, Copy } from 'lucide-react';
 import { format } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -335,8 +335,31 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
   const [currentProductIndex, setCurrentProductIndex] = useState(0);
   const [selectedSizesForPriceEdit, setSelectedSizesForPriceEdit] = useState<{ [productIndex: number]: string[] }>({});
   const [sizePriceEditOpen, setSizePriceEditOpen] = useState<{ [productIndex: number]: boolean }>({});
+  const [showAllSizesForQty, setShowAllSizesForQty] = useState<Record<number, boolean>>({});
+  const [expandedProductSections, setExpandedProductSections] = useState<Record<number, {
+    reference: boolean;
+    attachments: boolean;
+    branding: boolean;
+    mockup: boolean;
+  }>>({});
   const sliderRef = useRef<HTMLDivElement>(null);
   const autoScrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const toggleProductSection = (
+    productIndex: number,
+    section: 'reference' | 'attachments' | 'branding' | 'mockup'
+  ) => {
+    setExpandedProductSections(prev => ({
+      ...prev,
+      [productIndex]: {
+        reference: prev[productIndex]?.reference ?? false,
+        attachments: prev[productIndex]?.attachments ?? false,
+        branding: prev[productIndex]?.branding ?? false,
+        mockup: prev[productIndex]?.mockup ?? false,
+        [section]: !(prev[productIndex]?.[section] ?? false)
+      }
+    }));
+  };
 
   useEffect(() => {
     fetchData();
@@ -494,8 +517,24 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
   const selectedFabric = fabrics.find(f => f.id === baseId);
     if (!selectedFabric) return [];
     
-    // Get all fabrics with the same fabric_name but different colors
-    return fabrics.filter(f => f.fabric_name === selectedFabric.fabric_name);
+    // Get all variants for the same fabric and keep only unique color entries
+    const sameFabricVariants = fabrics.filter(
+      (f) => f.fabric_name === selectedFabric.fabric_name
+    );
+    const seen = new Set<string>();
+
+    return sameFabricVariants.filter((f) => {
+      const colorKey = (f.color || "").trim().toLowerCase();
+      const hexKey = (f.hex || "").trim().toLowerCase();
+      const key = `${colorKey}|${hexKey}`;
+
+      // If color text is missing, keep the entry to avoid hiding valid records.
+      if (!colorKey) return true;
+
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   };
 
 const getSelectedFabricVariant = (productIndex: number) => {
@@ -552,7 +591,8 @@ const getSelectedFabricVariant = (productIndex: number) => {
       products: prev.products.map((p, i) => {
         if (i === productIndex) {
           const existingImages = imageType === 'reference' ? p.reference_images : p.mockup_images;
-          const newFiles = [...existingImages, ...files].slice(0, 5);
+          const maxFiles = imageType === 'mockup' ? 20 : 5;
+          const newFiles = [...existingImages, ...files].slice(0, maxFiles);
           return { ...p, [imageType === 'reference' ? 'reference_images' : 'mockup_images']: newFiles };
         }
         return p;
@@ -1001,6 +1041,61 @@ const getSelectedFabricVariant = (productIndex: number) => {
       ...prev,
       products: [...prev.products, createEmptyProduct()]
     }));
+  };
+
+  const duplicateProduct = (productIndex: number) => {
+    const cloneMediaFiles = (items: Array<File | string>) =>
+      items.map((item) => {
+        if (item instanceof File) {
+          return new File([item], item.name, {
+            type: item.type,
+            lastModified: item.lastModified,
+          });
+        }
+        return item;
+      });
+
+    setFormData(prev => {
+      const source = prev.products[productIndex];
+      if (!source) return prev;
+
+      const duplicated: Product = {
+        ...source,
+        // Keep details same, but reset size type and quantities for new sizing
+        size_type_id: '',
+        sizes_quantities: {},
+        size_prices: undefined,
+        // Clone arrays/objects to avoid reference sharing
+        reference_images: cloneMediaFiles(source.reference_images || []),
+        mockup_images: cloneMediaFiles(source.mockup_images || []),
+        attachments: cloneMediaFiles(source.attachments || []),
+        branding_items: (source.branding_items || []).map(item => ({ ...item })),
+        customizations: (source.customizations || []).map(item => ({ ...item })),
+      };
+
+      const insertIndex = productIndex + 1;
+
+      // Keep main image mapping aligned after inserting a product.
+      setMainImages((prevMain) => {
+        const shifted: typeof prevMain = {};
+        Object.entries(prevMain).forEach(([key, value]) => {
+          const idx = Number(key);
+          shifted[idx >= insertIndex ? idx + 1 : idx] = value;
+        });
+        // No pre-selected main image for duplicated product.
+        shifted[insertIndex] = { reference: null, mockup: null, category: null };
+        return shifted;
+      });
+
+      return {
+        ...prev,
+        products: [
+          ...prev.products.slice(0, insertIndex),
+          duplicated,
+          ...prev.products.slice(insertIndex),
+        ],
+      };
+    });
   };
 
   const removeProduct = (productIndex: number) => {
@@ -1593,14 +1688,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <h3 className="text-lg font-semibold">Products</h3>
-                <Button 
-                  type="button" 
-                  onClick={addProduct}
-                  className="bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 shadow-lg hover:shadow-xl transition-all duration-200"
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Product
-                </Button>
               </div>
 
               {formData.products.map((product, productIndex) => {
@@ -1612,17 +1699,30 @@ const getSelectedFabricVariant = (productIndex: number) => {
                       <CardTitle className="text-base text-primary font-semibold">
                         Product {productIndex + 1}
                       </CardTitle>
-                      {formData.products.length > 1 && (
+                      <div className="flex items-center gap-2">
                         <Button
                           type="button"
-                          variant="destructive"
+                          variant="outline"
                           size="sm"
-                          onClick={() => removeProduct(productIndex)}
+                          onClick={() => duplicateProduct(productIndex)}
                           className="hover:scale-105 transition-transform"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Copy className="w-4 h-4 mr-1" />
+                          Duplicate
                         </Button>
-                      )}
+                        {formData.products.length > 1 && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => removeProduct(productIndex)}
+                            className="hover:scale-105 transition-transform text-red-600 border-red-300 hover:bg-red-50 hover:text-red-700"
+                          >
+                            <Trash2 className="w-4 h-4 mr-1" />
+                            Remove
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-6">
@@ -1822,7 +1922,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
   {/* Right Column - 2 Rows × 2 Columns each */}
   <div className="lg:col-span-8 grid grid-cols-1 gap-6">
     {/* Row 1 - Product, Color, and Size Type */}
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       {/* Product - Only show when product category is selected */}
       {product.product_category_id && (
         <div>
@@ -1921,23 +2021,21 @@ const getSelectedFabricVariant = (productIndex: number) => {
         </Select>
       </div>
 
-      {/* GSM - Hidden from UI but functionality remains intact */}
-      {/* <div>
-        <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
+      {/* GSM */}
+      <div>
+        <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM</Label>
         <Input
           value={product.gsm}
-          placeholder="GSM will be auto-selected from fabric"
-          disabled
-          className="bg-gray-50"
-        />
-      </div> */}
-      <div className="hidden">
-        <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM (Auto-selected)</Label>
-        <Input
-          value={product.gsm}
-          placeholder="GSM will be auto-selected from fabric"
-          disabled
-          className="bg-gray-50"
+          placeholder="Enter GSM"
+          onChange={(e) =>
+            setFormData((prev) => ({
+              ...prev,
+              products: prev.products.map((p, i) =>
+                i === productIndex ? { ...p, gsm: e.target.value } : p
+              ),
+            }))
+          }
+          className="w-full"
         />
       </div>
     </div>
@@ -2043,12 +2141,46 @@ const getSelectedFabricVariant = (productIndex: number) => {
       {/* Size-wise Quantities */}
       {product.size_type_id && (
         <div className="space-y-2">
-          <Label className="text-base font-semibold text-gray-700 mb-2 block">Size-wise Quantities</Label>
+          <div className="flex items-center justify-between mb-2">
+            <Label className="text-base font-semibold text-gray-700 block">Size-wise Quantities</Label>
+            {(() => {
+              const sortedSizes = sortSizesQuantities(
+                product.sizes_quantities || {},
+                product.size_type_id,
+                sizeTypes
+              );
+              if (sortedSizes.length <= 5) return null;
+              const isExpanded = !!showAllSizesForQty[productIndex];
+              return (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  onClick={() =>
+                    setShowAllSizesForQty(prev => ({
+                      ...prev,
+                      [productIndex]: !isExpanded,
+                    }))
+                  }
+                >
+                  {isExpanded ? 'Show Less Sizes' : `Show More Sizes (+${sortedSizes.length - 5})`}
+                </Button>
+              );
+            })()}
+          </div>
           <div className="flex gap-2 overflow-x-auto pb-1">
-            {sortSizesQuantities(
-              product.sizes_quantities || {},
-              product.size_type_id,
-              sizeTypes
+            {(showAllSizesForQty[productIndex]
+              ? sortSizesQuantities(
+                  product.sizes_quantities || {},
+                  product.size_type_id,
+                  sizeTypes
+                )
+              : sortSizesQuantities(
+                  product.sizes_quantities || {},
+                  product.size_type_id,
+                  sizeTypes
+                ).slice(0, 5)
             ).map(([size, quantity]) => {
               const sizePrice = product.size_prices?.[size] ?? product.price;
               const isCustomPrice = sizePrice !== product.price;
@@ -2089,6 +2221,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
         </div>
       )}
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
       {/* Base Price */}
       <div>
         <Label className="text-base font-semibold text-gray-700 mb-2 block">
@@ -2300,6 +2433,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
           )}
         </div>
       )}
+      </div>
                        {/* Product Description and Remarks */}
                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                          <div className="space-y-2">
@@ -2345,9 +2479,119 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
                                           {/* Selected Category Image Display */}
                       
+                    {/* Collapsible section cards (desktop-first compact row) */}
+                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 mb-4">
+                      <Card className="p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">Reference Images</span>
+                          <button
+                            type="button"
+                            onClick={() => toggleProductSection(productIndex, 'reference')}
+                            className="group inline-flex items-center cursor-pointer font-medium text-sm px-3 py-2 text-white bg-gradient-to-r from-[#0f0c29] via-[#302b63] to-[#24243e] border-0 tracking-[0.05em] rounded-2xl"
+                          >
+                            <svg
+                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[5px] group-hover:rotate-90"
+                              viewBox="0 0 24 24"
+                              xmlns="http://www.w3.org/2000/svg"
+                              aria-hidden="true"
+                            >
+                              <path d="M0 0h24v24H0z" fill="none"></path>
+                              <path
+                                d="M5 13c0-5.088 2.903-9.436 7-11.182C16.097 3.564 19 7.912 19 13c0 .823-.076 1.626-.22 2.403l1.94 1.832a.5.5 0 0 1 .095.603l-2.495 4.575a.5.5 0 0 1-.793.114l-2.234-2.234a1 1 0 0 0-.707-.293H9.414a1 1 0 0 0-.707.293l-2.234 2.234a.5.5 0 0 1-.793-.114l-2.495-4.575a.5.5 0 0 1 .095-.603l1.94-1.832C5.077 14.626 5 13.823 5 13zm1.476 6.696l.817-.817A3 3 0 0 1 9.414 18h5.172a3 3 0 0 1 2.121.879l.817.817.982-1.8-1.1-1.04a2 2 0 0 1-.593-1.82c.124-.664.187-1.345.187-2.036 0-3.87-1.995-7.3-5-8.96C8.995 5.7 7 9.13 7 13c0 .691.063 1.372.187 2.037a2 2 0 0 1-.593 1.82l-1.1 1.039.982 1.8zM12 13a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"
+                                fill="currentColor"
+                              ></path>
+                            </svg>
+                            <span className="transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[7px]">
+                              {expandedProductSections[productIndex]?.reference ? 'Hide' : 'Launch'}
+                            </span>
+                          </button>
+                        </div>
+                      </Card>
+                      <Card className="p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">Attachments</span>
+                          <button
+                            type="button"
+                            onClick={() => toggleProductSection(productIndex, 'attachments')}
+                            className="group inline-flex items-center cursor-pointer font-medium text-sm px-3 py-2 text-white bg-gradient-to-r from-[#0f0c29] via-[#302b63] to-[#24243e] border-0 tracking-[0.05em] rounded-2xl"
+                          >
+                            <svg
+                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[5px] group-hover:rotate-90"
+                              viewBox="0 0 24 24"
+                              xmlns="http://www.w3.org/2000/svg"
+                              aria-hidden="true"
+                            >
+                              <path d="M0 0h24v24H0z" fill="none"></path>
+                              <path
+                                d="M5 13c0-5.088 2.903-9.436 7-11.182C16.097 3.564 19 7.912 19 13c0 .823-.076 1.626-.22 2.403l1.94 1.832a.5.5 0 0 1 .095.603l-2.495 4.575a.5.5 0 0 1-.793.114l-2.234-2.234a1 1 0 0 0-.707-.293H9.414a1 1 0 0 0-.707.293l-2.234 2.234a.5.5 0 0 1-.793-.114l-2.495-4.575a.5.5 0 0 1 .095-.603l1.94-1.832C5.077 14.626 5 13.823 5 13zm1.476 6.696l.817-.817A3 3 0 0 1 9.414 18h5.172a3 3 0 0 1 2.121.879l.817.817.982-1.8-1.1-1.04a2 2 0 0 1-.593-1.82c.124-.664.187-1.345.187-2.036 0-3.87-1.995-7.3-5-8.96C8.995 5.7 7 9.13 7 13c0 .691.063 1.372.187 2.037a2 2 0 0 1-.593 1.82l-1.1 1.039.982 1.8zM12 13a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"
+                                fill="currentColor"
+                              ></path>
+                            </svg>
+                            <span className="transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[7px]">
+                              {expandedProductSections[productIndex]?.attachments ? 'Hide' : 'Launch'}
+                            </span>
+                          </button>
+                        </div>
+                      </Card>
+                      <Card className="p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">Branding Details</span>
+                          <button
+                            type="button"
+                            onClick={() => toggleProductSection(productIndex, 'branding')}
+                            className="group inline-flex items-center cursor-pointer font-medium text-sm px-3 py-2 text-white bg-gradient-to-r from-[#0f0c29] via-[#302b63] to-[#24243e] border-0 tracking-[0.05em] rounded-2xl"
+                          >
+                            <svg
+                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[5px] group-hover:rotate-90"
+                              viewBox="0 0 24 24"
+                              xmlns="http://www.w3.org/2000/svg"
+                              aria-hidden="true"
+                            >
+                              <path d="M0 0h24v24H0z" fill="none"></path>
+                              <path
+                                d="M5 13c0-5.088 2.903-9.436 7-11.182C16.097 3.564 19 7.912 19 13c0 .823-.076 1.626-.22 2.403l1.94 1.832a.5.5 0 0 1 .095.603l-2.495 4.575a.5.5 0 0 1-.793.114l-2.234-2.234a1 1 0 0 0-.707-.293H9.414a1 1 0 0 0-.707.293l-2.234 2.234a.5.5 0 0 1-.793-.114l-2.495-4.575a.5.5 0 0 1 .095-.603l1.94-1.832C5.077 14.626 5 13.823 5 13zm1.476 6.696l.817-.817A3 3 0 0 1 9.414 18h5.172a3 3 0 0 1 2.121.879l.817.817.982-1.8-1.1-1.04a2 2 0 0 1-.593-1.82c.124-.664.187-1.345.187-2.036 0-3.87-1.995-7.3-5-8.96C8.995 5.7 7 9.13 7 13c0 .691.063 1.372.187 2.037a2 2 0 0 1-.593 1.82l-1.1 1.039.982 1.8zM12 13a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"
+                                fill="currentColor"
+                              ></path>
+                            </svg>
+                            <span className="transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[7px]">
+                              {expandedProductSections[productIndex]?.branding ? 'Hide' : 'Launch'}
+                            </span>
+                          </button>
+                        </div>
+                      </Card>
+                      <Card className="p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">Mockup Images</span>
+                          <button
+                            type="button"
+                            onClick={() => toggleProductSection(productIndex, 'mockup')}
+                            className="group inline-flex items-center cursor-pointer font-medium text-sm px-3 py-2 text-white bg-gradient-to-r from-[#0f0c29] via-[#302b63] to-[#24243e] border-0 tracking-[0.05em] rounded-2xl"
+                          >
+                            <svg
+                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[5px] group-hover:rotate-90"
+                              viewBox="0 0 24 24"
+                              xmlns="http://www.w3.org/2000/svg"
+                              aria-hidden="true"
+                            >
+                              <path d="M0 0h24v24H0z" fill="none"></path>
+                              <path
+                                d="M5 13c0-5.088 2.903-9.436 7-11.182C16.097 3.564 19 7.912 19 13c0 .823-.076 1.626-.22 2.403l1.94 1.832a.5.5 0 0 1 .095.603l-2.495 4.575a.5.5 0 0 1-.793.114l-2.234-2.234a1 1 0 0 0-.707-.293H9.414a1 1 0 0 0-.707.293l-2.234 2.234a.5.5 0 0 1-.793-.114l-2.495-4.575a.5.5 0 0 1 .095-.603l1.94-1.832C5.077 14.626 5 13.823 5 13zm1.476 6.696l.817-.817A3 3 0 0 1 9.414 18h5.172a3 3 0 0 1 2.121.879l.817.817.982-1.8-1.1-1.04a2 2 0 0 1-.593-1.82c.124-.664.187-1.345.187-2.036 0-3.87-1.995-7.3-5-8.96C8.995 5.7 7 9.13 7 13c0 .691.063 1.372.187 2.037a2 2 0 0 1-.593 1.82l-1.1 1.039.982 1.8zM12 13a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"
+                                fill="currentColor"
+                              ></path>
+                            </svg>
+                            <span className="transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[7px]">
+                              {expandedProductSections[productIndex]?.mockup ? 'Hide' : 'Launch'}
+                            </span>
+                          </button>
+                        </div>
+                      </Card>
+                    </div>
+
                     {/* Image Gallery Sections */}
+                    {(expandedProductSections[productIndex]?.reference || expandedProductSections[productIndex]?.attachments) && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       {/* Reference Images Gallery */}
+                      {expandedProductSections[productIndex]?.reference && (
                       <div className="space-y-3">
                         <Label className="text-sm font-medium">Reference Images</Label>
                         <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
@@ -2435,8 +2679,10 @@ const getSelectedFabricVariant = (productIndex: number) => {
                           )}
                         </div>
                       </div>
+                      )}
 
                       {/* Attachments Gallery - Moved from below */}
+                      {expandedProductSections[productIndex]?.attachments && (
                       <div className="space-y-3">
                         <Label className="text-sm font-medium">Attachments</Label>
                         <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
@@ -2477,7 +2723,9 @@ const getSelectedFabricVariant = (productIndex: number) => {
                             )}
                         </div>
                         </div>
+                      )}
                       </div>
+                    )}
                     {/* Removed extra closing div to fix JSX tag mismatch */}
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2535,7 +2783,10 @@ const getSelectedFabricVariant = (productIndex: number) => {
                     </div>
 
 
+                    {(expandedProductSections[productIndex]?.branding || expandedProductSections[productIndex]?.mockup) && (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start lg:items-center">
                     {/* Branding Section */}
+                    {expandedProductSections[productIndex]?.branding && (
                     <div className="space-y-4">
                       <div className="flex justify-between items-center">
                         <Label className="text-base font-semibold">Branding Details</Label>
@@ -2557,17 +2808,15 @@ const getSelectedFabricVariant = (productIndex: number) => {
                         <div key={brandingIndex} className="border-2 border-primary/30 rounded-lg p-5 space-y-4 bg-gradient-to-br from-primary/5 to-primary/10 hover:border-primary/40 transition-colors shadow-sm">
                           <div className="flex justify-between items-center">
                             <h4 className="font-semibold text-foreground">Branding {brandingIndex + 1}</h4>
-                            {product.branding_items.length > 1 && (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => removeBrandingItem(productIndex, brandingIndex)}
-                                className="h-8 w-8 p-0 hover:bg-destructive/20 hover:text-destructive"
-                              >
-                                <X className="w-4 h-4" />
-                              </Button>
-                            )}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeBrandingItem(productIndex, brandingIndex)}
+                              className="h-8 w-8 p-0 hover:bg-destructive/20 hover:text-destructive"
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
                           </div>
                           
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -2616,9 +2865,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
                         </div>
                       ))}
                     </div>
+                    )}
 
-                    {/* Mockup Images Gallery - Moved from above */}
-                    <div className="space-y-3">
+                    {/* Mockup Images Gallery */}
+                    {expandedProductSections[productIndex]?.mockup && (
+                    <div className="space-y-3 lg:self-center">
                       <Label className="text-sm font-medium">Mockup Images</Label>
                       <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
                         <input
@@ -2639,7 +2890,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                         <label htmlFor={`mockup-images-${productIndex}`} className="cursor-pointer block">
                           <Image className="w-8 h-8 mx-auto mb-2 text-primary" />
                           <p className="text-sm font-medium text-foreground">Upload Mockup Images</p>
-                          <p className="text-xs text-muted-foreground">Up to 5 images • Click thumbnails to view</p>
+                          <p className="text-xs text-muted-foreground">Up to 20 images • Add multiple mockups for multiple branding types</p>
                         </label>
                         
                         {product.mockup_images.length > 0 && (
@@ -2765,11 +3016,52 @@ const getSelectedFabricVariant = (productIndex: number) => {
                         )}
                       </div>
                     </div>
+                    )}
+                    </div>
+                    )}
 
                   </CardContent>
                 </Card>
               );
               })}
+
+              <div className="flex justify-center">
+                <Button
+                  type="button"
+                  onClick={addProduct}
+                  className="lg:hidden bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 shadow-lg hover:shadow-xl transition-all duration-200"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Product
+                </Button>
+                <button
+                  type="button"
+                  onClick={addProduct}
+                  className="group hidden lg:flex relative w-[190px] h-11 cursor-pointer items-center border border-primary bg-primary hover:bg-primary/90 active:border-primary/80 rounded-2xl transition-all duration-300"
+                >
+                  <span className="translate-x-[34px] text-white font-semibold transition-all duration-300 group-hover:text-transparent">
+                    Add Product
+                  </span>
+                  <span className="absolute translate-x-[149px] h-full w-[39px] rounded-r-2xl bg-primary/90 group-hover:w-[188px] group-hover:translate-x-0 group-hover:rounded-2xl active:bg-primary/80 flex items-center justify-center transition-all duration-300">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="24"
+                      height="24"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-[30px] stroke-white"
+                      aria-hidden="true"
+                    >
+                      <line x1="12" y1="5" x2="12" y2="19"></line>
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                  </span>
+                </button>
+              </div>
             </div>
 
             {/* Order Summary */}
@@ -2820,6 +3112,10 @@ const getSelectedFabricVariant = (productIndex: number) => {
                               sizePriceGroups[priceKey].qty += qty;
                             }
                           });
+
+                          // Size-wise quantity details (without price) for Total Qty column
+                          const sizeQuantityEntries = Object.entries(product.sizes_quantities || {})
+                            .filter(([, qty]) => qty > 0);
                           
                           return (
                             <tr key={index} className="hover:bg-gray-50">
@@ -2869,6 +3165,29 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                   <div className="text-gray-600 text-xs">
                                     {productCategories.find(c => c.id === product.product_category_id)?.category_name}
                                   </div>
+                                  {product.branding_items && product.branding_items.length > 0 && (
+                                    <div className="mt-2">
+                                      <div className="text-xs font-bold text-gray-800 mb-1">Branding</div>
+                                      <table className="w-full border-collapse text-[11px]">
+                                        <thead>
+                                          <tr className="bg-gray-50">
+                                            <th className="border border-gray-200 px-1.5 py-1 text-left font-semibold">Type</th>
+                                            <th className="border border-gray-200 px-1.5 py-1 text-left font-semibold">Placement</th>
+                                            <th className="border border-gray-200 px-1.5 py-1 text-left font-semibold">Size</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {product.branding_items.map((item, idx) => (
+                                            <tr key={`${item.branding_type}-${item.placement}-${idx}`}>
+                                              <td className="border border-gray-200 px-1.5 py-1">{item.branding_type || '-'}</td>
+                                              <td className="border border-gray-200 px-1.5 py-1">{item.placement || '-'}</td>
+                                              <td className="border border-gray-200 px-1.5 py-1">{item.measurement || '-'}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
                                 </div>
                               </td>
                               <td className="border border-gray-300 px-3 py-2 text-sm">
@@ -2880,11 +3199,12 @@ const getSelectedFabricVariant = (productIndex: number) => {
                               </td>
                               <td className="border border-gray-300 px-3 py-2 text-sm">
                                 <div>{totalQty} Pcs</div>
-                                <div className="text-xs text-gray-600 space-y-1">
-                                  {Object.entries(sizePriceGroups).map(([price, group]) => (
-                                    <div key={price}>
-                                      {group.sizes.join(', ')}: {group.qty} @ ₹{parseFloat(price).toFixed(2)}
-                                    </div>
+                                <div className="text-xs text-gray-600 mt-1">
+                                  {sizeQuantityEntries.map(([size, qty], idx) => (
+                                    <span key={size}>
+                                      {size}: {qty}
+                                      {idx < sizeQuantityEntries.length - 1 ? ', ' : ''}
+                                    </span>
                                   ))}
                                 </div>
                               </td>

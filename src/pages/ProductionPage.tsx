@@ -11,6 +11,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Eye, Receipt } from "lucide-react";
 import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
+import { calculateOrderSummary } from "@/utils/priceCalculation";
+import { formatCurrency } from "@/lib/utils";
 
 const ProductionPage = () => {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -90,19 +92,35 @@ const ProductionPage = () => {
             .select(`
               id,
               quantity,
+              unit_price,
+              size_prices,
+              sizes_quantities,
+              specifications,
+              gst_rate,
               category_image_url,
               product_description,
-              mockup_images,
-              specifications
+              mockup_images
             `)
             .eq("order_id", order.id);
 
           if (itemsError) {
             console.error(`Error fetching items for order ${order.id}:`, itemsError);
-            return { ...order, order_items: [] };
+            const fallback = Number(order.final_amount || order.total_amount || 0);
+            return { ...order, order_items: [], calculatedAmount: fallback };
           }
 
-          return { ...order, order_items: orderItems || [] };
+          const items = orderItems || [];
+          let calculatedAmount = Number(order.final_amount || order.total_amount || 0);
+          if (items.length > 0) {
+            try {
+              const { grandTotal } = calculateOrderSummary(items, order);
+              calculatedAmount = grandTotal;
+            } catch (e) {
+              console.warn(`Order ${order.id} amount calculation failed, using stored total`, e);
+            }
+          }
+
+          return { ...order, order_items: items, calculatedAmount };
         })
       );
 
@@ -386,7 +404,9 @@ const ProductionPage = () => {
                             {new Date(order.order_date).toLocaleDateString()}
                           </TableCell>
                           <TableCell>
-                            ₹{order.final_amount?.toLocaleString() || '0'}
+                            {formatCurrency(
+                              Number(order.calculatedAmount ?? order.final_amount ?? order.total_amount ?? 0)
+                            )}
                           </TableCell>
                           <TableCell>
                             <Badge 
@@ -416,18 +436,6 @@ const ProductionPage = () => {
                 </Table>
               </div>
             )}
-          </CardContent>
-        </Card>
-
-        <Card className="shadow-erp-md">
-          <CardHeader>
-            <CardTitle>Production Workflow System</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-muted-foreground">
-              Comprehensive production tracking with {productionLogs} production orders across cutting, stitching, embroidery, and packaging stages.
-              Monitor worker efficiency and optimize production timelines with {activeWorkers} employees and {avgEfficiency}% average efficiency.
-            </p>
           </CardContent>
         </Card>
       </div>

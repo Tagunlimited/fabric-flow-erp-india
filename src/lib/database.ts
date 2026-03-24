@@ -701,10 +701,27 @@ export async function getCuttingPendingQuantities(): Promise<number> {
           // Get cut quantity - use cut_quantities_by_size if available, otherwise use cut_quantity
           let cutQty = 0;
           if (oa.cut_quantities_by_size && typeof oa.cut_quantities_by_size === 'object') {
-            // Sum up all values from the JSONB object
-            cutQty = Object.values(oa.cut_quantities_by_size).reduce((s: number, val: any): number => {
-              return s + Number(val || 0);
-            }, 0);
+            const raw = oa.cut_quantities_by_size as Record<string, unknown>;
+            if (raw.by_order_item && typeof raw.by_order_item === 'object') {
+              cutQty = Object.values(raw.by_order_item as Record<string, unknown>).reduce(
+                (sum: number, inner: unknown) => {
+                  if (!inner || typeof inner !== 'object') return sum;
+                  return (
+                    sum +
+                    Object.values(inner as Record<string, unknown>).reduce(
+                      (s, v) => s + (typeof v === 'number' ? Number(v) : 0),
+                      0
+                    )
+                  );
+                },
+                0
+              );
+            } else {
+              cutQty = Object.entries(raw).reduce((s: number, [k, val]: [string, any]) => {
+                if (k === 'by_order_item') return s;
+                return s + Number(val || 0);
+              }, 0);
+            }
           } else {
             cutQty = Number(oa.cut_quantity || 0);
           }

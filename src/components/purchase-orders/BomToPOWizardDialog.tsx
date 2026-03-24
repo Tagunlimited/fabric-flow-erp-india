@@ -51,6 +51,7 @@ export function BomToPOWizardDialog({
         .select(`
           id,
           order_id,
+          order_item_id,
           product_name,
           product_image_url
         `)
@@ -121,13 +122,20 @@ export function BomToPOWizardDialog({
           let itemAttributes: any = {};
           
           if (item.category === 'Fabric') {
-            // For fabric items, try to get attributes from order data first
+            // Prefer the BOM's order line when set (avoids wrong row when multiple products share fabric)
             if (orderData?.order_items) {
-              const orderItem = orderData.order_items.find((oi: any) => 
-                oi.product_description === item.item_name || 
-                oi.fabric?.fabric_name === item.item_name
-              );
-              
+              const bomRow = bomRecord as { order_item_id?: string | null };
+              let orderItem: any = null;
+              if (bomRow.order_item_id) {
+                orderItem = orderData.order_items.find((oi: any) => oi.id === bomRow.order_item_id);
+              }
+              if (!orderItem) {
+                orderItem = orderData.order_items.find((oi: any) =>
+                  oi.product_description === item.item_name ||
+                  oi.fabric?.fabric_name === item.item_name
+                );
+              }
+
               if (orderItem?.fabric) {
                 fabricName = orderItem.fabric.fabric_name || '';
                 fabricColor = orderItem.fabric.color || orderItem.color || '';

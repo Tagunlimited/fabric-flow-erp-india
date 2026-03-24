@@ -13,6 +13,27 @@ import { calculateOrderSummary } from '@/utils/priceCalculation';
 
 // Import existing BomList component
 import { BomList } from './BomList';
+import { BomOrderLinePicker } from './BomOrderLinePicker';
+
+type BomRowRef = { order_id: string; order_item_id: string | null };
+
+/** Legacy: BOM with null order_item_id covers the whole order for eligibility. */
+function getOrderBomCoverage(orderId: string, bomRows: BomRowRef[]) {
+  const forOrder = bomRows.filter(b => b.order_id === orderId);
+  const hasLegacyFullOrderBom = forOrder.some(b => b.order_item_id == null);
+  const coveredItemIds = new Set(
+    forOrder.map(b => b.order_item_id).filter(Boolean) as string[]
+  );
+  return { hasLegacyFullOrderBom, coveredItemIds };
+}
+
+function orderHasLineMissingBom(order: { id: string; order_items?: { id: string }[] }, bomRows: BomRowRef[]) {
+  const { hasLegacyFullOrderBom, coveredItemIds } = getOrderBomCoverage(order.id, bomRows);
+  if (hasLegacyFullOrderBom) return false;
+  const itemIds = (order.order_items || []).map(i => i.id).filter(Boolean);
+  if (itemIds.length === 0) return false;
+  return itemIds.some(id => !coveredItemIds.has(id));
+}
 
 interface Order {
   id: string;
@@ -40,21 +61,19 @@ interface OrderItem {
   quantity: number;
   unit_price: number;
   total_price: number;
-  product: {
-    name: string;
-    code: string;
-    category: string;
-    image_url?: string;
-  };
+  product_description?: string | null;
+  category_image_url?: string | null;
+  created_at?: string | null;
 }
 
 interface OrdersWithoutBomProps {
-  onCreateBom: (orderId: string) => void;
+  onOpenLinePicker: (orderId: string) => void;
   refreshTrigger?: number;
 }
 
-function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps) {
+function OrdersWithoutBom({ onOpenLinePicker, refreshTrigger }: OrdersWithoutBomProps) {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [bomRows, setBomRows] = useState<BomRowRef[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -75,15 +94,13 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
     try {
       setLoading(true);
       
-      // First, get all order IDs that have BOMs
       const { data: bomRecords, error: bomError } = await supabase
         .from('bom_records')
-        .select('order_id');
+        .select('order_id, order_item_id');
       
       if (bomError) throw bomError;
-      
-      const ordersWithBom = new Set((bomRecords || []).map((bom: any) => bom.order_id));
-      console.log('Orders with BOMs:', Array.from(ordersWithBom));
+      const bomList = (bomRecords || []) as BomRowRef[];
+      setBomRows(bomList);
       
       // Get all receipts linked to orders with amounts
       const { data: receiptRecords, error: receiptError } = await supabase
@@ -125,7 +142,7 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
       console.log('Orders with receipts (by Number):', Array.from(ordersWithReceiptsByNumber));
       
       // Get all orders that are not cancelled (including pending orders) - exclude readymade orders (they don't need BOMs)
-      const { data: allOrders, error: ordersError } = await supabase
+      const { data: allOrdersRaw, error: ordersError } = await supabase
         .from('orders')
         .select(`
           *,
@@ -136,28 +153,32 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
             quantity,
             unit_price,
             total_price,
-            product:products(name, code, category)
+            product_description,
+            category_image_url,
+            created_at
           )
         `)
         .not('status', 'eq', 'cancelled')
-        .or('order_type.is.null,order_type.eq.custom') // Exclude readymade orders
         .order('order_date', { ascending: false });
-      
+
       if (ordersError) throw ordersError;
+
+      const allOrders = (allOrdersRaw || []).filter(
+        (o: any) => !o.order_type || o.order_type === 'custom'
+      );
       
       console.log('All orders fetched:', allOrders?.length || 0);
       console.log('Sample order:', allOrders?.[0]);
       
-      // Filter orders that:
-      // 1. Have receipts (are paid) - check both ID and number matching
-      // 2. Do NOT have BOMs
+      // Filter orders that have receipts and at least one order line without a BOM
+      // (legacy: any bom_records row with null order_item_id counts as full-order BOM)
       const eligibleOrders = (allOrders || []).filter((order: any) => {
         const hasReceiptById = ordersWithReceiptsById.has(order.id);
         const hasReceiptByNumber = ordersWithReceiptsByNumber.has(order.order_number);
         const hasReceipt = hasReceiptById || hasReceiptByNumber;
-        const hasBom = ordersWithBom.has(order.id);
-        console.log(`Order ${order.order_number} (${order.id}): hasReceiptById=${hasReceiptById}, hasReceiptByNumber=${hasReceiptByNumber}, hasReceipt=${hasReceipt}, hasBom=${hasBom}, status=${order.status}`);
-        return hasReceipt && !hasBom;
+        const needsBom = orderHasLineMissingBom(order, bomList);
+        console.log(`Order ${order.order_number} (${order.id}): hasReceipt=${hasReceipt}, needsLineBom=${needsBom}, status=${order.status}`);
+        return hasReceipt && needsBom;
       });
       
       // Calculate correct amounts using size-based pricing for each order
@@ -226,10 +247,10 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
       order.order_number?.toLowerCase().includes(term) ||
       order.customer?.company_name?.toLowerCase().includes(term) ||
       order.customer?.contact_person?.toLowerCase().includes(term) ||
-      order.order_items?.some(item => 
-        item.product?.name?.toLowerCase().includes(term) ||
-        item.product?.code?.toLowerCase().includes(term)
-      )
+      order.order_items?.some(item => {
+        const desc = item.product_description || '';
+        return desc.toLowerCase().includes(term);
+      })
     );
   });
 
@@ -300,7 +321,8 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
                       quantity,
                       unit_price,
                       total_price,
-                      product:products(name, code, category)
+                      product_description,
+                      category_image_url
                     )
                   `)
                   .not('status', 'eq', 'cancelled')
@@ -379,7 +401,11 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
               </TableHeader>
               <TableBody>
                 {filteredOrders.map((order) => (
-                  <TableRow key={order.id} className="hover:bg-muted/50">
+                  <TableRow
+                    key={order.id}
+                    className="hover:bg-muted/50 cursor-pointer"
+                    onClick={() => onOpenLinePicker(order.id)}
+                  >
                     <TableCell className="font-medium">
                       {order.order_number}
                     </TableCell>
@@ -394,26 +420,42 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div className="space-y-1">
-                        {order.order_items?.slice(0, 2).map((item) => (
-                          <div key={item.id} className="flex items-center gap-2">
-                            {item.product?.image_url && (
-                              <img 
-                                src={item.product.image_url} 
-                                alt={item.product.name}
-                                className="w-6 h-6 rounded object-cover"
-                              />
-                            )}
-                            <span className="text-sm">
-                              {item.product?.name} ({item.quantity} pcs)
-                            </span>
-                          </div>
-                        ))}
-                        {order.order_items && order.order_items.length > 2 && (
-                          <div className="text-xs text-muted-foreground">
-                            +{order.order_items.length - 2} more items
-                          </div>
-                        )}
+                      <div className="space-y-2 max-w-md">
+                        {(() => {
+                          const { hasLegacyFullOrderBom, coveredItemIds } = getOrderBomCoverage(order.id, bomRows);
+                          return (order.order_items || []).map((item) => {
+                            const lineLabel = item.product_description || 'Product';
+                            const hasLineBom = hasLegacyFullOrderBom || coveredItemIds.has(item.id);
+                            const lineThumb = (item as any).category_image_url;
+                            return (
+                              <div
+                                key={item.id}
+                                className="flex flex-wrap items-center gap-2 border-b border-border/50 pb-2 last:border-0 last:pb-0"
+                              >
+                                {lineThumb && (
+                                  <img
+                                    src={lineThumb}
+                                    alt={lineLabel}
+                                    className="w-6 h-6 rounded object-cover shrink-0"
+                                  />
+                                )}
+                                <span className="text-sm flex-1 min-w-0">
+                                  {lineLabel}{' '}
+                                  <span className="text-muted-foreground">({item.quantity} pcs)</span>
+                                </span>
+                                {hasLineBom ? (
+                                  <Badge variant="secondary" className="shrink-0">
+                                    BOM
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="shrink-0 text-xs">
+                                    Pending
+                                  </Badge>
+                                )}
+                              </div>
+                            );
+                          });
+                        })()}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -435,24 +477,15 @@ function OrdersWithoutBom({ onCreateBom, refreshTrigger }: OrdersWithoutBomProps
                         year: '2-digit'
                       }) : '-'}
                     </TableCell>
-                    <TableCell>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => window.open(`/orders/${order.id}`, '_blank')}
-                        >
-                          <Eye className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() => onCreateBom(order.id)}
-                          className="bg-emerald-600 hover:bg-emerald-700"
-                        >
-                          <Plus className="w-4 h-4 mr-1" />
-                          Create BOM
-                        </Button>
-                      </div>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        title="View order"
+                        onClick={() => window.open(`/orders/${order.id}`, '_blank')}
+                      >
+                        <Eye className="w-4 h-4" />
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -476,14 +509,19 @@ export function BomTabsPage() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [searchParams] = useSearchParams();
   const tabFromUrl = searchParams.get('tab');
+  const pickOrder = searchParams.get('pickOrder');
 
   // Refresh when component mounts (user returns from BOM creation)
   useEffect(() => {
     setRefreshTrigger(prev => prev + 1);
   }, []);
 
-  const handleCreateBom = (orderId: string) => {
-    navigate(`/bom/new?order=${orderId}`);
+  const openLinePicker = (orderId: string) => {
+    navigate(`/bom?tab=create-bom&pickOrder=${encodeURIComponent(orderId)}`, { replace: true });
+  };
+
+  const closeLinePicker = () => {
+    navigate('/bom?tab=create-bom', { replace: true });
   };
 
   const handleRefresh = () => {
@@ -517,10 +555,13 @@ export function BomTabsPage() {
       </div>
 
       <div className="border rounded-lg p-4">
-        <Tabs value={tabFromUrl || defaultTab} onValueChange={(value) => {
-          // Update URL when tab changes
-          navigate(`/bom?tab=${value}`, { replace: true });
-        }} className="w-full">
+        <Tabs
+          value={tabFromUrl || defaultTab}
+          onValueChange={(value) => {
+            navigate(`/bom?tab=${value}`, { replace: true });
+          }}
+          className="w-full"
+        >
           <TabsList className="grid w-full grid-cols-2 mb-6 bg-gray-100">
             <TabsTrigger value="create-bom" className="flex items-center gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm">
               <Plus className="w-4 h-4" />
@@ -533,7 +574,11 @@ export function BomTabsPage() {
           </TabsList>
           
         <TabsContent value="create-bom" className="space-y-4">
-          <OrdersWithoutBom onCreateBom={handleCreateBom} refreshTrigger={refreshTrigger} />
+          {pickOrder ? (
+            <BomOrderLinePicker orderId={pickOrder} onBack={closeLinePicker} />
+          ) : (
+            <OrdersWithoutBom onOpenLinePicker={openLinePicker} refreshTrigger={refreshTrigger} />
+          )}
         </TabsContent>
           
           <TabsContent value="view-bom" className="space-y-4">

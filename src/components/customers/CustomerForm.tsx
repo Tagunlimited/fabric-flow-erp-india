@@ -10,7 +10,6 @@ import { Loader2, Save, X, ArrowLeft } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useFormData } from '@/contexts/FormPersistenceContext';
-import { useNavigate } from 'react-router-dom';
 import { StateCitySelector } from '@/components/ui/StateCitySelector';
 
 interface CustomerFormProps {
@@ -30,8 +29,9 @@ interface State {
   code: string;
 }
 
+const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+
 function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) {
-  const navigate = useNavigate();
   const { data: formData, updateData: setFormData, resetData, isLoaded, hasSavedData } = useFormData('customerForm', {
     company_name: '',
     contact_person: '',
@@ -119,6 +119,27 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
   };
 
   const handleChange = (field: string, value: any) => {
+    if (field === 'gstin') {
+      const normalizedGstin = String(value || '').toUpperCase().replace(/\s+/g, '');
+      const extractedPan = normalizedGstin.slice(2, 12);
+
+      setFormData(prev => ({
+        ...prev,
+        gstin: normalizedGstin,
+        // GSTIN format: skip first 2 chars, next 10 should be PAN
+        pan: PAN_REGEX.test(extractedPan) ? extractedPan : prev.pan
+      }));
+      return;
+    }
+
+    if (field === 'pan') {
+      setFormData(prev => ({
+        ...prev,
+        pan: String(value || '').toUpperCase().replace(/\s+/g, '')
+      }));
+      return;
+    }
+
     setFormData(prev => ({
       ...prev,
       [field]: value
@@ -150,6 +171,11 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
     // Pincode is optional, but if provided, it must be 6 digits
     if (formData.pincode.trim() && formData.pincode.length !== 6) {
       setError('Pincode must be 6 digits if provided');
+      return false;
+    }
+    // PAN is optional, but if provided it must match format ABCDE1234F
+    if (formData.pan.trim() && !PAN_REGEX.test(formData.pan.trim().toUpperCase())) {
+      setError('PAN format is invalid. Use format: ABCDE1234F');
       return false;
     }
     return true;
@@ -230,7 +256,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
   }
 
   return (
-    <Card className="w-full max-w-2xl mx-auto">
+    <Card className="w-full max-w-2xl lg:max-w-none mx-auto">
       <CardHeader>
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-3">
@@ -238,7 +264,7 @@ function CustomerFormContent({ customer, onSave, onCancel }: CustomerFormProps) 
               type="button" 
               variant="outline" 
               size="sm"
-              onClick={() => navigate('/crm/customers')}
+              onClick={onCancel}
               className="flex items-center gap-2"
             >
               <ArrowLeft className="w-4 h-4" />

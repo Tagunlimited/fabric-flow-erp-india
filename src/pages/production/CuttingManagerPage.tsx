@@ -41,7 +41,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleBatchAssignmentDialog";
 import { UpdateCuttingQuantityDialog } from "@/components/production/UpdateCuttingQuantityDialog";
 import { ReassignBatchDialog } from "@/components/production/ReassignBatchDialog";
-import { generateBatchAssignmentPDF } from "@/utils/batchAssignmentPDF";
+import { buildBatchAssignmentDocumentData, type BatchAssignmentDocumentData } from '@/utils/batchAssignmentDocument';
+import { BatchAssignmentPreviewDialog } from '@/components/production/BatchAssignmentPreviewDialog';
 import { BackButton } from '@/components/common/BackButton';
 
 interface CuttingJob {
@@ -153,8 +154,10 @@ const CuttingManagerPage = () => {
   } | null>(null);
   const [availableBatches, setAvailableBatches] = useState<any[]>([]);
   
-  // PDF generation state
+  // Stitching job card (A5 preview / PDF)
   const [generatingPDF, setGeneratingPDF] = useState<string | null>(null);
+  const [stitchJobCardOpen, setStitchJobCardOpen] = useState(false);
+  const [stitchJobCardDoc, setStitchJobCardDoc] = useState<BatchAssignmentDocumentData | null>(null);
 
   // Use the centralized Indian date format function
   const formatDateDDMMYY = (value?: string) => {
@@ -277,7 +280,7 @@ const CuttingManagerPage = () => {
       if (fabricIds.length > 0) {
         const { data: fabrics } = await supabase
           .from('fabric_master')
-          .select('id, fabric_name, color, gsm, image')
+          .select('id, fabric_name, color, gsm, image, hex')
           .in('id', fabricIds);
         (fabrics || []).forEach((fabric: any) => {
           fabricMap[fabric.id] = fabric;
@@ -336,44 +339,38 @@ const CuttingManagerPage = () => {
         return;
       }
 
-      // Prepare batch assignment data from existing batch assignments
-      const batchAssignments = (job.batchAssignments || []).map(assignment => {
-        // Handle size_distributions - can be array or object
+      const snRate = (priceData && !priceError && !('error' in (priceData as any)))
+        ? ((priceData as any).cutting_price_single_needle || 0)
+        : 0;
+      const ofRate = (priceData && !priceError && !('error' in (priceData as any)))
+        ? ((priceData as any).cutting_price_overlock_flatlock || 0)
+        : 0;
+
+      const rawBatches = (job.batchAssignments || []).map((assignment) => {
         let sizeDistributions: Array<{ size: string; quantity: number }> = [];
-        
+
         if (Array.isArray(assignment.size_distributions)) {
-          // If it's already an array, use it directly
           sizeDistributions = assignment.size_distributions.map((sd: any) => ({
             size: sd.size_name || sd.size || '',
-            quantity: typeof sd.quantity === 'number' ? sd.quantity : 0
+            quantity: typeof sd.quantity === 'number' ? sd.quantity : 0,
           }));
         } else if (assignment.size_distributions && typeof assignment.size_distributions === 'object') {
-          // If it's an object, convert to array
           sizeDistributions = Object.entries(assignment.size_distributions)
             .filter(([_, qty]) => typeof qty === 'number' && qty > 0)
             .map(([size, qty]) => ({ size, quantity: qty as number }));
         }
 
         const assignedQuantity = sizeDistributions.reduce((sum, sd) => sum + sd.quantity, 0);
-        const snRate = (priceData && !priceError && !('error' in (priceData as any))) 
-          ? ((priceData as any).cutting_price_single_needle || 0)
-          : 0;
-        const ofRate = (priceData && !priceError && !('error' in (priceData as any)))
-          ? ((priceData as any).cutting_price_overlock_flatlock || 0)
-          : 0;
-        // Total earning = (SN + OF) × assigned quantity
-        const totalEarning = (snRate + ofRate) * assignedQuantity;
 
         return {
           batchName: assignment.batch_name || 'Unknown Batch',
           batchLeaderName: assignment.batch_leader_name || 'Unknown Leader',
           batchLeaderAvatarUrl: assignment.batch_leader_avatar_url || undefined,
-          tailorType: assignment.tailor_type as 'single_needle' | 'overlock_flatlock' || 'single_needle',
+          tailorType: assignment.tailor_type || 'single_needle',
           sizeDistributions,
           snRate,
           ofRate,
-          totalEarning,
-          assignedQuantity
+          assignedQuantity,
         };
       });
 
@@ -398,18 +395,24 @@ const CuttingManagerPage = () => {
         return;
       }
 
-      await generateBatchAssignmentPDF({
+      const doc = buildBatchAssignmentDocumentData({
         orderNumber: job.orderNumber,
         customerName: job.customerName,
         orderItems: enrichedOrderItems,
-        batchAssignments,
+        rawBatches,
         companySettings: companySettings as any,
         salesManager,
         customizations: allCustomizations,
-        dueDate: (orderData as any).expected_delivery_date
+        dueDate: (orderData as any).expected_delivery_date,
       });
 
-      console.log('✅ PDF generation completed successfully!');
+      if (doc.batchAssignments.length === 0) {
+        console.warn('No batch rows for job card');
+        return;
+      }
+      setStitchJobCardDoc(doc);
+      setStitchJobCardOpen(true);
+      console.log('✅ Job card preview ready');
     } catch (error) {
       console.error('❌ Error generating PDF:', error);
     } finally {
@@ -538,7 +541,7 @@ const CuttingManagerPage = () => {
         if (fabricIds.length > 0) {
           const { data: fabrics, error: fabricsError } = await supabase
             .from('fabric_master' as any)
-            .select('id, fabric_name, color, gsm, image')
+            .select('id, fabric_name, color, gsm, image, hex')
             .in('id', fabricIds as any);
           
           if (fabricsError) {
@@ -1522,6 +1525,12 @@ const CuttingManagerPage = () => {
         orderNumber={selectedJobForBatch?.orderNumber || ''}
         customerName={selectedJobForBatch?.customerName || ''}
         onSuccess={handleBatchAssignmentSuccess}
+        onJobCardDocumentReady={(doc) => {
+          setStitchJobCardDoc(doc);
+          setStitchJobCardOpen(true);
+          setBatchAssignmentOpen(false);
+          setSelectedJobForBatch(null);
+        }}
         existingAssignments={selectedJobForBatch?.batchAssignments?.map(ba => ({
           batch_id: ba.batch_id,
           batch_name: ba.batch_name,
@@ -1547,6 +1556,15 @@ const CuttingManagerPage = () => {
         orderNumber={selectedBatchForReassign?.job.orderNumber || ''}
         batchAssignment={selectedBatchForReassign?.batchAssignment || null}
         availableBatches={availableBatches}
+      />
+
+      <BatchAssignmentPreviewDialog
+        open={stitchJobCardOpen}
+        onClose={() => {
+          setStitchJobCardOpen(false);
+          setStitchJobCardDoc(null);
+        }}
+        documentData={stitchJobCardDoc}
       />
       </div>
     </ErpLayout>

@@ -13,6 +13,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { ErpLayout } from '@/components/ErpLayout';
 import { useFormData } from '@/contexts/FormPersistenceContext';
+import { sortOrderLines, bomNumberForOrderLine } from './bomOrderLineUtils';
+import './BomLinePicker.css';
 
 type Customer = { 
   id: string; 
@@ -94,7 +96,60 @@ type BomRecord = {
   created_at?: string;
 };
 
-export function BomForm() {
+function fallbackBomNumberNoOrder(): string {
+  return `BOM-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+}
+
+async function resolveBomNumberForSave(
+  orderId: string | undefined | null,
+  orderItemId: string | undefined | null,
+  trimmedUserInput: string | undefined | null
+): Promise<string> {
+  if (trimmedUserInput) return trimmedUserInput;
+  if (!orderId || !orderItemId) return fallbackBomNumberNoOrder();
+  const { data: ord, error: oErr } = await supabase
+    .from('orders')
+    .select('order_number')
+    .eq('id', orderId as any)
+    .single();
+  if (oErr || !ord?.order_number) return fallbackBomNumberNoOrder();
+  const { data: items, error: iErr } = await supabase
+    .from('order_items')
+    .select('id, created_at')
+    .eq('order_id', orderId as any)
+    .order('created_at', { ascending: true });
+  if (iErr || !items?.length) {
+    return `BOM-${(ord as any).order_number}-P1`;
+  }
+  const sorted = sortOrderLines(items as any[]);
+  return bomNumberForOrderLine((ord as any).order_number, sorted, orderItemId);
+}
+
+function orderLineDisplayName(line: any): string {
+  if (!line) return '';
+  return (
+    line.product_description ||
+    line.product?.product_name ||
+    line.product?.name ||
+    ''
+  );
+}
+
+export type BomFormProps = {
+  /** Render without ErpLayout; load order from props instead of URL */
+  embedded?: boolean;
+  embeddedOrderId?: string;
+  embeddedOrderItemId?: string;
+  /** After a successful save in embedded mode (e.g. refresh line BOM state) */
+  onEmbeddedBomSaved?: () => void;
+};
+
+export function BomForm({
+  embedded = false,
+  embeddedOrderId,
+  embeddedOrderItemId,
+  onEmbeddedBomSaved,
+}: BomFormProps = {}) {
   const navigate = useNavigate();
   const { id } = useParams();
   const [searchParams] = useSearchParams();
@@ -103,34 +158,47 @@ export function BomForm() {
   
   // Check for Order data in URL params
   const orderParam = searchParams.get('order') || searchParams.get('orderId');
+  const orderItemIdParam = searchParams.get('orderItemId') || undefined;
   const [orderData, setOrderData] = useState<any>(null);
   const [orderFabricData, setOrderFabricData] = useState<any>(null);
+  /** True when order has multiple lines and URL has no orderItemId — user must pick a line */
+  const [needsOrderLineChoice, setNeedsOrderLineChoice] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
-  const { data: bom, updateData: setBom, resetData: resetBomData, isLoaded: isBomLoaded, hasSavedData: hasBomData } = useFormData<BomRecord>('bomForm', {
-    product_name: '',
-    total_order_qty: 0,
-    status: 'draft',
-  });
+  const bomFormInitial = useMemo(
+    () =>
+      ({
+        product_name: '',
+        total_order_qty: 0,
+        status: 'draft' as const,
+      }) satisfies BomRecord,
+    []
+  );
+  const formPersistenceKey =
+    embedded && embeddedOrderId && embeddedOrderItemId
+      ? `bomForm-embed-${embeddedOrderId}-${embeddedOrderItemId}`
+      : 'bomForm';
+  const { data: bom, updateData: setBom, resetData: resetBomData, isLoaded: isBomLoaded, hasSavedData: hasBomData } =
+    useFormData<BomRecord>(formPersistenceKey, bomFormInitial);
   const [items, setItems] = useState<BomLineItem[]>([]);
 
   // Clear BOM ID when creating a new BOM (not editing and not from order)
   useEffect(() => {
-    if (!isEditMode && !isReadOnly && !orderParam && bom.id) {
+    if (!isEditMode && !isReadOnly && !orderParam && !embedded && bom.id) {
       console.log('Clearing BOM ID for new BOM creation (no order param)');
       setBom(prev => ({ ...prev, id: undefined }));
     }
-  }, [isEditMode, isReadOnly, orderParam, bom.id, setBom]);
+  }, [isEditMode, isReadOnly, orderParam, embedded, bom.id, setBom]);
 
   // Clear all form data when creating a new BOM (not editing and not from order)
   useEffect(() => {
-    if (!isEditMode && !isReadOnly && !id && !orderParam) {
+    if (!isEditMode && !isReadOnly && !id && !orderParam && !embedded) {
       console.log('Clearing all form data for new BOM creation (no order param)');
       resetBomData();
     }
-  }, [isEditMode, isReadOnly, id, orderParam, resetBomData]);
+  }, [isEditMode, isReadOnly, id, orderParam, embedded, resetBomData]);
   
   // Option lists by type
   const [fabricOptions, setFabricOptions] = useState<{ id: string; label: string; image_url?: string | null; color?: string; gsm?: string; rate?: number }[]>([]);
@@ -288,19 +356,20 @@ export function BomForm() {
     
     // Process Order data if present
     if (orderParam && !id) {
-      // Check if orderParam is a JSON string or just an order ID
       const processOrderData = async () => {
-      try {
-        const decodedOrderData = JSON.parse(decodeURIComponent(orderParam));
-        setOrderData(decodedOrderData);
-        
-        // Pre-fill BOM data from order
-        if (decodedOrderData.order_item) {
-          console.log('Setting BOM data from decoded order data:', decodedOrderData);
-            // Get fabric/image URL instead of mockup image
+        try {
+          const decodedOrderData = JSON.parse(decodeURIComponent(orderParam));
+          setOrderData(decodedOrderData);
+          setNeedsOrderLineChoice(false);
+
+          if (decodedOrderData.order_item) {
+            console.log('Setting BOM data from decoded order data:', decodedOrderData);
+            const resolvedItemId =
+              orderItemIdParam ||
+              decodedOrderData.order_item_id ||
+              decodedOrderData.order_item.id;
             let productImageUrl = null;
             if (decodedOrderData.order_item.fabric_id) {
-              // Fetch fabric image
               try {
                 const { data: fabric } = await supabase
                   .from('fabric_master')
@@ -308,32 +377,46 @@ export function BomForm() {
                   .eq('id', decodedOrderData.order_item.fabric_id)
                   .single();
                 productImageUrl = fabric?.image || null;
-              } catch (error) {
-                console.warn('Failed to fetch fabric image:', error);
+              } catch (e) {
+                console.warn('Failed to fetch fabric image:', e);
               }
             }
-            
-          setBom(prev => ({
-            ...prev,
-            order_id: decodedOrderData.order_id,
-            order_item_id: decodedOrderData.order_item_id,
-            product_name: decodedOrderData.order_item.product_description || '',
+
+            const oid = decodedOrderData.order_id as string;
+            const onum = decodedOrderData.order_number as string | undefined;
+            const itemsArr = Array.isArray(decodedOrderData.order_items)
+              ? sortOrderLines(decodedOrderData.order_items)
+              : [];
+            const suggested =
+              onum && resolvedItemId && itemsArr.length
+                ? bomNumberForOrderLine(onum, itemsArr, resolvedItemId)
+                : onum && resolvedItemId
+                  ? `BOM-${onum}-P1`
+                  : fallbackBomNumberNoOrder();
+            setBom(prev => ({
+              ...prev,
+              order_id: oid,
+              order_item_id: resolvedItemId,
+              product_name: decodedOrderData.order_item.product_description || '',
               product_image_url: productImageUrl,
-            total_order_qty: decodedOrderData.order_item.quantity || 0,
-          }));
+              total_order_qty: decodedOrderData.order_item.quantity || 0,
+              bom_number: prev.bom_number?.trim() ? prev.bom_number : suggested,
+            }));
+          }
+        } catch {
+          console.log('Order param is not JSON, treating as order ID:', orderParam);
+          await fetchOrderData(orderParam, orderItemIdParam ?? null);
         }
-      } catch (error) {
-        // If parsing fails, treat it as an order ID
-        console.log('Order param is not JSON, treating as order ID:', orderParam);
-        fetchOrderData(orderParam);
-      }
       };
-      
-      processOrderData();
-      
+
       processOrderData();
     }
-  }, [id, orderParam]);
+  }, [id, orderParam, orderItemIdParam]);
+
+  useEffect(() => {
+    if (!embedded || !embeddedOrderId || id) return;
+    fetchOrderData(embeddedOrderId, embeddedOrderItemId ?? null);
+  }, [embedded, embeddedOrderId, embeddedOrderItemId, id]);
 
   // Auto-add fabric items when order fabric data is available
   useEffect(() => {
@@ -506,13 +589,13 @@ export function BomForm() {
     }
   };
 
-  const fetchOrderData = async (orderId: string) => {
+  const fetchOrderData = async (orderId: string, explicitOrderItemId?: string | null) => {
     try {
-      // Fetch order with order_items and fabric information
       const { data: order, error: orderError } = await supabase
         .from('orders')
         .select(`
           *,
+          customer:customers(company_name),
           order_items(
             id,
             product_id,
@@ -526,7 +609,7 @@ export function BomForm() {
             fabric_id,
             gsm,
             color,
-            product:products(name, code, category)
+            created_at
           )
         `)
         .eq('id', orderId as any)
@@ -535,66 +618,123 @@ export function BomForm() {
       if (orderError) throw orderError;
 
       setOrderData(order as any);
-      
-      // Extract fabric information from order items
-      const fabricItems = (order as any)?.order_items?.filter((item: any) => item.fabric_id) || [];
+      const linesRaw: any[] = (order as any)?.order_items || [];
+      const lines = sortOrderLines(linesRaw);
+
+      const resolvedLineId =
+        explicitOrderItemId ||
+        (lines.length === 1 ? lines[0].id : null);
+
+      if (lines.length > 1 && !resolvedLineId) {
+        setNeedsOrderLineChoice(true);
+        setOrderFabricData(null);
+        setItems([]);
+        setBom(prev => ({
+          ...prev,
+          order_id: (order as any).id,
+          order_item_id: undefined,
+          product_name: '',
+          product_image_url: undefined,
+          total_order_qty: 0,
+        }));
+        return;
+      }
+
+      setNeedsOrderLineChoice(false);
+
+      if (lines.length === 0) {
+        setOrderFabricData(null);
+        return;
+      }
+
+      let line: any;
+      if (resolvedLineId) {
+        line = lines.find((it: any) => it.id === resolvedLineId);
+        if (!line) {
+          toast.error('Selected order line was not found on this order.');
+          if (lines.length > 1) {
+            setNeedsOrderLineChoice(true);
+            setOrderFabricData(null);
+            setItems([]);
+            setBom(prev => ({
+              ...prev,
+              order_id: (order as any).id,
+              order_item_id: undefined,
+              product_name: '',
+              product_image_url: undefined,
+              total_order_qty: 0,
+            }));
+          }
+          return;
+        }
+      } else {
+        line = lines[0];
+      }
+
+      setItems([]);
+
+      const fabricItems = line.fabric_id ? [line] : [];
       if (fabricItems.length > 0) {
-        // Fetch fabric details separately to avoid join issues
         const fabricIds = fabricItems.map((item: any) => item.fabric_id).filter(Boolean);
         if (fabricIds.length > 0) {
           const { data: fabrics, error: fabricError } = await supabase
             .from('fabric_master')
             .select('id, fabric_name, color, gsm, rate, image, fabric_for_supplier')
             .in('id', fabricIds);
-          
+
           if (!fabricError && fabrics) {
-            // Merge fabric data with order items
             const enrichedFabricItems = fabricItems.map((item: any) => {
               const fabric = fabrics.find((f: any) => f.id === item.fabric_id);
-              return {
-                ...item,
-                fabric: fabric
-              };
+              return { ...item, fabric };
             });
             setOrderFabricData(enrichedFabricItems);
           } else {
             setOrderFabricData(fabricItems);
           }
+        } else {
+          setOrderFabricData(null);
+        }
+      } else {
+        setOrderFabricData(null);
+      }
+
+      let productImageUrl: string | null = null;
+      if (line.fabric_id) {
+        try {
+          const { data: fabric, error: fabricErr } = await supabase
+            .from('fabric_master')
+            .select('image')
+            .eq('id', line.fabric_id)
+            .single();
+          if (!fabricErr && fabric?.image) {
+            productImageUrl = fabric.image;
+          }
+        } catch (e) {
+          console.warn('Failed to fetch fabric image:', e);
         }
       }
 
-      // Pre-fill BOM data from order
-      if ((order as any)?.order_items && (order as any).order_items.length > 0) {
-        const firstItem = (order as any).order_items[0];
-        const totalQty = (order as any).order_items.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0);
-        console.log('Setting BOM data from fetched order:', { orderId: (order as any).id, totalQty, orderItems: (order as any).order_items });
-        
-        // Get fabric/image URL instead of mockup image
-        let productImageUrl = null;
-        if (firstItem.fabric_id) {
-          // Fetch fabric image if fabric_id exists
-          try {
-            const { data: fabric, error: fabricError } = await supabase
-              .from('fabric_master')
-              .select('image')
-              .eq('id', firstItem.fabric_id)
-              .single();
-            if (!fabricError && fabric?.image) {
-              productImageUrl = fabric.image;
-            }
-          } catch (error) {
-            console.warn('Failed to fetch fabric image:', error);
-          }
-        }
-        
-        setBom(prev => ({
-          ...prev,
-          order_id: (order as any).id,
-          product_name: firstItem.product_description || firstItem.product?.name || '',
-          product_image_url: productImageUrl,
-          total_order_qty: totalQty,
-        }));
-      }
+      const lineQty = Number(line.quantity) || 0;
+      console.log('Setting BOM from single order line:', {
+        orderId: (order as any).id,
+        order_item_id: line.id,
+        lineQty,
+        product: orderLineDisplayName(line),
+      });
+
+      const oid = (order as any).id as string;
+      const orderNumber = (order as any).order_number as string;
+      const suggestedNumber =
+        orderNumber && line.id ? bomNumberForOrderLine(orderNumber, lines, line.id) : fallbackBomNumberNoOrder();
+      setBom(prev => ({
+        ...prev,
+        order_id: oid,
+        order_item_id: line.id,
+        product_name: orderLineDisplayName(line),
+        product_image_url: productImageUrl,
+        total_order_qty: lineQty,
+        bom_number: prev.bom_number?.trim() ? prev.bom_number : suggestedNumber,
+      }));
     } catch (error) {
       console.error('Error fetching order data:', error);
       toast.error('Failed to load order data');
@@ -1265,22 +1405,50 @@ export function BomForm() {
       return;
     }
 
-    // Check for duplicate BOM for the same product (only for new BOMs)
+    // Check for duplicate BOM (only for new BOMs)
     if (!bom.id) {
       try {
-        const { data: existingBoms, error: checkError } = await supabase
-          .from('bom_records')
-          .select('id, product_name')
-          .eq('product_name', bom.product_name as any);
+        if (bom.order_id && bom.order_item_id) {
+          const { data: existingBoms, error: checkError } = await supabase
+            .from('bom_records')
+            .select('id')
+            .eq('order_id', bom.order_id as any)
+            .eq('order_item_id', bom.order_item_id as any);
 
-        if (checkError) {
-          console.log('Duplicate check failed, continuing with creation:', checkError);
-        } else if (existingBoms && existingBoms.length > 0) {
-          toast.error(`BOM already exists for product "${bom.product_name}". Please edit the existing BOM instead.`);
-          return;
+          if (checkError) {
+            console.log('Duplicate check failed, continuing with creation:', checkError);
+          } else if (existingBoms && existingBoms.length > 0) {
+            toast.error('A BOM already exists for this order line. Open it from View BOMs to edit.');
+            return;
+          }
+        } else if (bom.order_id && !bom.order_item_id) {
+          const { data: existingBoms, error: checkEnd } = await supabase
+            .from('bom_records')
+            .select('id')
+            .eq('order_id', bom.order_id as any)
+            .is('order_item_id', null);
+
+          if (checkEnd) {
+            console.log('Duplicate check failed, continuing with creation:', checkEnd);
+          } else if (existingBoms && existingBoms.length > 0) {
+            toast.error('A legacy order-level BOM already exists for this order. Edit it instead of creating another.');
+            return;
+          }
+        } else {
+          const { data: existingBoms, error: checkError } = await supabase
+            .from('bom_records')
+            .select('id')
+            .eq('product_name', bom.product_name as any)
+            .is('order_id', null);
+
+          if (checkError) {
+            console.log('Duplicate check failed, continuing with creation:', checkError);
+          } else if (existingBoms && existingBoms.length > 0) {
+            toast.error(`A BOM without an order link already exists for product "${bom.product_name}". Please edit the existing BOM instead.`);
+            return;
+          }
         }
       } catch (error) {
-        // If check fails, continue with creation
         console.log('Duplicate check failed, continuing with creation');
       }
     }
@@ -1288,16 +1456,24 @@ export function BomForm() {
     try {
       setLoading(true);
 
-             // Prepare BOM record data
-       const bomData = {
-         product_name: bom.product_name,
-         product_image_url: bom.product_image_url,
-         total_order_qty: bom.total_order_qty,
-         status: bom.status || 'draft',
-         bom_number: bom.bom_number || `BOM-${Date.now()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
-         ...(bom.order_id && { order_id: bom.order_id }),
-         ...(bom.order_item_id && { order_item_id: bom.order_item_id }),
-       };
+      const trimmedBn =
+        bom.bom_number && String(bom.bom_number).trim() ? String(bom.bom_number).trim() : null;
+      const resolvedBomNumber = await resolveBomNumberForSave(
+        bom.order_id,
+        bom.order_item_id,
+        trimmedBn
+      );
+
+      // Prepare BOM record data
+      const bomData = {
+        product_name: bom.product_name,
+        product_image_url: bom.product_image_url,
+        total_order_qty: bom.total_order_qty,
+        status: bom.status || 'draft',
+        bom_number: resolvedBomNumber,
+        ...(bom.order_id && { order_id: bom.order_id }),
+        ...(bom.order_item_id && { order_item_id: bom.order_item_id }),
+      };
 
       let bomId = bom.id;
 
@@ -1584,16 +1760,20 @@ export function BomForm() {
       // Success - show success message and navigate
       toast.success(bomId ? 'BOM updated successfully' : 'BOM created successfully');
       
-      // Clear saved form data after successful save (only for new BOMs)
-      if (!isEditMode) {
+      // Clear saved form data after successful save (only for new BOMs, full page flow)
+      if (!isEditMode && !embedded) {
         resetBomData();
       }
-      
-      // Navigate after a short delay to ensure toast is visible
-      // Navigate to BOM list tab instead of detail page
-      setTimeout(() => {
-        navigate('/bom?tab=view-bom');
-      }, 1000);
+
+      if (embedded && onEmbeddedBomSaved) {
+        onEmbeddedBomSaved();
+      }
+
+      if (!embedded) {
+        setTimeout(() => {
+          navigate('/bom?tab=view-bom');
+        }, 1000);
+      }
       
     } catch (error) {
       console.error('Error saving BOM:', error);
@@ -1610,10 +1790,16 @@ export function BomForm() {
     }
   };
 
-  // Show loading state while form data is being loaded
-  if (!isBomLoaded || (loading && !isEditMode)) {
+  // Show loading state while form persistence hydrates; optional full-page spinner when saving (non-embedded)
+  if (!isBomLoaded || (loading && !isEditMode && !embedded)) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div
+        className={
+          embedded
+            ? 'flex items-center justify-center py-12'
+            : 'flex items-center justify-center min-h-screen'
+        }
+      >
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
           <p className="text-muted-foreground">
@@ -1624,27 +1810,30 @@ export function BomForm() {
     );
   }
 
-  return (
-    <ErpLayout>
+  const formInner = (
       <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-4">
+            {!embedded && (
             <Button variant="outline" size="sm" onClick={() => navigate('/bom')}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back
           </Button>
+            )}
           <div>
-            <h1 className="text-2xl font-bold">
-              {isEditMode ? 'Edit BOM' : 'Create New BOM'}
+            <h1 className={embedded ? 'text-lg font-semibold' : 'text-2xl font-bold'}>
+              {isEditMode ? 'Edit BOM' : embedded ? 'Bill of materials' : 'Create New BOM'}
             </h1>
+            {!embedded && (
             <p className="text-muted-foreground">
               {isEditMode ? 'Modify existing Bill of Materials' : 'Create a new Bill of Materials'}
             </p>
+            )}
           </div>
         </div>
                  <div className="flex gap-2">
-            {hasBomData && !isEditMode && (
+            {hasBomData && !isEditMode && !embedded && (
               <Button 
                 variant="outline"
                 onClick={resetBomData}
@@ -1653,9 +1842,11 @@ export function BomForm() {
                 Clear Saved Data
               </Button>
             )}
+            {!embedded && (
             <Button variant="outline" onClick={() => navigate('/bom')}>
              Cancel
            </Button>
+            )}
            {isReadOnly && (
              <Button 
                variant="outline" 
@@ -1665,7 +1856,7 @@ export function BomForm() {
              </Button>
            )}
            {!isReadOnly && (
-             <Button onClick={save} disabled={loading}>
+             <Button onClick={save} disabled={loading || !!(needsOrderLineChoice && !id)}>
                <Save className="w-4 h-4 mr-2" />
                {loading ? 'Saving...' : (isEditMode ? 'Update BOM' : 'Save BOM')}
              </Button>
@@ -1673,6 +1864,46 @@ export function BomForm() {
          </div>
       </div>
 
+      {needsOrderLineChoice && orderData?.order_items?.length > 0 && !id && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Select product line</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              This order has multiple products. Choose which line this BOM is for. Each line has its own fabric and items.
+            </p>
+            <div className="bom-line-radio-inputs" role="radiogroup" aria-label="Product lines">
+              {sortOrderLines(orderData.order_items as any[]).map((item: any) => (
+                <label key={item.id} className="cursor-pointer">
+                  <input
+                    type="radio"
+                    name="bom-new-order-line"
+                    className="bom-line-radio-input"
+                    onChange={() =>
+                      navigate(
+                        `/bom/new?order=${encodeURIComponent(orderData.id)}&orderItemId=${encodeURIComponent(item.id)}`
+                      )
+                    }
+                  />
+                  <span className="bom-line-radio-tile">
+                    <span className="bom-line-radio-label">
+                      {orderLineDisplayName(item) || 'Product'}
+                      <span className="block text-xs font-normal text-muted-foreground mt-0.5">
+                        {item.quantity ?? 0} pcs
+                        {item.fabric_id ? ' · Fabric on order' : ''}
+                      </span>
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {!needsOrderLineChoice && (
+      <>
       {/* BOM Details */}
       <Card>
         <CardHeader>
@@ -1714,9 +1945,17 @@ export function BomForm() {
           </div>
           
           {orderData && (
-            <div className="p-3 bg-muted/50 rounded-lg">
+            <div className="p-3 bg-muted/50 rounded-lg space-y-1">
               <div className="text-sm text-muted-foreground">Created from Order: {orderData.order_number}</div>
               <div className="text-sm text-muted-foreground">Customer: {orderData.customer?.company_name}</div>
+              {bom.order_item_id && Array.isArray(orderData.order_items) && (
+                <div className="text-sm font-medium text-foreground">
+                  Order line:{' '}
+                  {orderLineDisplayName(
+                    (orderData.order_items as any[]).find((i: any) => i.id === bom.order_item_id)
+                  ) || bom.product_name}
+                </div>
+              )}
             </div>
           )}
         </CardContent>
@@ -2112,7 +2351,14 @@ export function BomForm() {
           </CardContent>
                  </Card>
        )}
+      </>
+      )}
      </div>
-     </ErpLayout>
-   );
+  );
+
+  if (embedded) {
+    return formInner;
+  }
+
+  return <ErpLayout>{formInner}</ErpLayout>;
  }

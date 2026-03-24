@@ -295,7 +295,7 @@ export function CustomerSearchSelect({
 
     {/* Create Customer Dialog */}
     <Dialog open={showCreateCustomer} onOpenChange={setShowCreateCustomer}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-[95vw] lg:max-w-6xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create New Customer</DialogTitle>
           <DialogDescription>

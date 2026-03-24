@@ -551,7 +551,7 @@ function OrdersPageContent() {
                                   className="text-green-600 hover:text-green-700 hover:bg-green-50"
                                   onClick={() => handleStatusChange(order.id, 'completed')}
                                 >
-                                  ✅ Complete
+                                  ✅ Mark Complete
                                 </Button>
                               )}
                               

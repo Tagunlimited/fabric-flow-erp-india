@@ -47,9 +47,11 @@ import {
   Wallet,
   List,
   BookOpen,
-  UserSearch
+  UserSearch,
+  Sun,
+  Moon
 } from "lucide-react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -58,6 +60,7 @@ import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { supabase } from '@/integrations/supabase/client';
 import { getPendingOrdersCount } from '@/lib/database';
 import { useSidebarPermissions, SidebarItem as DynamicSidebarItem } from '@/hooks/useSidebarPermissions';
+import { useTheme } from "next-themes";
 
 interface SidebarItem {
   title: string;
@@ -381,6 +384,8 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
   const [collapsed, setCollapsed] = useState(false);
   const { profile, user } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
+  const { theme, setTheme } = useTheme();
   const { config } = useCompanySettings();
   const { items: dynamicSidebarItems, loading: permissionsLoading, permissionsSetup } = useSidebarPermissions();
   
@@ -708,6 +713,31 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
         </nav>
         {/* Footer */}
         <div className="p-3 sm:p-4 border-t border-primary-foreground/20">
+          {!collapsed && (
+            <div className="lg:hidden grid grid-cols-2 gap-2 mb-3">
+              <Button
+                variant="secondary"
+                size="sm"
+                className="justify-start"
+                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              >
+                {theme === "dark" ? <Sun className="w-4 h-4 mr-2" /> : <Moon className="w-4 h-4 mr-2" />}
+                {theme === "dark" ? "Light Mode" : "Dark Mode"}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="justify-start"
+                onClick={() => {
+                  navigate("/profile");
+                  onMobileClose?.();
+                }}
+              >
+                <Settings className="w-4 h-4 mr-2" />
+                Settings
+              </Button>
+            </div>
+          )}
           {!collapsed && (
             <div className="text-center text-primary-foreground/70 text-xs">
               <p>2024 Scissors ERP</p>

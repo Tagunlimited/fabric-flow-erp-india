@@ -22,6 +22,13 @@ interface BomRecord {
   product_image_url?: string;
   total_order_qty: number;
   created_at: string;
+  order_item_id?: string | null;
+  order_item?: {
+    id: string;
+    product_description?: string | null;
+    quantity?: number | null;
+    category_image_url?: string | null;
+  } | null;
   order?: {
     order_number: string;
     customer?: {
@@ -81,6 +88,12 @@ export function BomList({ refreshTrigger }: BomListProps) {
           order:orders(
             order_number,
             customer:customers(company_name)
+          ),
+          order_item:order_items(
+            id,
+            product_description,
+            quantity,
+            category_image_url
           ),
           bom_record_items(*)
         `)
@@ -1069,11 +1082,13 @@ export function BomList({ refreshTrigger }: BomListProps) {
 
   const filteredBoms = boms.filter(bom => {
     const term = searchTerm.toLowerCase();
+    const lineLabel = bom.order_item?.product_description || '';
     return (
       bom.bom_number?.toLowerCase().includes(term) ||
       bom.product_name?.toLowerCase().includes(term) ||
       bom.order?.order_number?.toLowerCase().includes(term) ||
-      bom.order?.customer?.company_name?.toLowerCase().includes(term)
+      bom.order?.customer?.company_name?.toLowerCase().includes(term) ||
+      (lineLabel && lineLabel.toLowerCase().includes(term))
     );
   });
 
@@ -1174,6 +1189,15 @@ export function BomList({ refreshTrigger }: BomListProps) {
                           )}
                           <div>
                             <div className="font-medium">{bom.product_name}</div>
+                            {bom.order_item && (
+                              <div className="text-xs text-muted-foreground mt-0.5">
+                                Order line:{' '}
+                                {bom.order_item.product_description || '—'}
+                                {bom.order_item.quantity != null && (
+                                  <span> · Line qty {bom.order_item.quantity}</span>
+                                )}
+                              </div>
+                            )}
                             <Badge variant="secondary" className="text-xs">
                               {bom.bom_record_items?.length || 0} items
                             </Badge>

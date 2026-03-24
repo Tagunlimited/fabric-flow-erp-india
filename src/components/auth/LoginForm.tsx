@@ -130,40 +130,51 @@ export function LoginForm() {
 
   return (
     <div className="glass-login-container min-h-screen flex relative">
-      {/* Video Section - Full Screen Background on Mobile, Left Side on Desktop */}
-      <div className="absolute inset-0 lg:relative lg:w-1/2 overflow-hidden z-0">
+      {/* Video Section - Full Screen Background on all screen sizes */}
+      <div className="absolute inset-0 overflow-hidden z-0">
         <video
           autoPlay
           loop
           muted
           playsInline
-          className="absolute inset-0 w-full h-full object-cover z-10"
+          className="absolute inset-0 w-full h-full object-cover z-10 lg:hidden"
           onError={(e) => {
-            console.error('Video failed to load:', e);
+            console.error('Mobile video failed to load:', e);
           }}
         >
-          <source src={`/Navy cut.mp4`} type="video/mp4" />
+          <source src={`/custom apparel manufacturer (1).mp4`} type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover z-10 hidden lg:block"
+          onError={(e) => {
+            console.error('Desktop video failed to load:', e);
+          }}
+        >
+          <source src={`/apparel-manufacturer-in-bangalore (2) (1).mp4`} type="video/mp4" />
           Your browser does not support the video tag.
         </video>
         {/* Minimal overlay - no blur */}
         <div className="glass-video-overlay"></div>
       </div>
 
-      {/* Login Form Section - Right Side on Desktop, Centered on Mobile */}
-      <div className="relative z-10 w-full lg:w-1/2 flex items-center justify-center p-4 lg:p-8">
-        <Card className="glass-card w-full max-w-md">
+      {/* Login Form Section - Centered overlay on all screen sizes */}
+      <div className="relative z-10 w-full flex items-center justify-center lg:justify-end p-4 lg:px-12">
+        <Card className="glass-card w-full max-w-md !bg-transparent">
           <CardHeader className="glass-card-header text-center space-y-4">
           <div className="mx-auto">
-              <div className="glass-logo-container">
             <img 
               src="https://i.postimg.cc/4NKq0Rq5/tag-logo-pdf-pdf-(1000-x-1000-px).png"
               alt="Scissors ERP" 
-              className="w-45 h-36 mx-auto rounded-lg object-cover"
+              className="w-45 h-36 mx-auto object-contain"
               onError={(e) => {
                 (e.target as HTMLImageElement).src = '/placeholder.svg';
               }}
             />
-              </div>
           </div>
           <div>
               <CardTitle className="glass-title text-2xl font-bold">Scissors ERP</CardTitle>

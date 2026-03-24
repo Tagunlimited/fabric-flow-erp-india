@@ -146,7 +146,9 @@ export function useFormPersistence() {
 // Custom hook for specific form management
 export function useFormData<T>(formKey: string, initialData?: T) {
   const { saveFormData, getFormData, clearFormData, hasFormData } = useFormPersistence();
-  
+  const initialDataRef = useRef(initialData);
+  initialDataRef.current = initialData;
+
   const [data, setData] = useState<T>(() => {
     const savedData = getFormData(formKey);
     return savedData || initialData || ({} as T);
@@ -193,12 +195,12 @@ export function useFormData<T>(formKey: string, initialData?: T) {
     });
   }, []);
 
-  // Wrap resetData in useCallback
+  // Wrap resetData in useCallback (initial via ref so identity is stable — avoids infinite effect loops)
   const resetData = useCallback(() => {
-    const resetValue = initialData || ({} as T);
+    const resetValue = initialDataRef.current ?? ({} as T);
     setData(resetValue);
     clearFormData(formKey);
-  }, [formKey, clearFormData, initialData]);
+  }, [formKey, clearFormData]);
 
   return {
     data,
