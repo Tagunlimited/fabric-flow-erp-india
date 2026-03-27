@@ -38,7 +38,73 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
   const printRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = useCallback(() => {
-    window.print();
+    const root = printRef.current;
+    if (!root) return;
+
+    const styleTags = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map((el) => el.outerHTML)
+      .join('\n');
+
+    const html = `
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>Stitching Job Card</title>
+          ${styleTags}
+          <style>
+            @page { size: A5 landscape; margin: 4mm; }
+            html, body { margin: 0; padding: 0; background: #fff; }
+            .print-root { display: flex; flex-direction: column; gap: 0; align-items: center; }
+            .ba-a5-page { page-break-after: always; break-after: page; box-shadow: none !important; }
+            .ba-a5-page:last-child { page-break-after: auto; break-after: auto; }
+          </style>
+        </head>
+        <body>
+          <div class="print-root">${root.innerHTML}</div>
+        </body>
+      </html>
+    `;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!doc || !iframe.contentWindow) {
+      document.body.removeChild(iframe);
+      return;
+    }
+
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    const cleanup = () => {
+      setTimeout(() => {
+        if (document.body.contains(iframe)) {
+          document.body.removeChild(iframe);
+        }
+      }, 300);
+    };
+
+    const doPrint = () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } finally {
+        cleanup();
+      }
+    };
+
+    setTimeout(doPrint, 350);
   }, []);
 
   const handleExportPdf = useCallback(async () => {

@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelect';
 import { supabase } from '@/integrations/supabase/client';
@@ -50,6 +50,41 @@ interface Customer {
 }
 
 /** Compute order total from items (+ optional additional charges) and pending = total - receipts. Matches quotation total. */
+let orderAdditionalChargesAvailable: boolean | null = null;
+
+function isMissingRelationError(err: any): boolean {
+  const msg = String(err?.message || '').toLowerCase();
+  const details = String(err?.details || '').toLowerCase();
+  return (
+    msg.includes('relation') ||
+    msg.includes('does not exist') ||
+    msg.includes('not found') ||
+    details.includes('relation') ||
+    details.includes('does not exist')
+  );
+}
+
+async function safeFetchOrderAdditionalCharges(orderId: string): Promise<Array<{ amount_incl_gst?: number }>> {
+  if (orderAdditionalChargesAvailable === false) return [];
+  const { data, error } = await supabase
+    .from('order_additional_charges')
+    .select('amount_incl_gst')
+    .eq('order_id', orderId);
+
+  if (error) {
+    if (isMissingRelationError(error)) {
+      orderAdditionalChargesAvailable = false;
+      return [];
+    }
+    // Non-schema errors should still surface in console for investigation
+    console.warn('order_additional_charges fetch error:', error);
+    return [];
+  }
+
+  orderAdditionalChargesAvailable = true;
+  return (data || []) as Array<{ amount_incl_gst?: number }>;
+}
+
 async function getOrderCalculatedTotals(orderId: string, orderNumber: string): Promise<{ calculatedTotal: number; totalReceipts: number; pendingAmount: number }> {
   const { data: order } = await supabase
     .from('orders')
@@ -65,10 +100,7 @@ async function getOrderCalculatedTotals(orderId: string, orderNumber: string): P
     .select('amount')
     .eq('reference_id', orderId)
     .eq('reference_type', 'order');
-  const { data: additionalCharges } = await supabase
-    .from('order_additional_charges')
-    .select('amount_incl_gst')
-    .eq('order_id', orderId);
+  const additionalCharges = await safeFetchOrderAdditionalCharges(orderId);
 
   let calculatedTotal = order?.final_amount ?? 0;
   if (orderItems && orderItems.length > 0 && order) {
@@ -537,250 +569,89 @@ export default function ReceiptPage() {
 
   const handlePrint = async () => {
     if (!printRef.current) return;
-    
+
     try {
-      // Wait for images to load before printing
       const images = printRef.current.querySelectorAll('img');
-      const imagePromises = Array.from(images).map((img) => {
-        return new Promise((resolve) => {
-          if (img.complete) {
-            resolve(true);
-          } else {
-            img.onload = () => resolve(true);
-            img.onerror = () => resolve(true); // Resolve even if image fails
-          }
-        });
-      });
+      const imagePromises = Array.from(images).map(
+        (img) =>
+          new Promise((resolve) => {
+            if (img.complete) resolve(true);
+            else {
+              img.onload = () => resolve(true);
+              img.onerror = () => resolve(true);
+            }
+          })
+      );
       await Promise.all(imagePromises);
-      
-      // Create a print window with the exact same content and styling as PDF export
-      const printWindow = window.open('', '_blank');
-      if (!printWindow) {
-        toast.error('Please allow popups to print');
+
+      const styleTags = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+        .map((el) => el.outerHTML)
+        .join('\n');
+
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      iframe.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!doc || !iframe.contentWindow) {
+        document.body.removeChild(iframe);
+        toast.error('Failed to initialize print preview');
         return;
       }
 
-      // Get the content and clone it to avoid issues with React refs
-      const printContent = printRef.current.innerHTML;
-      
-      // Write the HTML content
-      printWindow.document.open();
-      printWindow.document.write(`
-        <!DOCTYPE html>
+      const printContent = printRef.current.outerHTML;
+      doc.open();
+      doc.write(`
+        <!doctype html>
         <html>
           <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
             <title>Receipt ${receiptNumber}</title>
-            <meta charset="utf-8">
+            ${styleTags}
             <style>
-              @page { 
-                size: A5 landscape; 
-                margin: 3mm; 
-              }
-              * {
-                box-sizing: border-box;
-                margin: 0;
-                padding: 0;
-              }
-              html, body {
-                width: 100%;
-                height: 100%;
-                margin: 0;
-                padding: 0;
-              }
-              body { 
-                font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; 
-                margin: 0; 
-                padding: 0; 
-                color: #000;
-                background: #fff;
-                display: flex;
-                justify-content: center;
-                align-items: flex-start;
-              }
-              .bg-white {
-                background-color: #fff !important;
-              }
-              .flex {
-                display: flex;
-              }
-              .justify-between {
-                justify-content: space-between;
-              }
-              .items-start {
-                align-items: flex-start;
-              }
-              .items-center {
-                align-items: center;
-              }
-              .items-end {
-                align-items: flex-end;
-              }
-              .text-right {
-                text-align: right;
-              }
-              .border-b {
-                border-bottom: 1px solid #e5e7eb;
-              }
-              .border {
-                border: 1px solid #e5e7eb;
-              }
-              .rounded {
-                border-radius: 0.25rem;
-              }
-              .grid {
-                display: grid;
-              }
-              .grid-cols-2 {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-              }
-              .gap-3 {
-                gap: 0.75rem;
-              }
-              .gap-4 {
-                gap: 1rem;
-              }
-              .pb-3 {
-                padding-bottom: 0.75rem;
-              }
-              .mb-3 {
-                margin-bottom: 0.75rem;
-              }
-              .mb-4 {
-                margin-bottom: 1rem;
-              }
-              .mt-2 {
-                margin-top: 0.5rem;
-              }
-              .mt-4 {
-                margin-top: 1rem;
-              }
-              .mt-8 {
-                margin-top: 2rem;
-              }
-              .p-3 {
-                padding: 0.75rem;
-              }
-              .p-4 {
-                padding: 1rem;
-              }
-              .space-y-1 > * + * {
-                margin-top: 0.25rem;
-              }
-              .text-2xl {
-                font-size: 1.5rem;
-                line-height: 2rem;
-              }
-              .text-xl {
-                font-size: 1.25rem;
-                line-height: 1.75rem;
-              }
-              .text-lg {
-                font-size: 1.125rem;
-                line-height: 1.75rem;
-              }
-              .text-base {
-                font-size: 1rem;
-                line-height: 1.5rem;
-              }
-              .text-sm {
-                font-size: 0.875rem;
-                line-height: 1.25rem;
-              }
-              .text-xs {
-                font-size: 0.75rem;
-                line-height: 1rem;
-              }
-              .font-bold {
-                font-weight: 700;
-              }
-              .font-semibold {
-                font-weight: 600;
-              }
-              .font-medium {
-                font-weight: 500;
-              }
-              .text-muted-foreground {
-                color: #6b7280;
-              }
-              .object-contain {
-                object-fit: contain;
-              }
-              .mx-auto {
-                margin-left: auto;
-                margin-right: auto;
-              }
-              .w-12 {
-                width: 3rem;
-              }
-              .w-16 {
-                width: 4rem;
-              }
-              .h-12 {
-                height: 3rem;
-              }
-              .h-16 {
-                height: 4rem;
-              }
-              .max-w-32 {
-                max-width: 8rem;
-              }
-              .max-h-16 {
-                max-height: 4rem;
-              }
-              .w-40 {
-                width: 10rem;
-              }
-              .receipt-print-container { 
-                width: 210mm !important; 
-                min-height: 148mm !important; 
-                padding: 3mm !important; 
-                margin: 0 auto !important;
+              @page { size: A5 landscape; margin: 3mm; }
+              html, body { margin: 0; padding: 0; background: #fff; }
+              body { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }
+              .receipt-print-container {
+                box-sizing: border-box !important;
+                width: 204mm !important;
+                min-height: 142mm !important;
+                height: 142mm !important;
+                padding: 0 !important;
+                margin: 0 !important;
                 background: #fff !important;
-                display: block !important;
-                visibility: visible !important;
-              }
-              img {
-                max-width: 100%;
-                height: auto;
-                display: block;
-              }
-              @media print {
-                body {
-                  margin: 0;
-                  padding: 0;
-                }
-                .receipt-print-container {
-                  width: 210mm !important;
-                  min-height: 148mm !important;
-                  padding: 3mm !important;
-                  margin: 0 !important;
-                  page-break-after: avoid;
-                }
+                overflow: hidden !important;
+                page-break-after: avoid !important;
+                break-after: avoid-page !important;
               }
             </style>
           </head>
-          <body>
-            ${printContent}
-          </body>
+          <body>${printContent}</body>
         </html>
       `);
-      printWindow.document.close();
-      
-      // Wait for window to fully load and render before printing
-      const waitForPrint = () => {
-        if (printWindow.document.readyState === 'complete') {
-          // Additional wait to ensure all images and styles are loaded
-          setTimeout(() => {
-            printWindow.focus();
-            printWindow.print();
-          }, 300);
-        } else {
-          setTimeout(waitForPrint, 100);
-        }
+      doc.close();
+
+      const cleanup = () => {
+        setTimeout(() => {
+          if (document.body.contains(iframe)) document.body.removeChild(iframe);
+        }, 400);
       };
-      
-      // Start waiting for the document to be ready
-      waitForPrint();
+
+      setTimeout(() => {
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+        } finally {
+          cleanup();
+        }
+      }, 350);
     } catch (error) {
       console.error('Error printing:', error);
       toast.error('Failed to print receipt');
@@ -1350,12 +1221,26 @@ export default function ReceiptPage() {
           <DialogContent className="max-w-4xl">
             <DialogHeader>
               <DialogTitle>Receipt Preview — {receiptNumber}</DialogTitle>
+              <DialogDescription>
+                Review receipt details before printing or exporting PDF.
+              </DialogDescription>
             </DialogHeader>
             <div className="flex justify-end gap-2 mb-2">
               <Button variant="outline" onClick={handlePrint}><Printer className="w-4 h-4 mr-1" /> Print</Button>
               <Button variant="outline" onClick={handleExportPDF}><Download className="w-4 h-4 mr-1" /> Export PDF</Button>
             </div>
-            <div ref={printRef} className="bg-white receipt-print-container" style={{ width: '210mm', minHeight: '148mm', padding: '3mm', margin: '0 auto' }}>
+            <div
+              ref={printRef}
+              className="bg-white receipt-print-container"
+              style={{
+                width: '204mm',
+                minHeight: '142mm',
+                height: '142mm',
+                padding: '0',
+                margin: '0',
+                overflow: 'hidden',
+              }}
+            >
               <style>{`
                 @page { 
                   size: A5 landscape; 
@@ -1373,10 +1258,15 @@ export default function ReceiptPage() {
                     position: absolute;
                     left: 0;
                     top: 0;
-                    width: 210mm !important;
-                    min-height: 148mm !important;
-                    padding: 3mm !important;
+                    box-sizing: border-box !important;
+                    width: 204mm !important;
+                    min-height: 142mm !important;
+                    height: 142mm !important;
+                    padding: 0 !important;
                     margin: 0 !important;
+                    overflow: hidden !important;
+                    page-break-after: avoid !important;
+                    break-after: avoid-page !important;
                   }
                 }
               `}</style>
@@ -1459,6 +1349,9 @@ export default function ReceiptPage() {
           <DialogContent className="max-w-4xl">
             <DialogHeader>
               <DialogTitle>Edit Receipt — {editingReceipt?.receipt_number}</DialogTitle>
+              <DialogDescription>
+                Update payment details and save changes to this receipt.
+              </DialogDescription>
             </DialogHeader>
             <div className="space-y-6">
               {/* Receipt Information */}

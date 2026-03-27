@@ -4,10 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ShoppingCart, Plus, Eye, Edit, Package, Truck, Clock, CheckCircle, Search, Filter, Trash2, RefreshCw } from "lucide-react";
-import { useState, useEffect } from "react";
+import { ShoppingCart, Plus, Eye, Package, Clock, CheckCircle, Trash2, RefreshCw, X, Filter } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { usePersistentTabState } from "@/hooks/usePersistentTabState";
 import { supabase } from "@/integrations/supabase/client";
@@ -16,7 +15,6 @@ import { OrderForm } from "@/components/orders/OrderForm";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +26,16 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { calculateOrderSummary } from '@/utils/priceCalculation';
+import { cn } from '@/lib/utils';
 
 interface Order {
   id: string;
@@ -54,6 +61,195 @@ interface Order {
   calculatedBalance?: number;
 }
 
+type OrdersColumnFilters = {
+  order_number: string;
+  customer: string;
+  sales_manager: string;
+  order_date: string;
+  expected_delivery: string;
+  status: string;
+  amount: string;
+  balance: string;
+};
+
+const EMPTY_COLUMN_FILTERS: OrdersColumnFilters = {
+  order_number: '',
+  customer: '',
+  sales_manager: '',
+  order_date: '',
+  expected_delivery: '',
+  status: '',
+  amount: '',
+  balance: '',
+};
+
+type OrdersFilterColumnKey = keyof OrdersColumnFilters;
+
+const COLUMN_FILTER_DIALOG_META: Record<
+  OrdersFilterColumnKey,
+  { title: string; placeholder: string; description: string }
+> = {
+  order_number: {
+    title: 'Filter by order number',
+    placeholder: 'Type to match order number…',
+    description: 'Shows rows whose order number contains this text (not case-sensitive).',
+  },
+  customer: {
+    title: 'Filter by customer',
+    placeholder: 'Company name…',
+    description: 'Shows rows whose customer name contains this text.',
+  },
+  sales_manager: {
+    title: 'Filter by sales manager',
+    placeholder: 'Name or id…',
+    description: 'Matches the assigned sales manager display name or id.',
+  },
+  order_date: {
+    title: 'Filter by order date',
+    placeholder: 'e.g. Mar 25, 2026-03-15…',
+    description: 'Matches common date formats shown in the list.',
+  },
+  expected_delivery: {
+    title: 'Filter by expected delivery',
+    placeholder: 'Date or N/A…',
+    description: 'Use N/A to find rows without an expected delivery date.',
+  },
+  status: {
+    title: 'Filter by status',
+    placeholder: 'e.g. pending, in production…',
+    description: 'Matches status value or readable labels (underscores or spaces).',
+  },
+  amount: {
+    title: 'Filter by amount',
+    placeholder: 'Amount or ₹…',
+    description: 'Matches the displayed order amount.',
+  },
+  balance: {
+    title: 'Filter by balance',
+    placeholder: 'Balance or ₹…',
+    description: 'Matches the displayed balance.',
+  },
+};
+
+function buildDateSearchText(raw: string | null | undefined): string {
+  if (!raw) return '';
+  const parts: string[] = [raw];
+  try {
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) {
+      parts.push(format(d, 'dd-MMM-yy'));
+      parts.push(format(d, 'dd/MM/yyyy'));
+      parts.push(format(d, 'yyyy-MM-dd'));
+      parts.push(
+        d.toLocaleDateString('en-GB', {
+          day: '2-digit',
+          month: 'short',
+          year: '2-digit',
+        })
+      );
+    }
+  } catch {
+    /* ignore */
+  }
+  return parts.join(' ').toLowerCase();
+}
+
+function buildNumberSearchText(n: number | undefined | null): string {
+  if (n === undefined || n === null || Number.isNaN(Number(n))) return '';
+  const num = Number(n);
+  return [String(num), num.toFixed(2), num.toFixed(0), `₹${num.toFixed(2)}`, `₹${num.toFixed(0)}`]
+    .join(' ')
+    .toLowerCase();
+}
+
+function buildStatusSearchText(status: string | undefined): string {
+  if (!status) return '';
+  return [status, status.replace(/_/g, ' '), status.replace(/_/g, '-')]
+    .join(' ')
+    .toLowerCase();
+}
+
+function colCellIncludes(filterRaw: string, cellHaystack: string): boolean {
+  const f = filterRaw.trim().toLowerCase();
+  if (!f) return true;
+  return cellHaystack.toLowerCase().includes(f);
+}
+
+function orderMatchesColumnFilters(
+  order: Order,
+  f: OrdersColumnFilters,
+  salesManagers: { [key: string]: { id: string; full_name: string; avatar_url?: string } }
+): boolean {
+  if (!colCellIncludes(f.order_number, order.order_number || '')) return false;
+  if (!colCellIncludes(f.customer, order.customer?.company_name || '')) return false;
+
+  const smHay = [salesManagers[order.sales_manager]?.full_name, order.sales_manager].filter(Boolean).join(' ');
+  if (!colCellIncludes(f.sales_manager, smHay)) return false;
+
+  if (!colCellIncludes(f.order_date, buildDateSearchText(order.order_date))) return false;
+
+  const expHay = order.expected_delivery_date
+    ? buildDateSearchText(order.expected_delivery_date)
+    : 'n/a';
+  if (!colCellIncludes(f.expected_delivery, expHay)) return false;
+
+  if (!colCellIncludes(f.status, buildStatusSearchText(order.status))) return false;
+
+  const amtHay = [
+    buildNumberSearchText(order.calculatedAmount ?? order.final_amount ?? order.total_amount),
+    buildNumberSearchText(order.final_amount),
+    buildNumberSearchText(order.total_amount),
+  ].join(' ');
+  if (!colCellIncludes(f.amount, amtHay)) return false;
+
+  const balHay = [
+    buildNumberSearchText(order.calculatedBalance ?? order.balance_amount),
+    buildNumberSearchText(order.balance_amount),
+  ].join(' ');
+  if (!colCellIncludes(f.balance, balHay)) return false;
+
+  return true;
+}
+
+function OrderColumnFilterTrigger({
+  active,
+  ariaLabel,
+  onOpen,
+}: {
+  active: boolean;
+  ariaLabel: string;
+  onOpen: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={ariaLabel}
+      aria-pressed={active}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      className={cn(
+        'h-7 w-7 shrink-0 rounded-full transition-all duration-200 ease-out',
+        active
+          ? 'bg-primary/20 text-primary shadow-[0_0_0_2px_hsl(var(--primary)/0.45),0_4px_14px_-4px_hsl(var(--primary)/0.45)] ring-2 ring-primary/50 ring-offset-2 ring-offset-background hover:bg-primary/28 hover:ring-primary/65'
+          : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+      )}
+    >
+      <Filter
+        className={cn(
+          'h-3.5 w-3.5 transition-transform duration-200 ease-out',
+          active && 'scale-110 fill-primary text-primary [filter:drop-shadow(0_0_5px_hsl(var(--primary)/0.55))]'
+        )}
+        strokeWidth={active ? 2.5 : 2}
+        aria-hidden
+      />
+    </Button>
+  );
+}
+
 const OrdersPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -65,10 +261,13 @@ const OrdersPage = () => {
     pageKey: 'orders',
     defaultValue: 'list'
   });
-  const [showSearch, setShowSearch] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterStatus, setFilterStatus] = useState<string | null>(null);
+  const [columnFilters, setColumnFilters] = useState<OrdersColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<OrdersFilterColumnKey | null>(null);
   const [sortBy, setSortBy] = useState<string>("date_desc");
+
+  const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
+
+  const filterDialogMeta = filterDialogColumn ? COLUMN_FILTER_DIALOG_META[filterDialogColumn] : null;
 
   // Only refresh on tab change, not on visibility changes or focus
   useEffect(() => {
@@ -302,51 +501,24 @@ const OrdersPage = () => {
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'pending': return 'bg-yellow-100 text-yellow-800';
-      case 'confirmed': return 'bg-blue-100 text-blue-800';
-      case 'in_production': return 'bg-purple-100 text-purple-800';
-      case 'designing_done': return 'bg-teal-100 text-teal-800';
-      case 'under_procurement': return 'bg-amber-100 text-amber-800';
-      case 'under_cutting': return 'bg-orange-100 text-orange-800';
-      case 'under_stitching': return 'bg-indigo-100 text-indigo-800';
-      case 'under_qc': return 'bg-pink-100 text-pink-800';
-      case 'ready_for_dispatch': return 'bg-green-100 text-green-800';
-      case 'rework': return 'bg-red-100 text-red-800';
-      case 'completed': return 'bg-green-100 text-green-800';
-      case 'cancelled': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  // Derived filtered, searched, and sorted orders
-  const filteredOrders = orders
-    .filter(order => !filterStatus || order.status === filterStatus)
-    .filter(order => {
-      if (!searchTerm) return true;
-      const term = searchTerm.toLowerCase();
-      return (
-        order.order_number?.toLowerCase().includes(term) ||
-        order.customer?.company_name?.toLowerCase().includes(term) ||
-        order.status?.toLowerCase().includes(term) ||
-        (order.order_date && format(new Date(order.order_date), 'dd-MMM-yy').toLowerCase().includes(term)) ||
-        (order.final_amount !== undefined && order.final_amount.toString().toLowerCase().includes(term)) ||
-        (order.balance_amount !== undefined && order.balance_amount.toString().toLowerCase().includes(term))
-      );
-    })
-    .sort((a, b) => {
+  const filteredOrders = useMemo(() => {
+    const searched = orders.filter((order) => orderMatchesColumnFilters(order, columnFilters, salesManagers));
+    return [...searched].sort((a, b) => {
       if (sortBy === "date_asc") {
         return new Date(a.order_date).getTime() - new Date(b.order_date).getTime();
-      } else if (sortBy === "date_desc") {
+      }
+      if (sortBy === "date_desc") {
         return new Date(b.order_date).getTime() - new Date(a.order_date).getTime();
-      } else if (sortBy === "amount_asc") {
+      }
+      if (sortBy === "amount_asc") {
         return (a.final_amount || 0) - (b.final_amount || 0);
-      } else if (sortBy === "amount_desc") {
+      }
+      if (sortBy === "amount_desc") {
         return (b.final_amount || 0) - (a.final_amount || 0);
       }
       return 0;
     });
+  }, [orders, columnFilters, sortBy, salesManagers]);
 
   return (
     <ErpLayout>
@@ -436,30 +608,30 @@ const OrdersPage = () => {
             <Card>
               <CardHeader>
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
-                  <CardTitle>All Orders</CardTitle>
+                  <div>
+                    <CardTitle className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                      All Orders
+                      {hasActiveColumnFilters && (
+                        <span className="text-sm font-normal text-muted-foreground">
+                          ({filteredOrders.length} of {orders.length} shown)
+                        </span>
+                      )}
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Click the filter icon on a column header to set that filter. Active filters combine (all must match).
+                    </p>
+                  </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setShowSearch(v => !v)}>
-                      <Search className="w-4 h-4 mr-2" />
-                      Search
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm">
-                          <Filter className="w-4 h-4 mr-2" />
-                          Filter
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setFilterStatus(null)} className={!filterStatus ? 'bg-accent/20 font-semibold' : ''}>All Statuses</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("pending")} className={filterStatus === "pending" ? 'bg-accent/20 font-semibold' : ''}>Pending</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("confirmed")} className={filterStatus === "confirmed" ? 'bg-accent/20 font-semibold' : ''}>Confirmed</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("designing_done")} className={filterStatus === "designing_done" ? 'bg-accent/20 font-semibold' : ''}>Designing Done</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("under_procurement")} className={filterStatus === "under_procurement" ? 'bg-accent/20 font-semibold' : ''}>Under Procurement</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("in_production")} className={filterStatus === "in_production" ? 'bg-accent/20 font-semibold' : ''}>In Production</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("completed")} className={filterStatus === "completed" ? 'bg-accent/20 font-semibold' : ''}>Completed</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("cancelled")} className={filterStatus === "cancelled" ? 'bg-accent/20 font-semibold' : ''}>Cancelled</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    {hasActiveColumnFilters && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setColumnFilters({ ...EMPTY_COLUMN_FILTERS })}
+                      >
+                        <X className="w-4 h-4 mr-2" />
+                        Clear column filters
+                      </Button>
+                    )}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="outline" size="sm">
@@ -480,17 +652,6 @@ const OrdersPage = () => {
                     <Button onClick={() => setActiveTab("create")}> <Plus className="w-4 h-4 mr-2" /> New Order </Button>
                   </div>
                 </div>
-                {showSearch && (
-                  <div className="mt-2">
-                    <Input
-                      autoFocus
-                      placeholder="Search by order number or customer name..."
-                      value={searchTerm}
-                      onChange={e => setSearchTerm(e.target.value)}
-                      className="max-w-xs"
-                    />
-                  </div>
-                )}
               </CardHeader>
               <CardContent className="p-2 sm:p-4">
                 {loading ? (
@@ -499,22 +660,105 @@ const OrdersPage = () => {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <Table className="min-w-[600px]">
+                    <Table className="min-w-[720px]">
                       <TableHeader>
-                        <TableRow>
-                          <TableHead>Order Number</TableHead>
-                          <TableHead>Customer</TableHead>
-                          <TableHead>Sales Manager</TableHead>
-                          <TableHead>Order Date</TableHead>
-                          <TableHead>Expected Delivery</TableHead>
-                          <TableHead className="text-left w-56">Status</TableHead>
-                          <TableHead>Amount</TableHead>
-                          <TableHead>Balance</TableHead>
-                          <TableHead>Actions</TableHead>
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead className="align-middle min-w-[6.5rem]">
+                            <div className="flex items-center justify-between gap-1 py-2 pr-1">
+                              <span className="text-xs font-semibold">Order #</span>
+                              <OrderColumnFilterTrigger
+                                active={!!columnFilters.order_number.trim()}
+                                ariaLabel="Filter by order number"
+                                onOpen={() => setFilterDialogColumn('order_number')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead className="align-middle min-w-[6rem]">
+                            <div className="flex items-center justify-between gap-1 py-2 pr-1">
+                              <span className="text-xs font-semibold">Customer</span>
+                              <OrderColumnFilterTrigger
+                                active={!!columnFilters.customer.trim()}
+                                ariaLabel="Filter by customer"
+                                onOpen={() => setFilterDialogColumn('customer')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead className="align-middle min-w-[7rem]">
+                            <div className="flex items-center justify-between gap-1 py-2 pr-1">
+                              <span className="text-xs font-semibold">Sales Mgr.</span>
+                              <OrderColumnFilterTrigger
+                                active={!!columnFilters.sales_manager.trim()}
+                                ariaLabel="Filter by sales manager"
+                                onOpen={() => setFilterDialogColumn('sales_manager')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead className="align-middle min-w-[6.5rem]">
+                            <div className="flex items-center justify-between gap-1 py-2 pr-1">
+                              <span className="text-xs font-semibold">Order date</span>
+                              <OrderColumnFilterTrigger
+                                active={!!columnFilters.order_date.trim()}
+                                ariaLabel="Filter by order date"
+                                onOpen={() => setFilterDialogColumn('order_date')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead className="align-middle min-w-[6.5rem]">
+                            <div className="flex items-center justify-between gap-1 py-2 pr-1">
+                              <span className="text-xs font-semibold">Exp. delivery</span>
+                              <OrderColumnFilterTrigger
+                                active={!!columnFilters.expected_delivery.trim()}
+                                ariaLabel="Filter by expected delivery"
+                                onOpen={() => setFilterDialogColumn('expected_delivery')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead className="align-middle min-w-[14rem] w-56 text-left">
+                            <div className="flex items-center justify-between gap-1 py-2 pr-1">
+                              <span className="text-xs font-semibold">Status</span>
+                              <OrderColumnFilterTrigger
+                                active={!!columnFilters.status.trim()}
+                                ariaLabel="Filter by status"
+                                onOpen={() => setFilterDialogColumn('status')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead className="align-middle min-w-[5.5rem]">
+                            <div className="flex items-center justify-between gap-1 py-2 pr-1">
+                              <span className="text-xs font-semibold">Amount</span>
+                              <OrderColumnFilterTrigger
+                                active={!!columnFilters.amount.trim()}
+                                ariaLabel="Filter by amount"
+                                onOpen={() => setFilterDialogColumn('amount')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead className="align-middle min-w-[5.5rem]">
+                            <div className="flex items-center justify-between gap-1 py-2 pr-1">
+                              <span className="text-xs font-semibold">Balance</span>
+                              <OrderColumnFilterTrigger
+                                active={!!columnFilters.balance.trim()}
+                                ariaLabel="Filter by balance"
+                                onOpen={() => setFilterDialogColumn('balance')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead className="align-middle w-[1%] whitespace-nowrap">
+                            <span className="text-xs font-semibold py-2 inline-block">Actions</span>
+                          </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {filteredOrders.map((order) => (
+                        {filteredOrders.length === 0 ? (
+                          <TableRow className="hover:bg-transparent">
+                            <TableCell colSpan={9} className="text-center text-muted-foreground py-10">
+                              {orders.length === 0
+                                ? 'No orders yet.'
+                                : 'No orders match the column filters. Adjust filters or clear them to see all rows.'}
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          filteredOrders.map((order) => (
                           <TableRow 
                             key={order.id} 
                             className="cursor-pointer hover:bg-muted/50"
@@ -646,13 +890,54 @@ const OrdersPage = () => {
                               </div>
                             </TableCell>
                           </TableRow>
-                        ))}
+                          ))
+                        )}
                       </TableBody>
                     </Table>
                   </div>
                 )}
               </CardContent>
             </Card>
+
+            <Dialog
+              open={filterDialogColumn !== null}
+              onOpenChange={(open) => {
+                if (!open) setFilterDialogColumn(null);
+              }}
+            >
+              <DialogContent className="sm:max-w-md">
+                {filterDialogColumn && filterDialogMeta && (
+                  <>
+                    <DialogHeader>
+                      <DialogTitle>{filterDialogMeta.title}</DialogTitle>
+                      <DialogDescription>{filterDialogMeta.description}</DialogDescription>
+                    </DialogHeader>
+                    <Input
+                      autoFocus
+                      placeholder={filterDialogMeta.placeholder}
+                      value={columnFilters[filterDialogColumn]}
+                      onChange={(e) =>
+                        setColumnFilters((p) => ({ ...p, [filterDialogColumn]: e.target.value }))
+                      }
+                    />
+                    <DialogFooter className="gap-2 sm:gap-0">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() =>
+                          setColumnFilters((p) => ({ ...p, [filterDialogColumn]: '' }))
+                        }
+                      >
+                        Clear this filter
+                      </Button>
+                      <Button type="button" onClick={() => setFilterDialogColumn(null)}>
+                        Done
+                      </Button>
+                    </DialogFooter>
+                  </>
+                )}
+              </DialogContent>
+            </Dialog>
           </TabsContent>
 
           <TabsContent value="create" className="space-y-6">

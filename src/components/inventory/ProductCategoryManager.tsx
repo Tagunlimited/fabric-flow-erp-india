@@ -66,8 +66,6 @@ export function ProductCategoryManager() {
     selectedFabrics: [] as string[],
     category_images: [] as CategoryImage[]
   });
-  const [currentSlide, setCurrentSlide] = useState(0);
-  const [itemsPerSlide] = useState(3); // Number of cards per slide
   const [currentImageIndex, setCurrentImageIndex] = useState<{[key: string]: number}>({});
 
   const fetchCategories = async () => {
@@ -301,21 +299,6 @@ export function ProductCategoryManager() {
     }
   };
 
-  // Carousel navigation functions
-  const nextSlide = () => {
-    const maxSlides = Math.ceil(categories.length / itemsPerSlide) - 1;
-    setCurrentSlide(prev => prev < maxSlides ? prev + 1 : 0);
-  };
-
-  const prevSlide = () => {
-    const maxSlides = Math.ceil(categories.length / itemsPerSlide) - 1;
-    setCurrentSlide(prev => prev > 0 ? prev - 1 : maxSlides);
-  };
-
-  const goToSlide = (slideIndex: number) => {
-    setCurrentSlide(slideIndex);
-  };
-
   // Image navigation functions
   const goToPreviousImage = (categoryId: string, totalImages: number) => {
     setCurrentImageIndex(prev => ({
@@ -485,32 +468,9 @@ export function ProductCategoryManager() {
         <CardHeader className="bg-gradient-to-r from-primary/5 to-primary/10">
           <div className="flex justify-between items-center">
             <CardTitle className="text-lg">Categories List ({categories.length} categories)</CardTitle>
-            {categories.length > itemsPerSlide && (
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={prevSlide}
-                  disabled={currentSlide === 0}
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </Button>
-                <span className="text-sm text-muted-foreground">
-                  {currentSlide + 1} of {Math.ceil(categories.length / itemsPerSlide)}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={nextSlide}
-                  disabled={currentSlide >= Math.ceil(categories.length / itemsPerSlide) - 1}
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
-              </div>
-            )}
           </div>
         </CardHeader>
-        <CardContent className="p-6">
+        <CardContent className="p-4">
           {categories.length === 0 ? (
             <div className="text-center py-12">
               <div className="text-muted-foreground mb-4">No categories found</div>
@@ -520,192 +480,122 @@ export function ProductCategoryManager() {
               </Button>
                                </div>
           ) : (
-            <div className="space-y-6">
-              {/* Carousel Container */}
-              <div className="relative overflow-hidden">
-                <div 
-                  className="flex transition-transform duration-300 ease-in-out"
-                  style={{ transform: `translateX(-${currentSlide * 100}%)` }}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 sm:gap-3">
+              {categories.map((category) => (
+                <Card
+                  key={category.id}
+                  className="group hover:shadow-md transition-all duration-200 border bg-white rounded-lg overflow-hidden"
                 >
-                  {Array.from({ length: Math.ceil(categories.length / itemsPerSlide) }).map((_, slideIndex) => (
-                    <div key={slideIndex} className="w-full flex-shrink-0">
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {categories
-                          .slice(slideIndex * itemsPerSlide, (slideIndex + 1) * itemsPerSlide)
-                          .map((category) => (
-                            <Card key={category.id} className="group hover:shadow-lg transition-all duration-200 border-2 hover:border-primary/20 bg-white rounded-lg overflow-hidden">
-                              {/* Header with action buttons */}
-                              <div className="flex justify-end items-center p-4 pb-2">
-                                <div className="flex space-x-1 opacity-60 hover:opacity-100 transition-opacity">
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => handleEdit(category)}
-                        title="Edit Category"
-                      >
-                        <Pencil className="w-3 h-3" />
-                      </Button>
-                      <Button 
-                        variant="destructive" 
-                        size="sm"
-                        onClick={() => handleDelete(category.id)}
-                        title="Delete Category"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </Button>
-                                </div>
-                              </div>
-
-                              {/* Main Content - Horizontal Layout */}
-                              <div className="flex">
-                                {/* Left Side - Product Image (Much Bigger) */}
-                                <div className="w-3/5 p-2">
-                                  <div className="relative">
-                                {(() => {
-                                  // Get images for this category
-                                  const categoryImages = category.category_images && Array.isArray(category.category_images) 
-                                    ? category.category_images 
-                                    : category.category_image_url 
-                                      ? [{ url: category.category_image_url, alt: category.category_name, type: 'main' }]
-                                      : [];
-                                  
-                                  return categoryImages.length > 0 ? (
-                                    <div className="relative flex items-center justify-center">
-                                      {/* Left Arrow */}
-                                      {categoryImages.length > 1 && (
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          className="absolute left-0 top-1/2 transform -translate-y-1/2 bg-white/90 hover:bg-white shadow-md z-10"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            goToPreviousImage(category.id, categoryImages.length);
-                                          }}
-                                        >
-                                          <ChevronLeft className="w-4 h-4" />
-                                        </Button>
-                                      )}
-
-                                      {/* Main Product Image - Much Bigger Size */}
-                                      <img 
-                                        src={categoryImages[currentImageIndex[category.id] || 0].url} 
-                                        alt={categoryImages[currentImageIndex[category.id] || 0].alt}
-                                        className="w-full h-[28rem] object-contain"
-                                      />
-
-                                      {/* Right Arrow */}
-                                      {categoryImages.length > 1 && (
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          className="absolute right-0 top-1/2 transform -translate-y-1/2 bg-white/90 hover:bg-white shadow-md z-10"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            goToNextImage(category.id, categoryImages.length);
-                                          }}
-                                        >
-                                          <ChevronRight className="w-4 h-4" />
-                                        </Button>
-                                      )}
-                                      
-                                      {/* Image Indicators */}
-                                      {categoryImages.length > 1 && (
-                                        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 flex space-x-1">
-                                          {categoryImages.map((_, index) => (
-                                            <div 
-                                              key={index}
-                                              className={`w-2 h-2 rounded-full ${
-                                                index === (currentImageIndex[category.id] || 0) ? 'bg-primary' : 'bg-white/70'
-                                              }`}
-                                            />
-                                          ))}
-                                        </div>
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <div className="w-full h-[28rem] bg-gradient-to-br from-muted/50 to-muted/30 rounded-lg flex items-center justify-center">
-                                      <div className="text-center text-muted-foreground">
-                                        <div className="text-6xl mb-4">📦</div>
-                                        <div className="text-lg">No Image</div>
-                                      </div>
-                                    </div>
-                                  );
-                                })()}
-                                  </div>
-                                </div>
-
-                                {/* Right Side - Content */}
-                                <div className="w-2/5 p-4 flex flex-col justify-center">
-                                  {/* Category Name */}
-                                  <h3 className="text-xl font-bold mb-3 text-center">
-                                    {category.category_name.toUpperCase()}
-                                  </h3>
-
-                                  {/* Product Description */}
-                                  <div className="mb-4">
-                                    <p className="text-sm text-muted-foreground text-center">
-                                      {category.description || `${category.category_name} Product`}
-                                    </p>
-                                  </div>
-
-                                  {/* Associated Fabrics */}
-                                  <div>
-                                <div className="text-sm font-semibold text-foreground mb-2">Associated Fabric</div>
-                                <div className="flex flex-wrap gap-2">
-                                  {(() => {
-                                    // Get unique fabric names from selected fabrics
-                                    const fabricIds = Array.isArray(category.fabrics) ? category.fabrics : [];
-                                    const selectedFabrics = fabricIds.map(id => fabrics.find(f => f.id === id)).filter(Boolean) || [];
-                                    const uniqueFabricNames = [...new Set(selectedFabrics.map(f => f!.fabric_name))];
-                                    
-                                    return uniqueFabricNames.map((fabricName, index) => {
-                                      const fabric = selectedFabrics.find(f => f!.fabric_name === fabricName)!;
-                                      const colorCount = selectedFabrics.filter(f => f!.fabric_name === fabricName).length;
-                                      
-                                      return (
-                                        <div key={index} className="flex items-center gap-2 bg-muted/50 rounded-full px-3 py-2 text-xs border">
-                                          {/* Fabric Icon - Only show if image exists */}
-                                          {fabric.image && (
-                                          <div className="w-4 h-4 rounded-full overflow-hidden border">
-                                              <img 
-                                                src={fabric.image} 
-                                                alt={fabric.fabric_name} 
-                                                className="w-full h-full object-cover"
-                                              />
-                                              </div>
-                                            )}
-                                          <span className="font-medium">{fabricName}</span>
-                                          <span className="text-muted-foreground">({colorCount})</span>
-                                        </div>
-                                      );
-                                    });
-                                  })()}
-                                </div>
-                                  </div>
-                                </div>
-                              </div>
-                            </Card>
-                          ))}
+                  <CardContent className="p-2 sm:p-2.5">
+                    <div className="flex justify-end items-center pb-0.5">
+                      <div className="flex space-x-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-5 w-5 p-0"
+                          onClick={() => handleEdit(category)}
+                          title="Edit Category"
+                        >
+                          <Pencil className="w-2.5 h-2.5" />
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="h-6 w-6 p-0"
+                          onClick={() => handleDelete(category.id)}
+                          title="Delete Category"
+                        >
+                          <Trash2 className="w-2.5 h-2.5" />
+                        </Button>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
 
-              {/* Carousel Indicators */}
-              {categories.length > itemsPerSlide && (
-                <div className="flex justify-center space-x-2">
-                  {Array.from({ length: Math.ceil(categories.length / itemsPerSlide) }).map((_, index) => (
-                    <button
-                      key={index}
-                      onClick={() => goToSlide(index)}
-                      className={`w-2 h-2 rounded-full transition-colors ${
-                        index === currentSlide ? 'bg-primary' : 'bg-muted'
-                      }`}
-                    />
-                  ))}
-                </div>
-              )}
+                    <div className="flex flex-col items-center text-center gap-1">
+                      {(() => {
+                        const categoryImages =
+                          category.category_images && Array.isArray(category.category_images)
+                            ? category.category_images
+                            : category.category_image_url
+                              ? [{ url: category.category_image_url, alt: category.category_name, type: 'main' }]
+                              : [];
+
+                        if (categoryImages.length === 0) return null;
+                        const index = currentImageIndex[category.id] || 0;
+                        const activeImage = categoryImages[index];
+
+                        return (
+                          <div className="relative w-full flex items-center justify-center">
+                            {categoryImages.length > 1 && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-5 p-0 bg-white/90 hover:bg-white z-10"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  goToPreviousImage(category.id, categoryImages.length);
+                                }}
+                              >
+                                <ChevronLeft className="w-2.5 h-2.5" />
+                              </Button>
+                            )}
+
+                            <img src={activeImage.url} alt={activeImage.alt} className="w-full h-14 sm:h-16 object-contain" />
+
+                            {categoryImages.length > 1 && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="absolute right-0 top-1/2 -translate-y-1/2 h-5 w-5 p-0 bg-white/90 hover:bg-white z-10"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  goToNextImage(category.id, categoryImages.length);
+                                }}
+                              >
+                                <ChevronRight className="w-2.5 h-2.5" />
+                              </Button>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      <h3 className="text-xs sm:text-sm font-bold leading-tight line-clamp-2">{category.category_name.toUpperCase()}</h3>
+                      <p className="text-[10px] sm:text-[11px] text-muted-foreground line-clamp-1">
+                        {category.description || `${category.category_name} Product`}
+                      </p>
+
+                      <div className="w-full">
+                        <div className="text-[10px] font-semibold text-foreground mb-0.5">Associated Fabric</div>
+                        <div className="flex flex-wrap justify-center gap-0.5">
+                          {(() => {
+                            const fabricIds = Array.isArray(category.fabrics) ? category.fabrics : [];
+                            const selectedFabrics = fabricIds.map(id => fabrics.find(f => f.id === id)).filter(Boolean) || [];
+                            const uniqueFabricNames = [...new Set(selectedFabrics.map(f => f!.fabric_name))];
+
+                            if (uniqueFabricNames.length === 0) {
+                              return <span className="text-[11px] text-muted-foreground">—</span>;
+                            }
+
+                            return (
+                              <>
+                                {uniqueFabricNames.slice(0, 1).map((fabricName, index) => (
+                                  <Badge key={index} variant="secondary" className="text-[10px] px-2 py-0.5">
+                                    {fabricName}
+                                  </Badge>
+                                ))}
+                                {uniqueFabricNames.length > 1 && (
+                                  <Badge variant="outline" className="text-[10px] px-2 py-0.5">
+                                    +{uniqueFabricNames.length - 1}
+                                  </Badge>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           )}
         </CardContent>
