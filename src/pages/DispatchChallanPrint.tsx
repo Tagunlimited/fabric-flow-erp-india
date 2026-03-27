@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { ErpLayout } from "@/components/ErpLayout";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,13 @@ import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { Printer, Download, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { formatDateIndian } from "@/lib/utils";
-import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
+import { useSizeTypes } from "@/hooks/useSizeTypes";
+import { usePrintDocumentTitle } from "@/hooks/usePrintDocumentTitle";
+import {
+  OrderSummaryProductDetailsCell,
+  OrderSummaryQtyCell,
+  sizeTypesArrayToMap,
+} from "@/components/accounts/OrderSummaryPrintLine";
 
 interface DispatchItem {
   size_name: string;
@@ -25,6 +31,12 @@ interface OrderItem {
   category_image_url?: string;
   fabric_id?: string;
   fabric_name?: string;
+  specifications?: any;
+  sizes_quantities?: any;
+  size_prices?: any;
+  size_type_id?: string;
+  unit_price?: number;
+  gst_rate?: number;
 }
 
 export default function DispatchChallanPrint() {
@@ -32,6 +44,9 @@ export default function DispatchChallanPrint() {
   const navigate = useNavigate();
   const printRef = useRef<HTMLDivElement>(null);
   const { config: company } = useCompanySettings();
+  const { sizeTypes } = useSizeTypes();
+  const sizeTypesMap = useMemo(() => sizeTypesArrayToMap(sizeTypes), [sizeTypes]);
+  usePrintDocumentTitle('Delivery Challan');
   
   const [dispatchOrder, setDispatchOrder] = useState<any | null>(null);
   const [dispatchItems, setDispatchItems] = useState<DispatchItem[]>([]);
@@ -65,6 +80,7 @@ export default function DispatchChallanPrint() {
             order_number,
             order_date,
             order_type,
+            gst_rate,
             customers:customers (
               company_name,
               contact_person,
@@ -100,7 +116,9 @@ export default function DispatchChallanPrint() {
       // Fetch order items with product details including fabric_id
       const { data: orderItemsData, error: orderItemsError } = await (supabase as any)
         .from('order_items')
-        .select('id, product_category_id, product_description, quantity, color, gsm, mockup_images, category_image_url, fabric_id')
+        .select(
+          'id, product_category_id, product_description, quantity, color, gsm, mockup_images, category_image_url, fabric_id, specifications, sizes_quantities, size_prices, size_type_id, unit_price, gst_rate'
+        )
         .eq('order_id', dispatchData.order_id);
 
       if (orderItemsError) throw orderItemsError;
@@ -188,6 +206,18 @@ export default function DispatchChallanPrint() {
     window.print();
   };
 
+  const balanceQuantity = totalApproved - totalDispatched;
+
+  const fabricsForPrint = useMemo(() => {
+    const m: Record<string, { name: string }> = {};
+    orderItems.forEach((it: any) => {
+      if (it.fabric_id && it.fabric_name) m[it.fabric_id] = { name: it.fabric_name };
+    });
+    return m;
+  }, [orderItems]);
+
+  const orderForSummary = dispatchOrder?.orders;
+
   if (loading || !dispatchOrder) {
     return (
       <ErpLayout>
@@ -200,8 +230,6 @@ export default function DispatchChallanPrint() {
       </ErpLayout>
     );
   }
-
-  const balanceQuantity = totalApproved - totalDispatched;
 
   return (
     <ErpLayout>
@@ -220,8 +248,11 @@ export default function DispatchChallanPrint() {
         </div>
 
         {/* Delivery Challan Content */}
-        <div ref={printRef} className="bg-white p-8 print:px-5 print:py-4 print:m-0 print:w-full print:max-w-none" style={{ width: '210mm', maxWidth: '210mm' }}>
-          <div className="print:max-w-none max-w-4xl mx-auto print:mx-0 print:w-full print:p-0" style={{ maxWidth: '100%' }}>
+        <div
+          ref={printRef}
+          className="bg-white p-8 w-full max-w-[210mm] mx-auto print:max-w-none print:w-full print:mx-0 print:m-0 print:px-[16mm] print:py-[12mm]"
+        >
+          <div className="w-full max-w-4xl mx-auto print:max-w-none print:mx-0 print:w-full print:p-0">
             {/* Company Header */}
             <div className="flex items-start gap-3 mb-3 pb-2 border-b-2 border-gray-300">
               {company?.logo_url && (
@@ -300,74 +331,48 @@ export default function DispatchChallanPrint() {
               </div>
             )}
 
-            {/* Product Details Table */}
+            {/* Order summary — same product/branding layout as quotation; no rates/amounts */}
             <div className="mb-4">
-              <table className="w-full border-collapse border border-gray-300 text-sm" style={{ tableLayout: 'fixed' }}>
-                <colgroup>
-                  <col style={{ width: '25%' }} />
-                  <col style={{ width: '45%' }} />
-                  <col style={{ width: '30%' }} />
-                </colgroup>
+              <h3 className="text-lg font-semibold text-gray-800 mb-3">ORDER SUMMARY</h3>
+              <div className="overflow-x-auto print:overflow-visible">
+                <table className="order-summary-print-table w-full table-fixed border-collapse border border-gray-400 text-sm">
+                  <colgroup>
+                    <col style={{ width: '72%' }} />
+                    <col style={{ width: '28%' }} />
+                  </colgroup>
                   <thead>
-                  <tr className="bg-gray-50">
-                    <th className="border border-gray-300 px-2 py-1 text-left text-xs font-semibold">Product</th>
-                    <th className="border border-gray-300 px-2 py-1 text-left text-xs font-semibold">Description</th>
-                    <th className="border border-gray-300 px-2 py-1 text-center text-xs font-semibold">Quantity Info</th>
+                    <tr className="bg-gray-100">
+                      <th className="border border-gray-400 px-4 py-3 text-left font-semibold align-middle">
+                        Product Details
+                      </th>
+                      <th className="border border-gray-400 px-4 py-3 text-left font-semibold align-middle">Qty</th>
                     </tr>
                   </thead>
                   <tbody>
-                  {orderItems.map((item, index) => {
-                    const displayImage = getOrderItemDisplayImage(item, { order_items: orderItems } as any);
-                    return (
-                      <tr key={index}>
-                        <td className="border border-gray-300 px-2 py-1 align-top">
-                          <div className="flex items-center gap-2">
-                            {displayImage && (
-                              <img
-                                src={displayImage}
-                                alt="Product"
-                                className="w-14 h-14 object-cover rounded flex-shrink-0"
-                              />
-                            )}
-                            <div className="flex-1 text-xs font-medium break-words">
-                              {productCategories[item.product_category_id]?.category_name || 'N/A'}
-                            </div>
-                          </div>
+                    {orderItems.map((item) => (
+                      <tr key={item.id}>
+                        <td className="border border-gray-400 px-4 py-3 align-middle text-sm">
+                          <OrderSummaryProductDetailsCell
+                            item={item}
+                            order={orderForSummary}
+                            fabrics={fabricsForPrint}
+                            productCategories={productCategories}
+                            sizeTypesMap={sizeTypesMap}
+                          />
                         </td>
-                        <td className="border border-gray-300 px-2 py-1 text-xs align-top">
-                          <div className="break-words">
-                            <div className="font-medium mb-0.5">{item.product_description}</div>
-                            {item.fabric_name && <div className="text-gray-600 font-medium">Fabric: {item.fabric_name}</div>}
-                            {item.color && <div className="text-gray-600">Color: {item.color}</div>}
-                            {item.gsm && <div className="text-gray-600">GSM: {item.gsm}</div>}
-                            {/* Show mockup image if available */}
-                            {item.mockup_images && Array.isArray(item.mockup_images) && item.mockup_images.length > 0 && (
-                              <div className="mt-2">
-                                <img
-                                  src={item.mockup_images[0]}
-                                  alt="Product Mockup"
-                                  className="w-20 h-20 object-cover rounded border"
-                                  onError={(e) => {
-                                    e.currentTarget.style.display = 'none';
-                                  }}
-                                />
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                        <td className="border border-gray-300 px-2 py-1 text-xs align-top">
-                          <div className="space-y-1">
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Order Qty:</span>
-                              <span className="font-semibold">{item.quantity}</span>
-                            </div>
-                          </div>
+                        <td className="border border-gray-400 px-4 py-3 align-middle text-sm">
+                          <OrderSummaryQtyCell
+                            item={item}
+                            order={orderForSummary}
+                            sizeTypesMap={sizeTypesMap}
+                            showUnitRates={false}
+                          />
                         </td>
                       </tr>
-                    );
-                  })}
+                    ))}
                   </tbody>
                 </table>
+              </div>
             </div>
 
             {/* Quantity Summary */}

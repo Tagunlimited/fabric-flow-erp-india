@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
 import { BackButton } from '@/components/common/BackButton';
+import { getOrderItemListThumbnailUrl, getOrderCardPlaceholderSrc } from '@/utils/orderItemImageUtils';
 
 interface OrderCard {
   order_id: string;
@@ -116,14 +117,16 @@ export default function DispatchQCPage() {
       }
 
       // order details and images (exclude readymade orders - they have separate dispatch flow)
-      let ordersMap: Record<string, { order_number?: string; customer_id?: string }> = {};
+      let ordersMap: Record<string, { order_number?: string; customer_id?: string; order_type?: string | null }> = {};
       if (orderIds.length > 0) {
         const { data: ords } = await (supabase as any)
           .from('orders')
           .select('id, order_number, customer_id, order_type')
           .in('id', orderIds as any)
           .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
-        (ords || []).forEach((o: any) => { ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id }; });
+        (ords || []).forEach((o: any) => {
+          ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id, order_type: o.order_type };
+        });
       }
 
       // Fetch confirmed readymade orders for dispatch separately
@@ -193,13 +196,14 @@ export default function DispatchQCPage() {
       try {
         const { data: items } = await (supabase as any)
           .from('order_items')
-          .select('order_id, category_image_url, mockup_images')
+          .select('order_id, category_image_url, mockup_images, specifications')
           .in('order_id', orderIds as any);
         (items || []).forEach((it: any) => {
           const oid = it?.order_id; if (!oid) return;
           if (!imageByOrder[oid]) {
-            const mock = Array.isArray(it?.mockup_images) && it.mockup_images.length > 0 ? it.mockup_images[0] : undefined;
-            imageByOrder[oid] = it?.category_image_url || mock || imageByOrder[oid];
+            const orderMeta = ordersMap[oid];
+            const thumb = getOrderItemListThumbnailUrl(it, { order_type: orderMeta?.order_type ?? undefined });
+            if (thumb) imageByOrder[oid] = thumb;
           }
         });
       } catch {}
@@ -247,6 +251,21 @@ export default function DispatchQCPage() {
       if (readymadeOrders && readymadeOrders.length > 0) {
         // Get dispatched quantities for readymade orders
         const readymadeIds = readymadeOrders.map((o: any) => o.id);
+        let readymadeImageByOrder: Record<string, string | undefined> = {};
+        if (readymadeIds.length > 0) {
+          try {
+            const { data: rmItems } = await (supabase as any)
+              .from('order_items')
+              .select('order_id, category_image_url, mockup_images, specifications')
+              .in('order_id', readymadeIds as any);
+            (rmItems || []).forEach((it: any) => {
+              const oid = it?.order_id as string | undefined;
+              if (!oid || readymadeImageByOrder[oid]) return;
+              const thumb = getOrderItemListThumbnailUrl(it, { order_type: 'readymade' });
+              if (thumb) readymadeImageByOrder[oid] = thumb;
+            });
+          } catch {}
+        }
         let readymadeDispatched: Record<string, number> = {};
         if (readymadeIds.length > 0) {
           try {
@@ -316,7 +335,7 @@ export default function DispatchQCPage() {
               total_quantity: totalQty,
               picked_quantity: totalQty, // For readymade, picked = total (no picking needed)
               dispatched_quantity: dispatchedQty,
-              image_url: undefined, // Readymade orders don't have images from production
+              image_url: readymadeImageByOrder[o.id],
               is_readymade: true, // Flag to identify readymade orders
               hasPendingChallan: hasPendingChallan // Store flag for tab filtering
             } as any;
@@ -911,12 +930,17 @@ export default function DispatchQCPage() {
                           {/* Product Image - Larger and more prominent */}
                           <div className="flex-shrink-0">
                             <img 
-                              src={o.image_url || '/placeholder.svg'} 
+                              src={o.image_url || getOrderCardPlaceholderSrc()} 
                               alt={o.order_number} 
                               className="w-24 h-24 rounded-lg object-cover border-2 border-gray-200 shadow-sm"
                               onError={(e) => {
                                 const target = e.currentTarget;
-                                target.src = '/placeholder.svg';
+                                const ph = getOrderCardPlaceholderSrc();
+                                if (target.src.endsWith(ph)) {
+                                  target.onerror = null;
+                                  return;
+                                }
+                                target.src = ph;
                                 target.onerror = null;
                               }}
                             />
@@ -958,12 +982,17 @@ export default function DispatchQCPage() {
                                 {/* Product Image - Larger */}
                                 <div className="flex-shrink-0">
                                   <img 
-                                    src={o.image_url || '/placeholder.svg'} 
+                                    src={o.image_url || getOrderCardPlaceholderSrc()} 
                                     alt={o.order_number} 
                                     className="w-20 h-20 rounded-lg object-cover border-2 border-gray-200 shadow-sm"
                                     onError={(e) => {
                                       const target = e.currentTarget;
-                                      target.src = '/placeholder.svg';
+                                      const ph = getOrderCardPlaceholderSrc();
+                                      if (target.src.endsWith(ph)) {
+                                        target.onerror = null;
+                                        return;
+                                      }
+                                      target.src = ph;
                                       target.onerror = null;
                                     }}
                                   />

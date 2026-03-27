@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -10,7 +10,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
-import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
+import {
+  buildOrderLinePrintModel,
+  OrderSummaryProductDetailsCell,
+  OrderSummaryQtyCell,
+  OrderSummaryPriceCell,
+  OrderSummaryFinancialCells,
+} from '@/components/accounts/OrderSummaryPrintLine';
+import { usePrintDocumentTitle } from '@/hooks/usePrintDocumentTitle';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,6 +37,7 @@ interface Order {
   final_amount: number;
   sales_manager?: string;
   gst_rate?: number;
+  order_type?: string;
 }
 interface Customer {
   id: string;
@@ -91,6 +99,8 @@ export default function InvoiceDetailPage() {
   const [isInvoiceId, setIsInvoiceId] = useState(false);
   const [receipts, setReceipts] = useState<any[]>([]);
   const [totalPaid, setTotalPaid] = useState(0);
+  const [sizeTypesMap, setSizeTypesMap] = useState<Record<string, any>>({});
+  usePrintDocumentTitle('Invoice');
 
   useEffect(() => {
     if (id) fetchData(id);
@@ -182,6 +192,16 @@ export default function InvoiceDetailPage() {
           fabricsMap[fabric.id] = fabric;
         });
         setFabrics(fabricsMap);
+      }
+
+      const { data: sizeTypesData } = await supabase.from('size_types').select('*');
+      if (sizeTypesData && Array.isArray(sizeTypesData)) {
+        setSizeTypesMap(
+          sizeTypesData.reduce((acc: Record<string, any>, st: any) => {
+            if (st?.id) acc[st.id] = st;
+            return acc;
+          }, {})
+        );
       }
 
       // Fetch sales manager
@@ -370,6 +390,21 @@ export default function InvoiceDetailPage() {
     }
   };
 
+  const { subtotal, gstAmount } = useMemo(() => {
+    if (!order) return { subtotal: 0, gstAmount: 0 };
+    let s = 0;
+    let g = 0;
+    for (const item of orderItems) {
+      const m = buildOrderLinePrintModel(item, order, sizeTypesMap);
+      s += m.amount;
+      g += m.gstAmt;
+    }
+    return { subtotal: s, gstAmount: g };
+  }, [orderItems, order, sizeTypesMap]);
+
+  const additionalChargesTotal = additionalCharges.reduce((sum, charge) => sum + charge.amount_incl_gst, 0);
+  const grandTotal = subtotal + gstAmount + additionalChargesTotal;
+
   if (loading) {
     return (
       <ErpLayout>
@@ -392,13 +427,6 @@ export default function InvoiceDetailPage() {
       </ErpLayout>
     );
   }
-
-  // Calculate totals
-  const subtotal = orderItems.reduce((sum, item) => sum + (item.total_price || 0), 0);
-  const gstRate = order.gst_rate || 18;
-  const gstAmount = (subtotal * gstRate) / 100;
-  const additionalChargesTotal = additionalCharges.reduce((sum, charge) => sum + charge.amount_incl_gst, 0);
-  const grandTotal = subtotal + gstAmount + additionalChargesTotal;
 
   return (
     <ErpLayout>
@@ -434,8 +462,11 @@ export default function InvoiceDetailPage() {
                 </div>
 
         {/* Print View - Full width for A4 */}
-        <div ref={printRef} className="bg-white p-8 print:px-5 print:py-4 print:m-0 print:w-full print:max-w-none" style={{ width: '210mm', maxWidth: '210mm' }}>
-          <div className="print:max-w-none max-w-4xl mx-auto print:mx-0 print:w-full print:p-0" style={{ maxWidth: '100%' }}>
+        <div
+          ref={printRef}
+          className="bg-white p-8 w-full max-w-[210mm] mx-auto print:max-w-none print:w-full print:mx-0 print:m-0 print:px-[16mm] print:py-[12mm]"
+        >
+          <div className="w-full max-w-4xl mx-auto print:max-w-none print:mx-0 print:w-full print:p-0">
                 {/* Company Header - Compact left-aligned */}
                 <div className="flex items-start gap-3 mb-3 pb-2 border-b-2 border-gray-300">
                   {/* Company Logo */}
@@ -510,62 +541,62 @@ export default function InvoiceDetailPage() {
                   </div>
                 )}
 
-                {/* Order Items Table - Compact with proper column widths */}
+                {/* Order summary — aligned with quotation layout */}
                 <div className="mb-4">
-                  <table className="w-full border-collapse border border-gray-300 text-sm" style={{ tableLayout: 'fixed' }}>
-                    <colgroup>
-                      <col style={{ width: '20%' }} />
-                      <col style={{ width: '40%' }} />
-                      <col style={{ width: '10%' }} />
-                      <col style={{ width: '15%' }} />
-                      <col style={{ width: '15%' }} />
-                    </colgroup>
-                    <thead>
-                      <tr className="bg-gray-50">
-                        <th className="border border-gray-300 px-2 py-1 text-left text-xs font-semibold">Item</th>
-                        <th className="border border-gray-300 px-2 py-1 text-left text-xs font-semibold">Description</th>
-                        <th className="border border-gray-300 px-2 py-1 text-center text-xs font-semibold">Qty</th>
-                        <th className="border border-gray-300 px-2 py-1 text-right text-xs font-semibold">Rate</th>
-                        <th className="border border-gray-300 px-2 py-1 text-right text-xs font-semibold">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {orderItems.map((item, index) => (
-                        <tr key={index}>
-                          <td className="border border-gray-300 px-2 py-1 align-top">
-                            <div className="flex items-center gap-2">
-                              {(() => {
-                                const displayImage = getOrderItemDisplayImage(item, order);
-                                return displayImage ? (
-                                  <img
-                                    src={displayImage}
-                                    alt="Product"
-                                    className="w-10 h-10 object-cover rounded flex-shrink-0"
-                                  />
-                                ) : null;
-                              })()}
-                              <div className="flex-1 text-xs font-medium break-words">
-                                {productCategories[item.product_category_id]?.category_name || 'N/A'}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="border border-gray-300 px-2 py-1 text-xs align-top">
-                            <div className="break-words">
-                              <div className="font-medium mb-0.5">{item.product_description}</div>
-                              {item.color && <div className="text-gray-600">Color: {item.color}</div>}
-                              {item.gsm && <div className="text-gray-600">GSM: {item.gsm}</div>}
-                            {fabrics[item.fabric_id] && (
-                                <div className="text-gray-600">Fabric: {fabrics[item.fabric_id].name}</div>
-                            )}
-                            </div>
-                          </td>
-                          <td className="border border-gray-300 px-2 py-1 text-center text-xs align-top font-medium">{item.quantity}</td>
-                          <td className="border border-gray-300 px-2 py-1 text-right text-xs align-top font-medium whitespace-nowrap">{formatCurrency(item.unit_price)}</td>
-                          <td className="border border-gray-300 px-2 py-1 text-right text-xs align-top font-semibold whitespace-nowrap">{formatCurrency(item.total_price)}</td>
+                  <h3 className="text-lg font-semibold text-gray-800 mb-3">ORDER SUMMARY</h3>
+                  <div className="overflow-x-auto print:overflow-visible">
+                    <table className="order-summary-print-table w-full table-fixed border-collapse border border-gray-400 text-sm">
+                      <colgroup>
+                        <col style={{ width: '38%' }} />
+                        <col style={{ width: '12%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '13%' }} />
+                        <col style={{ width: '13%' }} />
+                        <col style={{ width: '13%' }} />
+                      </colgroup>
+                      <thead>
+                        <tr className="bg-gray-100">
+                          <th className="border border-gray-400 px-4 py-3 text-left font-semibold align-middle">
+                            Product Details
+                          </th>
+                          <th className="border border-gray-400 px-4 py-3 text-left font-semibold align-middle">Qty</th>
+                          <th className="border border-gray-400 px-4 py-3 text-right font-semibold align-middle">
+                            Price
+                          </th>
+                          <th className="border border-gray-400 px-4 py-3 text-right font-semibold align-middle">
+                            Amount
+                          </th>
+                          <th className="border border-gray-400 px-4 py-3 text-center font-semibold align-middle">GST</th>
+                          <th className="border border-gray-400 px-4 py-3 text-right font-semibold align-middle">
+                            Total
+                          </th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {orderItems.map((item) => (
+                          <tr key={item.id}>
+                            <td className="border border-gray-400 px-4 py-3 align-middle text-sm">
+                              <OrderSummaryProductDetailsCell
+                                item={item}
+                                order={order}
+                                fabrics={fabrics}
+                                productCategories={productCategories}
+                                sizeTypesMap={sizeTypesMap}
+                                invoiceProductLayout
+                              />
+                            </td>
+                            <td className="border border-gray-400 px-4 py-3 align-middle text-sm">
+                              <OrderSummaryQtyCell item={item} order={order} sizeTypesMap={sizeTypesMap} />
+                            </td>
+                            <td className="border border-gray-400 px-4 py-3 align-middle text-sm text-right tabular-nums">
+                              <OrderSummaryPriceCell item={item} order={order} sizeTypesMap={sizeTypesMap} />
+                            </td>
+                            <OrderSummaryFinancialCells item={item} order={order} sizeTypesMap={sizeTypesMap} />
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
 
                 {/* Totals - Compact */}
@@ -576,7 +607,7 @@ export default function InvoiceDetailPage() {
                       <span>{formatCurrency(subtotal)}</span>
                     </div>
                     <div className="flex justify-between py-1 text-sm">
-                      <span>GST ({gstRate}%):</span>
+                      <span>GST Total:</span>
                       <span>{formatCurrency(gstAmount)}</span>
                     </div>
                     {additionalChargesTotal > 0 && (

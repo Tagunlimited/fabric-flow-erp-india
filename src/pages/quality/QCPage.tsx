@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import QCReviewDialog from "@/components/quality/QCReviewDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BackButton } from '@/components/common/BackButton';
+import { getOrderItemListThumbnailUrl, getOrderCardPlaceholderSrc } from '@/utils/orderItemImageUtils';
 
 interface BatchAvatarInfo {
   avatar_url: string;
@@ -150,14 +151,16 @@ export default function QCPage() {
       }
 
       // Fetch order and customer, and images (exclude readymade orders - they don't go through QC)
-      let ordersMap: Record<string, { order_number?: string; customer_id?: string }> = {};
+      let ordersMap: Record<string, { order_number?: string; customer_id?: string; order_type?: string | null }> = {};
       if (orderIds.length > 0) {
         const { data: orderRows } = await (supabase as any)
           .from('orders')
-          .select('id, order_number, customer_id')
+          .select('id, order_number, customer_id, order_type')
           .in('id', orderIds as any)
           .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
-        (orderRows || []).forEach((o: any) => { ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id }; });
+        (orderRows || []).forEach((o: any) => {
+          ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id, order_type: o.order_type };
+        });
       }
       const customerIds = Array.from(new Set(Object.values(ordersMap).map(o => o.customer_id).filter(Boolean)));
       let customersMap: Record<string, string> = {};
@@ -185,8 +188,9 @@ export default function QCPage() {
         (items || []).forEach((it: any) => {
           const oid = it?.order_id; if (!oid) return;
           if (!imageByOrder[oid]) {
-            const mock = Array.isArray(it?.mockup_images) && it.mockup_images.length > 0 ? it.mockup_images[0] : undefined;
-            imageByOrder[oid] = it?.category_image_url || mock || imageByOrder[oid];
+            const orderMeta = ordersMap[oid];
+            const thumb = getOrderItemListThumbnailUrl(it, { order_type: orderMeta?.order_type ?? undefined });
+            if (thumb) imageByOrder[oid] = thumb;
           }
           
           // Try to get product category
@@ -427,11 +431,16 @@ export default function QCPage() {
                           <div className="rounded-xl overflow-hidden w-full aspect-[3/4] relative" style={{ background: 'linear-gradient(to bottom, rgb(239 246 255) 40%, rgb(241 245 249) 40%)' }}>
                             <div className="absolute inset-0 flex items-center justify-center p-4 sm:p-5">
                               <img 
-                                src={o.image_url || '/placeholder.svg'} 
+                                src={o.image_url || getOrderCardPlaceholderSrc()} 
                                 alt={o.order_number}
                                 className="max-h-[85%] max-w-[85%] object-contain"
                                 onError={(e) => {
-                                  (e.target as HTMLImageElement).style.display = 'none';
+                                  const el = e.target as HTMLImageElement;
+                                  if (el.src.endsWith(getOrderCardPlaceholderSrc())) {
+                                    el.style.display = 'none';
+                                    return;
+                                  }
+                                  el.src = getOrderCardPlaceholderSrc();
                                 }}
                               />
                             </div>
@@ -444,54 +453,48 @@ export default function QCPage() {
                           <div className="mb-1">
                             <div className="text-sm font-semibold text-slate-900 mb-3">Batches Assigned:</div>
                             {o.batch_avatars && o.batch_avatars.length > 0 ? (
-                              <div className="flex items-center relative" style={{ height: '64px' }}>
-                                {o.batch_avatars.slice(0, 3).map((batchInfo, idx) => (
-                                  <Avatar 
-                                    key={idx}
-                                    className="w-16 h-16 border-2 border-white flex-shrink-0 shadow-sm cursor-pointer"
-                                    style={{ 
-                                      marginLeft: idx > 0 ? '-16px' : '0',
-                                      zIndex: 3 - idx,
-                                      position: 'relative'
-                                    }}
+                              <div className="flex flex-col gap-2">
+                                {o.batch_avatars.slice(0, 3).map((batchInfo, idx) => {
+                                  const displayName =
+                                    batchInfo.batch_leader_name?.trim() ||
+                                    batchInfo.batch_name?.trim() ||
+                                    'Batch leader';
+                                  return (
+                                    <button
+                                      key={idx}
+                                      type="button"
+                                      className="flex items-center gap-3 min-w-0 text-left rounded-lg -m-1 p-1 hover:bg-slate-50/80 transition-colors cursor-pointer"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openBatchAvatarGallery(o.order_number, o.batch_avatars);
+                                      }}
+                                    >
+                                      <Avatar className="w-12 h-12 border-2 border-slate-200 flex-shrink-0 shadow-sm">
+                                        <AvatarImage
+                                          src={batchInfo.avatar_url || undefined}
+                                          alt={displayName}
+                                        />
+                                        <AvatarFallback className="bg-slate-200 text-slate-700 text-sm">
+                                          {(batchInfo.batch_leader_name || batchInfo.batch_name || 'B')[0].toUpperCase()}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <span className="text-sm font-medium text-slate-800 truncate" title={displayName}>
+                                        {displayName}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                                {o.batch_avatars.length > 3 && (
+                                  <button
+                                    type="button"
+                                    className="text-xs font-medium text-primary hover:underline text-left pl-1"
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       openBatchAvatarGallery(o.order_number, o.batch_avatars);
                                     }}
                                   >
-                                    <AvatarImage src={batchInfo.avatar_url || undefined} alt={batchInfo.batch_name || `Batch ${idx + 1}`} />
-                                    <AvatarFallback className="bg-slate-200 text-slate-700">
-                                      {(batchInfo.batch_name || batchInfo.batch_leader_name || 'B')[0].toUpperCase()}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                ))}
-                                {o.batch_avatars.length > 3 && (
-                                  <div 
-                                    className="relative w-16 h-16 rounded-full overflow-hidden cursor-pointer border-2 border-white flex-shrink-0 shadow-sm"
-                                    style={{ 
-                                      marginLeft: '-16px',
-                                      zIndex: 0,
-                                      backgroundColor: '#3b82f6'
-                                    }}
-                                    onClick={(e) => { 
-                                      e.stopPropagation(); 
-                                      openBatchAvatarGallery(o.order_number, o.batch_avatars); 
-                                    }}
-                                  >
-                                    {o.batch_avatars[3] && (
-                                      <img 
-                                        src={o.batch_avatars[3].avatar_url} 
-                                        alt="More batches"
-                                        className="w-full h-full object-cover blur-sm"
-                                        onError={(e) => {
-                                          (e.target as HTMLImageElement).style.display = 'none';
-                                        }}
-                                      />
-                                    )}
-                                    <div className="absolute inset-0 flex items-center justify-center bg-blue-500/70 rounded-full">
-                                      <span className="text-white font-bold text-sm">+{o.batch_avatars.length - 3}</span>
-                                    </div>
-                                  </div>
+                                    +{o.batch_avatars.length - 3} more batch{o.batch_avatars.length - 3 === 1 ? '' : 'es'}
+                                  </button>
                                 )}
                               </div>
                             ) : (

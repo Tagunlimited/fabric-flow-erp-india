@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import QCReviewDialog from "@/components/quality/QCReviewDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BackButton } from '@/components/common/BackButton';
+import { getOrderItemListThumbnailUrl, getOrderCardPlaceholderSrc } from '@/utils/orderItemImageUtils';
 
 interface PickedOrderCard {
   order_id: string;
@@ -123,14 +124,16 @@ export default function QCPageWithTabs() {
       }
 
       // Fetch order and customer, and images (exclude readymade orders - they don't go through QC)
-      let ordersMap: Record<string, { order_number?: string; customer_id?: string }> = {};
+      let ordersMap: Record<string, { order_number?: string; customer_id?: string; order_type?: string | null }> = {};
       if (orderIds.length > 0) {
         const { data: orderRows } = await (supabase as any)
           .from('orders')
-          .select('id, order_number, customer_id')
+          .select('id, order_number, customer_id, order_type')
           .in('id', orderIds as any)
           .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
-        (orderRows || []).forEach((o: any) => { ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id }; });
+        (orderRows || []).forEach((o: any) => {
+          ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id, order_type: o.order_type };
+        });
       }
       const customerIds = Array.from(new Set(Object.values(ordersMap).map(o => o.customer_id).filter(Boolean)));
       let customersMap: Record<string, string> = {};
@@ -152,13 +155,14 @@ export default function QCPageWithTabs() {
       try {
         const { data: items } = await (supabase as any)
           .from('order_items')
-          .select('order_id, category_image_url, mockup_images')
+          .select('order_id, category_image_url, mockup_images, specifications')
           .in('order_id', orderIds as any);
         (items || []).forEach((it: any) => {
           const oid = it?.order_id; if (!oid) return;
           if (!imageByOrder[oid]) {
-            const mock = Array.isArray(it?.mockup_images) && it.mockup_images.length > 0 ? it.mockup_images[0] : undefined;
-            imageByOrder[oid] = it?.category_image_url || mock || imageByOrder[oid];
+            const orderMeta = ordersMap[oid];
+            const thumb = getOrderItemListThumbnailUrl(it, { order_type: orderMeta?.order_type ?? undefined });
+            if (thumb) imageByOrder[oid] = thumb;
           }
         });
       } catch {}
@@ -323,7 +327,7 @@ export default function QCPageWithTabs() {
                     <CardContent className="pt-7">
                       <div className="flex items-start justify-between">
                         <div className="flex items-start gap-3">
-                          <img src={o.image_url || '/placeholder.svg'} alt={o.order_number} className="w-12 h-12 rounded object-cover border" />
+                          <img src={o.image_url || getOrderCardPlaceholderSrc()} alt={o.order_number} className="w-12 h-12 rounded object-cover border" />
                           <div>
                             <div className="font-semibold flex items-center gap-2">
                               Order #{o.order_number}
