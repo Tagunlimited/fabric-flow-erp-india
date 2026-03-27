@@ -1,0 +1,11 @@
+# Single-page app (React Router): serve index.html for client routes.
+# Required on Apache (e.g. Hostinger) so URLs like /dispatch/challan/:id work on
+# refresh, new tab, or direct link — otherwise the server looks for a missing file and returns 404.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
