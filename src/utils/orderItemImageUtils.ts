@@ -98,6 +98,34 @@ export function getOrderItemDisplayImage(item: any, order?: any): string | null 
   return null;
 }
 
+const PLACEHOLDER_ORDER_IMAGE = '/placeholder-category.svg';
+
+/**
+ * Thumbnail for QC / Dispatch cards: uses {@link getOrderItemDisplayImage} (mockups + specs + readymade class image),
+ * then for custom orders falls back to category_image_url when no mockup exists.
+ */
+export function getOrderItemListThumbnailUrl(
+  item: any,
+  order?: { order_type?: string | null }
+): string | null {
+  const primary = getOrderItemDisplayImage(item, order);
+  if (primary) return primary;
+  const isReadymade = order?.order_type === 'readymade';
+  if (
+    !isReadymade &&
+    item?.category_image_url &&
+    typeof item.category_image_url === 'string' &&
+    item.category_image_url.trim()
+  ) {
+    return item.category_image_url.trim();
+  }
+  return null;
+}
+
+export function getOrderCardPlaceholderSrc(): string {
+  return PLACEHOLDER_ORDER_IMAGE;
+}
+
 /**
  * Helper function for form context where mockup_images might be File objects
  * This handles both File objects (before upload) and URL strings (after upload)
