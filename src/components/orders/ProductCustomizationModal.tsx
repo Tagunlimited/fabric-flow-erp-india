@@ -746,9 +746,9 @@ export function ProductCustomizationModal({
                                     }`}
                                   >
                                     <div className="flex items-start gap-3">
-                                      {/* Addon Image */}
-                                      <div className="flex-shrink-0">
-                                        {addon.image_url ? (
+                                      {/* Addon Image (show only when available) */}
+                                      {addon.image_url && (
+                                        <div className="flex-shrink-0">
                                           <img
                                             src={addon.image_url}
                                             alt={addon.image_alt_text || addon.addon_name}
@@ -757,20 +757,16 @@ export function ProductCustomizationModal({
                                               e.currentTarget.style.display = 'none';
                                             }}
                                           />
-                                        ) : (
-                                          <div className="w-16 h-16 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center">
-                                            <span className="text-xs text-gray-400">No Image</span>
-                                          </div>
-                                        )}
-                                      </div>
+                                        </div>
+                                      )}
                                       
                                       {/* Addon Details */}
                                       <div className="flex-1 min-w-0">
-                                        <div className="font-medium text-gray-900 truncate">
+                                        <div className="font-medium text-gray-900 whitespace-normal break-words leading-snug">
                                           {addon.addon_name}
                                         </div>
                                         {addon.image_alt_text && (
-                                          <div className="text-xs text-gray-600 truncate mt-1">
+                                          <div className="text-xs text-gray-600 whitespace-normal break-words leading-snug mt-1">
                                             {addon.image_alt_text}
                                           </div>
                                         )}

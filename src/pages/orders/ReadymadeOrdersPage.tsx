@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { usePersistentTabState } from "@/hooks/usePersistentTabState";
+import { cn } from "@/lib/utils";
 
 interface Order {
   id: string;
@@ -51,6 +52,7 @@ const ReadymadeOrdersPage = () => {
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
+  const [myOrdersFilterValue, setMyOrdersFilterValue] = useState<string>("");
   const [sortBy, setSortBy] = useState<string>("date_desc");
 
   useEffect(() => {
@@ -65,6 +67,50 @@ const ReadymadeOrdersPage = () => {
       navigate(location.pathname, { replace: true, state: {} });
     }
   }, [location.state, activeTab, navigate, location.pathname]);
+
+  const resolveMyOrdersFilterValue = async (): Promise<string> => {
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id;
+      const userEmail = authData?.user?.email || null;
+      if (!userId) return "";
+
+      const { data: employeeRows } = await (supabase.from('employees') as any).select('id, personal_email, user_id');
+      const employees = (employeeRows || []) as Array<{ id: string; personal_email?: string; user_id?: string }>;
+      let matchedEmployee = employees.find((e) => e.user_id === userId);
+
+      if (!matchedEmployee) {
+        const { data: allProfiles } = await supabase
+          .from('profiles')
+          .select('id, user_id, email');
+        const matchingProfile = (allProfiles || []).find((p: any) => p.user_id === userId || (userEmail && p.email === userEmail));
+        if (matchingProfile) {
+          matchedEmployee = employees.find(
+            (e) => e.user_id === matchingProfile.user_id || (!!matchingProfile.email && e.personal_email === matchingProfile.email)
+          );
+        }
+      }
+
+      if (!matchedEmployee && userEmail) {
+        matchedEmployee = employees.find((e) => e.personal_email === userEmail);
+      }
+
+      if (matchedEmployee?.id) return matchedEmployee.id;
+      const fallbackName = (authData?.user as any)?.user_metadata?.full_name;
+      if (typeof fallbackName === "string" && fallbackName.trim()) return fallbackName.trim();
+      return userEmail || "";
+    } catch {
+      return "";
+    }
+  };
+
+  useEffect(() => {
+    const load = async () => {
+      const marker = await resolveMyOrdersFilterValue();
+      if (marker) setMyOrdersFilterValue(marker);
+    };
+    load();
+  }, []);
 
   const fetchOrders = async (forceRefresh = false) => {
     try {
@@ -147,7 +193,32 @@ const ReadymadeOrdersPage = () => {
     }
   };
 
+  const [myOrdersOnly, setMyOrdersOnly] = useState(false);
+  const handleToggleMyOrders = async () => {
+    if (myOrdersOnly) {
+      setMyOrdersOnly(false);
+      return;
+    }
+
+    let marker = myOrdersFilterValue;
+    if (!marker) {
+      marker = await resolveMyOrdersFilterValue();
+      if (marker) setMyOrdersFilterValue(marker);
+    }
+    if (!marker) {
+      toast.error('Unable to resolve your sales-manager profile.');
+      return;
+    }
+    setMyOrdersOnly(true);
+  };
+
   const filteredOrders = orders
+    .filter(order => {
+      if (!myOrdersOnly || !myOrdersFilterValue) return true;
+      const marker = myOrdersFilterValue.trim().toLowerCase();
+      const managerName = (salesManagers[order.sales_manager]?.full_name || "").toLowerCase();
+      return order.sales_manager?.toLowerCase?.() === marker || managerName.includes(marker);
+    })
     .filter(order => !filterStatus || order.status === filterStatus)
     .filter(order => {
       if (!searchTerm) return true;
@@ -280,6 +351,16 @@ const ReadymadeOrdersPage = () => {
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
                   <CardTitle>All Readymade Orders</CardTitle>
                   <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      onClick={handleToggleMyOrders}
+                      className={cn(
+                        "rounded-full border border-yellow-500 bg-yellow-300 text-black text-sm font-semibold px-4 py-2 transition-all duration-300 shadow-[0_0_0_0_black] hover:-translate-y-1 hover:-translate-x-0.5 hover:shadow-[2px_5px_0_0_black] active:translate-y-0.5 active:translate-x-0.5 active:shadow-[0_0_0_0_black]",
+                        myOrdersOnly && "bg-black text-white border-black"
+                      )}
+                    >
+                      My Orders
+                    </Button>
                     <Button variant="outline" size="sm" onClick={() => setShowSearch(v => !v)}>
                       <Search className="w-4 h-4 mr-2" />
                       Search

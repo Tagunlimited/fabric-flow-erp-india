@@ -1,4 +1,4 @@
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1114,6 +1114,8 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
 export default function OrderDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const isFromDesignPage = (location.state as any)?.from === 'design';
   const [searchParams] = useSearchParams();
   const printRef = useRef<HTMLDivElement>(null);
   const { config: company } = useCompanySettings();
@@ -1189,9 +1191,14 @@ export default function OrderDetailPage() {
   // Handle back navigation based on referrer and order type
   const handleBackNavigation = () => {
     const from = searchParams.get('from');
+    const fromState = (location.state as any)?.from;
     // Check if this is a readymade order
     if (order?.order_type === 'readymade') {
       navigate('/orders/readymade', { state: { refreshOrders: true } });
+      return;
+    }
+    if (fromState === 'design') {
+      navigate('/design', { state: { refreshOrders: true, defaultTab: 'pending' } });
       return;
     }
     if (from === 'production') {
@@ -2437,7 +2444,7 @@ export default function OrderDetailPage() {
             <p className="text-muted-foreground mb-4">The requested order could not be found.</p>
             <Button onClick={handleBackNavigation}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to {order?.order_type === 'readymade' ? 'Readymade Orders' : (searchParams.get('from') === 'production' ? 'Production' : 'Orders')}
+              Back to {order?.order_type === 'readymade' ? 'Readymade Orders' : (((location.state as any)?.from === 'design') ? 'Design & Printing' : (searchParams.get('from') === 'production' ? 'Production' : 'Orders'))}
             </Button>
           </div>
         </div>
@@ -2486,7 +2493,7 @@ export default function OrderDetailPage() {
               className="flex items-center"
             >
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to {searchParams.get('from') === 'production' ? 'Production' : 'Orders'}
+              Back to {(location.state as any)?.from === 'design' ? 'Design & Printing' : (searchParams.get('from') === 'production' ? 'Production' : 'Orders')}
             </Button>
             <div>
               <h1 className="text-3xl font-bold">Order Details</h1>
@@ -2494,6 +2501,7 @@ export default function OrderDetailPage() {
             </div>
           </div>
           
+          {!isFromDesignPage && (
           <div className="flex items-center space-x-2">
             <div className="flex items-center space-x-3">
               <Badge className={getStatusColor(order.status)}>
@@ -2687,6 +2695,7 @@ export default function OrderDetailPage() {
               )}
              </div>
            </div>
+           )}
          </div>
 
         {/* Regular UI Content (not printed) */}

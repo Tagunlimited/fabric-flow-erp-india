@@ -1384,7 +1384,12 @@ export function BomForm({
     };
   }, [items]);
 
-  const save = async () => {
+  const isSaveAndCreatePoReady = useMemo(() => {
+    if (items.length === 0) return false;
+    return items.every((item) => Number(item.qty_per_product) > 0);
+  }, [items]);
+
+  const save = async (nextAction: 'view-bom' | 'create-po' = 'view-bom') => {
     if (!bom.product_name.trim()) {
       toast.error('Product name is required');
       return;
@@ -1769,6 +1774,26 @@ export function BomForm({
         onEmbeddedBomSaved();
       }
 
+      if (nextAction === 'create-po') {
+        const poItems = bomItems.map((item) => ({
+          ...item,
+          item_type: item.category === 'Fabric' ? 'fabric' : 'item',
+          quantity: item.qty_total ?? item.to_order ?? 0,
+        }));
+
+        const bomPayload = {
+          id: bomId,
+          bom_number: resolvedBomNumber,
+          product_name: bom.product_name,
+          order_number: orderData?.order_number,
+          items: poItems,
+        } as any;
+
+        const encoded = encodeURIComponent(JSON.stringify(bomPayload));
+        navigate(`/procurement/po/new?bom=${encoded}`);
+        return;
+      }
+
       if (!embedded) {
         setTimeout(() => {
           navigate('/bom?tab=view-bom');
@@ -1856,7 +1881,7 @@ export function BomForm({
              </Button>
            )}
            {!isReadOnly && (
-             <Button onClick={save} disabled={loading || !!(needsOrderLineChoice && !id)}>
+            <Button onClick={() => save('view-bom')} disabled={loading || !!(needsOrderLineChoice && !id)}>
                <Save className="w-4 h-4 mr-2" />
                {loading ? 'Saving...' : (isEditMode ? 'Update BOM' : 'Save BOM')}
              </Button>
@@ -2352,6 +2377,22 @@ export function BomForm({
                  </Card>
        )}
       </>
+      )}
+
+      {!isReadOnly && embedded && (
+        <Button
+          type="button"
+          onClick={() => save('create-po')}
+          disabled={loading || !!(needsOrderLineChoice && !id)}
+          className={`fixed right-6 top-1/2 -translate-y-1/2 z-50 rounded-full px-5 py-6 transition-all duration-300 ${
+            isSaveAndCreatePoReady
+              ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700 shadow-[0_0_0_2px_rgba(16,185,129,0.35),0_8px_24px_rgba(16,185,129,0.35)]'
+              : 'bg-muted text-muted-foreground border-border shadow-lg'
+          }`}
+        >
+          <Save className="w-4 h-4 mr-2" />
+          {loading ? 'Saving...' : 'Save BOM & Create PO'}
+        </Button>
       )}
      </div>
   );

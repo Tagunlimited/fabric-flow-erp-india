@@ -5,19 +5,19 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ShoppingCart, Eye, Package, Truck, Clock, CheckCircle, Search, Filter, FileImage } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { ShoppingCart, Eye, Package, Truck, Clock, CheckCircle, Filter, FileImage, X } from "lucide-react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useOrdersWithReceipts } from "@/hooks/useOrdersWithReceipts";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
-import { formatCurrency } from "@/lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 
 interface Order {
   id: string;
@@ -36,6 +36,8 @@ interface Order {
   order_items?: Array<{
     id: string;
     specifications: any;
+    mockup_images?: string[];
+    category_image_url?: string | null;
   }>;
 }
 
@@ -46,10 +48,14 @@ const DesignPage = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"pending" | "completed">("pending");
-  const [showSearch, setShowSearch] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<string>("date_desc");
+  const [columnFilters, setColumnFilters] = useState({
+    order_number: "",
+    customer: "",
+    date: "",
+    status: "",
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<null | "order_number" | "customer" | "date" | "status">(null);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   
   const [showPrintDialog, setShowPrintDialog] = useState(false);
@@ -71,7 +77,7 @@ const DesignPage = () => {
         // Fetch order items with specifications
         const { data: orderItems, error: itemsError } = await supabase
           .from('order_items')
-          .select('id, order_id, specifications')
+          .select('id, order_id, specifications, mockup_images, category_image_url')
           .in('order_id', orderIds);
 
         if (itemsError) throw itemsError;
@@ -109,6 +115,7 @@ const DesignPage = () => {
 
   // Check if order has mockup uploaded (for custom orders)
   const hasMockup = (order: Order): boolean => {
+    if (getOrderMockupPreviewUrls(order).length > 0) return true;
     if (!order.order_items || order.order_items.length === 0) return false;
     
     return order.order_items.some((item: any) => {
@@ -123,6 +130,24 @@ const DesignPage = () => {
         return false;
       }
     });
+  };
+
+  // Collect one display mockup per product line for list preview.
+  const getOrderMockupPreviewUrls = (order: Order): string[] => {
+    if (!order.order_items || order.order_items.length === 0) return [];
+    const seen = new Set<string>();
+    const urls: string[] = [];
+
+    order.order_items.forEach((item: any) => {
+      const displayImage = getOrderItemDisplayImage(item, order);
+      const normalized = (displayImage || '').trim();
+      if (!normalized) return;
+      if (seen.has(normalized)) return;
+      seen.add(normalized);
+      urls.push(normalized);
+    });
+
+    return urls;
   };
 
   // Check if order has branding (for readymade orders)
@@ -230,34 +255,48 @@ const DesignPage = () => {
 
   // Get current tab orders
   const currentTabOrders = activeTab === "completed" ? completedOrders : pendingOrders;
+  const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
 
-  // Derived filtered, searched, and sorted orders
-  const filteredOrders = currentTabOrders
-    .filter(order => !filterStatus || order.status === filterStatus)
-    .filter(order => {
-      if (!searchTerm) return true;
-      const term = searchTerm.toLowerCase();
-      return (
-        order.order_number?.toLowerCase().includes(term) ||
-        order.customer?.company_name?.toLowerCase().includes(term) ||
-        order.status?.toLowerCase().includes(term) ||
-        (order.order_date && format(new Date(order.order_date), 'dd-MMM-yy').toLowerCase().includes(term)) ||
-        (order.final_amount !== undefined && order.final_amount.toString().toLowerCase().includes(term)) ||
-        (order.balance_amount !== undefined && order.balance_amount.toString().toLowerCase().includes(term))
-      );
-    })
-    .sort((a, b) => {
-      if (sortBy === "date_asc") {
-        return new Date(a.order_date).getTime() - new Date(b.order_date).getTime();
-      } else if (sortBy === "date_desc") {
-        return new Date(b.order_date).getTime() - new Date(a.order_date).getTime();
-      } else if (sortBy === "amount_asc") {
-        return (a.final_amount || 0) - (b.final_amount || 0);
-      } else if (sortBy === "amount_desc") {
-        return (b.final_amount || 0) - (a.final_amount || 0);
-      }
+  const filterDialogMeta = {
+    order_number: { title: "Filter by order number", placeholder: "Type order number..." },
+    customer: { title: "Filter by customer", placeholder: "Type customer name..." },
+    date: { title: "Filter by date", placeholder: "e.g. 31-Mar-26 or 2026-03..." },
+    status: { title: "Filter by status", placeholder: "e.g. pending, in production..." },
+  } as const;
+
+  const matchesFilters = (order: Order) => {
+    const orderNo = (order.order_number || "").toLowerCase();
+    const customer = (order.customer?.company_name || "").toLowerCase();
+    const dateText = [
+      order.order_date || "",
+      order.order_date ? format(new Date(order.order_date), "dd-MMM-yy") : "",
+      order.order_date ? new Date(order.order_date).toLocaleDateString("en-GB") : "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    const statusText = [order.status || "", (order.status || "").replace(/_/g, " ")]
+      .join(" ")
+      .toLowerCase();
+    const includes = (source: string, term: string) => source.includes(term.trim().toLowerCase());
+
+    return (
+      includes(orderNo, columnFilters.order_number) &&
+      includes(customer, columnFilters.customer) &&
+      includes(dateText, columnFilters.date) &&
+      includes(statusText, columnFilters.status)
+    );
+  };
+
+  const filteredOrders = useMemo(() => {
+    const searched = currentTabOrders.filter(matchesFilters);
+    return [...searched].sort((a, b) => {
+      if (sortBy === "date_asc") return new Date(a.order_date).getTime() - new Date(b.order_date).getTime();
+      if (sortBy === "date_desc") return new Date(b.order_date).getTime() - new Date(a.order_date).getTime();
+      if (sortBy === "amount_asc") return (a.final_amount || 0) - (b.final_amount || 0);
+      if (sortBy === "amount_desc") return (b.final_amount || 0) - (a.final_amount || 0);
       return 0;
     });
+  }, [currentTabOrders, sortBy, columnFilters]);
 
   return (
     <ErpLayout>
@@ -347,26 +386,12 @@ const DesignPage = () => {
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
                   <CardTitle>Pending Orders (with Receipts)</CardTitle>
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => setShowSearch(v => !v)}>
-                  <Search className="w-4 h-4 mr-2" />
-                  Search
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm">
-                      <Filter className="w-4 h-4 mr-2" />
-                      Filter
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => setFilterStatus(null)} className={!filterStatus ? 'bg-accent/20 font-semibold' : ''}>All Statuses</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setFilterStatus("pending")} className={filterStatus === "pending" ? 'bg-accent/20 font-semibold' : ''}>Pending</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setFilterStatus("confirmed")} className={filterStatus === "confirmed" ? 'bg-accent/20 font-semibold' : ''}>Confirmed</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setFilterStatus("in_production")} className={filterStatus === "in_production" ? 'bg-accent/20 font-semibold' : ''}>In Production</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setFilterStatus("completed")} className={filterStatus === "completed" ? 'bg-accent/20 font-semibold' : ''}>Completed</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setFilterStatus("cancelled")} className={filterStatus === "cancelled" ? 'bg-accent/20 font-semibold' : ''}>Cancelled</DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                {hasActiveColumnFilters && (
+                  <Button variant="outline" size="sm" onClick={() => setColumnFilters({ order_number: "", customer: "", date: "", status: "" })}>
+                    <X className="w-4 h-4 mr-2" />
+                    Clear Filters
+                  </Button>
+                )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" size="sm">
@@ -383,17 +408,6 @@ const DesignPage = () => {
                 <Button onClick={fetchOrders} variant="outline">Refresh</Button>
               </div>
             </div>
-            {showSearch && (
-              <div className="mt-2">
-                <Input
-                  autoFocus
-                  placeholder="Search by order number or customer name..."
-                  value={searchTerm}
-                  onChange={e => setSearchTerm(e.target.value)}
-                  className="max-w-xs"
-                />
-              </div>
-            )}
           </CardHeader>
           <CardContent className="p-2 sm:p-4">
             {loading ? (
@@ -402,15 +416,41 @@ const DesignPage = () => {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <Table className="min-w-[600px]">
+                <Table className="min-w-[760px]">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Order Number</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Amount</TableHead>
-                      <TableHead>Balance</TableHead>
+                      <TableHead>
+                        <div className="flex items-center justify-between gap-0.5">
+                          <span>Order Number</span>
+                          <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 p-0" onClick={() => setFilterDialogColumn("order_number")}>
+                            <Filter className={`w-3.5 h-3.5 ${columnFilters.order_number ? "text-primary" : "text-muted-foreground"}`} />
+                          </Button>
+                        </div>
+                      </TableHead>
+                      <TableHead>
+                        <div className="flex items-center justify-between gap-0.5">
+                          <span>Customer</span>
+                          <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 p-0" onClick={() => setFilterDialogColumn("customer")}>
+                            <Filter className={`w-3.5 h-3.5 ${columnFilters.customer ? "text-primary" : "text-muted-foreground"}`} />
+                          </Button>
+                        </div>
+                      </TableHead>
+                      <TableHead>
+                        <div className="flex items-center justify-between gap-0.5">
+                          <span>Date</span>
+                          <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 p-0" onClick={() => setFilterDialogColumn("date")}>
+                            <Filter className={`w-3.5 h-3.5 ${columnFilters.date ? "text-primary" : "text-muted-foreground"}`} />
+                          </Button>
+                        </div>
+                      </TableHead>
+                      <TableHead>
+                        <div className="flex items-center justify-between gap-0.5">
+                          <span>Status</span>
+                          <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 p-0" onClick={() => setFilterDialogColumn("status")}>
+                            <Filter className={`w-3.5 h-3.5 ${columnFilters.status ? "text-primary" : "text-muted-foreground"}`} />
+                          </Button>
+                        </div>
+                      </TableHead>
                       <TableHead>Mockup/Branding</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
@@ -420,7 +460,11 @@ const DesignPage = () => {
                       <TableRow 
                         key={order.id} 
                         className="cursor-pointer hover:bg-muted/50"
-                        onClick={() => navigate(`/orders/${order.id}`)}
+                        onClick={() =>
+                          navigate(`/orders/${order.id}`, {
+                            state: { from: 'design', tab: activeTab },
+                          })
+                        }
                       >
                         <TableCell className="font-medium">{order.order_number}</TableCell>
                         <TableCell>{order.customer?.company_name}</TableCell>
@@ -436,23 +480,42 @@ const DesignPage = () => {
                             {order.status.replace('_', ' ').toUpperCase()}
                           </Badge>
                         </TableCell>
-                        <TableCell>{formatCurrency(order.final_amount || 0)}</TableCell>
-                        <TableCell>{formatCurrency(order.balance_amount || 0)}</TableCell>
                         <TableCell>
                           {(() => {
-                            // Check if order has mockup (for custom) or branding (for readymade)
-                            const hasMockupOrBranding = order.order_type === 'readymade' 
-                              ? hasBranding(order) 
-                              : hasMockup(order);
-                            
-                            return hasMockupOrBranding ? (
-                            <div className="w-6 h-6 bg-green-100 rounded flex items-center justify-center">
-                              <FileImage className="w-4 h-4 text-green-600" />
-                            </div>
-                          ) : (
-                            <div className="w-6 h-6 bg-gray-100 rounded flex items-center justify-center">
-                              <FileImage className="w-4 h-4 text-gray-400" />
-                            </div>
+                            const mockupUrls = getOrderMockupPreviewUrls(order);
+                            if (mockupUrls.length > 0) {
+                              const visible = mockupUrls.slice(0, 4);
+                              const remaining = mockupUrls.length - visible.length;
+                              return (
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  {visible.map((url, imgIdx) => (
+                                    <img
+                                      key={`${order.id}-mockup-${imgIdx}`}
+                                      src={url}
+                                      alt={`Mockup ${imgIdx + 1}`}
+                                      className="w-8 h-8 object-cover rounded border border-gray-200"
+                                    />
+                                  ))}
+                                  {remaining > 0 && (
+                                    <span className="text-[10px] font-medium text-gray-600">+{remaining}</span>
+                                  )}
+                                </div>
+                              );
+                            }
+
+                            const hasBrandingOnly = order.order_type === 'readymade' && hasBranding(order);
+                            if (hasBrandingOnly) {
+                              return (
+                                <div className="w-6 h-6 bg-green-100 rounded flex items-center justify-center">
+                                  <FileImage className="w-4 h-4 text-green-600" />
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div className="w-6 h-6 bg-gray-100 rounded flex items-center justify-center">
+                                <FileImage className="w-4 h-4 text-gray-400" />
+                              </div>
                             );
                           })()}
                         </TableCell>
@@ -463,7 +526,9 @@ const DesignPage = () => {
                               size="sm"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                navigate(`/orders/${order.id}`);
+                                navigate(`/orders/${order.id}`, {
+                                  state: { from: 'design', tab: activeTab },
+                                });
                               }}
                             >
                               <Eye className="w-4 h-4" />
@@ -492,26 +557,12 @@ const DesignPage = () => {
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
                   <CardTitle>Completed Orders (with Receipts)</CardTitle>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setShowSearch(v => !v)}>
-                      <Search className="w-4 h-4 mr-2" />
-                      Search
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm">
-                          <Filter className="w-4 h-4 mr-2" />
-                          Filter
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setFilterStatus(null)} className={!filterStatus ? 'bg-accent/20 font-semibold' : ''}>All Statuses</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("pending")} className={filterStatus === "pending" ? 'bg-accent/20 font-semibold' : ''}>Pending</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("confirmed")} className={filterStatus === "confirmed" ? 'bg-accent/20 font-semibold' : ''}>Confirmed</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("in_production")} className={filterStatus === "in_production" ? 'bg-accent/20 font-semibold' : ''}>In Production</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("completed")} className={filterStatus === "completed" ? 'bg-accent/20 font-semibold' : ''}>Completed</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setFilterStatus("cancelled")} className={filterStatus === "cancelled" ? 'bg-accent/20 font-semibold' : ''}>Cancelled</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    {hasActiveColumnFilters && (
+                      <Button variant="outline" size="sm" onClick={() => setColumnFilters({ order_number: "", customer: "", date: "", status: "" })}>
+                        <X className="w-4 h-4 mr-2" />
+                        Clear Filters
+                      </Button>
+                    )}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="outline" size="sm">
@@ -528,17 +579,6 @@ const DesignPage = () => {
                     <Button onClick={fetchOrders} variant="outline">Refresh</Button>
                   </div>
                 </div>
-                {showSearch && (
-                  <div className="mt-2">
-                    <Input
-                      autoFocus
-                      placeholder="Search by order number or customer name..."
-                      value={searchTerm}
-                      onChange={e => setSearchTerm(e.target.value)}
-                      className="max-w-xs"
-                    />
-                  </div>
-                )}
               </CardHeader>
               <CardContent className="p-2 sm:p-4">
                 {loading ? (
@@ -547,15 +587,41 @@ const DesignPage = () => {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <Table className="min-w-[600px]">
+                    <Table className="min-w-[760px]">
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Order Number</TableHead>
-                          <TableHead>Customer</TableHead>
-                          <TableHead>Date</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Amount</TableHead>
-                          <TableHead>Balance</TableHead>
+                          <TableHead>
+                            <div className="flex items-center justify-between gap-0.5">
+                              <span>Order Number</span>
+                              <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 p-0" onClick={() => setFilterDialogColumn("order_number")}>
+                                <Filter className={`w-3.5 h-3.5 ${columnFilters.order_number ? "text-primary" : "text-muted-foreground"}`} />
+                              </Button>
+                            </div>
+                          </TableHead>
+                          <TableHead>
+                            <div className="flex items-center justify-between gap-0.5">
+                              <span>Customer</span>
+                              <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 p-0" onClick={() => setFilterDialogColumn("customer")}>
+                                <Filter className={`w-3.5 h-3.5 ${columnFilters.customer ? "text-primary" : "text-muted-foreground"}`} />
+                              </Button>
+                            </div>
+                          </TableHead>
+                          <TableHead>
+                            <div className="flex items-center justify-between gap-0.5">
+                              <span>Date</span>
+                              <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 p-0" onClick={() => setFilterDialogColumn("date")}>
+                                <Filter className={`w-3.5 h-3.5 ${columnFilters.date ? "text-primary" : "text-muted-foreground"}`} />
+                              </Button>
+                            </div>
+                          </TableHead>
+                          <TableHead>
+                            <div className="flex items-center justify-between gap-0.5">
+                              <span>Status</span>
+                              <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 p-0" onClick={() => setFilterDialogColumn("status")}>
+                                <Filter className={`w-3.5 h-3.5 ${columnFilters.status ? "text-primary" : "text-muted-foreground"}`} />
+                              </Button>
+                            </div>
+                          </TableHead>
                           <TableHead>Mockup/Branding</TableHead>
                           <TableHead>Actions</TableHead>
                         </TableRow>
@@ -565,7 +631,11 @@ const DesignPage = () => {
                           <TableRow 
                             key={order.id} 
                             className="cursor-pointer hover:bg-muted/50"
-                            onClick={() => navigate(`/orders/${order.id}`)}
+                            onClick={() =>
+                              navigate(`/orders/${order.id}`, {
+                                state: { from: 'design', tab: activeTab },
+                              })
+                            }
                           >
                             <TableCell className="font-medium">{order.order_number}</TableCell>
                             <TableCell>{order.customer?.company_name}</TableCell>
@@ -581,20 +651,39 @@ const DesignPage = () => {
                                 {order.status.replace('_', ' ').toUpperCase()}
                               </Badge>
                             </TableCell>
-                            <TableCell>{formatCurrency(order.final_amount || 0)}</TableCell>
-                            <TableCell>{formatCurrency(order.balance_amount || 0)}</TableCell>
                             <TableCell>
                               {(() => {
-                                // Check if order has mockup (for custom) or branding (for readymade)
-                                const hasMockupOrBranding = order.order_type === 'readymade' 
-                                  ? hasBranding(order) 
-                                  : hasMockup(order);
-                                
-                                return hasMockupOrBranding ? (
-                                  <div className="w-6 h-6 bg-green-100 rounded flex items-center justify-center">
-                                    <FileImage className="w-4 h-4 text-green-600" />
-                                  </div>
-                                ) : (
+                                const mockupUrls = getOrderMockupPreviewUrls(order);
+                                if (mockupUrls.length > 0) {
+                                  const visible = mockupUrls.slice(0, 4);
+                                  const remaining = mockupUrls.length - visible.length;
+                                  return (
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {visible.map((url, imgIdx) => (
+                                        <img
+                                          key={`${order.id}-mockup-completed-${imgIdx}`}
+                                          src={url}
+                                          alt={`Mockup ${imgIdx + 1}`}
+                                          className="w-8 h-8 object-cover rounded border border-gray-200"
+                                        />
+                                      ))}
+                                      {remaining > 0 && (
+                                        <span className="text-[10px] font-medium text-gray-600">+{remaining}</span>
+                                      )}
+                                    </div>
+                                  );
+                                }
+
+                                const hasBrandingOnly = order.order_type === 'readymade' && hasBranding(order);
+                                if (hasBrandingOnly) {
+                                  return (
+                                    <div className="w-6 h-6 bg-green-100 rounded flex items-center justify-center">
+                                      <FileImage className="w-4 h-4 text-green-600" />
+                                    </div>
+                                  );
+                                }
+
+                                return (
                                   <div className="w-6 h-6 bg-gray-100 rounded flex items-center justify-center">
                                     <FileImage className="w-4 h-4 text-gray-400" />
                                   </div>
@@ -608,7 +697,9 @@ const DesignPage = () => {
                                   size="sm"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    navigate(`/orders/${order.id}`);
+                                    navigate(`/orders/${order.id}`, {
+                                      state: { from: 'design', tab: activeTab },
+                                    });
                                   }}
                                 >
                                   <Eye className="w-4 h-4" />
@@ -630,6 +721,37 @@ const DesignPage = () => {
             </Card>
           </TabsContent>
         </Tabs>
+
+        <Dialog open={filterDialogColumn !== null} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+          <DialogContent className="max-w-md">
+            {filterDialogColumn && (
+              <>
+                <DialogHeader>
+                  <DialogTitle>{filterDialogMeta[filterDialogColumn].title}</DialogTitle>
+                </DialogHeader>
+                <Input
+                  autoFocus
+                  placeholder={filterDialogMeta[filterDialogColumn].placeholder}
+                  value={columnFilters[filterDialogColumn]}
+                  onChange={(e) =>
+                    setColumnFilters((prev) => ({ ...prev, [filterDialogColumn]: e.target.value }))
+                  }
+                />
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      setColumnFilters((prev) => ({ ...prev, [filterDialogColumn]: "" }))
+                    }
+                  >
+                    Clear
+                  </Button>
+                  <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                </div>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
 
         {/* Print Dialog */}
         <Dialog open={showPrintDialog} onOpenChange={setShowPrintDialog}>
