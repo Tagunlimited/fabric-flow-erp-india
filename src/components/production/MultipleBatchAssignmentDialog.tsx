@@ -19,6 +19,7 @@ import { useSizeTypes } from '@/hooks/useSizeTypes';
 import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { sizesFromOrderItem } from '@/utils/sizesFromOrderItem';
+import { getOrderItemLineQuantity } from '@/utils/orderItemLineQuantity';
 import { resolveSwatchHex } from '@/lib/grnColorSwatch';
 import '@/components/purchase-orders/BomLinePicker.css';
 
@@ -354,8 +355,24 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
 
   const handleDistributeDialogSuccess = () => {
     setShowDistributeDialog(false);
-    onSuccess();
-    onClose();
+  };
+
+  const handleLineAssignmentSaved = (savedOrderItemId: string | null) => {
+    if (!savedOrderItemId || !orderItems || orderItems.length <= 1) return;
+    const currentIndex = orderItems.findIndex((i: any) => i.id === savedOrderItemId);
+    const hasNext = currentIndex >= 0 && currentIndex < orderItems.length - 1;
+    if (hasNext) {
+      setSelectedOrderItemId(orderItems[currentIndex + 1].id);
+      setSelectedBatches(new Set());
+      toast({
+        title: 'Line assigned',
+        description: 'Proceed to assign batches for the next product line.',
+      });
+    } else {
+      // Last line saved; parent refresh handles completed/active placement.
+      onSuccess();
+      onClose();
+    }
   };
 
   const handleAddMoreBatches = () => {
@@ -469,7 +486,7 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
                         <span className="bom-line-radio-label">
                           {it.product_description || it.product_category?.category_name || 'Product'}
                           <span className="block text-xs font-normal text-muted-foreground mt-0.5">
-                            {it.quantity ?? 0} pcs
+                            {getOrderItemLineQuantity(it)} pcs
                           </span>
                         </span>
                       </span>
@@ -577,6 +594,7 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
           onClose={handleDistributeDialogClose}
           onSuccess={handleDistributeDialogSuccess}
           onAssignmentsSaved={onSuccess}
+          onLineAssignmentSaved={handleLineAssignmentSaved}
           onAddMoreBatches={handleAddMoreBatches}
           orderId={orderId}
           orderNumber={orderNumber}

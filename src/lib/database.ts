@@ -602,6 +602,40 @@ export async function getQcStatusSummary(): Promise<{ totalApproved: number; tot
 // Get cutting quantities assigned to cutting master but not completed
 export async function getCuttingPendingQuantities(): Promise<number> {
   try {
+    const deriveLineQty = (item: any): number => {
+      const normalize = (value: any): Record<string, number> => {
+        const out: Record<string, number> = {};
+        if (!value || typeof value !== 'object') return out;
+        Object.entries(value).forEach(([size, qty]) => {
+          const key = String(size || '').trim();
+          if (!key) return;
+          const q = Number(qty) || 0;
+          if (q > 0) out[key] = q;
+        });
+        return out;
+      };
+
+      let specs = item?.specifications;
+      if (typeof specs === 'string') {
+        try {
+          specs = JSON.parse(specs);
+        } catch {
+          specs = null;
+        }
+      }
+      const sizes = normalize(item?.sizes_quantities || specs?.sizes_quantities);
+      const sum = Object.values(sizes).reduce((acc, q) => acc + q, 0);
+      return sum > 0 ? sum : Number(item?.quantity || 0);
+    };
+
+    const buildOrderQtyMap = (rows: any[]): Record<string, number> =>
+      (rows || []).reduce((acc: Record<string, number>, row: any) => {
+        const orderId = row?.order_id;
+        if (!orderId) return acc;
+        acc[orderId] = (acc[orderId] || 0) + deriveLineQty(row);
+        return acc;
+      }, {});
+
     // Fetch from order_cutting_assignments where cutting is not completed
     // Get all assignments and filter out completed ones
     const { data: allCuttingAssignments, error: cuttingError } = await (supabase as any)
@@ -624,21 +658,15 @@ export async function getCuttingPendingQuantities(): Promise<number> {
           .map((a: any) => a.order_id)
           .filter(Boolean);
         
-        let bomQtyByOrder: Record<string, number> = {};
+        let orderQtyByOrder: Record<string, number> = {};
         if (orderIdsForBom.length > 0) {
-          const { data: bomRecords, error: bomError2 } = await supabase
-            .from('bom_records')
-            .select('order_id, total_order_qty')
+          const { data: orderItems, error: itemsError2 } = await supabase
+            .from('order_items')
+            .select('order_id, quantity, sizes_quantities, specifications')
             .in('order_id', orderIdsForBom);
           
-          if (!bomError2 && bomRecords) {
-            bomQtyByOrder = bomRecords.reduce((acc: Record<string, number>, bom: any) => {
-              const orderId = bom.order_id;
-              if (orderId) {
-                acc[orderId] = (acc[orderId] || 0) + Number(bom.total_order_qty || 0);
-              }
-              return acc;
-            }, {});
+          if (!itemsError2 && orderItems) {
+            orderQtyByOrder = buildOrderQtyMap(orderItems as any[]);
           }
         }
         
@@ -646,9 +674,9 @@ export async function getCuttingPendingQuantities(): Promise<number> {
         cuttingPending = nonCompletedAssignments.reduce((sum: number, assignment: any) => {
           let assigned = Number(assignment.assigned_quantity || 0);
           
-          // If assigned_quantity is 0 or null, try to get from BOM
+          // If assigned_quantity is 0 or null, derive from current order items
           if (assigned === 0 && assignment.order_id) {
-            assigned = bomQtyByOrder[assignment.order_id] || 0;
+            assigned = orderQtyByOrder[assignment.order_id] || 0;
           }
           
           const completed = Number(assignment.completed_quantity || 0);
@@ -674,24 +702,16 @@ export async function getCuttingPendingQuantities(): Promise<number> {
       const orderIds = orderAssignments.map((oa: any) => oa.order_id).filter(Boolean);
       
       if (orderIds.length > 0) {
-        // Get total order quantities from BOM records
-        const { data: bomRecords, error: bomError } = await supabase
-          .from('bom_records')
-          .select('order_id, total_order_qty')
+        const { data: orderItems, error: itemsError } = await supabase
+          .from('order_items')
+          .select('order_id, quantity, sizes_quantities, specifications')
           .in('order_id', orderIds);
 
-        if (bomError) {
-          console.error('Error fetching BOM records:', bomError);
+        if (itemsError) {
+          console.error('Error fetching order items:', itemsError);
         }
 
-        // Calculate total quantity per order from BOM
-        const totalQtyByOrder = (bomRecords || []).reduce((acc: Record<string, number>, bom: any) => {
-          const orderId = bom.order_id;
-          if (orderId) {
-            acc[orderId] = (acc[orderId] || 0) + Number(bom.total_order_qty || 0);
-          }
-          return acc;
-        }, {});
+        const totalQtyByOrder = buildOrderQtyMap((orderItems || []) as any[]);
 
         // Calculate pending for each legacy assignment
         legacyPending = orderAssignments.reduce((sum: number, oa: any) => {

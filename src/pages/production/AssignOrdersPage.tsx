@@ -27,6 +27,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { formatDueDateIndian } from '@/lib/utils';
+import { getOrderTotalQuantityFromItems } from '@/utils/orderItemLineQuantity';
 import { ReassignCuttingMasterDialog } from '@/components/production/ReassignCuttingMasterDialog';
 import { BackButton } from '@/components/common/BackButton';
 
@@ -485,7 +486,7 @@ const AssignOrdersPage = () => {
         try {
           const { data: orderItemsData } = await supabase
             .from('order_items' as any)
-            .select('order_id, sizes_quantities')
+            .select('order_id, quantity, sizes_quantities, specifications')
             .in('order_id', orderIds as any);
           (orderItemsData || []).forEach((item: any) => {
             if (item?.order_id) {
@@ -557,7 +558,7 @@ const AssignOrdersPage = () => {
           const productName = bomList.length === 1
             ? (bomList[0]?.product_name || 'Product')
             : (bomList.length > 1 ? 'Multiple Products' : 'Product');
-          const quantity = bomList.reduce((sum: number, b: any) => sum + (b?.total_order_qty || 0), 0);
+          const quantity = getOrderTotalQuantityFromItems(orderItemsByOrder[o.id] || []);
           const due = o.expected_delivery_date || '';
 
           // Material status: Available if order has a BOM and that BOM has a GRN (PO created for BOM + GRN with approved items)
@@ -584,7 +585,7 @@ const AssignOrdersPage = () => {
           
           if (cuttingMasters.length > 0) {
             // Multiple cutting masters - calculate quantities per master
-            const bomTotalQty = quantity; // Already calculated from BOM
+            const bomTotalQty = quantity; // Calculated from canonical order item quantities
             
             // Get order items for this order to calculate size-wise quantities
             const orderItems = orderItemsByOrder[o.id] || [];

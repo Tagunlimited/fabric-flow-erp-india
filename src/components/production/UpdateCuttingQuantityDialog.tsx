@@ -17,6 +17,7 @@ import {
   sumAllCutsInStoredJson,
 } from '@/utils/cutQuantitiesStorage';
 import { sizesFromOrderItem } from '@/utils/sizesFromOrderItem';
+import { getOrderItemLineQuantity } from '@/utils/orderItemLineQuantity';
 import { resolveSwatchHex } from '@/lib/grnColorSwatch';
 import '@/components/purchase-orders/BomLinePicker.css';
 
@@ -717,7 +718,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                       <span className="bom-line-radio-label">
                         {it.product_description || 'Product'}
                         <span className="block text-xs font-normal text-muted-foreground mt-0.5">
-                          {it.quantity ?? 0} pcs
+                          {getOrderItemLineQuantity(it)} pcs
                         </span>
                       </span>
                     </span>
