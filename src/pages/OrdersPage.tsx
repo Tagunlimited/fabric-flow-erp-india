@@ -264,6 +264,7 @@ const OrdersPage = () => {
   const [columnFilters, setColumnFilters] = useState<OrdersColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
   const [filterDialogColumn, setFilterDialogColumn] = useState<OrdersFilterColumnKey | null>(null);
   const [sortBy, setSortBy] = useState<string>("date_desc");
+  const [loggedInSalesManagerFilterValue, setLoggedInSalesManagerFilterValue] = useState<string>("");
 
   const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
 
@@ -284,6 +285,74 @@ const OrdersPage = () => {
       navigate(location.pathname, { replace: true, state: {} });
     }
   }, [location.state, activeTab, navigate, location.pathname]);
+
+  const resolveLoggedInSalesManagerFilterValue = async (): Promise<string> => {
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id;
+      const userEmail = authData?.user?.email || null;
+      if (!userId) return "";
+
+      const { data: employeeRows } = await (supabase.from('employees') as any).select('id, full_name, personal_email, user_id');
+      const employees = (employeeRows || []) as Array<{ id: string; full_name?: string; personal_email?: string; user_id?: string }>;
+
+      let matchedEmployee = employees.find((e) => e.user_id === userId);
+
+      if (!matchedEmployee) {
+        const { data: allProfiles } = await supabase
+          .from('profiles')
+          .select('id, user_id, email');
+        const matchingProfile = (allProfiles || []).find((p: any) => p.user_id === userId || (userEmail && p.email === userEmail));
+        if (matchingProfile) {
+          matchedEmployee = employees.find(
+            (e) => e.user_id === matchingProfile.user_id || (!!matchingProfile.email && e.personal_email === matchingProfile.email)
+          );
+        }
+      }
+
+      if (!matchedEmployee && userEmail) {
+        matchedEmployee = employees.find((e) => e.personal_email === userEmail);
+      }
+
+      if (matchedEmployee?.id) return matchedEmployee.id;
+      const fallbackName = (authData?.user as any)?.user_metadata?.full_name;
+      if (typeof fallbackName === "string" && fallbackName.trim()) return fallbackName.trim();
+      return userEmail || "";
+    } catch {
+      return "";
+    }
+  };
+
+  // Prefetch marker for quick My Orders toggle.
+  useEffect(() => {
+    const load = async () => {
+      const marker = await resolveLoggedInSalesManagerFilterValue();
+      if (marker) setLoggedInSalesManagerFilterValue(marker);
+    };
+    load();
+  }, []);
+
+  const isMyOrdersFilterActive =
+    !!loggedInSalesManagerFilterValue &&
+    columnFilters.sales_manager.trim().toLowerCase() === loggedInSalesManagerFilterValue.trim().toLowerCase();
+
+  const handleToggleMyOrdersFilter = async () => {
+    if (isMyOrdersFilterActive) {
+      setColumnFilters((p) => ({ ...p, sales_manager: '' }));
+      return;
+    }
+
+    let marker = loggedInSalesManagerFilterValue;
+    if (!marker) {
+      marker = await resolveLoggedInSalesManagerFilterValue();
+      if (marker) setLoggedInSalesManagerFilterValue(marker);
+    }
+    if (!marker) {
+      toast.error('Unable to resolve your sales-manager profile.');
+      return;
+    }
+    setColumnFilters((p) => ({ ...p, sales_manager: marker }));
+  };
 
   const fetchOrders = async (forceRefresh = false) => {
     try {
@@ -622,6 +691,16 @@ const OrdersPage = () => {
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      onClick={handleToggleMyOrdersFilter}
+                      className={cn(
+                        "rounded-full border border-yellow-500 bg-yellow-300 text-black text-sm font-semibold px-4 py-2 transition-all duration-300 shadow-[0_0_0_0_black] hover:-translate-y-1 hover:-translate-x-0.5 hover:shadow-[2px_5px_0_0_black] active:translate-y-0.5 active:translate-x-0.5 active:shadow-[0_0_0_0_black]",
+                        isMyOrdersFilterActive && "bg-black text-white border-black"
+                      )}
+                    >
+                      My Orders
+                    </Button>
                     {hasActiveColumnFilters && (
                       <Button
                         variant="outline"

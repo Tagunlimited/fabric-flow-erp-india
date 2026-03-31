@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Trash2, Plus, ExternalLink, X, ArrowLeft, Printer, Download, Share2, Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import jsPDF from 'jspdf';
@@ -142,6 +143,8 @@ export function PurchaseOrderForm() {
   const [itemOptions, setItemOptions] = useState<{ id: string; label: string; image_url?: string | null; item_type?: string; uom?: string; type?: string; color?: string | null }[]>([]);
   const [productOptions, setProductOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
   const [itemTypeOptions, setItemTypeOptions] = useState<string[]>([]);
+  const [postSaveDialogOpen, setPostSaveDialogOpen] = useState(false);
+  const [savedPoNumber, setSavedPoNumber] = useState<string>('');
 
   const {
     pendingItems,
@@ -193,6 +196,12 @@ export function PurchaseOrderForm() {
   };
 
   const aggregatedSelectedItems = useMemo(() => {
+    const norm = (value: unknown) =>
+      String(value ?? '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+
     const grouped = new Map<
       string,
       {
@@ -221,15 +230,16 @@ export function PurchaseOrderForm() {
         itemType === 'fabric'
           ? [
               'fabric',
-              (item.fabric_name || item.item_name || '').toLowerCase(),
-              (item.fabric_color || '').toLowerCase(),
-              (item.fabric_gsm || '').toLowerCase(),
-              unit.toLowerCase()
+              // Group fabrics by what is shown to supplier + color + gsm + uom
+              norm(item.fabric_for_supplier || item.fabric_name || item.item_name),
+              norm(item.fabric_color),
+              norm(item.fabric_gsm),
+              norm(unit)
             ].join('|')
           : [
               'item',
-              (item.item_id || item.item_name || '').toLowerCase(),
-              unit.toLowerCase()
+              norm(item.item_id || item.item_name),
+              norm(unit)
             ].join('|');
 
       const resolvedColor = item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null);
@@ -919,10 +929,19 @@ export function PurchaseOrderForm() {
       });
       
       // Only update if there are changes
-      const hasChanges = enrichedItems.some((item, index) => 
-        item.item_image_url !== items[index].item_image_url || 
-        item.item_category !== items[index].item_category
-      );
+      const hasChanges = enrichedItems.some((item, index) => {
+        const prev = items[index];
+        return (
+          item.item_image_url !== prev.item_image_url ||
+          item.item_category !== prev.item_category ||
+          item.item_id !== prev.item_id ||
+          item.item_color !== prev.item_color ||
+          item.fabric_for_supplier !== prev.fabric_for_supplier ||
+          item.fabric_name !== prev.fabric_name ||
+          item.fabric_color !== prev.fabric_color ||
+          item.fabric_gsm !== prev.fabric_gsm
+        );
+      });
       
       console.log('Has changes:', hasChanges);
       
@@ -1204,18 +1223,7 @@ export function PurchaseOrderForm() {
     }
   };
 
-  const handlePrint = async () => {
-    // Removed loading toast as requested
-    
-    // Ensure logo is converted to base64
-    if (companySettings?.logo_url && !logoBase64) {
-      await convertLogoToBase64(companySettings.logo_url);
-    }
-    
-    // Loading toast removed as requested
-
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
+  const buildPurchaseOrderPrintHtml = () => {
       console.log('Company Settings:', companySettings);
       console.log('Suppliers:', suppliers);
       console.log('Suppliers Map:', suppliersMap);
@@ -1274,23 +1282,7 @@ export function PurchaseOrderForm() {
       const grandGstAmount = 0;
       const grandTotal = 0;
       
-      // Convert number to words (simple implementation)
-      const numberToWords = (num: number): string => {
-        const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
-        const teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
-        const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-        
-        if (num === 0) return 'Zero';
-        if (num < 10) return ones[num];
-        if (num < 20) return teens[num - 10];
-        if (num < 100) return tens[Math.floor(num / 10)] + (num % 10 ? ' ' + ones[num % 10] : '');
-        if (num < 1000) return ones[Math.floor(num / 100)] + ' Hundred' + (num % 100 ? ' ' + numberToWords(num % 100) : '');
-        if (num < 100000) return numberToWords(Math.floor(num / 1000)) + ' Thousand' + (num % 1000 ? ' ' + numberToWords(num % 1000) : '');
-        if (num < 10000000) return numberToWords(Math.floor(num / 100000)) + ' Lakh' + (num % 100000 ? ' ' + numberToWords(num % 100000) : '');
-        return numberToWords(Math.floor(num / 10000000)) + ' Crore' + (num % 10000000 ? ' ' + numberToWords(num % 10000000) : '');
-      };
-    
-    printWindow.document.write(`
+    return `
       <html>
         <head>
           <title>Purchase Order - ${po.po_number || 'Draft'}</title>
@@ -1481,7 +1473,22 @@ export function PurchaseOrderForm() {
             
         </body>
       </html>
-    `);
+    `;
+  };
+
+  const handlePrint = async () => {
+    // Removed loading toast as requested
+    
+    // Ensure logo is converted to base64
+    if (companySettings?.logo_url && !logoBase64) {
+      await convertLogoToBase64(companySettings.logo_url);
+    }
+    
+    // Loading toast removed as requested
+
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(buildPurchaseOrderPrintHtml());
     printWindow.document.close();
     
     // Since we're using base64 images, they load immediately - no need to wait
@@ -2071,6 +2078,29 @@ export function PurchaseOrderForm() {
         throw new Error('Failed to resolve purchase order ID after save.');
       }
 
+      // Validate fabric IDs against `fabrics` table to avoid FK conflicts.
+      const candidateFabricIds = Array.from(
+        new Set(
+          itemsWithTotals
+            .filter(item => item.item_type === 'fabric' && item.item_id)
+            .map(item => String(item.item_id))
+        )
+      );
+      let validFabricIds = new Set<string>();
+      if (candidateFabricIds.length > 0) {
+        try {
+          const { data: fabricsData, error: fabricsError } = await supabase
+            .from('fabrics')
+            .select('id')
+            .in('id', candidateFabricIds as any);
+          if (!fabricsError && fabricsData) {
+            validFabricIds = new Set((fabricsData as any[]).map((row: any) => String(row.id)));
+          }
+        } catch (fabricLookupError) {
+          console.warn('Unable to validate fabric IDs from fabrics table:', fabricLookupError);
+        }
+      }
+
       // Insert line items
       const lineItemsData = itemsWithTotals.map(item => ({
         po_id: poId, // Changed from purchase_order_id to po_id
@@ -2086,7 +2116,8 @@ export function PurchaseOrderForm() {
           fabric_name: item.fabric_name || null,
           fabric_color: item.fabric_color || null,
           fabric_gsm: item.fabric_gsm || null,
-          fabric_id: item.item_id || null // For fabric items, item_id is the fabric_id
+          // Only set fabric_id when it exists in `fabrics`; otherwise keep null.
+          fabric_id: item.item_id && validFabricIds.has(String(item.item_id)) ? item.item_id : null
         })
       }));
 
@@ -2131,8 +2162,10 @@ export function PurchaseOrderForm() {
         if (trackingInsertError) throw trackingInsertError;
       }
 
+      setPo(prev => ({ ...prev, id: poId || undefined, po_number: poNumber }));
+      setSavedPoNumber(poNumber || '');
+      setPostSaveDialogOpen(true);
       toast.success('Purchase order saved successfully');
-      navigate('/procurement/po');
       
       } catch (error) {
       console.error('Error saving purchase order:', error);
@@ -2742,6 +2775,38 @@ export function PurchaseOrderForm() {
         </CardContent>
       </Card>
       </div> {/* End of printRef */}
+
+      <Dialog open={postSaveDialogOpen} onOpenChange={setPostSaveDialogOpen}>
+        <DialogContent className="max-w-6xl">
+          <DialogHeader>
+            <DialogTitle>Purchase Order Saved</DialogTitle>
+            <DialogDescription>
+              {savedPoNumber
+                ? `PO ${savedPoNumber} is saved successfully.`
+                : 'Purchase order is saved successfully.'}{' '}
+              Review the preview and choose print/export.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="border rounded-md overflow-hidden bg-white">
+            <iframe
+              title="Purchase Order Preview"
+              className="w-full h-[62vh]"
+              srcDoc={buildPurchaseOrderPrintHtml()}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={handlePrint}>
+              <Printer className="w-4 h-4 mr-2" />
+              Print
+            </Button>
+            <Button variant="outline" onClick={generatePDF}>
+              <Download className="w-4 h-4 mr-2" />
+              Export PDF
+            </Button>
+            <Button onClick={() => navigate('/procurement/po')}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

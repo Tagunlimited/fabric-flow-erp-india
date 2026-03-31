@@ -1189,7 +1189,6 @@ export default function QuotationDetailPage() {
                     <div><strong>Order Date:</strong> {order?.order_date ? new Date(order.order_date).toLocaleDateString('en-IN') : 'N/A'}</div>
                     <div><strong>Expected Delivery:</strong> {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
                     <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
-                    <div><strong>Status:</strong> <span className="capitalize">{order?.status?.replace('_', ' ') || 'N/A'}</span></div>
                     <div><strong>Payment Terms:</strong> {(order as any).payment_channel || 'As per agreement'}</div>
                     </div>
                   </div>
@@ -1352,10 +1351,10 @@ export default function QuotationDetailPage() {
                                       </>
                                     ) : (
                                       <>
-                                        <div className="text-sm text-gray-600 font-semibold">
-                                          {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
+                                        <div className="text-sm text-gray-800 font-extrabold">
+                                          {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}
                                         </div>
-                                        <div className="font-semibold">{item.product_description}</div>
+                                        <div className="font-normal text-gray-900">{item.product_description}</div>
                                         <div className="text-sm text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
                                         {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
                                           <div className="text-sm text-gray-600">
@@ -1607,8 +1606,7 @@ export default function QuotationDetailPage() {
                       <div><strong>Order Date:</strong> {order?.order_date ? new Date(order.order_date).toLocaleDateString('en-IN') : 'N/A'}</div>
                       <div><strong>Expected Delivery:</strong> {(order as any)?.expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : 'TBD'}</div>
                     <div><strong>Sales Manager:</strong> {salesManager?.full_name || 'N/A'}</div>
-                      <div><strong>Status:</strong> <span className="capitalize">{order?.status?.replace('_', ' ') || 'N/A'}</span></div>
-                      <div><strong>Payment Terms:</strong> {(order as any)?.payment_channel || 'As per agreement'}</div>
+                        <div><strong>Payment Terms:</strong> {(order as any)?.payment_channel || 'As per agreement'}</div>
                   </div>
                 </div>
               </div>
@@ -1770,10 +1768,10 @@ export default function QuotationDetailPage() {
                               </>
                             ) : (
                               <>
-                                        <div className="text-sm text-gray-600 font-semibold">
-                                  {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}, {item.gsm}GSM
+                                        <div className="text-sm text-gray-800 font-extrabold">
+                                  {fabrics[item.fabric_id]?.name || 'Fabric'} - {item.color}
                                 </div>
-                                        <div className="font-semibold">{item.product_description}</div>
+                                        <div className="font-normal text-gray-900">{item.product_description}</div>
                                         <div className="text-sm text-gray-600">{productCategories[item.product_category_id]?.category_name}</div>
                                 {item.sizes_quantities && typeof item.sizes_quantities === 'object' && (
                                           <div className="text-sm text-gray-600">

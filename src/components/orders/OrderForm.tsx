@@ -178,6 +178,8 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [brandingTypes, setBrandingTypes] = useState<BrandingType[]>([]);
   const [loading, setLoading] = useState(false);
+  const [orderDatePopoverOpen, setOrderDatePopoverOpen] = useState(false);
+  const [expectedDeliveryPopoverOpen, setExpectedDeliveryPopoverOpen] = useState(false);
 
   const initialFormData = useMemo<OrderFormData>(() => ({
     order_date: new Date(),
@@ -335,7 +337,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
   const [currentProductIndex, setCurrentProductIndex] = useState(0);
   const [selectedSizesForPriceEdit, setSelectedSizesForPriceEdit] = useState<{ [productIndex: number]: string[] }>({});
   const [sizePriceEditOpen, setSizePriceEditOpen] = useState<{ [productIndex: number]: boolean }>({});
-  const [showAllSizesForQty, setShowAllSizesForQty] = useState<Record<number, boolean>>({});
+  const [colorTypeaheadPrefix, setColorTypeaheadPrefix] = useState<Record<number, string>>({});
   const [expandedProductSections, setExpandedProductSections] = useState<Record<number, {
     reference: boolean;
     attachments: boolean;
@@ -344,6 +346,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
   }>>({});
   const sliderRef = useRef<HTMLDivElement>(null);
   const autoScrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const colorTypeaheadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const toggleProductSection = (
     productIndex: number,
@@ -537,6 +540,37 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
     });
   };
 
+  const getSortedAvailableColors = (productIndex: number) => {
+    const colors = getAvailableColors(productIndex);
+    const prefix = (colorTypeaheadPrefix[productIndex] || '').trim().toLowerCase();
+
+    const alphaSort = (a: typeof colors[number], b: typeof colors[number]) =>
+      (a.color || '').localeCompare(b.color || '');
+
+    if (!prefix) return [...colors].sort(alphaSort);
+
+    const startsWithPrefix = colors.filter((c) => (c.color || '').toLowerCase().startsWith(prefix));
+    const others = colors.filter((c) => !(c.color || '').toLowerCase().startsWith(prefix));
+    return [...startsWithPrefix.sort(alphaSort), ...others.sort(alphaSort)];
+  };
+
+  const handleColorTypeahead = (productIndex: number, key: string) => {
+    if (!/^[a-zA-Z]$/.test(key)) return;
+
+    if (colorTypeaheadTimeoutRef.current) {
+      clearTimeout(colorTypeaheadTimeoutRef.current);
+    }
+
+    setColorTypeaheadPrefix((prev) => ({
+      ...prev,
+      [productIndex]: `${prev[productIndex] || ''}${key}`.toLowerCase(),
+    }));
+
+    colorTypeaheadTimeoutRef.current = setTimeout(() => {
+      setColorTypeaheadPrefix((prev) => ({ ...prev, [productIndex]: '' }));
+    }, 900);
+  };
+
 const getSelectedFabricVariant = (productIndex: number) => {
   const product = formData.products[productIndex];
   if (!product.fabric_id || !product.color || !product.gsm) return null;
@@ -557,6 +591,32 @@ const getSelectedFabricVariant = (productIndex: number) => {
   }
   return variant;
 };
+
+  // Get available GSM options for selected product/fabric.
+  // Keeps unique values and allows users to still type custom GSM manually.
+  const getAvailableGsmOptions = (productIndex: number): string[] => {
+    const product = formData.products[productIndex];
+    const baseId = product.fabric_base_id || product.fabric_id;
+    if (!baseId) return [];
+
+    const selectedBaseFabric = fabrics.find((f) => f.id === baseId);
+    if (!selectedBaseFabric) return [];
+
+    const gsmSet = new Set<string>();
+    fabrics
+      .filter((f) => f.fabric_name === selectedBaseFabric.fabric_name)
+      .forEach((f) => {
+        const gsm = String(f.gsm || '').trim();
+        if (gsm) gsmSet.add(gsm);
+      });
+
+    return Array.from(gsmSet).sort((a, b) => {
+      const aNum = Number(a);
+      const bNum = Number(b);
+      if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+      return a.localeCompare(b);
+    });
+  };
 
   // Color and GSM are now automatically selected with fabric
   // No separate color selection needed
@@ -872,19 +932,17 @@ const getSelectedFabricVariant = (productIndex: number) => {
   };
 
   // Get unique fabric names - show all active fabrics regardless of category association
-  // Returns all unique fabric_name × GSM combinations
+  // Returns one entry per fabric_name (GSM variants are merged)
   const getFilteredFabricNames = (productIndex: number) => {
     // Show all active fabrics, not filtered by category
     const allActiveFabrics = fabrics.filter(f => f.status === 'active');
     
-    // Create a map to store unique fabric_name × GSM combinations
-    // Key format: "fabric_name|gsm" to ensure uniqueness
+    // Create a map to store unique fabric names
+    // Key format: "fabric_name"
     const fabricMap = new Map<string, typeof allActiveFabrics[0]>();
     
     allActiveFabrics.forEach(fabric => {
-      // Create unique key: fabric_name + GSM (empty string if no GSM)
       const fabricName = (fabric.fabric_name || '').trim();
-      const gsm = (fabric.gsm || '').trim();
       
       // Only process if fabric has a name
       if (!fabricName) {
@@ -892,10 +950,10 @@ const getSelectedFabricVariant = (productIndex: number) => {
         return;
       }
       
-      const key = `${fabricName}|${gsm}`;
+      const key = fabricName.toLowerCase();
       
-      // Store each unique fabric_name × GSM combination
-      // If same fabric_name + GSM already exists, keep the first one
+      // Store each unique fabric name
+      // If same name already exists, keep the first one
       if (!fabricMap.has(key)) {
         fabricMap.set(key, fabric);
       }
@@ -903,30 +961,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
     
     // Convert to array and sort
     const result = Array.from(fabricMap.values()).sort((a, b) => {
-      // Sort by fabric name first, then by GSM (numeric if possible)
-      const nameCompare = (a.fabric_name || '').localeCompare(b.fabric_name || '');
-      if (nameCompare !== 0) return nameCompare;
-      
-      // Try numeric comparison for GSM, fallback to string
-      const aGsm = a.gsm || '';
-      const bGsm = b.gsm || '';
-      const aGsmNum = parseInt(aGsm);
-      const bGsmNum = parseInt(bGsm);
-      
-      if (!isNaN(aGsmNum) && !isNaN(bGsmNum)) {
-        return aGsmNum - bGsmNum;
-      }
-      return aGsm.localeCompare(bGsm);
+      return (a.fabric_name || '').localeCompare(b.fabric_name || '');
     });
     
     // Detailed logging for debugging
     const uniqueFabricNames = new Set(result.map(f => f.fabric_name || '')).size;
-    const gsmCounts = new Map<string, number>();
-    result.forEach(f => {
-      const name = f.fabric_name || '';
-      gsmCounts.set(name, (gsmCounts.get(name) || 0) + 1);
-    });
-    
     // Also check what's in the fabrics array
     const totalFabricsInState = fabrics.length;
     const activeInState = fabrics.filter(f => f.status === 'active').length;
@@ -938,8 +977,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
     console.log(`   Unique fabric names in state: ${uniqueNamesInState}`);
     console.log(`   Active fabrics after filter: ${allActiveFabrics.length}`);
     console.log(`   Unique fabric names in result: ${uniqueFabricNames}`);
-    console.log(`   Total fabric_name × GSM combinations: ${result.length}`);
-    console.log(`   Breakdown by fabric name:`, Array.from(gsmCounts.entries()).map(([name, count]) => `${name}: ${count} GSM${count > 1 ? 's' : ''}`));
+    console.log(`   Total unique product options: ${result.length}`);
     
     // Log all fabric names to see what we have
     console.log(`   All fabric names in database:`, Array.from(new Set(fabrics.map(f => f.fabric_name || ''))).sort());
@@ -1540,122 +1578,120 @@ const getSelectedFabricVariant = (productIndex: number) => {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Order Information - Client/Sales Manager on left, Order fields on right */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Left Side */}
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label className="block">Client</Label>
-                  <div className="w-[400px]">
-                    {!preSelectedCustomer ? (
-                      <CustomerSearchSelect
-                        value={formData.customer_id}
-                        onValueChange={handleCustomerSelect}
-                        onCustomerSelect={(customer) => setSelectedCustomer(customer as any)}
-                        placeholder="Search by name, phone, contact person..."
-                        cacheKey="customerSearchSelect-customOrder"
-                      />
-                    ) : (
-                      <Input 
-                        value={preSelectedCustomer.company_name} 
-                        disabled 
-                        className="bg-gray-50"
-                      />
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="block">Sales Manager</Label>
-                  <Select value={formData.sales_manager} onValueChange={(value) => setFormData(prev => ({ ...prev, sales_manager: value }))}>
-                    <SelectTrigger className="w-[400px]">
-                      <SelectValue placeholder="Select sales manager">
-                        {formData.sales_manager && employees.find(emp => emp.id === formData.sales_manager) && (
-                          <div className="flex items-center gap-2">
-                            <Avatar className="w-6 h-6">
-                              <AvatarImage 
-                                src={employees.find(emp => emp.id === formData.sales_manager)?.avatar_url} 
-                                alt={employees.find(emp => emp.id === formData.sales_manager)?.full_name}
-                              />
-                              <AvatarFallback className="text-xs">
-                                {employees.find(emp => emp.id === formData.sales_manager)?.full_name?.split(' ').map(n => n[0]).join('').toUpperCase()}
-                              </AvatarFallback>
-                            </Avatar>
-                            <span>{employees.find(emp => emp.id === formData.sales_manager)?.full_name}</span>
-                          </div>
-                        )}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {employees.map((employee) => (
-                        <SelectItem key={employee.id} value={employee.id}>
-                          <div className="flex items-center gap-2">
-                            <Avatar className="w-6 h-6">
-                              <AvatarImage src={employee.avatar_url} alt={employee.full_name} />
-                              <AvatarFallback className="text-xs">
-                                {employee.full_name.split(' ').map(n => n[0]).join('').toUpperCase()}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div className="flex flex-col">
-                              <span className="font-medium">{employee.full_name}</span>
-                              <span className="text-xs text-muted-foreground">{employee.department}</span>
-                            </div>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+            {/* Order Information */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+              <div className="space-y-2 min-w-0">
+                <Label className="block">Client</Label>
+                {!preSelectedCustomer ? (
+                  <CustomerSearchSelect
+                    value={formData.customer_id}
+                    onValueChange={handleCustomerSelect}
+                    onCustomerSelect={(customer) => setSelectedCustomer(customer as any)}
+                    placeholder="Search by name, phone, contact person..."
+                    cacheKey="customerSearchSelect-customOrder"
+                  />
+                ) : (
+                  <Input
+                    value={preSelectedCustomer.company_name}
+                    disabled
+                    className="bg-gray-50"
+                  />
+                )}
               </div>
 
-              {/* Right Side */}
-              <div className="space-y-4 flex justify-end">
-                <div className="space-y-4 w-full max-w-md">
-                  <div className="space-y-2">
-                    <Label className="block">Order Date</Label>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button variant="outline" className={cn("justify-start text-left font-normal", !formData.order_date && "text-muted-foreground")}>
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-                          {formData.order_date ? format(formData.order_date, "dd-MMM-yy") : "Pick a date"}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0">
-                        <Calendar
-                          mode="single"
-                          selected={formData.order_date}
-                          onSelect={(date) => date && setFormData(prev => ({ ...prev, order_date: date }))}
-                          initialFocus
-                        />
-                      </PopoverContent>
-                    </Popover>
-                  </div>
+              <div className="space-y-2 min-w-0">
+                <Label className="block">Sales Manager</Label>
+                <Select value={formData.sales_manager} onValueChange={(value) => setFormData(prev => ({ ...prev, sales_manager: value }))}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select sales manager">
+                      {formData.sales_manager && employees.find(emp => emp.id === formData.sales_manager) && (
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Avatar className="w-6 h-6">
+                            <AvatarImage
+                              src={employees.find(emp => emp.id === formData.sales_manager)?.avatar_url}
+                              alt={employees.find(emp => emp.id === formData.sales_manager)?.full_name}
+                            />
+                            <AvatarFallback className="text-xs">
+                              {employees.find(emp => emp.id === formData.sales_manager)?.full_name?.split(' ').map(n => n[0]).join('').toUpperCase()}
+                            </AvatarFallback>
+                          </Avatar>
+                          <span className="truncate">{employees.find(emp => emp.id === formData.sales_manager)?.full_name}</span>
+                        </div>
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {employees.map((employee) => (
+                      <SelectItem key={employee.id} value={employee.id}>
+                        <div className="flex items-center gap-2">
+                          <Avatar className="w-6 h-6">
+                            <AvatarImage src={employee.avatar_url} alt={employee.full_name} />
+                            <AvatarFallback className="text-xs">
+                              {employee.full_name.split(' ').map(n => n[0]).join('').toUpperCase()}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{employee.full_name}</span>
+                            <span className="text-xs text-muted-foreground">{employee.department}</span>
+                          </div>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-                  <div className="space-y-2">
-                    <Label className="block">Order ID</Label>
-                    <Input value={format(formData.order_date, 'dd-MMM-yy') + " (Auto-generated)"} disabled />
-                  </div>
+              <div className="space-y-2 min-w-0">
+                <Label className="block">Order Date</Label>
+                <Popover open={orderDatePopoverOpen} onOpenChange={setOrderDatePopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !formData.order_date && "text-muted-foreground")}>
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {formData.order_date ? format(formData.order_date, "dd-MMM-yy") : "Pick a date"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0">
+                    <Calendar
+                      mode="single"
+                      selected={formData.order_date}
+                      onSelect={(date) => {
+                        if (!date) return;
+                        setFormData(prev => ({ ...prev, order_date: date }));
+                        setOrderDatePopoverOpen(false);
+                      }}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
 
-                  <div className="space-y-2">
-                    <Label className="block">Expected Delivery Date</Label>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button variant="outline" className={cn("justify-start text-left font-normal", !formData.expected_delivery_date && "text-muted-foreground")}>
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-                          {formData.expected_delivery_date ? format(formData.expected_delivery_date, "dd-MMM-yy") : "Pick a date"}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0">
-                        <Calendar
-                          mode="single"
-                          selected={formData.expected_delivery_date}
-                          onSelect={(date) => date && setFormData(prev => ({ ...prev, expected_delivery_date: date }))}
-                          initialFocus
-                        />
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-                </div>
+              <div className="space-y-2 min-w-0">
+                <Label className="block">Order ID</Label>
+                <Input value={format(formData.order_date, 'dd-MMM-yy') + " (Auto-generated)"} disabled />
+              </div>
+
+              <div className="space-y-2 min-w-0">
+                <Label className="block">Expected Delivery Date</Label>
+                <Popover open={expectedDeliveryPopoverOpen} onOpenChange={setExpectedDeliveryPopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !formData.expected_delivery_date && "text-muted-foreground")}>
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {formData.expected_delivery_date ? format(formData.expected_delivery_date, "dd-MMM-yy") : "Pick a date"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0">
+                    <Calendar
+                      mode="single"
+                      selected={formData.expected_delivery_date}
+                      onSelect={(date) => {
+                        if (!date) return;
+                        setFormData(prev => ({ ...prev, expected_delivery_date: date }));
+                        setExpectedDeliveryPopoverOpen(false);
+                      }}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
               </div>
             </div>
 
@@ -1951,7 +1987,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                 console.log(`Product dropdown: ${filteredFabrics.length} products visible`);
                 return filteredFabrics.map((fabric) => (
                 <SelectItem key={fabric.id} value={fabric.id}>
-                  {fabric.gsm ? `${fabric.fabric_name}(${fabric.gsm})` : fabric.fabric_name}
+                  {fabric.fabric_name}
                 </SelectItem>
                 ));
               })()}
@@ -1968,11 +2004,14 @@ const getSelectedFabricVariant = (productIndex: number) => {
             value={product.fabric_id}
             onValueChange={(value) => handleColorSelectByFabricId(productIndex, value)}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger
+              className="w-full"
+              onKeyDown={(e) => handleColorTypeahead(productIndex, e.key)}
+            >
               <SelectValue placeholder="Select color" />
             </SelectTrigger>
             <SelectContent>
-              {getAvailableColors(productIndex).map((fabric) => (
+              {getSortedAvailableColors(productIndex).map((fabric) => (
                 <SelectItem key={fabric.id} value={fabric.id}>
                   <div className="flex items-center gap-2">
                     {fabric.hex && (
@@ -2024,19 +2063,33 @@ const getSelectedFabricVariant = (productIndex: number) => {
       {/* GSM */}
       <div>
         <Label className="text-base font-semibold text-gray-700 mb-2 block">GSM</Label>
-        <Input
-          value={product.gsm}
-          placeholder="Enter GSM"
-          onChange={(e) =>
-            setFormData((prev) => ({
-              ...prev,
-              products: prev.products.map((p, i) =>
-                i === productIndex ? { ...p, gsm: e.target.value } : p
-              ),
-            }))
-          }
-          className="w-full"
-        />
+        {(() => {
+          const gsmOptions = getAvailableGsmOptions(productIndex);
+          const listId = `gsm-options-${productIndex}`;
+          return (
+            <>
+              <Input
+                value={product.gsm}
+                placeholder={gsmOptions.length > 0 ? "Select or type GSM" : "Enter GSM"}
+                list={listId}
+                onChange={(e) =>
+                  setFormData((prev) => ({
+                    ...prev,
+                    products: prev.products.map((p, i) =>
+                      i === productIndex ? { ...p, gsm: e.target.value } : p
+                    ),
+                  }))
+                }
+                className="w-full"
+              />
+              <datalist id={listId}>
+                {gsmOptions.map((gsm) => (
+                  <option key={gsm} value={gsm} />
+                ))}
+              </datalist>
+            </>
+          );
+        })()}
       </div>
     </div>
     {selectedFabricVariant?.image && (
@@ -2143,44 +2196,12 @@ const getSelectedFabricVariant = (productIndex: number) => {
         <div className="space-y-2">
           <div className="flex items-center justify-between mb-2">
             <Label className="text-base font-semibold text-gray-700 block">Size-wise Quantities</Label>
-            {(() => {
-              const sortedSizes = sortSizesQuantities(
-                product.sizes_quantities || {},
-                product.size_type_id,
-                sizeTypes
-              );
-              if (sortedSizes.length <= 5) return null;
-              const isExpanded = !!showAllSizesForQty[productIndex];
-              return (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8"
-                  onClick={() =>
-                    setShowAllSizesForQty(prev => ({
-                      ...prev,
-                      [productIndex]: !isExpanded,
-                    }))
-                  }
-                >
-                  {isExpanded ? 'Show Less Sizes' : `Show More Sizes (+${sortedSizes.length - 5})`}
-                </Button>
-              );
-            })()}
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1">
-            {(showAllSizesForQty[productIndex]
-              ? sortSizesQuantities(
-                  product.sizes_quantities || {},
-                  product.size_type_id,
-                  sizeTypes
-                )
-              : sortSizesQuantities(
-                  product.sizes_quantities || {},
-                  product.size_type_id,
-                  sizeTypes
-                ).slice(0, 5)
+            {sortSizesQuantities(
+              product.sizes_quantities || {},
+              product.size_type_id,
+              sizeTypes
             ).map(([size, quantity]) => {
               const sizePrice = product.size_prices?.[size] ?? product.price;
               const isCustomPrice = sizePrice !== product.price;
@@ -2480,7 +2501,15 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                           {/* Selected Category Image Display */}
                       
                     {/* Collapsible section cards (desktop-first compact row) */}
-                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 mb-4">
+                    {(() => {
+                      const hasMockupImage =
+                        (product.mockup_images || []).some((file) => {
+                          if (file instanceof File) return true;
+                          return typeof file === 'string' && file.trim().length > 0;
+                        }) || !!getMainImage(productIndex, 'mockup');
+
+                      return (
+                    <div className={cn("grid grid-cols-1 gap-3 mb-4", hasMockupImage ? "lg:grid-cols-4" : "lg:grid-cols-3")}>
                       <Card className="p-3">
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-medium">Reference Images</span>
@@ -2559,6 +2588,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                           </button>
                         </div>
                       </Card>
+                      {hasMockupImage && (
                       <Card className="p-3">
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-medium">Mockup Images</span>
@@ -2585,7 +2615,10 @@ const getSelectedFabricVariant = (productIndex: number) => {
                           </button>
                         </div>
                       </Card>
+                      )}
                     </div>
+                      );
+                    })()}
 
                     {/* Image Gallery Sections */}
                     {(expandedProductSections[productIndex]?.reference || expandedProductSections[productIndex]?.attachments) && (
@@ -3158,11 +3191,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
                               </td>
                               <td className="border border-gray-300 px-3 py-2">
                                 <div className="text-sm">
-                                  <div className="text-gray-600 text-xs font-medium">
+                                  <div className="text-gray-800 text-xs font-extrabold">
                                     {fabrics.find(f => f.id === product.fabric_id)?.fabric_name} - {product.color}, {product.gsm} GSM
                                   </div>
-                                  <div className="font-medium">{product.product_description}</div>
-                                  <div className="text-gray-600 text-xs">
+                                  <div className="font-normal text-gray-800">{product.product_description}</div>
+                                  <div className="text-gray-700 text-xs font-bold">
                                     {productCategories.find(c => c.id === product.product_category_id)?.category_name}
                                   </div>
                                   {product.branding_items && product.branding_items.length > 0 && (
