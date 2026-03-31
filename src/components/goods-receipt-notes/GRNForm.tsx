@@ -1325,6 +1325,13 @@ const GRNForm = () => {
 
     try {
       setSaving(true);
+      const nowIso = new Date().toISOString();
+      const finalizedItems = grnItems.map(item => ({
+        ...item,
+        approved_quantity: Number(item.received_quantity || 0),
+        rejected_quantity: 0,
+        quality_status: 'approved' as const
+      }));
 
       if (isNew) {
         // Create new GRN
@@ -1332,11 +1339,16 @@ const GRNForm = () => {
         const insertPayload: any = {
           ...grn,
           grn_number: undefined,
+          status: 'approved',
+          received_date: nowIso,
+          received_by: grn.received_by || user?.id,
+          approved_by: user?.id,
+          approved_at: nowIso,
           total_items_received: totals.totalItems,
-          total_items_approved: grnItems.filter(item => item.quality_status === 'approved').length,
-          total_items_rejected: grnItems.filter(item => item.quality_status === 'rejected' || item.quality_status === 'damaged').length,
+          total_items_approved: finalizedItems.length,
+          total_items_rejected: 0,
           total_amount_received: totals.totalAmount,
-          total_amount_approved: totals.approvedAmount
+          total_amount_approved: totals.totalAmount
         };
         delete insertPayload.grn_number; // ensure omitted
 
@@ -1349,8 +1361,8 @@ const GRNForm = () => {
         if (grnError) throw grnError;
 
         // Insert GRN items
-        console.log('GRN items to insert:', grnItems);
-        const itemsToInsert = grnItems.map(item => ({
+        console.log('GRN items to insert:', finalizedItems);
+        const itemsToInsert = finalizedItems.map(item => ({
           grn_id: (grnData as any).id,
           po_item_id: item.po_item_id,
           item_type: item.item_type,
@@ -1380,16 +1392,32 @@ const GRNForm = () => {
         }));
 
         console.log('Items to insert:', itemsToInsert);
-        const { error: itemsError } = await supabase
+        const { data: insertedItems, error: itemsError } = await supabase
           .from('grn_items')
-          .insert(itemsToInsert as any);
+          .insert(itemsToInsert as any)
+          .select('*');
 
         if (itemsError) {
           console.error('Error inserting GRN items:', itemsError);
           throw itemsError;
         }
 
-        toast.success('GRN created successfully');
+        if (insertedItems && insertedItems.length > 0) {
+          await updateInventory(insertedItems as any[]);
+          try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
+        }
+
+        setGrn(prev => ({
+          ...prev,
+          ...(grnData as any),
+          status: 'approved',
+          received_date: nowIso,
+          received_by: prev.received_by || user?.id,
+          approved_by: user?.id,
+          approved_at: nowIso
+        }));
+        setGrnItems(finalizedItems);
+        toast.success('GRN saved, marked as received, and inventory added');
         navigate(`/procurement/grn/${(grnData as any).id}`);
       } else {
         // Update existing GRN
@@ -1401,20 +1429,20 @@ const GRNForm = () => {
             po_id: grn.po_id,
             supplier_id: grn.supplier_id,
             grn_date: grn.grn_date,
-            received_date: grn.received_date,
-            received_by: grn.received_by,
+            received_date: grn.received_date || nowIso,
+            received_by: grn.received_by || user?.id,
             received_at_location: grn.received_at_location,
-            status: grn.status,
+            status: 'approved',
             total_items_received: totals.totalItems,
-            total_items_approved: grnItems.filter(item => item.quality_status === 'approved').length,
-            total_items_rejected: grnItems.filter(item => item.quality_status === 'rejected' || item.quality_status === 'damaged').length,
+            total_items_approved: finalizedItems.length,
+            total_items_rejected: 0,
             total_amount_received: totals.totalAmount,
-            total_amount_approved: totals.approvedAmount,
+            total_amount_approved: totals.totalAmount,
             quality_inspector: grn.quality_inspector,
             inspection_date: grn.inspection_date,
             inspection_notes: grn.inspection_notes,
-            approved_by: grn.approved_by,
-            approved_at: grn.approved_at,
+            approved_by: user?.id,
+            approved_at: nowIso,
             rejection_reason: grn.rejection_reason
           } as any)
           .eq('id', id as any);
@@ -1425,13 +1453,16 @@ const GRNForm = () => {
         }
 
         // Update GRN items
-        for (const item of grnItems) {
+        for (const item of finalizedItems) {
           if (item.id) {
             // Update existing item
             const { error } = await supabase
               .from('grn_items')
               .update({
                 ...item,
+                approved_quantity: Number(item.received_quantity || 0),
+                rejected_quantity: 0,
+                quality_status: 'approved',
                 // Ensure fabric details are included in update
                 fabric_color: item.fabric_color,
                 fabric_gsm: item.fabric_gsm,
@@ -1453,15 +1484,15 @@ const GRNForm = () => {
                 item_image_url: item.item_image_url,
                 ordered_quantity: item.ordered_quantity,
                 received_quantity: item.received_quantity,
-                approved_quantity: item.approved_quantity,
-                rejected_quantity: item.rejected_quantity,
+                approved_quantity: Number(item.received_quantity || 0),
+                rejected_quantity: 0,
                 unit_of_measure: item.unit_of_measure,
                 unit_price: item.unit_price,
                 total_price: item.total_price,
                 gst_rate: item.gst_rate,
                 gst_amount: item.gst_amount,
                 line_total: item.line_total,
-                quality_status: item.quality_status,
+                quality_status: 'approved',
                 batch_number: item.batch_number,
                 expiry_date: item.expiry_date,
                 condition_notes: item.condition_notes,
@@ -1476,7 +1507,26 @@ const GRNForm = () => {
           }
         }
 
-        toast.success('GRN updated successfully');
+        const { data: latestItems } = await supabase
+          .from('grn_items')
+          .select('*')
+          .eq('grn_id', id as any);
+
+        if (latestItems && latestItems.length > 0) {
+          await updateInventory(latestItems as any[]);
+          try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
+        }
+
+        setGrn(prev => ({
+          ...prev,
+          status: 'approved',
+          received_date: prev.received_date || nowIso,
+          received_by: prev.received_by || user?.id,
+          approved_by: user?.id,
+          approved_at: nowIso
+        }));
+        setGrnItems(finalizedItems);
+        toast.success('GRN saved, marked as received, and inventory added');
       }
     } catch (error: any) {
       console.error('Error saving GRN:', error);
@@ -1490,7 +1540,7 @@ const GRNForm = () => {
     } finally {
       setSaving(false);
     }
-  }, [grn, grnItems, totals, isNew, id, navigate]);
+  }, [grn, grnItems, totals, isNew, id, navigate, updateInventory, user?.id]);
 
   // Status badge component for GRN items
   const StatusBadge = ({ status }: { status: GRNItem['quality_status'] }) => {

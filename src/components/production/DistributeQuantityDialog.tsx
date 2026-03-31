@@ -68,6 +68,8 @@ interface DistributeQuantityDialogProps {
   selectedOrderItemId?: string | null;
   /** After save, opens A5 job card preview from parent (survives this dialog unmount). */
   onJobCardDocumentReady?: (doc: BatchAssignmentDocumentData) => void;
+  /** Notifies parent which order line just got saved. */
+  onLineAssignmentSaved?: (orderItemId: string | null) => void;
 }
 
 export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> = ({
@@ -85,6 +87,7 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
   orderItems,
   selectedOrderItemId = null,
   onJobCardDocumentReady,
+  onLineAssignmentSaved,
 }) => {
   const selectedLine =
     (selectedOrderItemId && orderItems?.find((i: any) => i.id === selectedOrderItemId)) ||
@@ -400,12 +403,40 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
         throw tableError;
       }
 
-      // Delete existing assignments for this order
-      console.log('Deleting existing assignments for order:', orderId);
-      const { error: deleteError } = await supabase
-        .from('order_batch_assignments')
-        .delete()
-        .eq('order_id', orderId as any);
+      // For multi-line orders, replace assignments only for the current line.
+      // We persist line context in notes as: [line:<order_item_id>]
+      const lineTag = selectedOrderItemId ? `[line:${selectedOrderItemId}]` : null;
+      console.log('Deleting existing assignments for order/line:', { orderId, lineTag });
+      let deleteError: any = null;
+      if (lineTag) {
+        const { data: existingLineAssignments, error: fetchExistingError } = await supabase
+          .from('order_batch_assignments')
+          .select('id')
+          .eq('order_id', orderId as any)
+          .like('notes', `%${lineTag}%`);
+        if (fetchExistingError) throw fetchExistingError;
+        const lineAssignmentIds = (existingLineAssignments || []).map((r: any) => r.id).filter(Boolean);
+        if (lineAssignmentIds.length > 0) {
+          const { error: deleteSizeError } = await supabase
+            .from('order_batch_size_distributions')
+            .delete()
+            .in('order_batch_assignment_id', lineAssignmentIds as any);
+          if (deleteSizeError) throw deleteSizeError;
+
+          const { error: deleteLineAssignmentsError } = await supabase
+            .from('order_batch_assignments')
+            .delete()
+            .in('id', lineAssignmentIds as any);
+          deleteError = deleteLineAssignmentsError;
+        }
+      } else {
+        // Legacy/single-line behavior
+        const { error } = await supabase
+          .from('order_batch_assignments')
+          .delete()
+          .eq('order_id', orderId as any);
+        deleteError = error;
+      }
 
       if (deleteError) {
         console.error('Delete error:', deleteError);
@@ -431,7 +462,7 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
           assigned_by_name: user?.user_metadata?.full_name || user?.email || 'System',
           assignment_date: new Date().toISOString().split('T')[0],
           total_quantity: totalQty,
-          notes: `Order ${orderNumber} assigned to ${batch.batch_name}`
+          notes: `${lineTag ? `${lineTag} ` : ''}Order ${orderNumber} assigned to ${batch.batch_name}`
         };
         
         console.log('Inserting assignment:', assignmentData);
@@ -490,6 +521,7 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
       console.log('📄 Building stitching job card preview...');
       const doc = await buildJobCardDocumentAfterSave();
       const persistCb = onAssignmentsSaved ?? onSuccess;
+      onLineAssignmentSaved?.(selectedOrderItemId || null);
 
       if (doc && doc.batchAssignments.length > 0 && onJobCardDocumentReady) {
         onJobCardDocumentReady(doc);

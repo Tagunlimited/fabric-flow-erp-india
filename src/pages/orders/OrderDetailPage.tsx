@@ -149,6 +149,21 @@ interface OrderActivity {
   user_name?: string;
 }
 
+const normalizeSizesQuantities = (value: any): Record<string, number> => {
+  const result: Record<string, number> = {};
+  if (!value || typeof value !== 'object') return result;
+  Object.entries(value).forEach(([size, qty]) => {
+    const sizeName = String(size || '').trim();
+    if (!sizeName) return;
+    const quantity = Number(qty) || 0;
+    if (quantity > 0) result[sizeName] = quantity;
+  });
+  return result;
+};
+
+const sumSizesQuantities = (sizes: Record<string, number>): number =>
+  Object.values(sizes).reduce((sum, qty) => sum + (Number(qty) || 0), 0);
+
 // Helper function to extract images from specifications
 const extractImagesFromSpecifications = (specifications: any) => {
   if (!specifications) return { reference_images: [], mockup_images: [], attachments: [] };
@@ -1674,6 +1689,10 @@ export default function OrderDetailPage() {
     
     const itemsDraft = orderItems.map(it => {
       const specs = typeof it.specifications === 'string' ? JSON.parse(it.specifications) : (it.specifications || {});
+      const normalizedSizes = normalizeSizesQuantities(it.sizes_quantities || specs.sizes_quantities || {});
+      const computedQty = Object.keys(normalizedSizes).length > 0
+        ? sumSizesQuantities(normalizedSizes)
+        : Number(it.quantity || 0);
       const sizePrices = specs.size_prices || it.size_prices || {};
       const basePrice = it.unit_price || (sizePrices && Object.values(sizePrices).length > 0 ? Math.min(...Object.values(sizePrices) as number[]) : 0);
       
@@ -1686,12 +1705,12 @@ export default function OrderDetailPage() {
         gsm: it.gsm || '',
         product_category_id: it.product_category_id || '',
         size_type_id: specs.size_type_id || it.size_type_id || '',
-        quantity: it.quantity,
+        quantity: computedQty,
         unit_price: it.unit_price,
         price: basePrice,
         size_prices: sizePrices,
         gst_rate: it.gst_rate ?? (order.gst_rate ?? 0),
-        sizes_quantities: it.sizes_quantities || specs.sizes_quantities || {},
+        sizes_quantities: normalizedSizes,
         remarks: it.remarks || specs.remarks || '',
         customizations: specs.customizations || [],
         branding_items: specs.branding_items || []
@@ -1817,21 +1836,32 @@ export default function OrderDetailPage() {
                 : existingItem.specifications)
             : {};
           
+          const normalizedSizes = normalizeSizesQuantities(it.sizes_quantities || existingSpecs.sizes_quantities || {});
+          const hasSizes = Object.keys(normalizedSizes).length > 0;
+          const computedQty = hasSizes ? sumSizesQuantities(normalizedSizes) : Number(it.quantity || 0);
+          if (hasSizes && computedQty !== Number(it.quantity || 0)) {
+            console.info('Order edit quantity normalized from sizes', {
+              orderItemId: it.id,
+              previousQuantity: it.quantity,
+              normalizedQuantity: computedQty,
+            });
+          }
+
           // Calculate item total using size-based pricing if available
           let itemTotal = 0;
-          if (it.size_prices && Object.keys(it.sizes_quantities || {}).length > 0) {
-            Object.entries(it.sizes_quantities || {}).forEach(([size, qty]) => {
+          if (it.size_prices && hasSizes) {
+            Object.entries(normalizedSizes).forEach(([size, qty]) => {
               const sizePrice = it.size_prices?.[size] ?? it.price ?? it.unit_price;
               itemTotal += (qty || 0) * sizePrice;
             });
           } else {
-            itemTotal = it.quantity * (it.unit_price || it.price || 0);
+            itemTotal = computedQty * (it.unit_price || it.price || 0);
           }
           
           // Merge all fields into specifications
           const updatedSpecs = {
             ...existingSpecs,
-            sizes_quantities: it.sizes_quantities,
+            sizes_quantities: normalizedSizes,
             size_prices: it.size_prices,
             size_type_id: it.size_type_id,
             remarks: it.remarks,
@@ -1848,11 +1878,11 @@ export default function OrderDetailPage() {
               color: it.color || null,
               gsm: it.gsm || null,
               product_category_id: it.product_category_id || null,
-              quantity: it.quantity,
+              quantity: computedQty,
               unit_price: it.price || it.unit_price,
               total_price: itemTotal,
               gst_rate: it.gst_rate,
-              sizes_quantities: it.sizes_quantities,
+              sizes_quantities: normalizedSizes,
               remarks: it.remarks,
               specifications: updatedSpecs,
             })
@@ -2823,14 +2853,29 @@ export default function OrderDetailPage() {
                               {/* Quantity */}
                               <div>
                                 <Label>Total Quantity</Label>
+                                {(() => {
+                                  const normalizedSizes = normalizeSizesQuantities(it.sizes_quantities || {});
+                                  const hasSizeQuantities = Object.keys(normalizedSizes).length > 0;
+                                  const computedLineQty = hasSizeQuantities ? sumSizesQuantities(normalizedSizes) : Number(it.quantity || 0);
+                                  return (
                                 <Input 
                                   type="number" 
-                                  value={it.quantity} 
+                                  value={computedLineQty} 
+                                  readOnly={hasSizeQuantities}
+                                  disabled={hasSizeQuantities}
                                   onChange={e => {
+                                    if (hasSizeQuantities) return;
                                     const v = parseInt(e.target.value) || 0;
                                     setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, quantity: v } : p));
                                   }}
                                 />
+                                  );
+                                })()}
+                                {Object.keys(normalizeSizesQuantities(it.sizes_quantities || {})).length > 0 && (
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    Auto-calculated from size-wise quantities
+                                  </p>
+                                )}
                               </div>
                               
                               {/* GST Rate */}
@@ -2964,7 +3009,8 @@ export default function OrderDetailPage() {
                                           setEditItems(prev => prev.map((p, i) => {
                                             if (i === itemIdx) {
                                               const newSizes = { ...p.sizes_quantities, [size]: v };
-                                              return { ...p, sizes_quantities: newSizes };
+                                              const normalizedSizes = normalizeSizesQuantities(newSizes);
+                                              return { ...p, sizes_quantities: normalizedSizes, quantity: sumSizesQuantities(normalizedSizes) };
                                             }
                                             return p;
                                           }));

@@ -44,6 +44,7 @@ import { ReassignBatchDialog } from "@/components/production/ReassignBatchDialog
 import { buildBatchAssignmentDocumentData, type BatchAssignmentDocumentData } from '@/utils/batchAssignmentDocument';
 import { BatchAssignmentPreviewDialog } from '@/components/production/BatchAssignmentPreviewDialog';
 import { BackButton } from '@/components/common/BackButton';
+import { getOrderTotalQuantityFromItems } from '@/utils/orderItemLineQuantity';
 
 interface CuttingJob {
   id: string;
@@ -582,7 +583,7 @@ const CuttingManagerPage = () => {
           (customers || []).forEach((c: any) => { if (c?.id) customersMap[c.id] = { company_name: c.company_name }; });
         }
 
-        // Fetch BOM headers for product name and qty
+        // Fetch BOM headers for fallback product name
         const { data: boms } = await supabase
           .from('bom_records' as any)
           .select('order_id, product_name, total_order_qty')
@@ -627,7 +628,7 @@ const CuttingManagerPage = () => {
             fabricType: firstOrderItem?.fabric ? 
               `${firstOrderItem.fabric.fabric_name} - ${firstOrderItem.fabric.gsm} GSM` : 
               '-',
-            quantity: Number((bom as any).qty || 0),
+            quantity: getOrderTotalQuantityFromItems(orderItems),
             cutQuantity: Number(p.cut_quantity || 0),
             cutQuantitiesBySize: p.cut_quantities_by_size || {},
             startDate: p.cutting_work_date || '',
@@ -782,8 +783,12 @@ const CuttingManagerPage = () => {
   // Note: Fabric usage validation will be handled in the cutting dialog
   const isJobCompleted = (job: CuttingJob) => {
     const isFullyCut = job.cutQuantity >= job.quantity;
-    const hasBatchAssignments = job.batchAssignments && job.batchAssignments.length > 0;
-    return isFullyCut && hasBatchAssignments;
+    const totalAssignedToBatches = (job.batchAssignments || []).reduce(
+      (sum, assignment) => sum + Number(assignment.total_quantity || 0),
+      0
+    );
+    const isFullyBatchAssigned = totalAssignedToBatches >= Number(job.quantity || 0);
+    return isFullyCut && isFullyBatchAssigned;
   };
 
   // Sort handler
