@@ -336,13 +336,16 @@ export default function QuotationDetailPage() {
     return result + ' Only/-';
   }
 
-  // Enhanced PDF Export with proper A4 sizing - uses same format as print
-  const handleExportPDF = async () => {
+  /**
+   * Generates the quotation PDF by temporarily un-hiding the print area.
+   * html2canvas cannot capture elements with display:none — naive capture yields a 0×0 canvas
+   * and NaN coordinates in jsPDF.addImage ("Invalid coordinates").
+   */
+  const downloadQuotationPdf = async (): Promise<void> => {
     if (!printRef.current) {
-      toast.error('Print reference not available');
-      return;
+      throw new Error('Print reference not available');
     }
-    
+
     const element = printRef.current;
     const originalStyles = {
       position: element.style.position,
@@ -355,13 +358,10 @@ export default function QuotationDetailPage() {
       maxWidth: element.style.maxWidth,
       zIndex: element.style.zIndex,
     };
-    
-    // Store original class list to restore later
+
     const originalClasses = element.className;
-    
+
     try {
-      toast.loading('Generating PDF...');
-      
       // Remove print-only class temporarily (it has display: none !important)
       element.className = element.className.replace('print-only', '').trim();
       
@@ -501,18 +501,9 @@ export default function QuotationDetailPage() {
       pdf.addImage(imgData, 'JPEG', x, y, outWidth, outHeight);
 
       pdf.save(`Quotation-${quotationNumber}.pdf`);
-      
-      // Dismiss loading and show success
-      toast.dismiss();
-      toast.success('PDF exported successfully');
-    } catch (error) {
-      console.error('PDF export error:', error);
-      toast.dismiss();
-      toast.error('Failed to export PDF');
     } finally {
-      // Restore original styles and classes to hide element again
       if (element) {
-        element.className = originalClasses; // Restore original classes (including print-only)
+        element.className = originalClasses;
         element.style.position = originalStyles.position || '';
         element.style.left = originalStyles.left || '';
         element.style.top = originalStyles.top || '';
@@ -525,6 +516,19 @@ export default function QuotationDetailPage() {
         element.style.opacity = '';
         element.style.pointerEvents = '';
       }
+    }
+  };
+
+  const handleExportPDF = async () => {
+    try {
+      toast.loading('Generating PDF...');
+      await downloadQuotationPdf();
+      toast.dismiss();
+      toast.success('PDF exported successfully');
+    } catch (error) {
+      console.error('PDF export error:', error);
+      toast.dismiss();
+      toast.error('Failed to export PDF');
     }
   };
 
@@ -671,30 +675,9 @@ export default function QuotationDetailPage() {
     }
 
     try {
-      // Generate and download PDF
-      if (!printRef.current) return;
-      
       toast.info('Generating PDF...');
-      
-      const canvas = await html2canvas(printRef.current, { 
-        scale: 2, 
-        useCORS: true,
-        backgroundColor: '#ffffff'
-      });
-      
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      const imgWidth = canvas.width;
-      const imgHeight = canvas.height;
-      const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
-      const imgX = (pdfWidth - imgWidth * ratio) / 2;
-      const imgY = 20;
-      
-      pdf.addImage(imgData, 'PNG', imgX, imgY, imgWidth * ratio, imgHeight * ratio);
-      pdf.save(`Quotation-${quotationNumber}.pdf`);
-      
+      await downloadQuotationPdf();
+
       // Open WhatsApp with PDF instruction message
       const companyName = company?.company_name || 'Our Company';
       const message = WhatsAppSharing.generatePDFMessage(
@@ -782,30 +765,9 @@ export default function QuotationDetailPage() {
     }
 
     try {
-      // Generate and download PDF
-      if (!printRef.current) return;
-      
       toast.info('Generating PDF...');
-      
-      const canvas = await html2canvas(printRef.current, { 
-        scale: 2, 
-        useCORS: true,
-        backgroundColor: '#ffffff'
-      });
-      
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      const imgWidth = canvas.width;
-      const imgHeight = canvas.height;
-      const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
-      const imgX = (pdfWidth - imgWidth * ratio) / 2;
-      const imgY = 20;
-      
-      pdf.addImage(imgData, 'PNG', imgX, imgY, imgWidth * ratio, imgHeight * ratio);
-      pdf.save(`Quotation-${quotationNumber}.pdf`);
-      
+      await downloadQuotationPdf();
+
       // Open email with PDF attachment instructions
       const companyName = company?.company_name || 'Our Company';
       const subject = `Quotation ${quotationNumber} - ${companyName} (PDF Attached)`;
