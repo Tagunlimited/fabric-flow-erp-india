@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { formatCurrency } from '@/lib/utils';
+import { getCustomerMobile } from '@/lib/customerContact';
 import { Eye } from 'lucide-react';
 import { calculateOrderSummary } from '@/utils/priceCalculation';
 
@@ -16,7 +17,7 @@ interface Order {
   order_number: string;
   order_date: string;
   customer_id: string;
-  customer: { company_name: string };
+  customer: { company_name: string; phone?: string | null; mobile?: string | null };
   status: string;
   final_amount: number;
   sales_manager?: string;
@@ -42,7 +43,7 @@ export default function QuotationsPage() {
       setLoading(true);
       let query: any = supabase
         .from('orders')
-        .select(`*, customer:customers(company_name), gst_rate`);
+        .select(`*, customer:customers(company_name, phone), gst_rate`);
 
       if (showCompleted === 'no') {
         query = query.neq('status', 'completed');
@@ -140,6 +141,7 @@ export default function QuotationsPage() {
                   <TableRow>
                     <TableHead>Order #</TableHead>
                     <TableHead>Customer</TableHead>
+                    <TableHead>Mobile</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Amount</TableHead>
@@ -149,14 +151,17 @@ export default function QuotationsPage() {
                 </TableHeader>
                 <TableBody>
                   {loading ? (
-                    <TableRow><TableCell colSpan={7}>Loading...</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={8}>Loading...</TableCell></TableRow>
                   ) : orders.length === 0 ? (
-                    <TableRow><TableCell colSpan={7}>No orders found.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={8}>No orders found.</TableCell></TableRow>
                   ) : (
                     orders.map((order) => (
                       <TableRow key={order.id}>
                         <TableCell>{order.order_number}</TableCell>
                         <TableCell>{order.customer?.company_name}</TableCell>
+                        <TableCell className="font-mono text-xs whitespace-nowrap">
+                          {getCustomerMobile(order.customer as any) || '—'}
+                        </TableCell>
                         <TableCell>{new Date(order.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}</TableCell>
                         <TableCell><Badge>{order.status}</Badge></TableCell>
                         <TableCell>{formatCurrency(order.calculatedAmount ?? order.final_amount ?? 0)}</TableCell>

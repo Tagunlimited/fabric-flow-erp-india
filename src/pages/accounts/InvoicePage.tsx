@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { formatCurrency } from '@/lib/utils';
+import { getCustomerMobile } from '@/lib/customerContact';
 import { Eye, Plus } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -17,7 +18,7 @@ interface Order {
   order_number: string;
   order_date: string;
   customer_id: string;
-  customer: { company_name: string };
+  customer: { company_name: string; phone?: string | null; mobile?: string | null };
   status: string;
   final_amount: number;
   sales_manager?: string;
@@ -48,7 +49,7 @@ export default function InvoicePage() {
       // Get all dispatched and completed orders (include readymade orders that have been dispatched)
       const { data: ordersData, error: ordersError } = await supabase
         .from('orders')
-        .select(`*, customer:customers(company_name)`)
+        .select(`*, customer:customers(company_name, phone)`)
         .in('status', ['dispatched', 'partial_dispatched', 'completed'] as any)
         .order('created_at', { ascending: false });
 
@@ -77,7 +78,7 @@ export default function InvoicePage() {
           if (missingIds.length > 0) {
             const { data: readyOrders } = await supabase
               .from('orders')
-              .select(`*, customer:customers(company_name)`)
+              .select(`*, customer:customers(company_name, phone)`)
               .in('id', missingIds as any)
               .order('created_at', { ascending: false });
             
@@ -328,6 +329,9 @@ export default function InvoicePage() {
         </div>
       </TableCell>
       <TableCell>{order.customer?.company_name}</TableCell>
+      <TableCell className="font-mono text-xs whitespace-nowrap">
+        {getCustomerMobile(order.customer as any) || '—'}
+      </TableCell>
       <TableCell>{new Date(order.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}</TableCell>
       <TableCell>
         <Badge className={getStatusColor(order.status)}>
@@ -424,6 +428,7 @@ export default function InvoicePage() {
                       <TableRow>
                         <TableHead>Order #</TableHead>
                         <TableHead>Customer</TableHead>
+                        <TableHead>Mobile</TableHead>
                         <TableHead>Date</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Amount</TableHead>
@@ -434,9 +439,9 @@ export default function InvoicePage() {
                     </TableHeader>
                     <TableBody>
                       {loading ? (
-                        <TableRow><TableCell colSpan={8}>Loading...</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={9}>Loading...</TableCell></TableRow>
                       ) : pendingOrders.length === 0 ? (
-                        <TableRow><TableCell colSpan={8}>No pending orders found.</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={9}>No pending orders found.</TableCell></TableRow>
                       ) : (
                         pendingOrders.map(renderOrderRow)
                       )}
@@ -462,6 +467,7 @@ export default function InvoicePage() {
                       <TableRow>
                         <TableHead>Order #</TableHead>
                         <TableHead>Customer</TableHead>
+                        <TableHead>Mobile</TableHead>
                         <TableHead>Date</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Amount</TableHead>
@@ -472,9 +478,9 @@ export default function InvoicePage() {
                     </TableHeader>
                     <TableBody>
                       {loading ? (
-                        <TableRow><TableCell colSpan={8}>Loading...</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={9}>Loading...</TableCell></TableRow>
                       ) : completedOrders.length === 0 ? (
-                        <TableRow><TableCell colSpan={8}>No completed orders found.</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={9}>No completed orders found.</TableCell></TableRow>
                       ) : (
                         completedOrders.map(renderOrderRow)
                       )}

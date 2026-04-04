@@ -8,6 +8,7 @@ import html2canvas from 'html2canvas';
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
+import { getCustomerMobile } from '@/lib/customerContact';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
 import {
@@ -45,6 +46,7 @@ interface Customer {
   contact_person: string;
   email: string;
   phone: string;
+  mobile?: string | null;
   address: string;
   city: string;
   state: string;
@@ -517,9 +519,9 @@ export default function InvoiceDetailPage() {
                     <div className="space-y-0.5 mt-1">
                       <p className="text-xs font-semibold break-words">{customer.company_name}</p>
                       <p className="text-xs text-gray-700 break-words">{customer.contact_person}</p>
-                      {customer.phone?.trim() && (
-                        <p className="text-xs text-gray-700 break-words">Mobile: {customer.phone}</p>
-                      )}
+                      <p className="text-xs text-gray-700 break-words">
+                        Mobile: {getCustomerMobile(customer) || '—'}
+                      </p>
                       <p className="text-xs text-gray-700 break-words leading-relaxed">{customer.address}</p>
                       <p className="text-xs text-gray-700">
                         {customer.city}, {customer.state} - {customer.pincode}

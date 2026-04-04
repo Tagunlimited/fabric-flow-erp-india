@@ -14,6 +14,7 @@ import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelec
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
+import { getCustomerMobile } from '@/lib/customerContact';
 import { calculateOrderSummary } from '@/utils/priceCalculation';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -42,6 +43,7 @@ interface Customer {
   contact_person: string | null;
   email: string | null;
   phone: string | null;
+  mobile?: string | null;
   address: string | null;
   city: string | null;
   state: string | null;
@@ -236,7 +238,7 @@ export default function ReceiptPage() {
       // First try: full select with status and join to customers
       let query = supabase
         .from('receipts')
-        .select('id, created_at, receipt_number, reference_id, reference_number, reference_type, amount, payment_mode, payment_type, customer_id, customers(company_name)')
+        .select('id, created_at, receipt_number, reference_id, reference_number, reference_type, amount, payment_mode, payment_type, customer_id, customers(company_name, phone)')
         .order('created_at', { ascending: false })
         .limit(50);
       let resp: any = customerId ? await query.eq('customer_id', customerId) : await query;
@@ -252,22 +254,24 @@ export default function ReceiptPage() {
       }
       if (resp.error) throw resp.error;
       let rows = resp.data || [];
-      // If customer join is missing, enrich with a lookup
-      const needsLookup = rows.some((r: any) => !r.customers?.company_name);
-      if (needsLookup && rows.length > 0) {
-        const ids = Array.from(new Set(rows.map((r: any) => r.customer_id).filter(Boolean)));
-        if (ids.length > 0) {
-          const { data: custs } = await supabase
-            .from('customers')
-            .select('id, company_name')
-            .in('id', ids);
-          const idToName: Record<string, string> = {};
-          (custs || []).forEach((c: any) => { idToName[c.id] = c.company_name; });
-          rows = rows.map((r: any) => ({
-            ...r,
-            customer_name: idToName[r.customer_id] || r.customer_name,
-          }));
-        }
+      const custIds = Array.from(new Set(rows.map((r: any) => r.customer_id).filter(Boolean)));
+      if (custIds.length > 0) {
+        const { data: custs } = await supabase
+          .from('customers')
+          .select('id, company_name, phone')
+          .in('id', custIds);
+        const idToCust: Record<string, { company_name: string; phone: string | null }> = {};
+        (custs || []).forEach((c: any) => {
+          idToCust[c.id] = { company_name: c.company_name, phone: c.phone ?? null };
+        });
+        rows = rows.map((r: any) => ({
+          ...r,
+          customer_name: r.customer_name || idToCust[r.customer_id]?.company_name,
+          customers: {
+            company_name: r.customers?.company_name ?? idToCust[r.customer_id]?.company_name ?? '',
+            phone: r.customers?.phone ?? idToCust[r.customer_id]?.phone ?? null,
+          },
+        }));
       }
       setTxns(rows);
     } catch (e) {
@@ -1023,6 +1027,7 @@ export default function ReceiptPage() {
                           <th className="p-2 text-left border">Date</th>
                           <th className="p-2 text-left border">Receipt #</th>
                           <th className="p-2 text-left border">Customer</th>
+                          <th className="p-2 text-left border">Mobile</th>
                           <th className="p-2 text-left border">Reference</th>
                           <th className="p-2 text-left border">Type</th>
                           <th className="p-2 text-right border">Amount</th>
@@ -1041,6 +1046,12 @@ export default function ReceiptPage() {
                               )}
                             </td>
                             <td className="p-2 border">{r.customers?.company_name || r.customer_name || '-'}</td>
+                            <td className="p-2 border font-mono text-xs">
+                              {getCustomerMobile({
+                                phone: r.customers?.phone,
+                                mobile: (r.customers as any)?.mobile,
+                              }) || '—'}
+                            </td>
                             <td className="p-2 border">{r.reference_number}</td>
                             <td className="p-2 border uppercase">{r.reference_type}</td>
                             <td className="p-2 border text-right">
@@ -1058,7 +1069,7 @@ export default function ReceiptPage() {
                         ))}
                         {!loadingTxns && txns.length === 0 && (
                           <tr>
-                            <td className="p-4 text-center text-muted-foreground" colSpan={8}>No receipts found.</td>
+                            <td className="p-4 text-center text-muted-foreground" colSpan={9}>No receipts found.</td>
                           </tr>
                         )}
                       </tbody>
@@ -1088,6 +1099,11 @@ export default function ReceiptPage() {
                   placeholder="Search by phone, name, contact..."
                   cacheKey="customerSearchSelect-receipt"
                 />
+                {customer && (
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    Mobile: <span className="font-mono text-foreground">{getCustomerMobile(customer) || '—'}</span>
+                  </p>
+                )}
               </div>
 
               {/* Reference selector - depends on customer (Orders only) */}
@@ -1293,9 +1309,10 @@ export default function ReceiptPage() {
                   <div><span className="font-medium">Receipt No.:</span> {receiptNumber}</div>
                   <div><span className="font-medium">Reference:</span> {receiptReference}</div>
                   <div><span className="font-medium">Customer:</span> {customer?.company_name || '-'}</div>
-                  {customer?.phone?.trim() && (
-                    <div><span className="font-medium">Mobile:</span> {customer.phone}</div>
-                  )}
+                  <div>
+                    <span className="font-medium">Mobile:</span>{' '}
+                    <span className="font-mono">{getCustomerMobile(customer) || '—'}</span>
+                  </div>
                   <div><span className="font-medium">Payment Mode:</span> {paymentMode}</div>
                   <div><span className="font-medium">Payment Type:</span> {paymentType}</div>
                 </div>
@@ -1315,7 +1332,14 @@ export default function ReceiptPage() {
               {/* Acknowledgement */}
               <div className="border rounded p-4 text-base">
                 Received a sum of <span className="font-semibold">{formatCurrency(receiptAmount)}</span> from
-                {' '}<span className="font-semibold">{customer?.company_name || 'Customer'}</span> towards
+                {' '}<span className="font-semibold">{customer?.company_name || 'Customer'}</span>
+                {getCustomerMobile(customer) ? (
+                  <>
+                    {' '}
+                    <span className="text-muted-foreground">(Mobile: {getCustomerMobile(customer)})</span>
+                  </>
+                ) : null}{' '}
+                towards
                 {' '}<span className="font-semibold">{paymentType}</span> against reference
                 {' '}<span className="font-semibold">{receiptReference}</span>.
                 {notes && <div className="mt-2 text-sm text-muted-foreground">Note: {notes}</div>}

@@ -5,11 +5,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Archive, Package, Search, Eye, Filter, History } from 'lucide-react';
+import { Archive, Package, Search, Eye, Filter, History, Trash2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS, ITEM_TYPE_CONFIGS } from '@/types/warehouse-inventory';
 import { toast } from 'sonner';
 import { InventoryLogsModal } from './InventoryLogsModal';
+import { DeleteWarehouseInventoryDialog } from './DeleteWarehouseInventoryDialog';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   hasMeaningfulColorLabel,
@@ -41,6 +42,8 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
   const [itemTypeFilter, setItemTypeFilter] = useState<string>('all');
   const [logsModalOpen, setLogsModalOpen] = useState(false);
   const [selectedInventoryForLogs, setSelectedInventoryForLogs] = useState<WarehouseInventory | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WarehouseInventory | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [allocationModalOpen, setAllocationModalOpen] = useState(false);
   const [selectedAllocationDetails, setSelectedAllocationDetails] = useState<{
     inventory: WarehouseInventory;
@@ -882,6 +885,20 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                             <History className="h-3 w-3" />
                             Logs {(item as any).consolidatedIds?.length > 1 && `(${(item as any).consolidatedIds.length})`}
                           </Button>
+
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="flex items-center gap-1 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => {
+                              setDeleteTarget(item);
+                              setDeleteOpen(true);
+                            }}
+                            title="Remove this stock line"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Delete
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -900,6 +917,16 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 consolidatedIds={(selectedInventoryForLogs as any).consolidatedIds}
               />
             )}
+
+            <DeleteWarehouseInventoryDialog
+              open={deleteOpen}
+              onOpenChange={(o) => {
+                setDeleteOpen(o);
+                if (!o) setDeleteTarget(null);
+              }}
+              item={deleteTarget as any}
+              onDeleted={() => loadInventory()}
+            />
             {selectedAllocationDetails && (
               <Dialog
                 open={allocationModalOpen}

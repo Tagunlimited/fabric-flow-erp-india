@@ -8,6 +8,7 @@ import html2canvas from 'html2canvas';
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
+import { getCustomerMobile } from '@/lib/customerContact';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
@@ -40,6 +41,7 @@ interface Customer {
   contact_person: string;
   email: string;
   phone: string;
+  mobile?: string | null;
   address: string;
   city: string;
   state: string;
@@ -646,8 +648,8 @@ export default function QuotationDetailPage() {
 
   // Enhanced sharing functions
   const handleShareQuotationSummary = () => {
-    if (!customer?.phone) {
-      toast.error('Customer phone number not available');
+    if (!getCustomerMobile(customer)) {
+      toast.error('Customer mobile number not available');
       return;
     }
 
@@ -660,13 +662,13 @@ export default function QuotationDetailPage() {
       companyName
     );
 
-    WhatsAppSharing.openWhatsApp(customer.phone, message);
+    WhatsAppSharing.openWhatsApp(getCustomerMobile(customer), message);
     toast.success('WhatsApp opened with quotation summary');
   };
 
   const handleSharePDFToWhatsApp = async () => {
-    if (!customer?.phone) {
-      toast.error('Customer phone number not available');
+    if (!getCustomerMobile(customer)) {
+      toast.error('Customer mobile number not available');
       return;
     }
 
@@ -704,7 +706,7 @@ export default function QuotationDetailPage() {
         companyName
       );
       
-      WhatsAppSharing.openWhatsApp(customer.phone, message);
+      WhatsAppSharing.openWhatsApp(getCustomerMobile(customer), message);
       
       toast.success('PDF downloaded! WhatsApp opened with instructions.');
     } catch (error) {
@@ -714,8 +716,8 @@ export default function QuotationDetailPage() {
   };
 
   const handleQuickContact = () => {
-    if (!customer?.phone) {
-      toast.error('Customer phone number not available');
+    if (!getCustomerMobile(customer)) {
+      toast.error('Customer mobile number not available');
       return;
     }
 
@@ -728,7 +730,7 @@ export default function QuotationDetailPage() {
       `We're here to help! 😊`
     );
 
-    WhatsAppSharing.openWhatsApp(customer.phone, message);
+    WhatsAppSharing.openWhatsApp(getCustomerMobile(customer), message);
     toast.success('WhatsApp opened for quick contact');
   };
 
@@ -1173,9 +1175,9 @@ export default function QuotationDetailPage() {
                   <div className="bg-gray-50 p-4 rounded">
                     <p className="font-semibold text-gray-800">{customer?.company_name || 'Client Name'}</p>
                     <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
-                    {customer?.phone?.trim() && (
-                      <p className="text-sm text-gray-600">Mobile: {customer.phone}</p>
-                    )}
+                    <p className="text-sm text-gray-600">
+                      Mobile: {getCustomerMobile(customer) || '—'}
+                    </p>
                     <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
                     <p className="text-sm text-gray-600">
                       {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
@@ -1593,9 +1595,9 @@ export default function QuotationDetailPage() {
                     <div className="bg-gray-50 p-2 rounded">
                       <p className="font-semibold text-gray-800">{customer?.company_name || 'Client Name'}</p>
                       <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
-                      {customer?.phone?.trim() && (
-                        <p className="text-sm text-gray-600">Mobile: {customer.phone}</p>
-                      )}
+                      <p className="text-sm text-gray-600">
+                        Mobile: {getCustomerMobile(customer) || '—'}
+                      </p>
                       <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
                       <p className="text-sm text-gray-600">
                         {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}

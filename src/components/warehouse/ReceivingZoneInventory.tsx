@@ -14,12 +14,14 @@ import {
   ArrowRight,
   Eye,
   Move,
-  History
+  History,
+  Trash2
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS, ITEM_TYPE_CONFIGS } from '@/types/warehouse-inventory';
 import { toast } from 'sonner';
 import { InventoryLogsModal } from './InventoryLogsModal';
+import { DeleteWarehouseInventoryDialog } from './DeleteWarehouseInventoryDialog';
 import {
   hasMeaningfulColorLabel,
   resolveSwatchHex,
@@ -45,6 +47,8 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
   const [itemTypeFilter, setItemTypeFilter] = useState<string>('all');
   const [logsModalOpen, setLogsModalOpen] = useState(false);
   const [selectedInventoryForLogs, setSelectedInventoryForLogs] = useState<WarehouseInventory | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WarehouseInventory | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   // Load receiving zone inventory
   const loadInventory = async () => {
@@ -781,6 +785,20 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                             <History className="h-3 w-3" />
                             Logs {(item as any).consolidatedIds?.length > 1 && `(${(item as any).consolidatedIds.length})`}
                           </Button>
+
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="flex items-center gap-1 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => {
+                              setDeleteTarget(item);
+                              setDeleteOpen(true);
+                            }}
+                            title="Remove this stock line"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Delete
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -799,6 +817,16 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                 consolidatedIds={(selectedInventoryForLogs as any).consolidatedIds}
               />
             )}
+
+            <DeleteWarehouseInventoryDialog
+              open={deleteOpen}
+              onOpenChange={(o) => {
+                setDeleteOpen(o);
+                if (!o) setDeleteTarget(null);
+              }}
+              item={deleteTarget as any}
+              onDeleted={() => loadInventory()}
+            />
             
             {filteredInventory.length === 0 && (
               <div className="text-center py-8">
