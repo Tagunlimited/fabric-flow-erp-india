@@ -7,11 +7,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Badge } from '../ui/badge';
-import { Search, Eye, Edit, Plus, CheckCircle2, Clock, AlertCircle, FileText } from 'lucide-react';
+import { Search, Eye, Edit, CheckCircle2, Clock, AlertCircle, FileText } from 'lucide-react';
 import { BomDisplayCard } from './BomDisplayCard';
 import { BomToPOWizardDialog } from './BomToPOWizardDialog';
 import { getBomCompletionStatus } from '@/services/bomPOTracking';
 import { toast } from 'sonner';
+import './BomListCreatePoButton.css';
 import { Label } from '../ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 
@@ -1116,14 +1117,16 @@ export function BomList({ refreshTrigger }: BomListProps) {
           <p className="text-muted-foreground">Manage your Bills of Materials</p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => navigate('/procurement/po')} variant="outline">
-            <FileText className="w-4 h-4 mr-2" />
-            Create PO
-          </Button>
-          <Button onClick={() => navigate('/bom/create')}>
-            <Plus className="w-4 h-4 mr-2" />
-            Create BOM
-          </Button>
+          <button
+            type="button"
+            className="bom-list-boton-elegante"
+            onClick={() => navigate('/procurement/po/new')}
+          >
+            <span className="bom-list-boton-elegante__inner">
+              <FileText className="w-5 h-5 shrink-0" aria-hidden />
+              Create PO
+            </span>
+          </button>
         </div>
       </div>
 

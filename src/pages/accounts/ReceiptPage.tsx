@@ -1293,6 +1293,9 @@ export default function ReceiptPage() {
                   <div><span className="font-medium">Receipt No.:</span> {receiptNumber}</div>
                   <div><span className="font-medium">Reference:</span> {receiptReference}</div>
                   <div><span className="font-medium">Customer:</span> {customer?.company_name || '-'}</div>
+                  {customer?.phone?.trim() && (
+                    <div><span className="font-medium">Mobile:</span> {customer.phone}</div>
+                  )}
                   <div><span className="font-medium">Payment Mode:</span> {paymentMode}</div>
                   <div><span className="font-medium">Payment Type:</span> {paymentType}</div>
                 </div>

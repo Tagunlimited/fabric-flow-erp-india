@@ -1579,74 +1579,76 @@ const getSelectedFabricVariant = (productIndex: number) => {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Order Information */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
-              <div className="space-y-2 min-w-0">
-                <Label className="block">Client</Label>
-                {!preSelectedCustomer ? (
-                  <CustomerSearchSelect
-                    value={formData.customer_id}
-                    onValueChange={handleCustomerSelect}
-                    onCustomerSelect={(customer) => setSelectedCustomer(customer as any)}
-                    placeholder="Search by name, phone, contact person..."
-                    cacheKey="customerSearchSelect-customOrder"
-                  />
-                ) : (
-                  <Input
-                    value={preSelectedCustomer.company_name}
-                    disabled
-                    className="bg-gray-50"
-                  />
-                )}
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(8.25rem,10rem)_minmax(9.5rem,12.5rem)_minmax(8.25rem,10rem)] gap-x-3 gap-y-4 xl:gap-x-4 items-end">
+              <div className="flex flex-col gap-4 min-w-0 sm:flex-row sm:items-end sm:gap-3 md:col-span-2 xl:col-span-1">
+                <div className="space-y-2 min-w-0 flex-1">
+                  <Label className="block">Client</Label>
+                  {!preSelectedCustomer ? (
+                    <CustomerSearchSelect
+                      value={formData.customer_id}
+                      onValueChange={handleCustomerSelect}
+                      onCustomerSelect={(customer) => setSelectedCustomer(customer as any)}
+                      placeholder="Search by name, phone, contact person..."
+                      cacheKey="customerSearchSelect-customOrder"
+                    />
+                  ) : (
+                    <Input
+                      value={preSelectedCustomer.company_name}
+                      disabled
+                      className="bg-gray-50"
+                    />
+                  )}
+                </div>
 
-              <div className="space-y-2 min-w-0">
-                <Label className="block">Sales Manager</Label>
-                <Select value={formData.sales_manager} onValueChange={(value) => setFormData(prev => ({ ...prev, sales_manager: value }))}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select sales manager">
-                      {formData.sales_manager && employees.find(emp => emp.id === formData.sales_manager) && (
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Avatar className="w-6 h-6">
-                            <AvatarImage
-                              src={employees.find(emp => emp.id === formData.sales_manager)?.avatar_url}
-                              alt={employees.find(emp => emp.id === formData.sales_manager)?.full_name}
-                            />
-                            <AvatarFallback className="text-xs">
-                              {employees.find(emp => emp.id === formData.sales_manager)?.full_name?.split(' ').map(n => n[0]).join('').toUpperCase()}
-                            </AvatarFallback>
-                          </Avatar>
-                          <span className="truncate">{employees.find(emp => emp.id === formData.sales_manager)?.full_name}</span>
-                        </div>
-                      )}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {employees.map((employee) => (
-                      <SelectItem key={employee.id} value={employee.id}>
-                        <div className="flex items-center gap-2">
-                          <Avatar className="w-6 h-6">
-                            <AvatarImage src={employee.avatar_url} alt={employee.full_name} />
-                            <AvatarFallback className="text-xs">
-                              {employee.full_name.split(' ').map(n => n[0]).join('').toUpperCase()}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{employee.full_name}</span>
-                            <span className="text-xs text-muted-foreground">{employee.department}</span>
+                <div className="space-y-2 min-w-0 w-full sm:w-fit sm:max-w-[min(100%,26rem)] sm:min-w-[10.5rem] sm:shrink-0">
+                  <Label className="block">Sales Manager</Label>
+                  <Select value={formData.sales_manager} onValueChange={(value) => setFormData(prev => ({ ...prev, sales_manager: value }))}>
+                    <SelectTrigger className="w-full min-w-[10.5rem]">
+                      <SelectValue placeholder="Select sales manager">
+                        {formData.sales_manager && employees.find(emp => emp.id === formData.sales_manager) && (
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Avatar className="w-6 h-6 shrink-0">
+                              <AvatarImage
+                                src={employees.find(emp => emp.id === formData.sales_manager)?.avatar_url}
+                                alt={employees.find(emp => emp.id === formData.sales_manager)?.full_name}
+                              />
+                              <AvatarFallback className="text-xs">
+                                {employees.find(emp => emp.id === formData.sales_manager)?.full_name?.split(' ').map(n => n[0]).join('').toUpperCase()}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="truncate">{employees.find(emp => emp.id === formData.sales_manager)?.full_name}</span>
                           </div>
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                        )}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {employees.map((employee) => (
+                        <SelectItem key={employee.id} value={employee.id}>
+                          <div className="flex items-center gap-2">
+                            <Avatar className="w-6 h-6">
+                              <AvatarImage src={employee.avatar_url} alt={employee.full_name} />
+                              <AvatarFallback className="text-xs">
+                                {employee.full_name.split(' ').map(n => n[0]).join('').toUpperCase()}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="flex flex-col">
+                              <span className="font-medium">{employee.full_name}</span>
+                              <span className="text-xs text-muted-foreground">{employee.department}</span>
+                            </div>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               <div className="space-y-2 min-w-0">
                 <Label className="block">Order Date</Label>
                 <Popover open={orderDatePopoverOpen} onOpenChange={setOrderDatePopoverOpen}>
                   <PopoverTrigger asChild>
-                    <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !formData.order_date && "text-muted-foreground")}>
-                      <CalendarIcon className="mr-2 h-4 w-4" />
+                    <Button variant="outline" className={cn("w-full min-w-0 justify-start text-left font-normal text-sm", !formData.order_date && "text-muted-foreground")}>
+                      <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                       {formData.order_date ? format(formData.order_date, "dd-MMM-yy") : "Pick a date"}
                     </Button>
                   </PopoverTrigger>
@@ -1667,15 +1669,19 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
               <div className="space-y-2 min-w-0">
                 <Label className="block">Order ID</Label>
-                <Input value={format(formData.order_date, 'dd-MMM-yy') + " (Auto-generated)"} disabled />
+                <Input
+                  value={format(formData.order_date, 'dd-MMM-yy') + " (Auto-generated)"}
+                  disabled
+                  className="min-w-0 text-sm"
+                />
               </div>
 
               <div className="space-y-2 min-w-0">
                 <Label className="block">Expected Delivery Date</Label>
                 <Popover open={expectedDeliveryPopoverOpen} onOpenChange={setExpectedDeliveryPopoverOpen}>
                   <PopoverTrigger asChild>
-                    <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !formData.expected_delivery_date && "text-muted-foreground")}>
-                      <CalendarIcon className="mr-2 h-4 w-4" />
+                    <Button variant="outline" className={cn("w-full min-w-0 justify-start text-left font-normal text-sm", !formData.expected_delivery_date && "text-muted-foreground")}>
+                      <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                       {formData.expected_delivery_date ? format(formData.expected_delivery_date, "dd-MMM-yy") : "Pick a date"}
                     </Button>
                   </PopoverTrigger>

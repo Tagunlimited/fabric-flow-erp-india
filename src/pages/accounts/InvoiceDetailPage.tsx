@@ -517,6 +517,9 @@ export default function InvoiceDetailPage() {
                     <div className="space-y-0.5 mt-1">
                       <p className="text-xs font-semibold break-words">{customer.company_name}</p>
                       <p className="text-xs text-gray-700 break-words">{customer.contact_person}</p>
+                      {customer.phone?.trim() && (
+                        <p className="text-xs text-gray-700 break-words">Mobile: {customer.phone}</p>
+                      )}
                       <p className="text-xs text-gray-700 break-words leading-relaxed">{customer.address}</p>
                       <p className="text-xs text-gray-700">
                         {customer.city}, {customer.state} - {customer.pincode}

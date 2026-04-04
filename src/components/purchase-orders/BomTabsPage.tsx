@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Eye, Search, Plus, FileText, Calendar, User, Package } from 'lucide-react';
+import { Eye, Search, Package } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatCurrency } from '@/lib/utils';
@@ -14,6 +14,10 @@ import { calculateOrderSummary } from '@/utils/priceCalculation';
 // Import existing BomList component
 import { BomList } from './BomList';
 import { BomOrderLinePicker } from './BomOrderLinePicker';
+import { BomTabSparkleTrigger } from './BomTabSparkleTrigger';
+
+const bomTabTriggerReset =
+  'h-auto rounded-none border-0 bg-transparent p-0 shadow-none ring-offset-background data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=inactive]:bg-transparent focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2';
 
 type BomRowRef = { order_id: string; order_item_id: string | null };
 
@@ -539,17 +543,8 @@ export function BomTabsPage() {
           <p className="text-muted-foreground">Manage and create Bills of Material for orders</p>
         </div>
         <div className="flex gap-2">
-          <Button 
-            variant="outline"
-            onClick={handleRefresh}
-          >
+          <Button variant="outline" onClick={handleRefresh}>
             <Search className="w-4 h-4 mr-2" /> Refresh
-          </Button>
-          <Button 
-            onClick={() => navigate('/bom/new')} 
-            className="bg-emerald-600 hover:bg-emerald-700"
-          >
-            <Plus className="w-4 h-4 mr-2" /> Create New BOM
           </Button>
         </div>
       </div>
@@ -562,14 +557,12 @@ export function BomTabsPage() {
           }}
           className="w-full"
         >
-          <TabsList className="grid w-full grid-cols-2 mb-6 bg-gray-100">
-            <TabsTrigger value="create-bom" className="flex items-center gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-              <Plus className="w-4 h-4" />
-              Create BOM
+          <TabsList className="mb-6 flex h-auto w-full flex-wrap items-center justify-start gap-8 rounded-none border-0 bg-transparent p-0 shadow-none">
+            <TabsTrigger value="create-bom" asChild className={bomTabTriggerReset}>
+              <BomTabSparkleTrigger label="Create BOM" />
             </TabsTrigger>
-            <TabsTrigger value="view-bom" className="flex items-center gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-              <Eye className="w-4 h-4" />
-              View BOMs
+            <TabsTrigger value="view-bom" asChild className={bomTabTriggerReset}>
+              <BomTabSparkleTrigger label="View BOMs" />
             </TabsTrigger>
           </TabsList>
           

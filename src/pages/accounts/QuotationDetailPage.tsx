@@ -1173,6 +1173,9 @@ export default function QuotationDetailPage() {
                   <div className="bg-gray-50 p-4 rounded">
                     <p className="font-semibold text-gray-800">{customer?.company_name || 'Client Name'}</p>
                     <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
+                    {customer?.phone?.trim() && (
+                      <p className="text-sm text-gray-600">Mobile: {customer.phone}</p>
+                    )}
                     <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
                     <p className="text-sm text-gray-600">
                       {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
@@ -1590,6 +1593,9 @@ export default function QuotationDetailPage() {
                     <div className="bg-gray-50 p-2 rounded">
                       <p className="font-semibold text-gray-800">{customer?.company_name || 'Client Name'}</p>
                       <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
+                      {customer?.phone?.trim() && (
+                        <p className="text-sm text-gray-600">Mobile: {customer.phone}</p>
+                      )}
                       <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
                       <p className="text-sm text-gray-600">
                         {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
