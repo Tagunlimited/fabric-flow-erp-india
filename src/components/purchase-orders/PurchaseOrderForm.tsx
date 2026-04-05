@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -11,7 +11,9 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Trash2, Plus, ExternalLink, X, ArrowLeft, Printer, Download, Share2, Loader2, RefreshCw } from 'lucide-react';
+import { Trash2, Plus, ExternalLink, X, ArrowLeft, Printer, Download, Share2, Loader2, RefreshCw, ChevronDown } from 'lucide-react';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { toast } from 'sonner';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -19,6 +21,17 @@ import { ProductImage } from '@/components/ui/OptimizedImage';
 import { convertImageToBase64WithCache, createFallbackLogo } from '@/utils/imageUtils';
 import { Checkbox } from '@/components/ui/checkbox';
 import { PendingItem, PendingItemGroup, getPendingItemPlaceholder, usePendingPoItems } from '@/hooks/usePendingPoItems';
+import {
+  getBomLinePoQuantity,
+  remainingQtyForNewPurchaseOrderLine,
+} from '@/components/purchase-orders/bomOrderLineUtils';
+import {
+  fetchStockForBomRecordItem,
+  type BomDisplayAllocationTarget,
+  type InventorySourceRow,
+} from '@/components/purchase-orders/bomInventoryAllocation';
+import { BomAllocateStockDialog } from '@/components/purchase-orders/BomAllocateStockDialog';
+import { getBomItemOrderStatus } from '@/services/bomPOTracking';
 
 type CompanySettings = {
   company_name: string;
@@ -53,11 +66,73 @@ type LineItem = {
   fabric_for_supplier?: string | null;
   fabric_color?: string;
   fabric_gsm?: string;
+  /** fabric_master.id when present on the BOM line */
+  fabric_id?: string | null;
   // Pending BOM linkage
   bom_item_id?: string;
   bom_id?: string;
+  /** BOM requirement (qty_total) for allocation / remaining math */
+  bom_qty_total?: number;
   bom_number?: string;
   product_name?: string | null;
+};
+
+function buildPoLineBomRecordStub(line: LineItem, bomId: string): Record<string, unknown> {
+  const category = line.item_type === 'fabric' ? 'Fabric' : 'Item';
+  return {
+    id: line.bom_item_id,
+    bom_id: bomId,
+    category,
+    fabric_name: line.fabric_name,
+    fabric_color: line.fabric_color,
+    fabric_gsm: line.fabric_gsm,
+    fabric_id: line.fabric_id ?? null,
+    item_name: line.item_name,
+    item_id: line.item_id || null,
+    qty_total: line.bom_qty_total,
+    quantity: line.bom_qty_total,
+    unit_of_measure: line.unit_of_measure,
+    required_unit: line.unit_of_measure,
+    item_code: (line as { item_code?: string }).item_code ?? null,
+  };
+}
+
+function buildPoStubFromPending(p: PendingItem, bomId: string): Record<string, unknown> {
+  const isFabric =
+    String(p.item_type || '').toLowerCase() === 'fabric' ||
+    String(p.category || '').toLowerCase() === 'fabric';
+  return {
+    id: p.bom_item_id,
+    bom_id: bomId,
+    category: isFabric ? 'Fabric' : 'Item',
+    fabric_name: p.fabric_name,
+    fabric_color: p.fabric_color,
+    fabric_gsm: p.fabric_gsm,
+    fabric_id: p.fabric_id ?? null,
+    item_name: p.item_name,
+    item_id: p.item_id || null,
+    item_code: p.item_code ?? null,
+    qty_total: p.qty_total,
+    quantity: p.qty_total,
+    unit_of_measure: p.unit,
+    required_unit: p.unit,
+  };
+}
+
+type PoBomStockPanelRow = {
+  bomItemId: string;
+  /** BOM that owns this line (for inventory_allocations.bom_id). */
+  lineBomId: string;
+  label: string;
+  categoryLabel: string;
+  required: number;
+  requiredUnit: string;
+  inStock: number;
+  stockUnit: string;
+  warehouseAvailable: number;
+  allocated: number;
+  remainingToPurchase: number;
+  inventorySources: InventorySourceRow[];
 };
 
 type PurchaseOrder = {
@@ -118,6 +193,12 @@ export function PurchaseOrderForm() {
   const isEditMode = !!id && searchParams.get('edit') === '1';
   const isReadOnly = !!id && !isEditMode;
   const printRef = useRef<HTMLDivElement>(null);
+  const printPreviewIframeRef = useRef<HTMLIFrameElement>(null);
+  const postSavePreviewIframeRef = useRef<HTMLIFrameElement>(null);
+  const pendingGroupsRef = useRef<{ fabricGroups: PendingItemGroup[]; itemGroups: PendingItemGroup[] }>({
+    fabricGroups: [],
+    itemGroups: [],
+  });
   
   // Check for BOM data in URL params and location state
   const location = useLocation();
@@ -145,6 +226,296 @@ export function PurchaseOrderForm() {
   const [itemTypeOptions, setItemTypeOptions] = useState<string[]>([]);
   const [postSaveDialogOpen, setPostSaveDialogOpen] = useState(false);
   const [savedPoNumber, setSavedPoNumber] = useState<string>('');
+  const [printPreviewOpen, setPrintPreviewOpen] = useState(false);
+  const [poBomStockRows, setPoBomStockRows] = useState<PoBomStockPanelRow[]>([]);
+  const [poBomStockLoading, setPoBomStockLoading] = useState(false);
+  const [allocateDialogOpen, setAllocateDialogOpen] = useState(false);
+  const [allocateTarget, setAllocateTarget] = useState<BomDisplayAllocationTarget | null>(null);
+  const [nonBomLinesOpen, setNonBomLinesOpen] = useState(false);
+
+  const poBomStockByItemId = useMemo(() => {
+    const m = new Map<string, PoBomStockPanelRow>();
+    poBomStockRows.forEach((r) => m.set(r.bomItemId, r));
+    return m;
+  }, [poBomStockRows]);
+
+  const openBulkAllocateDialog = useCallback(() => {
+    const aggregateSources = poBomStockRows.flatMap((r) => r.inventorySources);
+    const first = aggregateSources.find((s) => s.available > 0);
+    const bulkItems = poBomStockRows
+      .filter((r) => r.remainingToPurchase > 0 && r.warehouseAvailable > 0)
+      .map((r) => ({
+        id: r.bomItemId,
+        bom_id: r.lineBomId,
+        required_qty: r.required,
+        stock_unit: r.stockUnit,
+        required_unit: r.requiredUnit,
+        allocation: {
+          totalAllocated: r.allocated,
+          totalAvailable: r.warehouseAvailable,
+          inventorySources: r.inventorySources,
+        },
+      }));
+    if (!bulkItems.length) return;
+    setAllocateTarget({
+      id: null,
+      isBulk: true,
+      bom_id: poBomStockRows[0]?.lineBomId || bomData?.id || null,
+      items: bulkItems as any,
+      stock_unit: first?.unit,
+      required_unit: poBomStockRows[0]?.requiredUnit || '',
+      allocation: {
+        inventorySources: aggregateSources,
+        totalAvailable: aggregateSources.reduce((sum, s) => sum + (s.available || 0), 0),
+      },
+    });
+    setAllocateDialogOpen(true);
+  }, [poBomStockRows, bomData?.id]);
+
+  const refreshPoBomStockPanel = useCallback(async () => {
+    if (isReadOnly) return;
+
+    const formBomId = bomData?.id as string | undefined;
+    const { fabricGroups: fg, itemGroups: ig } = pendingGroupsRef.current;
+
+    const pendingForScope: PendingItem[] = [];
+    for (const g of [...fg, ...ig]) {
+      for (const it of g.bomBreakdowns) {
+        if (!formBomId || String(it.bom_id) === String(formBomId)) {
+          pendingForScope.push(it);
+        }
+      }
+    }
+
+    const lineByBomId = new Map<string, LineItem>();
+    for (const i of items) {
+      if (!i.bom_item_id) continue;
+      if (!formBomId || String(i.bom_id) === String(formBomId)) {
+        lineByBomId.set(i.bom_item_id, i);
+      }
+    }
+
+    const idsOrdered: string[] = [];
+    const seen = new Set<string>();
+    for (const p of pendingForScope) {
+      if (!seen.has(p.bom_item_id)) {
+        seen.add(p.bom_item_id);
+        idsOrdered.push(p.bom_item_id);
+      }
+    }
+    for (const i of items) {
+      if (
+        i.bom_item_id &&
+        (!formBomId || String(i.bom_id) === String(formBomId)) &&
+        !seen.has(i.bom_item_id)
+      ) {
+        seen.add(i.bom_item_id);
+        idsOrdered.push(i.bom_item_id);
+      }
+    }
+
+    if (!idsOrdered.length) {
+      setPoBomStockRows([]);
+      return;
+    }
+
+    setPoBomStockLoading(true);
+    try {
+      const { data: allocRows, error: allocErr } = await supabase
+        .from('inventory_allocations' as any)
+        .select('bom_item_id, quantity')
+        .in('bom_item_id', idsOrdered);
+
+      if (allocErr) {
+        console.warn('PO form: failed to load inventory_allocations', allocErr);
+      }
+
+      const allocByItem = new Map<string, number>();
+      for (const row of allocRows || []) {
+        const bid = row.bom_item_id != null ? String(row.bom_item_id) : '';
+        if (!bid) continue;
+        allocByItem.set(
+          bid,
+          (allocByItem.get(bid) || 0) + Number((row as { quantity?: number }).quantity || 0)
+        );
+      }
+
+      let orderStatusRows: { bom_item_id: string; total_ordered?: number }[] = [];
+      try {
+        const { data: stRows, error: stErr } = await supabase
+          .from('bom_item_order_status' as any)
+          .select('bom_item_id, total_ordered')
+          .in('bom_item_id', idsOrdered);
+        if (!stErr && stRows) {
+          orderStatusRows = stRows as { bom_item_id: string; total_ordered?: number }[];
+        } else if (formBomId) {
+          orderStatusRows = await getBomItemOrderStatus(formBomId);
+        }
+      } catch (e) {
+        console.warn('PO form: bom order status load failed', e);
+      }
+
+      const poByItem = new Map(
+        orderStatusRows.map((s) => [s.bom_item_id, Number(s.total_ordered || 0)])
+      );
+
+      const findPending = (bomItemId: string) =>
+        pendingForScope.find((p) => p.bom_item_id === bomItemId) ||
+        [...fg, ...ig].flatMap((g) => g.bomBreakdowns).find((p) => p.bom_item_id === bomItemId);
+
+      const rows: PoBomStockPanelRow[] = [];
+      for (const bomItemId of idsOrdered) {
+        const line = lineByBomId.get(bomItemId);
+        const pendingRow = findPending(bomItemId);
+        let stub: Record<string, unknown>;
+        let qtyTotal: number;
+        let requiredUnit: string;
+        let label: string;
+        let categoryLabel: string;
+        let lineBomId: string;
+
+        if (line) {
+          lineBomId = String(line.bom_id || formBomId || '');
+          stub = buildPoLineBomRecordStub(line, lineBomId) as Record<string, unknown>;
+          qtyTotal = Number(line.bom_qty_total ?? 0);
+          requiredUnit = line.unit_of_measure || '';
+          categoryLabel = line.item_type === 'fabric' ? 'Fabric' : 'Item';
+          label =
+            line.item_type === 'fabric'
+              ? [line.fabric_name || line.item_name, line.fabric_color, line.fabric_gsm ? `${line.fabric_gsm} GSM` : '']
+                  .filter(Boolean)
+                  .join(' · ') || line.item_name
+              : line.item_name;
+        } else if (pendingRow) {
+          lineBomId = String(pendingRow.bom_id || formBomId || '');
+          stub = buildPoStubFromPending(pendingRow, lineBomId);
+          qtyTotal = Number(pendingRow.qty_total ?? 0);
+          requiredUnit = pendingRow.unit || '';
+          const isFabric =
+            String(pendingRow.item_type || '').toLowerCase() === 'fabric' ||
+            String(pendingRow.category || '').toLowerCase() === 'fabric';
+          categoryLabel = isFabric ? 'Fabric' : 'Item';
+          label = isFabric
+            ? [pendingRow.fabric_name || pendingRow.item_name, pendingRow.fabric_color, pendingRow.fabric_gsm ? `${pendingRow.fabric_gsm} GSM` : '']
+                .filter(Boolean)
+                .join(' · ') || pendingRow.item_name
+            : pendingRow.item_name;
+        } else {
+          continue;
+        }
+
+        const stock = await fetchStockForBomRecordItem(supabase, stub);
+        const alloc = allocByItem.get(bomItemId) ?? 0;
+        const poOrd = poByItem.get(bomItemId) ?? 0;
+        const remaining = remainingQtyForNewPurchaseOrderLine({
+          qtyTotal,
+          inventoryAllocated: alloc,
+          totalOrderedOnPurchaseOrders: poOrd,
+        });
+
+        rows.push({
+          bomItemId,
+          lineBomId,
+          label: label || '—',
+          categoryLabel,
+          required: qtyTotal,
+          requiredUnit,
+          inStock: stock.totalQuantity,
+          stockUnit: stock.unit || requiredUnit || '',
+          warehouseAvailable: stock.totalAvailable,
+          allocated: stock.totalAllocatedToThisItem,
+          remainingToPurchase: remaining,
+          inventorySources: stock.inventorySources,
+        });
+      }
+      setPoBomStockRows(rows);
+    } finally {
+      setPoBomStockLoading(false);
+    }
+  }, [bomData?.id, items, isReadOnly]);
+
+  const applyQuantitiesAfterAllocation = useCallback(async () => {
+    const idsOnPo = [...new Set(items.map((i) => i.bom_item_id).filter(Boolean))] as string[];
+    if (!idsOnPo.length) {
+      await refreshPoBomStockPanel();
+      return;
+    }
+
+    const { data: allocRows, error: allocErr } = await supabase
+      .from('inventory_allocations' as any)
+      .select('bom_item_id, quantity')
+      .in('bom_item_id', idsOnPo);
+
+    if (allocErr) {
+      console.warn('applyQuantitiesAfterAllocation: allocations', allocErr);
+    }
+
+    const allocByItem = new Map<string, number>();
+    for (const row of allocRows || []) {
+      const bid = row.bom_item_id != null ? String(row.bom_item_id) : '';
+      if (!bid) continue;
+      allocByItem.set(
+        bid,
+        (allocByItem.get(bid) || 0) + Number((row as { quantity?: number }).quantity || 0)
+      );
+    }
+
+    let orderStatusRows: { bom_item_id: string; total_ordered?: number }[] = [];
+    try {
+      const { data: stRows, error: stErr } = await supabase
+        .from('bom_item_order_status' as any)
+        .select('bom_item_id, total_ordered')
+        .in('bom_item_id', idsOnPo);
+      if (!stErr && stRows) {
+        orderStatusRows = stRows as { bom_item_id: string; total_ordered?: number }[];
+      }
+    } catch (e) {
+      console.warn('applyQuantitiesAfterAllocation: order status', e);
+    }
+
+    const poByItem = new Map(
+      orderStatusRows.map((s) => [s.bom_item_id, Number(s.total_ordered || 0)])
+    );
+
+    setItems((prev) =>
+      prev
+        .map((line) => {
+          if (!line.bom_item_id) return line;
+          const qtyTotal = Number(line.bom_qty_total ?? 0);
+          const alloc = allocByItem.get(line.bom_item_id) ?? 0;
+          const poOrd = poByItem.get(line.bom_item_id) ?? 0;
+          const rem = remainingQtyForNewPurchaseOrderLine({
+            qtyTotal,
+            inventoryAllocated: alloc,
+            totalOrderedOnPurchaseOrders: poOrd,
+          });
+          return { ...line, quantity: rem };
+        })
+        .filter((line) => !line.bom_item_id || Number(line.quantity) > 0)
+    );
+
+    toast.success('Line quantities updated from stock allocation.');
+    await refreshPoBomStockPanel();
+  }, [items, refreshPoBomStockPanel]);
+
+  useEffect(() => {
+    if (isReadOnly) return;
+
+    const channel = supabase
+      .channel('po-form-inventory-allocations')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'inventory_allocations' },
+        () => {
+          void refreshPoBomStockPanel();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [isReadOnly, refreshPoBomStockPanel]);
 
   const {
     pendingItems,
@@ -154,6 +525,12 @@ export function PurchaseOrderForm() {
     error: pendingError,
     refresh: refreshPending
   } = usePendingPoItems();
+
+  useEffect(() => {
+    pendingGroupsRef.current = { fabricGroups, itemGroups };
+    if (isReadOnly) return;
+    void refreshPoBomStockPanel();
+  }, [fabricGroups, itemGroups, items, bomData?.id, isReadOnly, refreshPoBomStockPanel]);
 
   const pendingPlaceholder = useMemo(() => getPendingItemPlaceholder(), []);
 
@@ -320,6 +697,7 @@ export function PurchaseOrderForm() {
       fabric_for_supplier: isFabric ? (pending as any).fabric_for_supplier || null : undefined,
       fabric_color: isFabric ? pending.fabric_color || undefined : undefined,
       fabric_gsm: isFabric ? pending.fabric_gsm || undefined : undefined,
+      fabric_id: isFabric ? pending.fabric_id ?? undefined : undefined,
       bom_item_id: pending.bom_item_id,
       bom_id: pending.bom_id,
       bom_number: pending.bom_number,
@@ -377,6 +755,69 @@ export function PurchaseOrderForm() {
     group.bomBreakdowns.forEach(item => {
       handleTogglePendingSelection(item, checked);
     });
+  };
+
+  const renderPendingInventoryCell = (bomItemId: string) => {
+    const stockRow = poBomStockByItemId.get(bomItemId);
+    if (poBomStockLoading && !stockRow) {
+      return <span className="text-muted-foreground text-sm">…</span>;
+    }
+    if (!stockRow) {
+      return <span className="text-muted-foreground text-sm">—</span>;
+    }
+    const summary = `${formatQuantity(stockRow.warehouseAvailable)} ${stockRow.stockUnit}`.trim();
+    const hasWarehouseStock = stockRow.warehouseAvailable > 0;
+    const highlightClass = hasWarehouseStock
+      ? 'text-emerald-700 dark:text-emerald-400 font-medium'
+      : '';
+    const sources = stockRow.inventorySources.filter(
+      (s) => Number(s.available) > 0 || Number(s.quantity) > 0
+    );
+    if (sources.length === 0) {
+      return (
+        <span
+          className={`tabular-nums text-sm ${highlightClass}`}
+          title={
+            hasWarehouseStock
+              ? 'Stock available in warehouse — use Allocate to reserve for this BOM line.'
+              : undefined
+          }
+        >
+          {summary}
+        </span>
+      );
+    }
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className={`text-left text-sm tabular-nums underline-offset-2 hover:underline text-primary ${highlightClass}`}
+            title={
+              hasWarehouseStock
+                ? 'Stock available in warehouse — open for locations or use Allocate.'
+                : undefined
+            }
+          >
+            {summary}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-80" align="start">
+          <p className="text-xs font-medium text-muted-foreground mb-2">Stock by location</p>
+          <ul className="space-y-2 text-sm max-h-56 overflow-y-auto">
+            {sources.map((s) => (
+              <li key={s.id} className="border-b border-border/60 pb-2 last:border-0">
+                <div className="font-medium">{s.locationLabel || 'Bin'}</div>
+                <div className="text-muted-foreground text-xs">
+                  Available {formatQuantity(s.available)} · On hand {formatQuantity(s.quantity)}{' '}
+                  {s.unit || stockRow.stockUnit}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </PopoverContent>
+      </Popover>
+    );
   };
 
   const renderPendingSection = (title: string, groups: PendingItemGroup[]) => {
@@ -461,19 +902,23 @@ export function PurchaseOrderForm() {
                             <TableHead className="text-left">Fabric (for supplier)</TableHead>
                             <TableHead className="text-left">Color</TableHead>
                             <TableHead className="text-left">GSM</TableHead>
-                            <TableHead className="w-[15%] text-right">Order Qty</TableHead>
-                            <TableHead className="w-[15%] text-center">Actions</TableHead>
+                            <TableHead className="text-right whitespace-nowrap">Inventory</TableHead>
+                            <TableHead className="text-right whitespace-nowrap">Allocated</TableHead>
+                            <TableHead className="w-[12%] text-right">Order Qty</TableHead>
+                            <TableHead className="w-[18%] text-center">Actions</TableHead>
                           </>
                         ) : (
                           <>
-                            <TableHead className="w-[24%] text-left">BOM</TableHead>
-                            <TableHead className="w-[10%] text-right">Required</TableHead>
-                            <TableHead className="w-[10%] text-right">Ordered</TableHead>
-                            <TableHead className="w-[10%] text-right">Remaining</TableHead>
-                            <TableHead className="w-[12%] text-right">Order Qty</TableHead>
-                            <TableHead className="w-[9%] text-center">UOM</TableHead>
-                            <TableHead className="w-[15%] text-left">Remark</TableHead>
-                            <TableHead className="w-[15%] text-center">Actions</TableHead>
+                            <TableHead className="w-[20%] text-left">BOM</TableHead>
+                            <TableHead className="w-[8%] text-right">Required</TableHead>
+                            <TableHead className="w-[8%] text-right">Ordered</TableHead>
+                            <TableHead className="w-[8%] text-right">Remaining</TableHead>
+                            <TableHead className="text-right whitespace-nowrap">Inventory</TableHead>
+                            <TableHead className="text-right whitespace-nowrap">Allocated</TableHead>
+                            <TableHead className="w-[10%] text-right">Order Qty</TableHead>
+                            <TableHead className="w-[8%] text-center">UOM</TableHead>
+                            <TableHead className="w-[14%] text-left">Remark</TableHead>
+                            <TableHead className="w-[16%] text-center">Actions</TableHead>
                           </>
                         )}
                       </TableRow>
@@ -493,8 +938,23 @@ export function PurchaseOrderForm() {
                           const remarkValue = selectedItem?.remarks || '';
 
                           if (isFabric) {
+                            const stockRow = poBomStockByItemId.get(item.bom_item_id);
+                            const fabricLabel =
+                              item.fabric_for_supplier || item.fabric_name || item.item_name || '—';
+                            const canAllocateFabric =
+                              !!stockRow &&
+                              stockRow.remainingToPurchase > 0 &&
+                              stockRow.warehouseAvailable > 0 &&
+                              stockRow.inventorySources.some((s) => s.available > 0);
                             return (
-                              <TableRow key={item.bom_item_id} className="[&>td]:align-middle">
+                              <TableRow
+                                key={item.bom_item_id}
+                                className={
+                                  stockRow && stockRow.warehouseAvailable > 0
+                                    ? '[&>td]:align-middle bg-emerald-50/60 dark:bg-emerald-950/25'
+                                    : '[&>td]:align-middle'
+                                }
+                              >
                                 <TableCell className="text-center">
                                   <Checkbox
                                     checked={isSelected}
@@ -509,6 +969,16 @@ export function PurchaseOrderForm() {
                                 </TableCell>
                                 <TableCell>{item.fabric_color ?? 'N/A'}</TableCell>
                                 <TableCell>{item.fabric_gsm ? `${item.fabric_gsm} GSM` : 'N/A'}</TableCell>
+                                <TableCell className="text-right text-sm">
+                                  {renderPendingInventoryCell(item.bom_item_id)}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums text-sm">
+                                  {stockRow
+                                    ? `${formatQuantity(stockRow.allocated)} ${stockRow.stockUnit}`
+                                    : poBomStockLoading
+                                      ? '…'
+                                      : '—'}
+                                </TableCell>
                                 <TableCell className="text-right">
                                   <Input
                                     type="number"
@@ -526,7 +996,32 @@ export function PurchaseOrderForm() {
                                   />
                                 </TableCell>
                                 <TableCell className="text-center">
-                                  <div className="flex items-center justify-center gap-2">
+                                  <div className="flex flex-wrap items-center justify-center gap-2">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      disabled={!canAllocateFabric || isReadOnly}
+                                      onClick={() => {
+                                        if (!stockRow) return;
+                                        setAllocateTarget({
+                                          id: item.bom_item_id,
+                                          bom_id: stockRow.lineBomId || item.bom_id || null,
+                                          item_name: fabricLabel,
+                                          required_qty: stockRow.required,
+                                          required_unit: stockRow.requiredUnit,
+                                          stock_unit: stockRow.stockUnit,
+                                          allocation: {
+                                            totalAllocated: stockRow.allocated,
+                                            totalAvailable: stockRow.warehouseAvailable,
+                                            inventorySources: stockRow.inventorySources,
+                                          },
+                                        });
+                                        setAllocateDialogOpen(true);
+                                      }}
+                                    >
+                                      Allocate
+                                    </Button>
                                     <Button
                                       variant="outline"
                                       size="sm"
@@ -549,8 +1044,23 @@ export function PurchaseOrderForm() {
                             );
                           }
 
+                          const stockRowItem = poBomStockByItemId.get(item.bom_item_id);
+                          const itemLabel = item.item_name || item.product_name || '—';
+                          const canAllocateItem =
+                            !!stockRowItem &&
+                            stockRowItem.remainingToPurchase > 0 &&
+                            stockRowItem.warehouseAvailable > 0 &&
+                            stockRowItem.inventorySources.some((s) => s.available > 0);
+
                           return (
-                            <TableRow key={item.bom_item_id} className="[&>td]:align-middle">
+                            <TableRow
+                              key={item.bom_item_id}
+                              className={
+                                stockRowItem && stockRowItem.warehouseAvailable > 0
+                                  ? '[&>td]:align-middle bg-emerald-50/60 dark:bg-emerald-950/25'
+                                  : '[&>td]:align-middle'
+                              }
+                            >
                               <TableCell className="text-center">
                                 <Checkbox
                                   checked={isSelected}
@@ -560,25 +1070,32 @@ export function PurchaseOrderForm() {
                                   disabled={isReadOnly}
                                 />
                               </TableCell>
-                              <TableCell className="w-[24%]">
+                              <TableCell className="w-[20%]">
                                 <div className="font-medium">{item.bom_number}</div>
                                 <div className="text-xs text-muted-foreground">
                                   {item.product_name || 'Unnamed Product'}
                                 </div>
                               </TableCell>
-                              <TableCell className="w-[10%] text-right whitespace-nowrap tabular-nums">
+                              <TableCell className="w-[8%] text-right whitespace-nowrap tabular-nums">
                                 {formatQuantity(item.qty_total)} {item.unit || ''}
                               </TableCell>
-                              <TableCell className="w-[10%] text-right whitespace-nowrap tabular-nums">
+                              <TableCell className="w-[8%] text-right whitespace-nowrap tabular-nums">
                                 {formatQuantity(item.total_ordered)} {item.unit || ''}
                               </TableCell>
-                              <TableCell className="w-[10%] text-right whitespace-nowrap tabular-nums font-semibold text-primary">
+                              <TableCell className="w-[8%] text-right whitespace-nowrap tabular-nums font-semibold text-primary">
                                 {formatQuantity(item.remaining_quantity)} {item.unit || ''}
                               </TableCell>
-                              <TableCell className="w-[10%] text-right whitespace-nowrap tabular-nums font-semibold text-primary">
-                                {formatQuantity(item.remaining_quantity)} {item.unit || ''}
+                              <TableCell className="text-right text-sm">
+                                {renderPendingInventoryCell(item.bom_item_id)}
                               </TableCell>
-                              <TableCell className="w-[12%] text-right">
+                              <TableCell className="text-right tabular-nums text-sm">
+                                {stockRowItem
+                                  ? `${formatQuantity(stockRowItem.allocated)} ${stockRowItem.stockUnit}`
+                                  : poBomStockLoading
+                                    ? '…'
+                                    : '—'}
+                              </TableCell>
+                              <TableCell className="w-[10%] text-right">
                                 <Input
                                   type="number"
                                   value={quantityValue}
@@ -594,7 +1111,7 @@ export function PurchaseOrderForm() {
                                   min={0}
                                 />
                               </TableCell>
-                              <TableCell className="w-[9%] text-center">
+                              <TableCell className="w-[8%] text-center">
                                 <Input
                                   value={unitValue}
                                   onChange={e => {
@@ -607,7 +1124,7 @@ export function PurchaseOrderForm() {
                                   className="text-center"
                                 />
                               </TableCell>
-                              <TableCell className="w-[15%]">
+                              <TableCell className="w-[14%]">
                                 <Input
                                   value={remarkValue}
                                   onChange={e => {
@@ -620,8 +1137,33 @@ export function PurchaseOrderForm() {
                                   placeholder="Add remark"
                                 />
                               </TableCell>
-                              <TableCell className="w-[15%] text-center">
-                                <div className="flex items-center justify-center gap-2">
+                              <TableCell className="w-[16%] text-center">
+                                <div className="flex flex-wrap items-center justify-center gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={!canAllocateItem || isReadOnly}
+                                    onClick={() => {
+                                      if (!stockRowItem) return;
+                                      setAllocateTarget({
+                                        id: item.bom_item_id,
+                                        bom_id: stockRowItem.lineBomId || item.bom_id || null,
+                                        item_name: itemLabel,
+                                        required_qty: stockRowItem.required,
+                                        required_unit: stockRowItem.requiredUnit,
+                                        stock_unit: stockRowItem.stockUnit,
+                                        allocation: {
+                                          totalAllocated: stockRowItem.allocated,
+                                          totalAvailable: stockRowItem.warehouseAvailable,
+                                          inventorySources: stockRowItem.inventorySources,
+                                        },
+                                      });
+                                      setAllocateDialogOpen(true);
+                                    }}
+                                  >
+                                    Allocate
+                                  </Button>
                                   <Button
                                     variant="outline"
                                     size="sm"
@@ -776,11 +1318,17 @@ export function PurchaseOrderForm() {
             item_id: item.item_id || '',
             item_name: fabricName || item.item_name || '',
             item_image_url: fabricOption?.image_url || item.item_image_url || null,
-            quantity: item.qty_total || item.to_order || item.quantity || 0,
+            quantity: getBomLinePoQuantity(item),
+            bom_item_id: item.id || undefined,
+            bom_id: bomData.id || undefined,
+            bom_qty_total: Number(item.qty_total ?? item.quantity ?? 0) || undefined,
             unit_of_measure: item.unit_of_measure || 'Kgs',
             // Store fabric-specific data with parsed values
             fabric_name: fabricName || 'Unknown Fabric',
-            fabric_for_supplier: fabricOption?.fabric_for_supplier || null,
+            fabric_for_supplier:
+              (item as { fabric_for_supplier?: string | null }).fabric_for_supplier ??
+              fabricOption?.fabric_for_supplier ??
+              null,
             fabric_color: fabricColor || 'N/A',
             fabric_gsm: fabricGsm || 'N/A',
             fabricSelections: fabricSelections,
@@ -822,16 +1370,18 @@ export function PurchaseOrderForm() {
             item_id: item.item_id || '',
             item_name: item.item_name || '',
             item_image_url: itemOption?.image_url || item.item_image_url || null,
-            quantity: item.qty_total || item.to_order || item.quantity || 0,
+            quantity: getBomLinePoQuantity(item),
+            bom_item_id: item.id || undefined,
+            bom_id: bomData.id || undefined,
+            bom_qty_total: Number(item.qty_total ?? item.quantity ?? 0) || undefined,
             unit_of_measure: item.unit_of_measure || 'pcs',
             item_category: itemOption?.item_type || item.item_category || null,
             itemSelections: item.itemSelections || []
           };
         }
       });
-      
-      // No pricing calculations needed for purchase orders
-      const itemsWithTotals = formattedItems;
+
+      const itemsWithTotals = formattedItems.filter((row) => Number(row.quantity) > 0);
       setItems(itemsWithTotals);
       console.log('Items loaded from BOM:', itemsWithTotals);
     }
@@ -923,7 +1473,8 @@ export function PurchaseOrderForm() {
             fabric_color: item.fabric_color || fabricOption?.color || 'N/A',
             fabric_gsm: item.fabric_gsm || fabricOption?.gsm || 'N/A',
             fabric_name: item.fabric_name || fabricOption?.fabric_name || item.item_name,
-            fabric_for_supplier: item.fabric_for_supplier || fabricOption?.fabric_for_supplier || null
+            fabric_for_supplier:
+              item.fabric_for_supplier ?? fabricOption?.fabric_for_supplier ?? null,
           })
         };
       });
@@ -1066,13 +1617,13 @@ export function PurchaseOrderForm() {
         
         return `
         <tr>
-          <td>${displayName}</td>
-          <td>${item.remarks || '-'}</td>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
-          <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A')}</td>
+          <td>${displayName}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
+          <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A')}</td>
           <td style="text-align: right;">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
+          <td>${item.remarks || '-'}</td>
         </tr>
       `;
       }).join('');
@@ -1144,13 +1695,13 @@ export function PurchaseOrderForm() {
         <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px;">
             <thead>
               <tr>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Item</th>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Remarks</th>
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Type</th>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Color</th>
+              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Item</th>
               <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">GSM</th>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Quantity</th>
-              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">UOM</th>
+              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Color</th>
+              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Qty</th>
+              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">U.O.M</th>
+              <th style="border: 1px solid #ddd; padding: 6px; background-color: #f2f2f2; font-weight: bold;">Remark</th>
               </tr>
             </thead>
             <tbody>
@@ -1265,13 +1816,13 @@ export function PurchaseOrderForm() {
         
         return `
         <tr>
-          <td>${displayName}</td>
-          <td>${item.remarks || '-'}</td>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
-          <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A')}</td>
+          <td>${displayName}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
+          <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A')}</td>
           <td class="number-cell">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
+          <td>${item.remarks || '-'}</td>
         </tr>
       `;
       }).join('');
@@ -1439,13 +1990,13 @@ export function PurchaseOrderForm() {
             <table class="print-table">
             <thead>
               <tr>
-                <th>Item</th>
-                <th>Remarks</th>
                 <th>Type</th>
-                <th>Color</th>
+                <th>Item</th>
                 <th>GSM</th>
-                <th>Quantity</th>
-                <th>UOM</th>
+                <th>Color</th>
+                <th>Qty</th>
+                <th>U.O.M</th>
+                <th>Remark</th>
               </tr>
             </thead>
             <tbody>
@@ -1476,26 +2027,27 @@ export function PurchaseOrderForm() {
     `;
   };
 
+  const printFromIframe = (iframe: HTMLIFrameElement | null) => {
+    try {
+      const win = iframe?.contentWindow;
+      if (!win) return;
+      win.focus();
+      win.print();
+    } catch (e) {
+      console.error('Print from preview failed:', e);
+      toast.error('Could not open print dialog');
+    }
+  };
+
   const handlePrint = async () => {
-    // Removed loading toast as requested
-    
-    // Ensure logo is converted to base64
     if (companySettings?.logo_url && !logoBase64) {
       await convertLogoToBase64(companySettings.logo_url);
     }
-    
-    // Loading toast removed as requested
+    setPrintPreviewOpen(true);
+  };
 
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-      printWindow.document.write(buildPurchaseOrderPrintHtml());
-    printWindow.document.close();
-    
-    // Since we're using base64 images, they load immediately - no need to wait
-    printWindow.onload = () => {
-      setTimeout(() => printWindow.print(), 100);
-    };
-    }
+  const handlePrintPreviewDialogPrint = () => {
+    setTimeout(() => printFromIframe(printPreviewIframeRef.current), 150);
   };
 
   const handleShare = async () => {
@@ -2191,6 +2743,235 @@ export function PurchaseOrderForm() {
     };
   }, [items]);
 
+  const renderManualFabricAndItemCards = () => (
+    <>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle>Fabric</CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => addItem('fabric')}
+              className="rounded-full w-8 h-8 p-0"
+            >
+              <Plus className="w-4 h-4" />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {manualFabricItems.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              No fabrics added yet. Click + to add fabric.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {items.map((it, idx) => {
+                if (it.item_type !== 'fabric' || it.bom_item_id) return null;
+                return (
+                  <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
+                    <div className="flex-1 grid grid-cols-12 gap-4 items-center">
+                      <div className="col-span-4">
+                        <Label className="text-sm font-medium">Fabric (for supplier)</Label>
+                        <div className="text-sm font-medium">
+                          {it.fabric_for_supplier || it.fabric_name || it.item_name || 'N/A'}
+                        </div>
+                      </div>
+                      <div className="col-span-2">
+                        <Label className="text-sm font-medium">Color</Label>
+                        <div className="text-sm">{it.fabric_color || 'N/A'}</div>
+                      </div>
+                      <div className="col-span-2">
+                        <Label className="text-sm font-medium">GSM</Label>
+                        <div className="text-sm">
+                          {it.fabric_gsm ? `${it.fabric_gsm} GSM` : 'N/A'}
+                        </div>
+                      </div>
+                      <div className="col-span-2">
+                        <Label className="text-sm font-medium">Qty</Label>
+                        <Input
+                          type="number"
+                          value={it.quantity}
+                          onChange={(e) => {
+                            const qty = parseFloat(e.target.value) || 0;
+                            updateItem(idx, { quantity: qty });
+                          }}
+                          disabled={isReadOnly}
+                          className="w-full text-right"
+                          placeholder="Qty"
+                        />
+                      </div>
+                      <div className="col-span-2 flex items-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => removeItem(idx)}
+                          className="text-red-600 hover:text-red-700"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle>Items</CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => addItem('item')}
+              className="rounded-full w-8 h-8 p-0"
+            >
+              <Plus className="w-4 h-4" />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {manualNonFabricItems.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              No items added yet. Click + to add item.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {items.map((it, idx) => {
+                if (it.item_type !== 'item' || it.bom_item_id) return null;
+                return (
+                  <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
+                    {it.item_image_url ? (
+                      <ProductImage
+                        src={it.item_image_url}
+                        alt={it.item_name}
+                        className="w-20 h-20 object-cover rounded"
+                        showFallback={false}
+                      />
+                    ) : null}
+
+                    <div className="flex-1 grid grid-cols-8 gap-4 items-center">
+                      <div>
+                        <Label className="text-sm font-medium">Item Type</Label>
+                        {isReadOnly ? (
+                          <div className="w-full p-2 border rounded-md bg-muted text-sm">
+                            {it.item_type === 'fabric' ? 'Fabric' : it.item_category || 'Not specified'}
+                          </div>
+                        ) : (
+                          <Select
+                            value={it.item_category || ''}
+                            onValueChange={(v) => {
+                              updateItem(idx, {
+                                item_category: v,
+                                item_id: '',
+                                item_name: '',
+                                item_image_url: null,
+                                itemSelections: [],
+                              });
+                            }}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Select Item Type" value={it.item_category || ''} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {itemTypeOptions.map((type) => (
+                                <SelectItem key={type} value={type}>
+                                  {type}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+
+                      <div>
+                        <Label className="text-sm font-medium">Item Name</Label>
+                        {isReadOnly ? (
+                          <div className="w-full p-2 border rounded-md bg-muted text-sm font-medium">
+                            {it.item_name || 'N/A'}
+                          </div>
+                        ) : (
+                          <div className="text-sm font-medium">{it.item_name || 'N/A'}</div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Label className="text-sm font-medium">Qty</Label>
+                        {isReadOnly ? (
+                          <div className="w-full p-2 border rounded-md bg-muted text-sm text-right">
+                            {it.quantity}
+                          </div>
+                        ) : (
+                          <Input
+                            type="number"
+                            value={it.quantity}
+                            onChange={(e) => {
+                              const qty = parseFloat(e.target.value) || 0;
+                              updateItem(idx, { quantity: qty });
+                            }}
+                            className="w-full text-right"
+                            placeholder="Qty"
+                          />
+                        )}
+                      </div>
+
+                      <div>
+                        <Label className="text-sm font-medium">UOM</Label>
+                        {isReadOnly ? (
+                          <div className="w-full p-2 border rounded-md bg-muted text-sm">
+                            {it.unit_of_measure || 'pcs'}
+                          </div>
+                        ) : (
+                          <Input
+                            value={it.unit_of_measure || ''}
+                            onChange={(e) => {
+                              updateItem(idx, { unit_of_measure: e.target.value });
+                            }}
+                            className="w-full"
+                            placeholder="UOM"
+                          />
+                        )}
+                      </div>
+
+                      <div className="col-span-6">
+                        <Label className="text-sm font-medium">Remarks</Label>
+                        {isReadOnly ? (
+                          <div className="w-full p-2 border rounded-md bg-muted text-sm">
+                            {it.notes || it.remarks || '-'}
+                          </div>
+                        ) : (
+                          <Input
+                            value={it.notes || it.remarks || ''}
+                            onChange={(e) => updateItem(idx, { notes: e.target.value })}
+                            className="w-full"
+                            placeholder="Enter remarks for this item"
+                          />
+                        )}
+                      </div>
+                    </div>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => removeItem(idx)}
+                      className="text-red-600 hover:text-red-700"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </>
+  );
+
   if (loading) {
     return <div className="flex items-center justify-center h-64">Loading...</div>;
   }
@@ -2399,10 +3180,27 @@ export function PurchaseOrderForm() {
               Select the materials to include in this purchase order. Adjust quantities and remarks before saving.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Badge variant="secondary" className="text-sm">
               {pendingSelectionMap.size} selected
             </Badge>
+            {bomData?.id && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={
+                  poBomStockLoading ||
+                  !poBomStockRows.some(
+                    (r) => r.remainingToPurchase > 0 && r.warehouseAvailable > 0
+                  )
+                }
+                onClick={() => openBulkAllocateDialog()}
+                className="flex items-center gap-2"
+              >
+                Allocate all (one bin)
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -2524,257 +3322,74 @@ export function PurchaseOrderForm() {
           </Card>
         )}
 
-        {!isReadOnly && (
-          <>
-        {/* Fabric Section */}
-      <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Fabric</CardTitle>
-          {!isReadOnly && (
+        {!isReadOnly &&
+          (bomData?.id ? (
+            <Collapsible open={nonBomLinesOpen} onOpenChange={setNonBomLinesOpen} className="space-y-2">
+              <CollapsibleTrigger asChild>
                 <Button
+                  type="button"
                   variant="outline"
-                  size="sm"
-                  onClick={() => addItem('fabric')}
-                  className="rounded-full w-8 h-8 p-0"
+                  className="flex h-auto min-h-11 w-full items-center justify-between gap-2 px-4 py-3"
                 >
-                  <Plus className="w-4 h-4" />
-          </Button>
-          )}
-            </div>
-        </CardHeader>
-        <CardContent>
-            {manualFabricItems.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                No fabrics added yet. Click + to add fabric.
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {items.map((it, idx) => {
-                  if (it.item_type !== 'fabric' || it.bom_item_id) return null;
-                  return (
-                    <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
-                      {/* Fabric: only fabric_for_supplier, color, gsm */}
-                      <div className="flex-1 grid grid-cols-12 gap-4 items-center">
-                        <div className="col-span-4">
-                          <Label className="text-sm font-medium">Fabric (for supplier)</Label>
-                          <div className="text-sm font-medium">
-                            {it.fabric_for_supplier || it.fabric_name || it.item_name || 'N/A'}
-                          </div>
-                        </div>
-                        <div className="col-span-2">
-                          <Label className="text-sm font-medium">Color</Label>
-                          <div className="text-sm">
-                            {it.fabric_color || 'N/A'}
-                          </div>
-                        </div>
-                        <div className="col-span-2">
-                          <Label className="text-sm font-medium">GSM</Label>
-                          <div className="text-sm">
-                            {it.fabric_gsm ? `${it.fabric_gsm} GSM` : 'N/A'}
-                          </div>
-                        </div>
-                        <div className="col-span-2">
-                          <Label className="text-sm font-medium">Qty</Label>
-                          <Input
-                            type="number"
-                            value={it.quantity}
-                            onChange={(e) => {
-                              const qty = parseFloat(e.target.value) || 0;
-                              updateItem(idx, { quantity: qty });
-                            }}
-                            disabled={isReadOnly}
-                            className="w-full text-right"
-                            placeholder="Qty"
-                          />
-                        </div>
-                        {!isReadOnly && (
-                          <div className="col-span-2 flex items-end">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => removeItem(idx)}
-                              className="text-red-600 hover:text-red-700"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Items Section */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Items</CardTitle>
-                             {!isReadOnly && (
-                             <Button
-                              variant="outline"
-                              size="sm"
-                  onClick={() => addItem('item')}
-                  className="rounded-full w-8 h-8 p-0"
-                >
-                  <Plus className="w-4 h-4" />
-                            </Button>
-                             )}
-                          </div>
-          </CardHeader>
-          <CardContent>
-            {manualNonFabricItems.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                No items added yet. Click + to add item.
-                          </div>
-            ) : (
-              <div className="space-y-4">
-                {items.map((it, idx) => {
-                  if (it.item_type !== 'item' || it.bom_item_id) return null;
-                  return (
-                    <div key={idx} className="flex items-center gap-4 p-4 border rounded-lg">
-                      {/* Item Image - Only show if image exists */}
-                      {it.item_image_url ? (
-                      <ProductImage 
-                        src={it.item_image_url} 
-                        alt={it.item_name}
-                        className="w-20 h-20 object-cover rounded"
-                          showFallback={false}
-                      />
-                      ) : null}
-
-                      {/* Item Details */}
-                      <div className="flex-1 grid grid-cols-8 gap-4 items-center">
-                        {/* Item Type */}
-                        <div>
-                          <Label className="text-sm font-medium">Item Type</Label>
-                          {isReadOnly ? (
-                            <div className="w-full p-2 border rounded-md bg-muted text-sm">
-                              {it.item_type === 'fabric' ? 'Fabric' : (it.item_category || 'Not specified')}
-                            </div>
-                          ) : (
-                                  <Select
-                              value={it.item_category || ''} 
-                                    onValueChange={(v) => {
-                                updateItem(idx, { item_category: v, item_id: '', item_name: '', item_image_url: null, itemSelections: [] });
-                              }}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Select Item Type" value={it.item_category || ''} />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                {itemTypeOptions.map((type) => (
-                                  <SelectItem key={type} value={type}>{type}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                  </Select>
-                          )}
-                                </div>
-
-                        {/* Item Name */}
-                        <div>
-                          <Label className="text-sm font-medium">Item Name</Label>
-                          {isReadOnly ? (
-                            <div className="w-full p-2 border rounded-md bg-muted text-sm font-medium">
-                              {it.item_name || 'N/A'}
-                            </div>
-                          ) : (
-                            <div className="text-sm font-medium">
-                              {it.item_name || 'N/A'}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Quantity */}
-                        <div>
-                          <Label className="text-sm font-medium">Qty</Label>
-                          {isReadOnly ? (
-                            <div className="w-full p-2 border rounded-md bg-muted text-sm text-right">
-                              {it.quantity}
-                            </div>
-                          ) : (
-                            <Input 
-                              type="number" 
-                              value={it.quantity} 
-                              onChange={(e) => {
-                                const qty = parseFloat(e.target.value) || 0;
-                                updateItem(idx, { quantity: qty });
-                              }}
-                              className="w-full text-right" 
-                              placeholder="Qty"
-                            />
-                          )}
-                        </div>
-
-                        {/* UOM */}
-                        <div>
-                          <Label className="text-sm font-medium">UOM</Label>
-                          {isReadOnly ? (
-                            <div className="w-full p-2 border rounded-md bg-muted text-sm">
-                              {it.unit_of_measure || 'pcs'}
-                            </div>
-                          ) : (
-                            <Input 
-                              value={it.unit_of_measure || ''} 
-                              onChange={(e) => {
-                                updateItem(idx, { unit_of_measure: e.target.value });
-                              }} 
-                              className="w-full" 
-                              placeholder="UOM"
-                            />
-                          )}
-                        </div>
-
-                        {/* Remarks */}
-                        <div className="col-span-6">
-                          <Label className="text-sm font-medium">Remarks</Label>
-                          {isReadOnly ? (
-                            <div className="w-full p-2 border rounded-md bg-muted text-sm">
-                              {it.notes || it.remarks || '-'}
-                            </div>
-                          ) : (
-                            <Input 
-                              value={it.notes || it.remarks || ''} 
-                              onChange={(e) => updateItem(idx, { notes: e.target.value })}
-                              className="w-full" 
-                              placeholder="Enter remarks for this item"
-                            />
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Remove Button */}
-                      {!isReadOnly && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => removeItem(idx)}
-                          className="text-red-600 hover:text-red-700"
-                        >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                      )}
-          </div>
-                  );
-                })}
-              </div>
-            )}
-        </CardContent>
-      </Card>
-          </>
-        )}
+                  <span className="flex items-center gap-2 text-left font-medium">
+                    <ChevronDown
+                      className={`h-4 w-4 shrink-0 transition-transform duration-200 ${nonBomLinesOpen ? 'rotate-180' : ''}`}
+                    />
+                    Add non-BOM lines
+                  </span>
+                  {manualItems.length > 0 ? (
+                    <Badge variant="secondary">{manualItems.length} extra line(s)</Badge>
+                  ) : null}
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-6 data-[state=closed]:animate-none">
+                {renderManualFabricAndItemCards()}
+              </CollapsibleContent>
+            </Collapsible>
+          ) : (
+            renderManualFabricAndItemCards()
+          ))}
       </div>
-
-      <Card>
-        <CardContent className="pt-6">
-
-        </CardContent>
-      </Card>
       </div> {/* End of printRef */}
+
+      <Dialog open={printPreviewOpen} onOpenChange={setPrintPreviewOpen}>
+        <DialogContent className="max-w-6xl max-h-[92vh] flex flex-col gap-0">
+          <DialogHeader>
+            <DialogTitle>Print preview</DialogTitle>
+            <DialogDescription>
+              Review the purchase order, then print or close. Your browser print dialog will open when you choose Print.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="border rounded-md overflow-hidden bg-white my-4 min-h-0 flex-1">
+            <iframe
+              ref={printPreviewIframeRef}
+              title="Purchase Order print preview"
+              className="w-full h-[62vh] min-h-[320px] border-0"
+              srcDoc={printPreviewOpen ? buildPurchaseOrderPrintHtml() : ''}
+            />
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setPrintPreviewOpen(false)}>
+              Close
+            </Button>
+            <Button type="button" onClick={handlePrintPreviewDialogPrint}>
+              <Printer className="w-4 h-4 mr-2" />
+              Print
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <BomAllocateStockDialog
+        open={allocateDialogOpen}
+        onOpenChange={(open) => {
+          setAllocateDialogOpen(open);
+          if (!open) setAllocateTarget(null);
+        }}
+        bomId={bomData?.id ?? null}
+        target={allocateTarget}
+        onSuccess={applyQuantitiesAfterAllocation}
+      />
 
       <Dialog open={postSaveDialogOpen} onOpenChange={setPostSaveDialogOpen}>
         <DialogContent className="max-w-6xl">
@@ -2789,13 +3404,17 @@ export function PurchaseOrderForm() {
           </DialogHeader>
           <div className="border rounded-md overflow-hidden bg-white">
             <iframe
+              ref={postSavePreviewIframeRef}
               title="Purchase Order Preview"
               className="w-full h-[62vh]"
               srcDoc={buildPurchaseOrderPrintHtml()}
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={handlePrint}>
+            <Button
+              variant="outline"
+              onClick={() => setTimeout(() => printFromIframe(postSavePreviewIframeRef.current), 150)}
+            >
               <Printer className="w-4 h-4 mr-2" />
               Print
             </Button>

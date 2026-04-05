@@ -19,7 +19,39 @@ import {
 import { sizesFromOrderItem } from '@/utils/sizesFromOrderItem';
 import { getOrderItemLineQuantity } from '@/utils/orderItemLineQuantity';
 import { resolveSwatchHex } from '@/lib/grnColorSwatch';
+import { normalizeGsmVariants } from '@/components/purchase-orders/bomInventoryAllocation';
 import '@/components/purchase-orders/BomLinePicker.css';
+
+function normLower(s: string | null | undefined): string {
+  return `${s ?? ''}`.trim().toLowerCase();
+}
+
+/**
+ * Match warehouse `item_name` to a specific fabric_master variant (not just base name).
+ */
+function warehouseItemNameMatchesFabricVariant(
+  itemName: string | undefined,
+  fabric: { fabric_name?: string | null; color?: string | null; gsm?: string | number | null }
+): boolean {
+  const n = normLower(itemName);
+  if (!n) return false;
+  const fname = normLower(fabric.fabric_name);
+  if (!fname) return false;
+  const nameOk = n === fname || n.includes(fname) || fname.includes(n);
+  if (!nameOk) return false;
+  const color = normLower(fabric.color);
+  if (color && !n.includes(color)) return false;
+  const gsmVars = normalizeGsmVariants(`${fabric.gsm ?? ''}`);
+  if (gsmVars.length > 0) {
+    const gsmOk = gsmVars.some((g) => {
+      const g2 = normLower(g);
+      if (!g2) return false;
+      return n.includes(g2) || n.includes(g2.replace(/\s/g, ''));
+    });
+    if (!gsmOk) return false;
+  }
+  return true;
+}
 
 function fabricSwatchCss(fabric: { color?: string | null; hex?: string | null } | null | undefined): string {
   if (!fabric) return '#e5e7eb';
@@ -152,23 +184,24 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
           .eq('item_type', 'FABRIC')
           .in('status', ['IN_STORAGE', 'RECEIVED']);
 
+        const fabricIdSet = new Set(fabricIds);
         const warehouseInventoryMap: Record<string, { quantity: number; unit: string }> = {};
         if (!warehouseError && warehouseInventory) {
           warehouseInventory.forEach((invRow: any) => {
-            const fabricId = invRow.item_id;
-            const fabricName = invRow.item_name;
+            const fabricId = invRow.item_id as string | undefined;
+            const fabricName = invRow.item_name as string | undefined;
 
             let matchKey: string | null = null;
-            if (fabricId && fabricIds.includes(fabricId)) {
+            if (fabricId && fabricIdSet.has(fabricId)) {
               matchKey = fabricId;
-            } else if (fabricName) {
-              const matchingFabric = fabricData.find(
+            } else {
+              const candidates = (fabricData as any[]).filter(
                 (f: any) =>
-                  f.fabric_name === fabricName ||
-                  fabricName.includes(f.fabric_name) ||
-                  f.fabric_name.includes(fabricName.split(' - ')[0])
+                  fabricIdSet.has(f.id) && warehouseItemNameMatchesFabricVariant(fabricName, f)
               );
-              if (matchingFabric) matchKey = matchingFabric.id;
+              if (candidates.length === 1) {
+                matchKey = candidates[0].id;
+              }
             }
 
             if (matchKey) {

@@ -6,7 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent, TabsTrigger } from '@/components/ui/tabs';
+import { ErpSegmentedTabList } from '@/components/ui/ErpSegmentedTabList';
 import { Plus, Pencil, Trash2, X, Grid3X3, List, Upload, Image as ImageIcon, GripVertical } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -471,31 +472,37 @@ export function SizeTypeManager() {
       </div>
 
       <Card>
-        <CardHeader>
-          <div className="flex justify-between items-center">
-            <CardTitle>Size Types</CardTitle>
-            <div className="flex gap-2">
-              <Button
-                variant={viewMode === 'table' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setViewMode('table')}
+        <Tabs
+          value={viewMode}
+          onValueChange={(value) => setViewMode(value as 'table' | 'card')}
+        >
+          <CardHeader>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <CardTitle>Size Types</CardTitle>
+              <ErpSegmentedTabList
+                segmentCount={2}
+                activeIndex={viewMode === 'table' ? 0 : 1}
+                stretch={false}
+                className="self-start sm:self-auto"
               >
-                <List className="w-4 h-4 mr-2" />
-                Table View
-              </Button>
-              <Button
-                variant={viewMode === 'card' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setViewMode('card')}
-              >
-                <Grid3X3 className="w-4 h-4 mr-2" />
-                Card View
-              </Button>
+                <TabsTrigger
+                  value="table"
+                  className="erp-segmented__btn inline-flex items-center justify-center gap-1.5 focus-visible:ring-0 focus-visible:ring-offset-0"
+                >
+                  <List className="h-4 w-4 shrink-0" />
+                  Table
+                </TabsTrigger>
+                <TabsTrigger
+                  value="card"
+                  className="erp-segmented__btn inline-flex items-center justify-center gap-1.5 focus-visible:ring-0 focus-visible:ring-offset-0"
+                >
+                  <Grid3X3 className="h-4 w-4 shrink-0" />
+                  Cards
+                </TabsTrigger>
+              </ErpSegmentedTabList>
             </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as 'table' | 'card')}>
+          </CardHeader>
+          <CardContent>
             <TabsContent value="table" className="space-y-4">
               <Table>
                 <TableHeader>
@@ -608,8 +615,8 @@ export function SizeTypeManager() {
                 ))}
               </div>
             </TabsContent>
-          </Tabs>
-        </CardContent>
+          </CardContent>
+        </Tabs>
       </Card>
     </div>
   );

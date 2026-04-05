@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { formatCurrency } from '@/lib/utils';
+import { getCustomerMobile } from '@/lib/customerContact';
 import { Eye } from 'lucide-react';
 import { calculateOrderSummary } from '@/utils/priceCalculation';
 
@@ -16,7 +17,7 @@ interface Order {
   order_number: string;
   order_date: string;
   customer_id: string;
-  customer: { company_name: string };
+  customer: { company_name: string; phone?: string | null; mobile?: string | null };
   status: string;
   final_amount: number;
   sales_manager?: string;
@@ -42,7 +43,7 @@ export default function QuotationsPage() {
       setLoading(true);
       let query: any = supabase
         .from('orders')
-        .select(`*, customer:customers(company_name), gst_rate`);
+        .select(`*, customer:customers(company_name, phone), gst_rate`);
 
       if (showCompleted === 'no') {
         query = query.neq('status', 'completed');
@@ -51,7 +52,25 @@ export default function QuotationsPage() {
       const { data, error } = await query.order('created_at', { ascending: false });
       if (error) throw error;
       const list: Order[] = data || [];
-      
+      const orderIds = list.map((o) => o.id).filter(Boolean);
+      const additionalByOrderId = new Map<string, number>();
+      if (orderIds.length > 0) {
+        const { data: chargeRows, error: chErr } = await supabase
+          .from('order_additional_charges')
+          .select('order_id, amount_incl_gst')
+          .in('order_id', orderIds as any);
+        if (!chErr && chargeRows) {
+          for (const row of chargeRows as { order_id: string; amount_incl_gst: number | null }[]) {
+            if (!row?.order_id) continue;
+            const amt = Number(row.amount_incl_gst || 0);
+            additionalByOrderId.set(
+              row.order_id,
+              (additionalByOrderId.get(row.order_id) ?? 0) + amt
+            );
+          }
+        }
+      }
+
       // Calculate correct amounts using size-based pricing for each order
       const ordersWithCalculatedAmounts = await Promise.all(
         list.map(async (order) => {
@@ -66,7 +85,8 @@ export default function QuotationsPage() {
             let calculatedAmount = order.final_amount; // Fallback to final_amount
             if (orderItems && orderItems.length > 0) {
               const summary = calculateOrderSummary(orderItems, order);
-              calculatedAmount = summary.grandTotal;
+              const extra = additionalByOrderId.get(order.id) ?? 0;
+              calculatedAmount = summary.grandTotal + extra;
             }
             
             return {
@@ -140,6 +160,7 @@ export default function QuotationsPage() {
                   <TableRow>
                     <TableHead>Order #</TableHead>
                     <TableHead>Customer</TableHead>
+                    <TableHead>Mobile</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Amount</TableHead>
@@ -149,14 +170,17 @@ export default function QuotationsPage() {
                 </TableHeader>
                 <TableBody>
                   {loading ? (
-                    <TableRow><TableCell colSpan={7}>Loading...</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={8}>Loading...</TableCell></TableRow>
                   ) : orders.length === 0 ? (
-                    <TableRow><TableCell colSpan={7}>No orders found.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={8}>No orders found.</TableCell></TableRow>
                   ) : (
                     orders.map((order) => (
                       <TableRow key={order.id}>
                         <TableCell>{order.order_number}</TableCell>
                         <TableCell>{order.customer?.company_name}</TableCell>
+                        <TableCell className="font-mono text-xs whitespace-nowrap">
+                          {getCustomerMobile(order.customer as any) || '—'}
+                        </TableCell>
                         <TableCell>{new Date(order.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}</TableCell>
                         <TableCell><Badge>{order.status}</Badge></TableCell>
                         <TableCell>{formatCurrency(order.calculatedAmount ?? order.final_amount ?? 0)}</TableCell>

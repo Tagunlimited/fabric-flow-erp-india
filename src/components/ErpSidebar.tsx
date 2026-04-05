@@ -105,6 +105,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "View Quotation", url: "/accounts/quotations", icon: Quote },
         { title: "Create/View Invoices", url: "/accounts/invoices", icon: FileText },
         { title: "Receipts", url: "/accounts/receipts", icon: Receipt },
+        { title: "Receivables", url: "/accounts/receivables", icon: Wallet },
         // { title: "Payments", url: "/accounts/payments", icon: CreditCard },
       ]
     },
@@ -739,42 +740,19 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
             </div>
           )}
           {!collapsed && (
-            <div className="text-center text-primary-foreground/70 text-xs">
-              <p>2024 Scissors ERP</p>
-              <p className="mt-1">v1.0.0</p>
-              
-              <p className="mt-2">
-                Powered by <br />
-                <a
-                  href="https://blackmattertech.com/"
-                  className="animated-sellers"
-                  style={{
-                    fontSize: '20px',
-                    fontWeight: 'bold',
-                    display: 'inline-block',
-                    marginTop: '4px',
-                    color: '#fff',
-                    textShadow: '0 0 8px #2196f3, 0 0 16px #2196f3',
-                  }}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <span className="flex items-center gap-2">
-                    {/* <img src="/Users//public/1.png" alt="BlackMatter Technologies" className="w-10 h-10" /> */}
-                    BlackMatter <br></br> Technologies
-                  </span>
-                </a>
-              </p>
-              <style>{`
-                .animated-sellers {
-                  animation: sellersPulse 1.5s infinite alternate;
-                }
-                @keyframes sellersPulse {
-                  0% { letter-spacing: 0px; text-shadow: 0 0 8px #2196f3, 0 0 16px #2196f3; }
-                  50% { letter-spacing: 2px; text-shadow: 0 0 16px #fff, 0 0 32px #2196f3; }
-                  100% { letter-spacing: 0px; text-shadow: 0 0 8px #2196f3, 0 0 16px #2196f3; }
-                }
-              `}</style>
+            <div className="flex justify-center">
+              <a
+                href="https://blackmattertech.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex w-full max-w-[min(100%,320px)] justify-center opacity-90 hover:opacity-100 transition-opacity"
+              >
+                <img
+                  src="/blackmatterlogo.svg"
+                  alt="BlackMatter Technologies"
+                  className="h-14 w-auto max-w-full object-contain object-center sm:h-16"
+                />
+              </a>
             </div>
           )}
         </div>

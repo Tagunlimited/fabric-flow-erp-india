@@ -29,7 +29,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDateIndian } from "@/lib/utils";
 import { ErpLayout } from "@/components/ErpLayout";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -43,6 +43,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { sortSizesQuantities, SizeType, sortSizesByMasterOrder } from '@/utils/sizeSorting';
 import { calculateSizeBasedTotal, calculateOrderSummary } from '@/utils/priceCalculation';
+import { orderHasActiveCreditInReceiptRows, sumActiveReceiptAmountsForOrder } from '@/utils/orderFinancials';
+import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
+import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 import { ProductCustomizationModal } from "@/components/orders/ProductCustomizationModal";
 import { CustomizationColorChips } from "@/components/common/CustomizationColorChips";
 import {
@@ -83,6 +86,7 @@ interface Order {
   payment_channel: string;
   reference_id: string;
   notes: string;
+  payment_due_date?: string | null;
 }
 
 interface SalesManager {
@@ -242,6 +246,7 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
   const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [totalReceipts, setTotalReceipts] = useState<number>(0);
+  const [hasActiveCreditReceipt, setHasActiveCreditReceipt] = useState(false);
 
   useEffect(() => {
     const loadOrderData = async () => {
@@ -275,6 +280,17 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
           };
         });
 
+        const { data: chargesData } = await supabase
+          .from('order_additional_charges')
+          .select('*')
+          .eq('order_id', order.id);
+        const additionalChargesRows = ((chargesData || []) as any[]).map((c: any) => ({
+          particular: c.particular || '',
+          rate: Number(c.rate || 0),
+          gst_percentage: Number(c.gst_percentage || 0),
+          amount_incl_gst: Number(c.amount_incl_gst || 0),
+        }));
+
         setFormData({
           order_date: new Date(order.order_date),
           expected_delivery_date: new Date(order.expected_delivery_date),
@@ -285,7 +301,7 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
           reference_id: order.reference_id || '',
           advance_amount: order.advance_amount || 0,
           notes: order.notes || '',
-          additional_charges: []
+          additional_charges: additionalChargesRows,
         });
       } catch (error) {
         console.error('Error loading order data:', error);
@@ -349,26 +365,27 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
   // Fetch total receipts
   useEffect(() => {
     const fetchTotalReceipts = async () => {
-      if (!order?.order_number) return;
-      
+      if (!order?.order_number || !order?.id) return;
+
       try {
         const { data: receiptsData, error: receiptsError } = await supabase
           .from('receipts')
-          .select('amount')
-          .eq('reference_number', order.order_number)
-          .eq('reference_type', 'order');
-        
+          .select('amount, status, payment_mode, payment_type, reference_id, reference_number')
+          .eq('reference_type', 'order')
+          .or(`reference_id.eq.${order.id},reference_number.eq.${order.order_number}`);
+
         if (receiptsError) throw receiptsError;
-        
-        const total = (receiptsData || []).reduce((sum, receipt) => sum + Number(receipt.amount || 0), 0);
-        setTotalReceipts(total);
+
+        const rows = receiptsData || [];
+        setTotalReceipts(sumActiveReceiptAmountsForOrder(rows, order.id, order.order_number));
+        setHasActiveCreditReceipt(orderHasActiveCreditInReceiptRows(rows, order.id, order.order_number));
       } catch (error) {
         console.error('Error fetching receipts:', error);
       }
     };
-    
+
     fetchTotalReceipts();
-  }, [order?.order_number]);
+  }, [order?.order_number, order?.id]);
 
   // Helper functions for activities
   const getActivityIcon = (activityType: string) => {
@@ -503,9 +520,14 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
     }
   };
 
-  // Calculate order totals
-  const { subtotal, gstAmount, grandTotal } = calculateOrderSummary(orderItems, order);
+  // Calculate order totals (line items + GST); additional charges stored on order_additional_charges
+  const { subtotal, gstAmount, grandTotal: itemsPlusGstTotal } = calculateOrderSummary(orderItems, order);
   const gstBreakdown = calculateGSTRatesBreakdown(orderItems, order);
+  const readymadeAdditionalTotal = (formData?.additional_charges || []).reduce(
+    (sum: number, c: { amount_incl_gst?: number }) => sum + Number(c.amount_incl_gst || 0),
+    0
+  );
+  const grandTotal = itemsPlusGstTotal + readymadeAdditionalTotal;
 
   if (loading || !formData) {
     return <div className="text-center py-8">Loading order data...</div>;
@@ -956,7 +978,7 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
             <CardContent className="space-y-4">
               <div className="flex justify-between">
                 <span>Subtotal</span>
-                <span>{formatCurrency(order.total_amount)}</span>
+                <span>{formatCurrency(subtotal)}</span>
               </div>
               {(() => {
                 if (gstBreakdown.length === 0) {
@@ -990,6 +1012,14 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
                   );
                 }
               })()}
+              {(formData.additional_charges || [])
+                .filter((c: { amount_incl_gst?: number }) => Number(c.amount_incl_gst || 0) !== 0)
+                .map((c: { particular?: string; amount_incl_gst?: number }, i: number) => (
+                  <div key={i} className="flex justify-between text-sm">
+                    <span>{(c.particular || '').trim() || 'Additional charge'}</span>
+                    <span>{formatCurrency(c.amount_incl_gst || 0)}</span>
+                  </div>
+                ))}
               <div className="flex justify-between">
                 <span>Amount Paid</span>
                 <span className="text-green-600">{formatCurrency(totalReceipts)}</span>
@@ -1005,7 +1035,20 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
                   {formatCurrency(grandTotal - totalReceipts)}
                 </span>
               </div>
-              
+              {(hasActiveCreditReceipt ||
+                (!!order.payment_due_date && grandTotal - totalReceipts > 0)) && (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {hasActiveCreditReceipt && (
+                    <CreditOrderBadge>Credit order</CreditOrderBadge>
+                  )}
+                  {order.payment_due_date && grandTotal - totalReceipts > 0 && (
+                    <Badge variant="outline" className="text-[10px] font-normal">
+                      Due {formatDateIndian(order.payment_due_date)}
+                    </Badge>
+                  )}
+                </div>
+              )}
+
               {order.reference_id && (
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Reference ID</span>
@@ -1195,12 +1238,20 @@ export default function OrderDetailPage() {
     gst_percentage: number;
     amount_incl_gst: number;
   }>>([]);
+  /** Loaded from DB for view mode; `additionalCharges` is the edit draft while editing */
+  const [persistedAdditionalCharges, setPersistedAdditionalCharges] = useState<Array<{
+    particular: string;
+    rate: number;
+    gst_percentage: number;
+    amount_incl_gst: number;
+  }>>([]);
   const [customizationModalOpen, setCustomizationModalOpen] = useState(false);
   const [activeCustomizationIndex, setActiveCustomizationIndex] = useState<number | null>(null);
   const [editingCustomizationIndex, setEditingCustomizationIndex] = useState<number | null>(null);
   const [orderActivities, setOrderActivities] = useState<OrderActivity[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [totalReceipts, setTotalReceipts] = useState<number>(0);
+  const [hasActiveCreditReceipt, setHasActiveCreditReceipt] = useState(false);
   const [hasCuttingMaster, setHasCuttingMaster] = useState<boolean>(false);
 
   // Handle back navigation based on referrer and order type
@@ -1357,10 +1408,10 @@ export default function OrderDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    if (order?.order_number) {
+    if (order?.order_number && order?.id) {
       fetchTotalReceipts();
     }
-  }, [order?.order_number]);
+  }, [order?.order_number, order?.id]);
 
   // DISABLED: Refresh receipts on focus - prevents unwanted auto-refresh
   // Receipts will only refresh when explicitly needed (e.g., after creating a receipt)
@@ -1458,6 +1509,23 @@ export default function OrderDetailPage() {
         
         setOrderItems((itemsData as unknown as OrderItem[]) || []);
 
+        try {
+          const { data: chargesData } = await (supabase as any)
+            .from('order_additional_charges')
+            .select('*')
+            .eq('order_id', id as string);
+          const mappedCharges = ((chargesData || []) as any[]).map((c: any) => ({
+            particular: c.particular || '',
+            rate: Number(c.rate || 0),
+            gst_percentage: Number(c.gst_percentage || 0),
+            amount_incl_gst: Number(c.amount_incl_gst || 0),
+          }));
+          setPersistedAdditionalCharges(mappedCharges);
+        } catch (chargesErr) {
+          console.error('Error fetching order additional charges:', chargesErr);
+          setPersistedAdditionalCharges([]);
+        }
+
         // Safety rule: if order is confirmed but mockups already exist, auto-move to Designing Done.
         const hasAnyMockup = ((itemsData as any[]) || []).some((it) => hasMockupInItem(it));
         if ((orderData as any).status === 'confirmed' && hasAnyMockup) {
@@ -1466,6 +1534,7 @@ export default function OrderDetailPage() {
             .update({ status: 'designing_done' })
             .eq('id', id as string);
           if (!statusErr) {
+            playOrderStatusChangeSound();
             setOrder({ ...(orderData as any), status: 'designing_done' } as unknown as Order);
           } else {
             setOrder(orderData as unknown as Order);
@@ -1574,22 +1643,22 @@ export default function OrderDetailPage() {
 
   const fetchTotalReceipts = async () => {
     try {
-      if (!order?.order_number) return;
-      
+      if (!order?.order_number || !order?.id) return;
+
       const { data: receiptsData, error: receiptsError } = await (supabase as any)
         .from('receipts')
-        .select('amount')
-        .eq('reference_number', order.order_number)
-        .eq('reference_type', 'order');
+        .select('amount, status, payment_mode, payment_type, reference_id, reference_number')
+        .eq('reference_type', 'order')
+        .or(`reference_id.eq.${order.id},reference_number.eq.${order.order_number}`);
 
       if (receiptsError) {
         console.error('Error fetching receipts:', receiptsError);
         return;
       }
 
-      const total = (receiptsData || []).reduce((sum: number, receipt: any) => sum + Number(receipt.amount), 0);
-      setTotalReceipts(total);
-      
+      const rows = receiptsData || [];
+      setTotalReceipts(sumActiveReceiptAmountsForOrder(rows, order.id, order.order_number));
+      setHasActiveCreditReceipt(orderHasActiveCreditInReceiptRows(rows, order.id, order.order_number));
     } catch (error) {
       console.error('Error calculating total receipts:', error);
     }
@@ -1608,6 +1677,7 @@ export default function OrderDetailPage() {
 
       if (error) throw error;
 
+      playOrderStatusChangeSound();
       toast.success('Order cancelled successfully');
       setOrder({ ...order, status: 'cancelled' });
       await fetchOrderActivities();
@@ -1631,6 +1701,7 @@ export default function OrderDetailPage() {
 
       if (error) throw error;
 
+      playOrderStatusChangeSound();
       toast.success(`Order status changed to ${newStatus.replace('_', ' ').toUpperCase()}`);
       setOrder({ ...order, status: newStatus });
       await fetchOrderActivities();
@@ -1800,7 +1871,11 @@ export default function OrderDetailPage() {
       };
     }
     const summary = calculateOrderSummary(orderItems, order);
-    const additionalChargesTotal = isEditing ? additionalCharges.reduce((sum, charge) => sum + charge.amount_incl_gst, 0) : 0;
+    const chargesSource = isEditing ? additionalCharges : persistedAdditionalCharges;
+    const additionalChargesTotal = chargesSource.reduce(
+      (sum, charge) => sum + Number(charge.amount_incl_gst || 0),
+      0
+    );
     return {
       subtotal: summary.subtotal,
       gstTotal: summary.gstAmount,
@@ -1808,7 +1883,7 @@ export default function OrderDetailPage() {
       grandTotal: summary.grandTotal + additionalChargesTotal,
       balance: summary.grandTotal + additionalChargesTotal - (isEditing ? (editDraft?.advance_amount || 0) : (order?.advance_amount || 0))
     };
-  }, [isEditing, editItems, orderItems, order, draftTotals, additionalCharges, editDraft?.advance_amount]);
+  }, [isEditing, editItems, orderItems, order, draftTotals, additionalCharges, persistedAdditionalCharges, editDraft?.advance_amount]);
 
   // Computed GST breakdown - use displayItems
   const gstBreakdown = useMemo(() => {
@@ -2000,6 +2075,7 @@ export default function OrderDetailPage() {
             .update({ status: 'designing_done' })
             .eq('id', order.id);
           if (!statusErr) {
+            playOrderStatusChangeSound();
             setOrder({ ...order, status: 'designing_done' });
           } else {
             console.error('Failed to auto-update status to designing_done:', statusErr);
@@ -3899,9 +3975,21 @@ export default function OrderDetailPage() {
                        <div className="text-right space-y-1">
                          <div className="text-lg font-semibold">Subtotal: {formatCurrency(orderSummary.subtotal)}</div>
                          <div className="text-lg font-semibold">GST Total: {formatCurrency(orderSummary.gstTotal)}</div>
-                         {orderSummary.additionalChargesTotal > 0 && (
-                           <div className="text-lg font-semibold">Additional Charges: {formatCurrency(orderSummary.additionalChargesTotal)}</div>
-                         )}
+                         {(isEditing ? additionalCharges : persistedAdditionalCharges)
+                           .filter((c) => Number(c.amount_incl_gst || 0) !== 0)
+                           .map((c, idx) => (
+                             <div key={idx} className="text-base font-medium text-foreground">
+                               {c.particular?.trim() || 'Additional charge'}: {formatCurrency(c.amount_incl_gst)}
+                             </div>
+                           ))}
+                         {orderSummary.additionalChargesTotal > 0 &&
+                           (isEditing ? additionalCharges : persistedAdditionalCharges).filter(
+                             (c) => Number(c.amount_incl_gst || 0) !== 0
+                           ).length === 0 && (
+                             <div className="text-lg font-semibold">
+                               Additional Charges: {formatCurrency(orderSummary.additionalChargesTotal)}
+                             </div>
+                           )}
                          <div className="text-2xl font-bold text-primary">Grand Total: {formatCurrency(orderSummary.grandTotal)}</div>
                        </div>
                      </div>
@@ -4104,12 +4192,25 @@ export default function OrderDetailPage() {
                       );
                     }
                   })()}
-                    {orderSummary.additionalChargesTotal > 0 && (
-                      <div className="flex justify-between">
-                        <span>Additional Charges</span>
-                        <span>{formatCurrency(orderSummary.additionalChargesTotal)}</span>
-                      </div>
-                    )}
+                    {(() => {
+                      const lines = (isEditing ? additionalCharges : persistedAdditionalCharges).filter(
+                        (c) => Number(c.amount_incl_gst || 0) !== 0
+                      );
+                      if (lines.length === 0 && orderSummary.additionalChargesTotal > 0) {
+                        return (
+                          <div className="flex justify-between">
+                            <span>Additional Charges</span>
+                            <span>{formatCurrency(orderSummary.additionalChargesTotal)}</span>
+                          </div>
+                        );
+                      }
+                      return lines.map((c, i) => (
+                        <div key={i} className="flex justify-between text-sm">
+                          <span>{c.particular?.trim() || 'Additional charge'}</span>
+                          <span>{formatCurrency(c.amount_incl_gst)}</span>
+                        </div>
+                      ));
+                    })()}
                     <div className="flex justify-between">
                       <span>Amount Paid</span>
                       <span className="text-green-600">{formatCurrency(isEditing ? (editDraft?.advance_amount || 0) : totalReceipts)}</span>
@@ -4128,7 +4229,26 @@ export default function OrderDetailPage() {
                         {formatCurrency(orderSummary.grandTotal - (isEditing ? (editDraft?.advance_amount || 0) : totalReceipts))}
                       </span>
                     </div>
-                    
+                    {(() => {
+                      const balance = orderSummary.grandTotal - (isEditing ? (editDraft?.advance_amount || 0) : totalReceipts);
+                      const showCredit =
+                        !isEditing &&
+                        (hasActiveCreditReceipt || (!!order.payment_due_date && balance > 0));
+                      if (!showCredit) return null;
+                      return (
+                        <div className="flex flex-wrap gap-1 pt-1">
+                          {hasActiveCreditReceipt && (
+                            <CreditOrderBadge>Credit order</CreditOrderBadge>
+                          )}
+                          {order.payment_due_date && balance > 0 && (
+                            <Badge variant="outline" className="text-[10px] font-normal">
+                              Due {formatDateIndian(order.payment_due_date)}
+                            </Badge>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     {(() => {
                       const balance = orderSummary.grandTotal - (isEditing ? (editDraft?.advance_amount || 0) : totalReceipts);
                       return balance > 0;

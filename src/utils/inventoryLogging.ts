@@ -94,6 +94,13 @@ export async function createInventoryLog(params: CreateInventoryLogParams): Prom
 /**
  * Helper to log an inventory addition
  */
+function mapItemTypeForLog(raw: string): string {
+  const t = (raw || '').toLowerCase();
+  if (t === 'fabric') return 'FABRIC';
+  if (t === 'product') return 'PRODUCT';
+  return 'ITEM';
+}
+
 export async function logInventoryAddition(
   warehouse_inventory_id: string,
   item: { item_type: string; item_id?: string; item_name: string; item_code: string; unit: string },
@@ -108,11 +115,12 @@ export async function logInventoryAddition(
     old_quantity?: number;
     new_quantity?: number;
     notes?: string;
+    reference_type?: InventoryLogReferenceType;
   }
 ): Promise<void> {
   return createInventoryLog({
     warehouse_inventory_id,
-    item_type: item.item_type === 'fabric' ? 'FABRIC' : item.item_type === 'product' ? 'PRODUCT' : 'ITEM',
+    item_type: mapItemTypeForLog(item.item_type),
     item_id: item.item_id || null,
     item_name: item.item_name,
     item_code: item.item_code,
@@ -126,7 +134,7 @@ export async function logInventoryAddition(
     action: options?.action || 'ADDED',
     grn_id: options?.grn_id || null,
     grn_item_id: options?.grn_item_id || null,
-    reference_type: 'GRN',
+    reference_type: options?.reference_type ?? 'GRN',
     notes: options?.notes || null,
   });
 }

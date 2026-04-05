@@ -239,6 +239,7 @@ export const usePendingPoItems = () => {
               fabric_name,
               fabric_color,
               fabric_gsm,
+              fabric_id,
               item_id,
               item_code,
               item_image_url,

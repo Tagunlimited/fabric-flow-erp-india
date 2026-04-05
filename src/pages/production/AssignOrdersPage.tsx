@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { SortableTableHeader } from "@/components/ui/sortable-table-header";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import "@/components/purchase-orders/POPlanningSegmentedSwitch.css";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import { 
@@ -29,7 +29,6 @@ import { useNavigate } from "react-router-dom";
 import { formatDueDateIndian } from '@/lib/utils';
 import { getOrderTotalQuantityFromItems } from '@/utils/orderItemLineQuantity';
 import { ReassignCuttingMasterDialog } from '@/components/production/ReassignCuttingMasterDialog';
-import { BackButton } from '@/components/common/BackButton';
 
 interface OrderAssignment {
   id: string;
@@ -80,6 +79,7 @@ const AssignOrdersPage = () => {
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [sortField, setSortField] = useState<string>('dueDate');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [assignOrdersTab, setAssignOrdersTab] = useState<'assignments' | 'assigned' | 'workers'>('assignments');
 
   // Initialize with empty array - data will be loaded from backend
   const [assignments, setAssignments] = useState<OrderAssignment[]>([]);
@@ -1058,9 +1058,6 @@ const AssignOrdersPage = () => {
   return (
     <ErpLayout>
       <div className="space-y-4">
-        <div className="flex items-center">
-          <BackButton to="/production" label="Back to Production" />
-        </div>
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
@@ -1139,14 +1136,49 @@ const AssignOrdersPage = () => {
           </Card>
         </div>
 
-        <Tabs defaultValue="assignments" className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="assignments">Order Assignments</TabsTrigger>
-            <TabsTrigger value="assigned">Assigned Orders</TabsTrigger>
-            <TabsTrigger value="workers">Available Workers</TabsTrigger>
-          </TabsList>
+        <div className="w-full">
+          <div
+            className="erp-segmented-3 erp-segmented-3--stretch"
+            data-idx={assignOrdersTab === 'assignments' ? 0 : assignOrdersTab === 'assigned' ? 1 : 2}
+            role="tablist"
+            aria-label="Assign orders views"
+          >
+            <span className="erp-segmented-3__thumb" aria-hidden />
+            <button
+              type="button"
+              role="tab"
+              aria-selected={assignOrdersTab === 'assignments'}
+              data-idx="0"
+              className="erp-segmented-3__btn"
+              onClick={() => setAssignOrdersTab('assignments')}
+            >
+              Order Assignments
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={assignOrdersTab === 'assigned'}
+              data-idx="1"
+              className="erp-segmented-3__btn"
+              onClick={() => setAssignOrdersTab('assigned')}
+            >
+              Assigned Orders
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={assignOrdersTab === 'workers'}
+              data-idx="2"
+              className="erp-segmented-3__btn"
+              onClick={() => setAssignOrdersTab('workers')}
+            >
+              Available Workers
+            </button>
+          </div>
+        </div>
 
-          <TabsContent value="assignments" className="space-y-2">
+          {assignOrdersTab === 'assignments' && (
+          <div className="space-y-2">
             {/* Filters */}
             <Card>
               <CardHeader>
@@ -1338,9 +1370,11 @@ const AssignOrdersPage = () => {
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
+          </div>
+          )}
 
-          <TabsContent value="assigned" className="space-y-2">
+          {assignOrdersTab === 'assigned' && (
+          <div className="space-y-2">
             {/* Filters */}
             <Card>
               <CardHeader>
@@ -1548,9 +1582,11 @@ const AssignOrdersPage = () => {
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
+          </div>
+          )}
 
-          <TabsContent value="workers" className="space-y-4">
+          {assignOrdersTab === 'workers' && (
+          <div className="space-y-4">
             <Card>
               <CardHeader>
                 <CardTitle>Available Workers</CardTitle>
@@ -1587,8 +1623,8 @@ const AssignOrdersPage = () => {
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
-        </Tabs>
+          </div>
+          )}
 
         {/* Reassign Cutting Master Dialog */}
         <ReassignCuttingMasterDialog

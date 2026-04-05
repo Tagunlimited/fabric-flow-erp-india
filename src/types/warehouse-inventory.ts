@@ -19,8 +19,8 @@ export type MovementType =
 
 export interface WarehouseInventory {
   id: string;
-  grn_id: string;
-  grn_item_id: string;
+  grn_id: string | null;
+  grn_item_id: string | null;
   item_type: WarehouseItemType;
   item_id: string;
   item_name: string;

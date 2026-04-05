@@ -84,6 +84,7 @@ export default function DispatchChallanPrint() {
             customers:customers (
               company_name,
               contact_person,
+              phone,
               address,
               city,
               state,
@@ -305,6 +306,11 @@ export default function DispatchChallanPrint() {
                 <div className="space-y-0.5 mt-1">
                   <p className="text-xs font-semibold break-words">{dispatchOrder.orders?.customers?.company_name}</p>
                   <p className="text-xs text-gray-700 break-words">{dispatchOrder.orders?.customers?.contact_person}</p>
+                  {dispatchOrder.orders?.customers?.phone?.trim() && (
+                    <p className="text-xs text-gray-700 break-words">
+                      Mobile: {dispatchOrder.orders.customers.phone}
+                    </p>
+                  )}
                   <p className="text-xs text-gray-700 break-words leading-relaxed">{dispatchOrder.orders?.customers?.address}</p>
                   <p className="text-xs text-gray-700">
                     {dispatchOrder.orders?.customers?.city}, {dispatchOrder.orders?.customers?.state} - {dispatchOrder.orders?.customers?.pincode}

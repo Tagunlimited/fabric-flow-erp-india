@@ -2,7 +2,7 @@ import { format } from 'date-fns';
 import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import "./OrdersPageViewSwitch.css";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ShoppingCart, Plus, Eye, Package, Clock, CheckCircle, Trash2, RefreshCw, X, Filter } from "lucide-react";
@@ -35,7 +35,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { calculateOrderSummary } from '@/utils/priceCalculation';
-import { cn } from '@/lib/utils';
+import { cn, formatDateIndian } from '@/lib/utils';
+import { fetchOrderIdsWithActiveCreditReceipt, sumActiveReceiptAmountsForOrder } from '@/utils/orderFinancials';
+import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
+import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
+import { Badge } from '@/components/ui/badge';
 
 interface Order {
   id: string;
@@ -59,6 +63,8 @@ interface Order {
   gst_rate?: number;
   calculatedAmount?: number;
   calculatedBalance?: number;
+  payment_due_date?: string | null;
+  has_credit_receipt?: boolean;
 }
 
 type OrdersColumnFilters = {
@@ -384,6 +390,9 @@ const OrdersPage = () => {
         reference_id: string | null;
         reference_number: string | null;
         amount: number | null;
+        status?: string | null;
+        payment_mode?: string | null;
+        payment_type?: string | null;
       }> = [];
 
       if (orderIds.length > 0 || orderNumbers.length > 0) {
@@ -391,13 +400,13 @@ const OrdersPage = () => {
           orderIds.length > 0
             ? supabase
                 .from('receipts')
-                .select('id, reference_id, reference_number, amount')
+                .select('id, reference_id, reference_number, amount, status, payment_mode, payment_type')
                 .in('reference_id', orderIds as any)
             : Promise.resolve({ data: [] as any[] }),
           orderNumbers.length > 0
             ? supabase
                 .from('receipts')
-                .select('id, reference_id, reference_number, amount')
+                .select('id, reference_id, reference_number, amount, status, payment_mode, payment_type')
                 .in('reference_number', orderNumbers as any)
             : Promise.resolve({ data: [] as any[] }),
         ]);
@@ -416,6 +425,29 @@ const OrdersPage = () => {
         receiptRows = Array.from(receiptMap.values());
       }
 
+      const creditOrderIdSet =
+        orderIds.length > 0 ? await fetchOrderIdsWithActiveCreditReceipt(orderIds) : new Set<string>();
+
+      const additionalByOrderId = new Map<string, number>();
+      if (orderIds.length > 0) {
+        const { data: chargesRows, error: chargesError } = await supabase
+          .from('order_additional_charges')
+          .select('order_id, amount_incl_gst')
+          .in('order_id', orderIds as any);
+        if (chargesError) {
+          console.warn('order_additional_charges fetch for orders list:', chargesError);
+        } else if (chargesRows) {
+          for (const row of chargesRows as { order_id: string; amount_incl_gst: number | null }[]) {
+            if (!row?.order_id) continue;
+            const amt = Number(row.amount_incl_gst || 0);
+            additionalByOrderId.set(
+              row.order_id,
+              (additionalByOrderId.get(row.order_id) ?? 0) + amt
+            );
+          }
+        }
+      }
+
       // Calculate correct amounts for each order using size-based pricing
       const ordersWithCalculatedAmounts = await Promise.all(
         (data || []).map(async (order) => {
@@ -428,48 +460,50 @@ const OrdersPage = () => {
 
             if (!itemsError && orderItems && orderItems.length > 0) {
               // Calculate the correct total using size-based pricing
-              const { grandTotal } = calculateOrderSummary(orderItems, order);
-              const totalReceipts = receiptRows.reduce((sum, receipt) => {
-                const matchesOrder =
-                  receipt.reference_id === order.id ||
-                  receipt.reference_number === order.order_number;
-                return matchesOrder ? sum + Number(receipt.amount || 0) : sum;
-              }, 0);
+              const { grandTotal: lineItemsGrandTotal } = calculateOrderSummary(orderItems, order);
+              const additionalSum = additionalByOrderId.get(order.id) ?? 0;
+              const grandTotal = lineItemsGrandTotal + additionalSum;
+              const totalReceipts = sumActiveReceiptAmountsForOrder(
+                receiptRows,
+                order.id,
+                order.order_number
+              );
 
               return {
                 ...order,
                 calculatedAmount: grandTotal,
                 calculatedBalance: Math.max(grandTotal - totalReceipts, 0),
+                has_credit_receipt: creditOrderIdSet.has(order.id),
               };
             } else {
               // Fallback to final_amount if no items found
               const fallbackAmount = Number(order.final_amount || order.total_amount || 0);
-              const totalReceipts = receiptRows.reduce((sum, receipt) => {
-                const matchesOrder =
-                  receipt.reference_id === order.id ||
-                  receipt.reference_number === order.order_number;
-                return matchesOrder ? sum + Number(receipt.amount || 0) : sum;
-              }, 0);
+              const totalReceipts = sumActiveReceiptAmountsForOrder(
+                receiptRows,
+                order.id,
+                order.order_number
+              );
 
               return {
                 ...order,
                 calculatedAmount: fallbackAmount,
                 calculatedBalance: Math.max(fallbackAmount - totalReceipts, 0),
+                has_credit_receipt: creditOrderIdSet.has(order.id),
               };
             }
           } catch (error) {
             console.error(`Error calculating amount for order ${order.order_number}:`, error);
             const fallbackAmount = Number(order.final_amount || order.total_amount || 0);
-            const totalReceipts = receiptRows.reduce((sum, receipt) => {
-              const matchesOrder =
-                receipt.reference_id === order.id ||
-                receipt.reference_number === order.order_number;
-              return matchesOrder ? sum + Number(receipt.amount || 0) : sum;
-            }, 0);
+            const totalReceipts = sumActiveReceiptAmountsForOrder(
+              receiptRows,
+              order.id,
+              order.order_number
+            );
             return {
               ...order,
               calculatedAmount: fallbackAmount, // Fallback to final_amount on error
               calculatedBalance: Math.max(fallbackAmount - totalReceipts, 0),
+              has_credit_receipt: creditOrderIdSet.has(order.id),
             };
           }
         })
@@ -562,6 +596,7 @@ const OrdersPage = () => {
 
       if (error) throw error;
 
+      playOrderStatusChangeSound();
       toast.success(`Order status changed to ${newStatus.replace('_', ' ').toUpperCase()}`);
       fetchOrders();
     } catch (error) {
@@ -665,15 +700,28 @@ const OrdersPage = () => {
           </Card>
         </div>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <div className="space-y-6">
           <div className="flex justify-between items-center">
-            <TabsList>
-              <TabsTrigger value="list">Orders List</TabsTrigger>
-              <TabsTrigger value="create">Create Order</TabsTrigger>
-            </TabsList>
+            <label
+              htmlFor="orders-page-view-switch"
+              className="orders-view-switch"
+              aria-label="Switch between orders list and create order"
+            >
+              <input
+                id="orders-page-view-switch"
+                type="checkbox"
+                role="switch"
+                aria-checked={activeTab === "create"}
+                checked={activeTab === "create"}
+                onChange={(e) => setActiveTab(e.target.checked ? "create" : "list")}
+              />
+              <span>Orders List</span>
+              <span>Create Order</span>
+            </label>
           </div>
 
-          <TabsContent value="list" className="space-y-6">
+          {activeTab === "list" && (
+          <div className="space-y-6">
             <Card>
               <CardHeader>
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
@@ -900,7 +948,26 @@ const OrdersPage = () => {
                               </div>
                             </TableCell>
                             <TableCell>₹{(order.calculatedAmount ?? order.final_amount)?.toFixed(2) || '0.00'}</TableCell>
-                            <TableCell>₹{(order.calculatedBalance ?? order.balance_amount)?.toFixed(2) || '0.00'}</TableCell>
+                            <TableCell>
+                              <div className="space-y-1">
+                                <div>
+                                  ₹{(order.calculatedBalance ?? order.balance_amount)?.toFixed(2) || '0.00'}
+                                </div>
+                                {(order.has_credit_receipt ||
+                                  (!!order.payment_due_date &&
+                                    (order.calculatedBalance ?? order.balance_amount ?? 0) > 0)) && (
+                                  <div className="flex flex-wrap gap-1">
+                                    {order.has_credit_receipt && <CreditOrderBadge />}
+                                    {order.payment_due_date &&
+                                      (order.calculatedBalance ?? order.balance_amount ?? 0) > 0 && (
+                                        <Badge variant="outline" className="text-[10px] font-normal px-1 py-0">
+                                          Due {formatDateIndian(order.payment_due_date)}
+                                        </Badge>
+                                      )}
+                                  </div>
+                                )}
+                              </div>
+                            </TableCell>
                             <TableCell>
                               <div className="flex space-x-2">
                                 {order.status !== 'completed' && order.status !== 'cancelled' && (
@@ -1017,21 +1084,22 @@ const OrdersPage = () => {
                 )}
               </DialogContent>
             </Dialog>
-          </TabsContent>
+          </div>
+          )}
 
-          <TabsContent value="create" className="space-y-6">
-            <OrderForm 
+          {activeTab === "create" && (
+          <div className="space-y-6">
+            <OrderForm
               onOrderCreated={async () => {
                 setActiveTab("list");
-                // Add a small delay to ensure the tab switch completes
                 setTimeout(async () => {
                   await fetchOrders();
                 }, 100);
-                toast.success("Order created successfully!");
               }}
             />
-          </TabsContent>
-        </Tabs>
+          </div>
+          )}
+        </div>
       </div>
     </ErpLayout>
   );

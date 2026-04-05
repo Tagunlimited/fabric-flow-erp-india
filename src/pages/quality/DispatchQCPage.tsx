@@ -3,7 +3,7 @@ import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import "@/pages/OrdersPageViewSwitch.css";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,8 +12,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
-import { BackButton } from '@/components/common/BackButton';
 import { getOrderItemListThumbnailUrl, getOrderCardPlaceholderSrc } from '@/utils/orderItemImageUtils';
+import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 
 interface OrderCard {
   order_id: string;
@@ -33,7 +33,7 @@ export default function DispatchQCPage() {
   const [orders, setOrders] = useState<OrderCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState("pending");
+  const [activeTab, setActiveTab] = useState<'pending' | 'completed'>('pending');
 
   // Dispatch modal state
   const [dispatchOpen, setDispatchOpen] = useState(false);
@@ -683,10 +683,13 @@ export default function DispatchQCPage() {
         const newStatus = dispatchedTotal >= Math.max(1, approvedTotal) ? 'dispatched' : 'partial_dispatched';
         
         // Update order status - for both custom and readymade orders
-        await (supabase as any)
+        const { error: orderStatusUpdateError } = await (supabase as any)
           .from('orders')
           .update({ status: newStatus } as any)
           .eq('id', dispatchTarget.order_id);
+        if (!orderStatusUpdateError) {
+          playOrderStatusChangeSound();
+        }
 
         // For readymade orders, update product_master stock when dispatched
         if (isReadymadeOrder && dispatchedTotal > 0) {
@@ -880,9 +883,6 @@ export default function DispatchQCPage() {
   return (
     <ErpLayout>
       <div className="space-y-6">
-        <div className="flex items-center">
-          <BackButton to="/quality" label="Back to Quality" />
-        </div>
         <div>
           <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">Dispatch</h1>
           <p className="text-muted-foreground mt-1">Orders approved by QC, ready for dispatch</p>
@@ -909,13 +909,25 @@ export default function DispatchQCPage() {
           </Card>
         </div>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="pending">Pending</TabsTrigger>
-            <TabsTrigger value="completed">Dispatch Completed</TabsTrigger>
-          </TabsList>
+        <label
+          htmlFor="dispatch-qc-view-switch"
+          className="orders-view-switch mb-4"
+          aria-label="Switch between pending and completed dispatch"
+        >
+          <input
+            id="dispatch-qc-view-switch"
+            type="checkbox"
+            role="switch"
+            aria-checked={activeTab === 'completed'}
+            checked={activeTab === 'completed'}
+            onChange={(e) => setActiveTab(e.target.checked ? 'completed' : 'pending')}
+          />
+          <span>Pending</span>
+          <span>Dispatch Completed</span>
+        </label>
 
-          <TabsContent value="pending">
+          {activeTab === 'pending' && (
+          <div className="space-y-4">
             {loading ? (
               <p className="text-muted-foreground">Loading...</p>
             ) : pendingOrders.length === 0 ? (
@@ -962,9 +974,11 @@ export default function DispatchQCPage() {
                 ))}
               </div>
             )}
-          </TabsContent>
+          </div>
+          )}
 
-          <TabsContent value="completed">
+          {activeTab === 'completed' && (
+          <div className="space-y-4">
             {completed.length === 0 && readyToDispatchOrders.length === 0 ? (
               <p className="text-muted-foreground">No completed dispatch orders.</p>
             ) : (
@@ -1045,15 +1059,15 @@ export default function DispatchQCPage() {
                 )}
               </div>
             )}
-          </TabsContent>
-        </Tabs>
+          </div>
+          )}
       </div>
 
       {/* Dispatch dialog */}
       <Dialog open={dispatchOpen} onOpenChange={(v) => { if (!v) { setDispatchOpen(false); setDispatchTarget(null); } }}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Mark as Dispatched</DialogTitle>
+            <DialogTitle>Mark RTD</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             {/* Order info with product image */}
@@ -1147,7 +1161,7 @@ export default function DispatchQCPage() {
                       }
                     }
                   }}>View/Print Challan</Button>
-                  <Button onClick={handleMarkDispatch} disabled={savingDispatch}>Mark Dispatched</Button>
+                  <Button onClick={handleMarkDispatch} disabled={savingDispatch}>Mark RTD</Button>
                 </>
               )}
             </div>

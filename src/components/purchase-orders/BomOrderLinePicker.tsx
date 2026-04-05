@@ -7,7 +7,13 @@ import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, Package, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { BomForm } from './BomForm';
-import { sortOrderLines } from './bomOrderLineUtils';
+import {
+  sortOrderLines,
+  BOM_ORDER_ITEMS_SELECT,
+  orderLineFabricColorGsmSuffix,
+  orderLineBomProductColumnLabel,
+  orderLineProductDropdownOnly,
+} from './bomOrderLineUtils';
 import './BomLinePicker.css';
 
 export { sortOrderLines, lineProductIndex, bomNumberForOrderLine } from './bomOrderLineUtils';
@@ -71,13 +77,7 @@ export function BomOrderLinePicker({ orderId, onBack }: BomOrderLinePickerProps)
             order_number,
             status,
             customer:customers(company_name),
-            order_items(
-              id,
-              quantity,
-              product_description,
-              category_image_url,
-              created_at
-            )
+            order_items(${BOM_ORDER_ITEMS_SELECT})
           `
           )
           .eq('id', orderId as any)
@@ -174,7 +174,9 @@ export function BomOrderLinePicker({ orderId, onBack }: BomOrderLinePickerProps)
             <p className="text-sm font-medium text-foreground mb-3">Select product line</p>
             <div className="bom-line-radio-inputs" role="radiogroup" aria-label="Product lines">
               {sortedLines.map(item => {
-                const label = item.product_description || 'Product';
+                const label =
+                  orderLineBomProductColumnLabel(item) || orderLineProductDropdownOnly(item) || '—';
+                const fabricSuffix = orderLineFabricColorGsmSuffix(item);
                 const hasLineBom = hasLegacyFullOrderBom || !!bomIdByItemId[item.id];
                 return (
                   <label key={item.id} className="cursor-pointer">
@@ -190,6 +192,7 @@ export function BomOrderLinePicker({ orderId, onBack }: BomOrderLinePickerProps)
                         {label}
                         <span className="block text-xs font-normal text-muted-foreground mt-0.5">
                           {item.quantity} pcs
+                          {fabricSuffix ? ` · ${fabricSuffix}` : ''}
                           {hasLineBom ? ' · BOM exists' : ''}
                         </span>
                       </span>

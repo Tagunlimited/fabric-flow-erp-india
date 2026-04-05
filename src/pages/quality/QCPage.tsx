@@ -3,13 +3,12 @@ import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import "@/components/purchase-orders/POPlanningSegmentedSwitch.css";
 import { Search, CheckCircle, Clock, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import QCReviewDialog from "@/components/quality/QCReviewDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { BackButton } from '@/components/common/BackButton';
 import { getOrderItemListThumbnailUrl, getOrderCardPlaceholderSrc } from '@/utils/orderItemImageUtils';
 
 interface BatchAvatarInfo {
@@ -41,7 +40,8 @@ export default function QCPage() {
   const [selectAssignmentsForOrder, setSelectAssignmentsForOrder] = useState<null | { order_id: string; order_number: string; options: { assignment_id: string; batch_name?: string; picked: number; batch_leader_name?: string; batch_leader_avatar?: string | null }[] }>(null);
   const [qcOpen, setQcOpen] = useState(false);
   const [qcCtx, setQcCtx] = useState<null | { assignmentId: string; orderId: string; orderNumber: string }>(null);
-  const [activeTab, setActiveTab] = useState("pending");
+  const [activeTab, setActiveTab] = useState<'pending' | 'partial' | 'completed'>('pending');
+  const qcTabIdx = activeTab === 'pending' ? 0 : activeTab === 'partial' ? 1 : 2;
   const [imageGalleryOpen, setImageGalleryOpen] = useState(false);
   const [galleryBatchInfo, setGalleryBatchInfo] = useState<BatchAvatarInfo[]>([]);
   const [galleryTitle, setGalleryTitle] = useState('');
@@ -365,9 +365,6 @@ export default function QCPage() {
   return (
     <ErpLayout>
       <div className="space-y-6">
-        <div className="flex items-center">
-          <BackButton to="/quality" label="Back to Quality" />
-        </div>
         <div>
           <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">QC</h1>
           <p className="text-muted-foreground mt-1">Review and QC picked orders</p>
@@ -378,23 +375,51 @@ export default function QCPage() {
           <Input placeholder="Search orders or customers" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="pending" className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4" />
+        <div className="w-full mb-4">
+          <div
+            className="erp-segmented-3 erp-segmented-3--stretch"
+            data-idx={qcTabIdx}
+            role="tablist"
+            aria-label="QC order status"
+          >
+            <span className="erp-segmented-3__thumb" aria-hidden />
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'pending'}
+              data-idx="0"
+              className="erp-segmented-3__btn inline-flex items-center justify-center gap-1.5"
+              onClick={() => setActiveTab('pending')}
+            >
+              <AlertTriangle className="h-4 w-4 shrink-0" />
               Pending ({orders.filter(o => o.qc_status === 'pending').length})
-            </TabsTrigger>
-            <TabsTrigger value="partial" className="flex items-center gap-2">
-              <Clock className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'partial'}
+              data-idx="1"
+              className="erp-segmented-3__btn inline-flex items-center justify-center gap-1.5"
+              onClick={() => setActiveTab('partial')}
+            >
+              <Clock className="h-4 w-4 shrink-0" />
               In Progress ({orders.filter(o => o.qc_status === 'partial').length})
-            </TabsTrigger>
-            <TabsTrigger value="completed" className="flex items-center gap-2">
-              <CheckCircle className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'completed'}
+              data-idx="2"
+              className="erp-segmented-3__btn inline-flex items-center justify-center gap-1.5"
+              onClick={() => setActiveTab('completed')}
+            >
+              <CheckCircle className="h-4 w-4 shrink-0" />
               Completed ({orders.filter(o => o.qc_status === 'completed').length})
-            </TabsTrigger>
-          </TabsList>
+            </button>
+          </div>
+        </div>
 
-          <TabsContent value={activeTab} className="space-y-4">
+          <div className="space-y-4">
             {loading ? (
               <p className="text-muted-foreground">Loading...</p>
             ) : filtered.length === 0 ? (
@@ -544,8 +569,7 @@ export default function QCPage() {
                 ))}
               </div>
             )}
-          </TabsContent>
-        </Tabs>
+          </div>
 
         {/* Choose batch to QC when multiple assignments exist */}
         <Dialog open={!!selectAssignmentsForOrder} onOpenChange={(v) => { if (!v) setSelectAssignmentsForOrder(null); }}>

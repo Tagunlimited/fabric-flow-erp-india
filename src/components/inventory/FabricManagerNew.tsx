@@ -87,16 +87,7 @@ export function FabricManagerNew() {
   const [filterType, setFilterType] = useState<string>('all');
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
   const [columnWidths, setColumnWidths] = useState(() => {
-    const saved = localStorage.getItem('fabric-table-column-widths');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        // Fallback to default if parsing fails
-      }
-    }
-    return {
-      code: 80,
+    const defaults = {
       fabricDetails: 160,
       type: 96,
       color: 128,
@@ -106,6 +97,17 @@ export function FabricManagerNew() {
       status: 80,
       actions: 96
     };
+    const saved = localStorage.getItem('fabric-table-column-widths');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as Record<string, number>;
+        delete parsed.code;
+        return { ...defaults, ...parsed };
+      } catch {
+        // Fallback to default if parsing fails
+      }
+    }
+    return defaults;
   });
   
   const [formData, setFormData] = useState<FabricMaster>(DEFAULT_FABRIC);
@@ -510,7 +512,6 @@ export function FabricManagerNew() {
 
   const resetColumnWidths = () => {
     const defaultWidths = {
-      code: 80,
       fabricDetails: 160,
       type: 96,
       color: 128,
@@ -1018,7 +1019,6 @@ export function FabricManagerNew() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead style={{ width: `${columnWidths.code}px` }}>Code</TableHead>
                     <TableHead style={{ width: `${columnWidths.fabricDetails}px` }}>Fabric Details</TableHead>
                     <TableHead style={{ width: `${columnWidths.type}px` }}>Type</TableHead>
                     <TableHead style={{ width: `${columnWidths.color}px` }}>Color</TableHead>
@@ -1032,7 +1032,6 @@ export function FabricManagerNew() {
                 <TableBody>
                   {filteredFabrics.map((fabric) => (
                     <TableRow key={fabric.id}>
-                      <TableCell className="font-medium">{fabric.fabric_code}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           {fabric.image && (

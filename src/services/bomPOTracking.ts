@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { remainingQtyForNewPurchaseOrderLine } from '@/components/purchase-orders/bomOrderLineUtils';
 
 export interface BomItemOrderStatus {
   bom_id: string;
@@ -240,6 +241,22 @@ export async function validateOrderQuantities(
   items: Array<{ bomItemId: string; quantity: number }>
 ): Promise<{ valid: boolean; errors: string[] }> {
   try {
+    const { data: allocRows, error: allocErr } = await supabase
+      .from('inventory_allocations' as any)
+      .select('bom_item_id, quantity')
+      .eq('bom_id', bomId);
+
+    if (allocErr) {
+      console.warn('validateOrderQuantities: failed to load inventory allocations', allocErr);
+    }
+
+    const allocByItem = new Map<string, number>();
+    for (const row of allocRows || []) {
+      const bid = row.bom_item_id != null ? String(row.bom_item_id) : '';
+      if (!bid) continue;
+      allocByItem.set(bid, (allocByItem.get(bid) || 0) + Number((row as { quantity?: number }).quantity || 0));
+    }
+
     const statusData = await getBomItemOrderStatus(bomId);
     const errors: string[] = [];
 
@@ -255,9 +272,18 @@ export async function validateOrderQuantities(
         continue;
       }
 
-      if (item.quantity > bomItem.remaining_quantity) {
+      const qtyTotal = Number(bomItem.total_required);
+      const alloc = allocByItem.get(item.bomItemId) ?? 0;
+      const poOrd = Number(bomItem.total_ordered || 0);
+      const effectiveRemaining = remainingQtyForNewPurchaseOrderLine({
+        qtyTotal,
+        inventoryAllocated: alloc,
+        totalOrderedOnPurchaseOrders: poOrd,
+      });
+
+      if (item.quantity > effectiveRemaining) {
         errors.push(
-          `${bomItem.item_name}: Cannot order ${item.quantity} units. Only ${bomItem.remaining_quantity} units remaining`
+          `${bomItem.item_name}: Cannot order ${item.quantity} units. Only ${effectiveRemaining} units remaining`
         );
       }
     }

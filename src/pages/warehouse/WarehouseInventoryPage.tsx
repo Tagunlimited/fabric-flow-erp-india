@@ -1,17 +1,33 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
-import { 
-  Package, 
-  Archive, 
-  Truck, 
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import {
+  Package,
+  Archive,
+  Truck,
   BarChart3,
-  ArrowRightLeft
+  Plus,
+  Trash2,
+  ChevronRight,
+  RefreshCw,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { ReceivingZoneInventory } from '@/components/warehouse/ReceivingZoneInventory';
 import { StorageZoneInventory } from '@/components/warehouse/StorageZoneInventory';
 import { InventoryTransferModal } from '@/components/warehouse/InventoryTransferModal';
+import { AddRawInventoryModal } from '@/components/warehouse/AddRawInventoryModal';
+import { DeleteWarehouseInventoryDialog } from '@/components/warehouse/DeleteWarehouseInventoryDialog';
 import { WarehouseInventory } from '@/types/warehouse-inventory';
 import { ErpLayout } from '@/components/ErpLayout';
 import { useNavigate } from 'react-router-dom';
@@ -25,11 +41,14 @@ const WarehouseInventoryPage: React.FC = () => {
   const [showViewModal, setShowViewModal] = useState(false);
   const [activeTab, setActiveTab] = useState('receiving');
   const [totals, setTotals] = useState({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+  const [storageBinCount, setStorageBinCount] = useState(0);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [grnHeader, setGrnHeader] = useState<any | null>(null);
   const [poHeader, setPoHeader] = useState<any | null>(null);
   const [bomItems, setBomItems] = useState<any[]>([]);
   const [relatedOrders, setRelatedOrders] = useState<any[]>([]);
+  const [addInventoryOpen, setAddInventoryOpen] = useState(false);
+  const [detailsDeleteOpen, setDetailsDeleteOpen] = useState(false);
 
   const loadTotals = async () => {
     try {
@@ -43,6 +62,7 @@ const WarehouseInventoryPage: React.FC = () => {
         console.error('Warehouse inventory table error:', tableError);
         // Set default totals if table doesn't exist
         setTotals({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+        setStorageBinCount(0);
         return;
       }
 
@@ -54,6 +74,7 @@ const WarehouseInventoryPage: React.FC = () => {
           quantity,
           status,
           item_type,
+          bin_id,
           bin:bin_id (
             id,
             location_type
@@ -64,12 +85,12 @@ const WarehouseInventoryPage: React.FC = () => {
       if (error) {
         console.error('Error fetching warehouse inventory totals:', error);
         setTotals({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+        setStorageBinCount(0);
         return;
       }
       
       const rows = (data as any) || [];
-      console.log('Warehouse inventory rows:', rows);
-      
+
       // Filter out PRODUCT items (only show FABRIC and ITEM)
       const filteredRows = rows.filter((r: any) => 
         r.item_type === 'FABRIC' || r.item_type === 'ITEM'
@@ -85,12 +106,22 @@ const WarehouseInventoryPage: React.FC = () => {
         .filter((r: any) => r.status === 'READY_TO_DISPATCH' && r.bin?.location_type === 'DISPATCH_ZONE')
         .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
       const allQty = filteredRows.reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
-      
-      console.log('Warehouse inventory totals:', { receiving: receivingQty, storage: storageQty, dispatch: dispatchQty, all: allQty });
+
+      const storageBins = new Set(
+        filteredRows
+          .filter(
+            (r: any) =>
+              r.status === 'IN_STORAGE' && r.bin?.location_type === 'STORAGE' && r.bin_id
+          )
+          .map((r: any) => r.bin_id as string)
+      );
+      setStorageBinCount(storageBins.size);
+
       setTotals({ receiving: receivingQty, storage: storageQty, dispatch: dispatchQty, all: allQty });
     } catch (error) {
       console.error('Error in loadTotals:', error);
       setTotals({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+      setStorageBinCount(0);
     }
   };
 
@@ -121,11 +152,9 @@ const WarehouseInventoryPage: React.FC = () => {
       setBomItems([]);
       setRelatedOrders([]);
 
-      console.log('Loading related details for inventory:', inv);
-
-      // 1. Fetch GRN Header
+      // 1. Fetch GRN Header (skip when manual / opening-balance row)
       let grnData: any = null;
-      {
+      if (inv.grn_id) {
         const { data, error } = await supabase
           .from('grn_master' as any)
           .select(`id, grn_number, grn_date, received_date, status, po_id,
@@ -135,7 +164,6 @@ const WarehouseInventoryPage: React.FC = () => {
           .single();
         if (!error && data) {
           grnData = data;
-          console.log('GRN fetched:', grnData);
         } else {
           const { data: alt } = await supabase
             .from('goods_receipt_notes' as any)
@@ -160,12 +188,9 @@ const WarehouseInventoryPage: React.FC = () => {
       }
       if (poData) {
         setPoHeader(poData);
-        console.log('PO fetched:', poData);
 
         // 3. Fetch BOM from PO
         if (poData.bom_id) {
-          console.log('PO has BOM ID:', poData.bom_id);
-          
           const { data: bomData } = await supabase
             .from('bom_records' as any)
             .select(`id, bom_number, product_name, status, order_id,
@@ -174,9 +199,7 @@ const WarehouseInventoryPage: React.FC = () => {
             .single();
 
           if (bomData) {
-            console.log('BOM fetched:', bomData);
             const bomOrderId = (bomData as any).order_id;
-            console.log('BOM order_id:', bomOrderId);
 
             // 4. Fetch Order from BOM
             if (bomOrderId) {
@@ -188,53 +211,47 @@ const WarehouseInventoryPage: React.FC = () => {
                 .single();
 
               if (orderData) {
-                console.log('Order fetched:', orderData);
                 setRelatedOrders([orderData]);
               }
             }
           }
         }
+      }
 
-        // Alternative approach: Match BOM items by item_id/item_code to find related orders
-        if (inv.item_id || inv.item_code) {
-          console.log('Searching for BOM items matching item_id:', inv.item_id, 'or item_code:', inv.item_code);
-          
-          const bomItemQuery = supabase
-            .from('bom_record_items' as any)
-            .select(`id, bom_id, item_name, item_code, unit_of_measure, qty_per_product, qty_total,
-                     bom_records:bom_id (id, bom_number, product_name, status, order_id)`);
+      // Match BOM items by item_id/item_code (also for manual warehouse rows without GRN/PO)
+      if (inv.item_id || inv.item_code) {
+        const bomItemQuery = supabase
+          .from('bom_record_items' as any)
+          .select(`id, bom_id, item_name, item_code, unit_of_measure, qty_per_product, qty_total,
+                   bom_records:bom_id (id, bom_number, product_name, status, order_id)`);
 
-          if (inv.item_id) {
-            bomItemQuery.eq('item_id', inv.item_id as any);
-          } else if (inv.item_code) {
-            bomItemQuery.eq('item_code', inv.item_code as any);
-          }
+        if (inv.item_id) {
+          bomItemQuery.eq('item_id', inv.item_id as any);
+        } else if (inv.item_code) {
+          bomItemQuery.eq('item_code', inv.item_code as any);
+        }
 
-          const { data: bomItemsData } = await bomItemQuery.limit(25);
+        const { data: bomItemsData } = await bomItemQuery.limit(25);
 
-          if (bomItemsData && bomItemsData.length > 0) {
-            console.log('Found BOM items:', bomItemsData.length);
-            setBomItems(bomItemsData as any[]);
+        if (bomItemsData && bomItemsData.length > 0) {
+          setBomItems(bomItemsData as any[]);
 
-            // Extract and fetch unique orders from BOM items
-            const uniqueOrderIds = Array.from(new Set(
-              bomItemsData
-                .map((bi: any) => bi.bom_records?.order_id)
-                .filter(Boolean)
-            ));
+          const uniqueOrderIds = Array.from(new Set(
+            bomItemsData
+              .map((bi: any) => bi.bom_records?.order_id)
+              .filter(Boolean)
+          ));
 
-            if (uniqueOrderIds.length > 0) {
-              const { data: ordersData } = await supabase
-                .from('orders' as any)
-                .select(`id, order_number, order_date, status, final_amount, customer_id,
-                          customers:customer_id (company_name)`)
-                .in('id', uniqueOrderIds)
-                .limit(10);
+          if (uniqueOrderIds.length > 0) {
+            const { data: ordersData } = await supabase
+              .from('orders' as any)
+              .select(`id, order_number, order_date, status, final_amount, customer_id,
+                        customers:customer_id (company_name)`)
+              .in('id', uniqueOrderIds)
+              .limit(10);
 
-              if (ordersData && ordersData.length > 0) {
-                console.log('Fetched orders from BOM items:', ordersData);
-                setRelatedOrders(ordersData as any[]);
-              }
+            if (ordersData && ordersData.length > 0) {
+              setRelatedOrders(ordersData as any[]);
             }
           }
         }
@@ -270,114 +287,154 @@ const WarehouseInventoryPage: React.FC = () => {
 
   return (
     <ErpLayout>
-      <div className="w-full p-6 space-y-6">
-        <div className="flex items-center">
+      <div className="w-full space-y-6 bg-[#f9fafb] p-6 -mx-4 sm:-mx-6 rounded-xl">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <BackButton to="/inventory" label="Back to Inventory" />
         </div>
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Warehouse Inventory Management</h1>
-          <p className="text-muted-foreground">
-            Track and manage GRN items across warehouse zones
+
+        <div className="flex flex-wrap items-center gap-2 text-sm text-[#6a7282]">
+          <Link to="/inventory" className="hover:text-[#101828] transition-colors">
+            Inventory
+          </Link>
+          <ChevronRight className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
+          <span className="font-medium text-[#101828]">Raw Material Inventory</span>
+        </div>
+
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2 max-w-3xl">
+            <h1 className="text-[30px] font-bold leading-9 tracking-tight text-[#101828]">
+              Raw Material Inventory
+            </h1>
+            <p className="text-base leading-6 text-[#4a5565]">
+              Fabrics and items received through GRN—or added manually—across receiving and storage bins.
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 gap-2 rounded-lg border-black/10 bg-white text-[#0a0a0a] shadow-sm hover:bg-[#fafafa]"
+              onClick={() => loadTotals()}
+            >
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </Button>
+            <Button
+              type="button"
+              className="h-9 gap-2 rounded-lg bg-[#030213] px-4 text-white hover:bg-[#030213]/90"
+              onClick={() => setAddInventoryOpen(true)}
+            >
+              <Plus className="h-4 w-4" />
+              Add Inventory
+            </Button>
+          </div>
+        </div>
+
+      {/* Overview Cards — Figma: white + border-2 #e5e7eb, rounded 14px; total card purple gradient */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="rounded-[14px] border-2 border-[#e5e7eb] bg-white p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-[#dbeafe]">
+              <Package className="h-6 w-6 text-blue-600" />
+            </div>
+            <span className="rounded-lg bg-[#dbeafe] px-2.5 py-1 text-xs font-medium text-[#1447e6]">
+              Active
+            </span>
+          </div>
+          <p className="mt-4 text-sm font-medium text-[#4a5565]">Receiving Zone</p>
+          <p className="mt-1 text-[30px] font-bold leading-9 tracking-tight text-[#101828] tabular-nums">
+            {Math.round(totals.receiving)}
           </p>
+          <p className="mt-2 text-sm font-medium text-[#6a7282]">Qty in receiving bins</p>
         </div>
-        
-        <div className="flex items-center gap-2">
-          <Badge variant="outline" className="flex items-center gap-1">
-            <Package className="h-3 w-3" />
-            Receiving Zone
-          </Badge>
-          <ArrowRightLeft className="h-4 w-4 text-muted-foreground" />
-          <Badge variant="outline" className="flex items-center gap-1">
-            <Archive className="h-3 w-3" />
-            Storage Zone
-          </Badge>
-          <ArrowRightLeft className="h-4 w-4 text-muted-foreground" />
-          <Badge variant="outline" className="flex items-center gap-1">
-            <Truck className="h-3 w-3" />
-            Dispatch Zone
-          </Badge>
+
+        <div className="rounded-[14px] border-2 border-[#e5e7eb] bg-white p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-[#dcfce7]">
+              <Archive className="h-6 w-6 text-green-700" />
+            </div>
+            <span className="rounded-lg bg-[#dcfce7] px-2.5 py-1 text-xs font-medium text-[#008236]">
+              {storageBinCount} {storageBinCount === 1 ? 'Bin' : 'Bins'}
+            </span>
+          </div>
+          <p className="mt-4 text-sm font-medium text-[#4a5565]">Storage Zone</p>
+          <p className="mt-1 text-[30px] font-bold leading-9 tracking-tight text-[#101828] tabular-nums">
+            {Math.round(totals.storage)}
+          </p>
+          <p className="mt-2 text-sm font-medium text-[#6a7282]">Items in storage</p>
+        </div>
+
+        <div className="rounded-[14px] border-2 border-[#e5e7eb] bg-white p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-[#ffedd4]">
+              <Truck className="h-6 w-6 text-[#ca3500]" />
+            </div>
+            <span className="rounded-lg bg-[#ffedd4] px-2.5 py-1 text-xs font-medium text-[#ca3500]">
+              Ready
+            </span>
+          </div>
+          <p className="mt-4 text-sm font-medium text-[#4a5565]">Dispatch Zone</p>
+          <p className="mt-1 text-[30px] font-bold leading-9 tracking-tight text-[#101828] tabular-nums">
+            {Math.round(totals.dispatch)}
+          </p>
+          <p className="mt-2 text-sm font-medium text-[#6a7282]">Ready to ship</p>
+        </div>
+
+        <div
+          className="rounded-[14px] p-5 text-white sm:col-span-2 xl:col-span-1"
+          style={{
+            background: 'linear-gradient(153.435deg, rgb(173, 70, 255) 0%, rgb(152, 16, 250) 100%)',
+          }}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-white/20">
+              <BarChart3 className="h-6 w-6 text-white" />
+            </div>
+          </div>
+          <p className="mt-4 text-sm font-medium text-[#f3e8ff]">Total Raw Qty</p>
+          <p className="mt-1 text-[30px] font-bold leading-9 tracking-tight tabular-nums">
+            {Math.round(totals.all)}
+          </p>
+          <p className="mt-2 text-sm text-[#f3e8ff]">Fabrics + items (excl. products)</p>
         </div>
       </div>
 
-      {/* Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <Package className="h-5 w-5 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Receiving Zone</p>
-                <p className="text-2xl font-bold">{Math.round(totals.receiving)}</p>
-                <p className="text-xs text-muted-foreground">Total quantity received</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-green-100 rounded-lg">
-                <Archive className="h-5 w-5 text-green-600" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Storage Zone</p>
-                <p className="text-2xl font-bold">{Math.round(totals.storage)}</p>
-                <p className="text-xs text-muted-foreground">Total quantity in storage</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-orange-100 rounded-lg">
-                <Truck className="h-5 w-5 text-orange-600" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Dispatch Zone</p>
-                <p className="text-2xl font-bold">{Math.round(totals.dispatch)}</p>
-                <p className="text-xs text-muted-foreground">Total quantity ready to dispatch</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-purple-100 rounded-lg">
-                <BarChart3 className="h-5 w-5 text-purple-600" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Total Items</p>
-                <p className="text-2xl font-bold">{Math.round(totals.all)}</p>
-                <p className="text-xs text-muted-foreground">Total quantity across zones</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Main Content Tabs */}
+      {/* Zone tabs — Figma filter-style neutral pills */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="receiving" className="flex items-center gap-2">
-            <Package className="h-4 w-4" />
-            Receiving Zone ({totals.receiving})
+        <TabsList className="flex h-auto w-full flex-wrap items-center justify-start gap-1 rounded-lg bg-[#f3f3f5] p-1 text-[#0a0a0a] md:w-fit">
+          <TabsTrigger
+            value="receiving"
+            className={cn(
+              'gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-all',
+              'data-[state=active]:border data-[state=active]:border-black/10 data-[state=active]:bg-white data-[state=active]:shadow-sm',
+              'data-[state=inactive]:bg-transparent data-[state=inactive]:shadow-none'
+            )}
+          >
+            <Package className="h-4 w-4 shrink-0" />
+            Receiving
           </TabsTrigger>
-          <TabsTrigger value="storage" className="flex items-center gap-2">
-            <Archive className="h-4 w-4" />
-            Storage Zone ({totals.storage})
+          <TabsTrigger
+            value="storage"
+            className={cn(
+              'gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-all',
+              'data-[state=active]:border data-[state=active]:border-black/10 data-[state=active]:bg-white data-[state=active]:shadow-sm',
+              'data-[state=inactive]:bg-transparent data-[state=inactive]:shadow-none'
+            )}
+          >
+            <Archive className="h-4 w-4 shrink-0" />
+            Storage
           </TabsTrigger>
-          <TabsTrigger value="dispatch" className="flex items-center gap-2">
-            <Truck className="h-4 w-4" />
-            Dispatch Zone ({totals.dispatch})
+          <TabsTrigger
+            value="dispatch"
+            className={cn(
+              'gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-all',
+              'data-[state=active]:border data-[state=active]:border-black/10 data-[state=active]:bg-white data-[state=active]:shadow-sm',
+              'data-[state=inactive]:bg-transparent data-[state=inactive]:shadow-none'
+            )}
+          >
+            <Truck className="h-4 w-4 shrink-0" />
+            Dispatch
           </TabsTrigger>
         </TabsList>
 
@@ -397,25 +454,32 @@ const WarehouseInventoryPage: React.FC = () => {
         </TabsContent>
 
         <TabsContent value="dispatch" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Truck className="h-5 w-5" />
-                Dispatch Zone Inventory
+          <Card className="shadow-erp-md border-border/60 rounded-xl border-dashed">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <Truck className="h-5 w-5 text-muted-foreground" />
+                Dispatch zone
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-center py-8">
-                <Truck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">Dispatch zone inventory coming soon...</p>
-                <p className="text-sm text-muted-foreground mt-2">
-                  Items ready for dispatch will appear here
+              <div className="text-center py-12 px-4 rounded-lg bg-muted/20 border border-border/40">
+                <Truck className="h-12 w-12 text-muted-foreground/70 mx-auto mb-4" />
+                <p className="text-muted-foreground font-medium">Dispatch tracking is not wired here yet</p>
+                <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+                  Raw materials in the dispatch zone will be listed in a future update. Use receiving and storage tabs for active stock.
                 </p>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+      </div>
+
+      <AddRawInventoryModal
+        open={addInventoryOpen}
+        onOpenChange={setAddInventoryOpen}
+        onSuccess={() => loadTotals()}
+      />
 
       {/* Transfer Modal */}
       <InventoryTransferModal
@@ -425,16 +489,26 @@ const WarehouseInventoryPage: React.FC = () => {
         onTransferComplete={handleTransferComplete}
       />
 
-      {/* View Details Modal */}
+      {/* View Details */}
       {selectedInventory && (
-        <div className={`fixed inset-0 z-50 ${showViewModal ? '' : 'hidden'}`}>
-          <div className="fixed inset-0 bg-black/30" onClick={() => setShowViewModal(false)} />
-          <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-background border rounded-lg shadow-lg w-[90vw] max-w-2xl max-h-[80vh] overflow-y-auto">
-            <div className="p-4 border-b flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Inventory Details</h2>
-              <button className="text-sm" onClick={() => setShowViewModal(false)}>Close</button>
-            </div>
-            <div className="p-4 space-y-4">
+        <Dialog
+          open={showViewModal}
+          onOpenChange={(open) => {
+            setShowViewModal(open);
+            if (!open) setDetailsDeleteOpen(false);
+          }}
+        >
+          <DialogContent className="max-w-2xl w-[95vw] max-h-[88vh] flex flex-col p-0 gap-0 overflow-hidden sm:rounded-xl">
+            <DialogHeader className="px-6 pt-6 pb-2 space-y-1 text-left">
+              <DialogTitle className="text-xl">Inventory details</DialogTitle>
+              {!selectedInventory.grn_id && (
+                <p className="text-sm font-normal text-muted-foreground">
+                  Not linked to a GRN — manual or opening balance line.
+                </p>
+              )}
+            </DialogHeader>
+            <ScrollArea className="flex-1 min-h-0 max-h-[min(520px,72vh)] px-6">
+              <div className="space-y-4 pb-4">
               <div>
                 <div className="text-sm text-muted-foreground">Item</div>
                 <div className="font-medium">{selectedInventory.item_name}</div>
@@ -503,9 +577,11 @@ const WarehouseInventoryPage: React.FC = () => {
                 </div>
               )}
 
+              <Separator />
+
               {/* GRN Item Attributes */}
-              <div className="pt-2 border-t">
-                <h3 className="font-semibold mb-2">GRN Item Attributes</h3>
+              <div className="pt-1">
+                <h3 className="font-semibold mb-2">GRN line details</h3>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
                     <div className="text-muted-foreground">Item/Fabric Name</div>
@@ -560,10 +636,15 @@ const WarehouseInventoryPage: React.FC = () => {
                     <div className="font-medium">{selectedInventory.grn_item?.inspection_notes || '-'}</div>
                   </div>
                 </div>
+                {!selectedInventory.grn_item && (
+                  <p className="text-sm text-muted-foreground mt-2">No GRN item snapshot on this row.</p>
+                )}
               </div>
 
+              <Separator />
+
               {/* Related Records */}
-              <div className="pt-2 border-t space-y-4">
+              <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold">Related Records</h3>
                   {/* Flow Diagram */}
@@ -598,12 +679,13 @@ const WarehouseInventoryPage: React.FC = () => {
                           <div className="text-muted-foreground">Supplier: {grnHeader.supplier_master.supplier_name}</div>
                         )}
                       </div>
-                      <button
-                        className="text-blue-600 text-sm underline"
+                      <Button
+                        variant="link"
+                        className="h-auto p-0 text-primary"
                         onClick={() => navigate(`/procurement/grn/${grnHeader.id}`)}
                       >
                         View GRN
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 )}
@@ -620,12 +702,13 @@ const WarehouseInventoryPage: React.FC = () => {
                           <div className="text-muted-foreground">Total: ₹{poHeader.total_amount}</div>
                         )}
                       </div>
-                      <button
-                        className="text-blue-600 text-sm underline"
+                      <Button
+                        variant="link"
+                        className="h-auto p-0 text-primary"
                         onClick={() => navigate(`/procurement/po/${poHeader.id}`)}
                       >
                         View PO
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 )}
@@ -678,12 +761,12 @@ const WarehouseInventoryPage: React.FC = () => {
                               </div>
                             )}
                           </div>
-                          <button
-                            className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 px-4 rounded-md font-medium transition-colors"
+                          <Button
+                            className="w-full"
                             onClick={() => navigate(`/orders/${order.id}`)}
                           >
-                            View Order Details
-                          </button>
+                            View order details
+                          </Button>
                         </div>
                       ))}
                     </div>
@@ -719,12 +802,13 @@ const WarehouseInventoryPage: React.FC = () => {
                               <td className="p-2">{bi.bom_records?.status || '-'}</td>
                               <td className="p-2">
                                 {bi.bom_records?.id && (
-                                  <button
-                                    className="text-blue-600 text-xs underline"
+                                  <Button
+                                    variant="link"
+                                    className="h-auto p-0 text-xs"
                                     onClick={() => navigate(`/bom/${bi.bom_records.id}`)}
                                   >
                                     View
-                                  </button>
+                                  </Button>
                                 )}
                               </td>
                             </tr>
@@ -735,11 +819,37 @@ const WarehouseInventoryPage: React.FC = () => {
                   </div>
                 )}
               </div>
+              </div>
+            </ScrollArea>
+            <div className="flex justify-end px-6 py-3 border-t border-border/60 bg-muted/20">
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                className="gap-2"
+                onClick={() => setDetailsDeleteOpen(true)}
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete inventory
+              </Button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
-      </div>
+
+      <DeleteWarehouseInventoryDialog
+        open={detailsDeleteOpen && !!selectedInventory}
+        onOpenChange={(open) => {
+          setDetailsDeleteOpen(open);
+        }}
+        item={selectedInventory as any}
+        onDeleted={() => {
+          setDetailsDeleteOpen(false);
+          setShowViewModal(false);
+          setSelectedInventory(null);
+          loadTotals();
+        }}
+      />
     </ErpLayout>
   );
 };

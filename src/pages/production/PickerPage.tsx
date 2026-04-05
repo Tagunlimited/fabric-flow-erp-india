@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import "@/pages/OrdersPageViewSwitch.css";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +19,6 @@ import { toast } from "sonner";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizesByMasterOrder, sortSizeDistributionsByMasterOrder, getFallbackSizeOrder } from "@/utils/sizeSorting";
-import { BackButton } from '@/components/common/BackButton';
 
 interface TailorListItem {
   id: string;
@@ -125,6 +124,7 @@ export default function PickerPage() {
   const [readymadeOrderItems, setReadymadeOrderItems] = useState<Record<string, ReadymadeOrderItem[]>>({});
   const [loadingReadymadeOrders, setLoadingReadymadeOrders] = useState(false);
   const [readymadeViewMode, setReadymadeViewMode] = useState<'order' | 'product'>('order');
+  const [pickerTab, setPickerTab] = useState<'custom' | 'readymade'>('custom');
   const [groupedProducts, setGroupedProducts] = useState<GroupedProduct[]>([]);
   const [selectedProductDetail, setSelectedProductDetail] = useState<GroupedProduct | null>(null);
   const [productDetailDialogOpen, setProductDetailDialogOpen] = useState(false);
@@ -1076,9 +1076,6 @@ export default function PickerPage() {
   return (
     <ErpLayout>
       <div className="w-full px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-4 sm:space-y-6">
-        <div className="flex items-center gap-4">
-          <BackButton to="/production" label="Back to Production" />
-        </div>
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
             Picker
@@ -1088,19 +1085,31 @@ export default function PickerPage() {
           </p>
         </div>
 
-        <Tabs defaultValue="custom" className="space-y-4 sm:space-y-6">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="custom" className="flex items-center gap-2 text-xs sm:text-sm">
-              <ShoppingCart className="h-3 w-3 sm:h-4 sm:w-4" />
-              <span>Custom Orders</span>
-            </TabsTrigger>
-            <TabsTrigger value="readymade" className="flex items-center gap-2 text-xs sm:text-sm">
-              <Shirt className="h-3 w-3 sm:h-4 sm:w-4" />
-              <span>Readymade Orders</span>
-            </TabsTrigger>
-          </TabsList>
+        <label
+          htmlFor="picker-page-view-switch"
+          className="orders-view-switch"
+          aria-label="Switch between custom and readymade picker views"
+        >
+          <input
+            id="picker-page-view-switch"
+            type="checkbox"
+            role="switch"
+            aria-checked={pickerTab === 'readymade'}
+            checked={pickerTab === 'readymade'}
+            onChange={(e) => setPickerTab(e.target.checked ? 'readymade' : 'custom')}
+          />
+          <span className="flex items-center justify-center gap-1.5 text-xs sm:text-sm">
+            <ShoppingCart className="h-3 w-3 sm:h-4 sm:w-4 shrink-0" />
+            Custom Orders
+          </span>
+          <span className="flex items-center justify-center gap-1.5 text-xs sm:text-sm">
+            <Shirt className="h-3 w-3 sm:h-4 sm:w-4 shrink-0" />
+            Readymade Orders
+          </span>
+        </label>
 
-          <TabsContent value="custom" className="space-y-4 sm:space-y-6">
+          {pickerTab === 'custom' && (
+          <div className="space-y-4 sm:space-y-6 mt-4 sm:mt-6">
             <Card>
               <CardHeader className="pb-3 sm:pb-6">
                 <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
@@ -1373,9 +1382,11 @@ export default function PickerPage() {
                 )}
               </CardContent>
             </Card>
-          </TabsContent>
+          </div>
+          )}
 
-          <TabsContent value="readymade" className="space-y-4 sm:space-y-6">
+          {pickerTab === 'readymade' && (
+          <div className="space-y-4 sm:space-y-6 mt-4 sm:mt-6">
             <Card>
               <CardHeader className="pb-3 sm:pb-6">
                 <div className="flex items-center justify-between">
@@ -1555,9 +1566,8 @@ export default function PickerPage() {
                 )}
               </CardContent>
             </Card>
-          </TabsContent>
-           
-        </Tabs>
+          </div>
+          )}
         {/* Orders list dialog per batch */}
         <Dialog open={ordersDialogOpen} onOpenChange={(v) => { if (!v) { setOrdersDialogOpen(false); fetchTailorsWithAssignedCounts(); } }}>
           <DialogContent className="max-w-[95vw] sm:max-w-2xl lg:max-w-4xl xl:max-w-6xl max-h-[90vh] overflow-y-auto">

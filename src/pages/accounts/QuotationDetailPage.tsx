@@ -8,10 +8,14 @@ import html2canvas from 'html2canvas';
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
+import { getCustomerMobile } from '@/lib/customerContact';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { ErpLayout } from '@/components/ErpLayout';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { calculateSizeBasedTotal } from '@/utils/priceCalculation';
+import { orderHasActiveCreditInReceiptRows, sumActiveReceiptAmountsForOrder } from '@/utils/orderFinancials';
+import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { getSortedSizes, sortSizesQuantities as sortSizesQuantitiesUtil, sortSizesByMasterOrder } from '@/utils/sizeSorting';
 import {
   DropdownMenu,
@@ -33,6 +37,8 @@ interface Order {
   sales_manager?: string;
   gst_rate?: number;
   order_type?: string;
+  expected_delivery_date?: string | null;
+  payment_due_date?: string | null;
 }
 interface Customer {
   id: string;
@@ -40,6 +46,7 @@ interface Customer {
   contact_person: string;
   email: string;
   phone: string;
+  mobile?: string | null;
   address: string;
   city: string;
   state: string;
@@ -93,6 +100,7 @@ export default function QuotationDetailPage() {
   const [salesManager, setSalesManager] = useState<SalesManager | null>(null);
   const [sizeTypes, setSizeTypes] = useState<{ [key: string]: any }>({});
   const [totalReceipts, setTotalReceipts] = useState<number>(0);
+  const [hasActiveCreditReceipt, setHasActiveCreditReceipt] = useState(false);
 
   useEffect(() => {
     if (id) fetchData(id);
@@ -188,21 +196,41 @@ export default function QuotationDetailPage() {
         setSizeTypes(sizeTypesMap);
       }
       
-      // Fetch additional charges if available (optional: you may need to fetch from order or another table)
-      // For now, we'll just set it to an empty array as it's not directly linked to order_items in this schema
-      setAdditionalCharges([]);
+      try {
+        const { data: chargesData, error: chargesError } = await supabase
+          .from('order_additional_charges')
+          .select('particular, rate, gst_percentage, amount_incl_gst')
+          .eq('order_id', orderId as any);
+        if (!chargesError && chargesData) {
+          setAdditionalCharges(
+            (chargesData as any[]).map((c) => ({
+              particular: String(c.particular || ''),
+              rate: Number(c.rate || 0),
+              gst_percentage: Number(c.gst_percentage || 0),
+              amount_incl_gst: Number(c.amount_incl_gst || 0),
+            }))
+          );
+        } else {
+          setAdditionalCharges([]);
+        }
+      } catch {
+        setAdditionalCharges([]);
+      }
       // Fetch receipts for this order to compute amount received and pending
-      const orderNumber = (orderData as any).order_number;
-      if (orderNumber) {
+      const orderNumber = (orderData as any).order_number as string;
+      const oid = (orderData as any).id as string;
+      if (orderNumber && oid) {
         const { data: receiptsData } = await supabase
           .from('receipts')
-          .select('amount')
+          .select('amount, status, payment_mode, payment_type, reference_id, reference_number')
           .eq('reference_type', 'order')
-          .eq('reference_number', orderNumber);
-        const received = (receiptsData || []).reduce((s, r) => s + Number((r as any).amount || 0), 0);
-        setTotalReceipts(received);
+          .or(`reference_id.eq.${oid},reference_number.eq.${orderNumber}`);
+        const rows = receiptsData || [];
+        setTotalReceipts(sumActiveReceiptAmountsForOrder(rows, oid, orderNumber));
+        setHasActiveCreditReceipt(orderHasActiveCreditInReceiptRows(rows, oid, orderNumber));
       } else {
         setTotalReceipts(0);
+        setHasActiveCreditReceipt(false);
       }
       // Generate quotation number
       const qNum = await generateQuotationNumber();
@@ -650,8 +678,8 @@ export default function QuotationDetailPage() {
 
   // Enhanced sharing functions
   const handleShareQuotationSummary = () => {
-    if (!customer?.phone) {
-      toast.error('Customer phone number not available');
+    if (!getCustomerMobile(customer)) {
+      toast.error('Customer mobile number not available');
       return;
     }
 
@@ -664,13 +692,13 @@ export default function QuotationDetailPage() {
       companyName
     );
 
-    WhatsAppSharing.openWhatsApp(customer.phone, message);
+    WhatsAppSharing.openWhatsApp(getCustomerMobile(customer), message);
     toast.success('WhatsApp opened with quotation summary');
   };
 
   const handleSharePDFToWhatsApp = async () => {
-    if (!customer?.phone) {
-      toast.error('Customer phone number not available');
+    if (!getCustomerMobile(customer)) {
+      toast.error('Customer mobile number not available');
       return;
     }
 
@@ -687,7 +715,7 @@ export default function QuotationDetailPage() {
         companyName
       );
       
-      WhatsAppSharing.openWhatsApp(customer.phone, message);
+      WhatsAppSharing.openWhatsApp(getCustomerMobile(customer), message);
       
       toast.success('PDF downloaded! WhatsApp opened with instructions.');
     } catch (error) {
@@ -697,8 +725,8 @@ export default function QuotationDetailPage() {
   };
 
   const handleQuickContact = () => {
-    if (!customer?.phone) {
-      toast.error('Customer phone number not available');
+    if (!getCustomerMobile(customer)) {
+      toast.error('Customer mobile number not available');
       return;
     }
 
@@ -711,7 +739,7 @@ export default function QuotationDetailPage() {
       `We're here to help! 😊`
     );
 
-    WhatsAppSharing.openWhatsApp(customer.phone, message);
+    WhatsAppSharing.openWhatsApp(getCustomerMobile(customer), message);
     toast.success('WhatsApp opened for quick contact');
   };
 
@@ -1135,6 +1163,9 @@ export default function QuotationDetailPage() {
                   <div className="bg-gray-50 p-4 rounded">
                     <p className="font-semibold text-gray-800">{customer?.company_name || 'Client Name'}</p>
                     <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
+                    <p className="text-sm text-gray-600">
+                      Mobile: {getCustomerMobile(customer) || '—'}
+                    </p>
                     <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
                     <p className="text-sm text-gray-600">
                       {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
@@ -1416,6 +1447,12 @@ export default function QuotationDetailPage() {
                           return sum + (amount * gstRate) / 100;
                         }, 0))}</span>
                       </div>
+                      {additionalCharges.map((charge, acIdx) => (
+                        <div key={acIdx} className="flex justify-between text-sm">
+                          <span>{charge.particular?.trim() || 'Additional charge'}:</span>
+                          <span>{formatCurrency(charge.amount_incl_gst)}</span>
+                        </div>
+                      ))}
                       <div className="border-t border-gray-400 pt-2">
                         <div className="flex justify-between text-lg font-bold">
                           <span>GRAND TOTAL:</span>
@@ -1430,6 +1467,19 @@ export default function QuotationDetailPage() {
                         <span>Pending Amount:</span>
                         <span className="text-amber-700">{formatCurrency(Math.max(0, grandTotal - totalReceipts))}</span>
                       </div>
+                      {(hasActiveCreditReceipt ||
+                        (!!order?.payment_due_date && Math.max(0, grandTotal - totalReceipts) > 0)) && (
+                        <div className="flex flex-wrap gap-1 justify-end pt-1">
+                          {hasActiveCreditReceipt && (
+                            <CreditOrderBadge>Credit order</CreditOrderBadge>
+                          )}
+                          {order?.payment_due_date && Math.max(0, grandTotal - totalReceipts) > 0 && (
+                            <Badge variant="outline" className="text-[10px] font-normal">
+                              Due {formatDateIndian(order.payment_due_date)}
+                            </Badge>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                   
@@ -1552,6 +1602,9 @@ export default function QuotationDetailPage() {
                     <div className="bg-gray-50 p-2 rounded">
                       <p className="font-semibold text-gray-800">{customer?.company_name || 'Client Name'}</p>
                       <p className="text-sm text-gray-600">{customer?.contact_person || 'Contact Person'}</p>
+                      <p className="text-sm text-gray-600">
+                        Mobile: {getCustomerMobile(customer) || '—'}
+                      </p>
                       <p className="text-sm text-gray-600">{customer?.address || 'Address'}</p>
                       <p className="text-sm text-gray-600">
                         {customer?.city || 'City'}, {customer?.state || 'State'} - {customer?.pincode || 'Pincode'}
@@ -1833,12 +1886,12 @@ export default function QuotationDetailPage() {
                           return sum + (amount * gstRate) / 100;
                         }, 0))}</span>
                     </div>
-                    {additionalChargesTotal > 0 && (
-                        <div className="flex justify-between">
-                        <span>Additional Charges:</span>
-                        <span>{formatCurrency(additionalChargesTotal)}</span>
+                    {additionalCharges.map((charge, acIdx) => (
+                      <div key={acIdx} className="flex justify-between text-sm">
+                        <span>{charge.particular?.trim() || 'Additional charge'}:</span>
+                        <span>{formatCurrency(charge.amount_incl_gst)}</span>
                       </div>
-                    )}
+                    ))}
                       <div className="border-t border-gray-400 pt-2">
                         <div className="flex justify-between text-lg font-bold">
                         <span>GRAND TOTAL:</span>
@@ -1853,6 +1906,19 @@ export default function QuotationDetailPage() {
                       <span>Pending Amount:</span>
                       <span className="text-amber-700">{formatCurrency(Math.max(0, grandTotal - totalReceipts))}</span>
                     </div>
+                    {(hasActiveCreditReceipt ||
+                      (!!order?.payment_due_date && Math.max(0, grandTotal - totalReceipts) > 0)) && (
+                      <div className="flex flex-wrap gap-1 justify-end pt-1">
+                        {hasActiveCreditReceipt && (
+                          <CreditOrderBadge>Credit order</CreditOrderBadge>
+                        )}
+                        {order?.payment_due_date && Math.max(0, grandTotal - totalReceipts) > 0 && (
+                          <Badge variant="outline" className="text-[10px] font-normal">
+                            Due {formatDateIndian(order.payment_due_date)}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
                 

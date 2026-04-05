@@ -49,6 +49,8 @@ export function BomDisplayCard({
   onAllocateClick,
   onAllocateAllClick
 }: BomDisplayCardProps) {
+  const showAllocationActions = Boolean(onAllocateClick || onAllocateAllClick);
+
   console.log('BomDisplayCard received bomItems:', bomItems);
   console.log('BomDisplayCard bomItems length:', bomItems?.length || 0);
   console.log('BomDisplayCard productName:', productName);
@@ -112,7 +114,9 @@ export function BomDisplayCard({
                         <th className="text-left py-2 px-3 text-sm font-medium text-gray-600">Available</th>
                         <th className="text-left py-2 px-3 text-sm font-medium text-gray-600">Allocated</th>
                         <th className="text-left py-2 px-3 text-sm font-medium text-gray-600">To Order</th>
-                        <th className="text-left py-2 px-3 text-sm font-medium text-gray-600">Actions</th>
+                        {showAllocationActions && (
+                          <th className="text-left py-2 px-3 text-sm font-medium text-gray-600">Actions</th>
+                        )}
                       </tr>
                     </thead>
                     <tbody>
@@ -133,7 +137,10 @@ export function BomDisplayCard({
                             0
                           );
                           const canAllocate =
-                            hasBomItemId && item.allocation?.totalAvailable > 0 && remainingToAllocate > 0;
+                            showAllocationActions &&
+                            hasBomItemId &&
+                            item.allocation?.totalAvailable > 0 &&
+                            remainingToAllocate > 0;
 
                           return (
                             <tr key={item.id || index} className="border-b last:border-b-0">
@@ -180,16 +187,18 @@ export function BomDisplayCard({
                                   {Math.max(remainingToAllocate - item.in_stock, 0)} {item.required_unit}
                                 </span>
                               </td>
-                              <td className="py-3 px-3 text-sm">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  disabled={!canAllocate}
-                                  onClick={() => onAllocateClick?.(item)}
-                                >
-                                  Allocate
-                                </Button>
-                              </td>
+                              {showAllocationActions && (
+                                <td className="py-3 px-3 text-sm">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={!canAllocate}
+                                    onClick={() => onAllocateClick?.(item)}
+                                  >
+                                    Allocate
+                                  </Button>
+                                </td>
+                              )}
                             </tr>
                           );
                         })
@@ -201,19 +210,23 @@ export function BomDisplayCard({
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row sm:justify-end sm:items-center">
-              <Button
-                variant="outline"
-                onClick={() => onAllocateAllClick?.()}
-                disabled={!onAllocateAllClick || !bomItems.some((item) => {
-                  const remainingToAllocate = Math.max(
-                    item.required_qty - (item.allocation?.totalAllocated || 0),
-                    0
-                  );
-                  return item.allocation?.totalAvailable > 0 && remainingToAllocate > 0;
-                })}
-              >
-                Allocate All
-              </Button>
+              {onAllocateAllClick && (
+                <Button
+                  variant="outline"
+                  onClick={() => onAllocateAllClick()}
+                  disabled={
+                    !bomItems.some((item) => {
+                      const remainingToAllocate = Math.max(
+                        item.required_qty - (item.allocation?.totalAllocated || 0),
+                        0
+                      );
+                      return item.allocation?.totalAvailable > 0 && remainingToAllocate > 0;
+                    })
+                  }
+                >
+                  Allocate All
+                </Button>
+              )}
               <Button
                 onClick={onViewClick}
                 className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg"

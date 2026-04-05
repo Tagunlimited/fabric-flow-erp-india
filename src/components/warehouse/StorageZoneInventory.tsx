@@ -1,15 +1,15 @@
-import React, { useEffect, useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Archive, Package, Search, Eye, Filter, History } from 'lucide-react';
+import { Archive, Package, Search, Eye, History, Trash2, Download, Truck } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
-import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS, ITEM_TYPE_CONFIGS } from '@/types/warehouse-inventory';
+import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS } from '@/types/warehouse-inventory';
 import { toast } from 'sonner';
 import { InventoryLogsModal } from './InventoryLogsModal';
+import { DeleteWarehouseInventoryDialog } from './DeleteWarehouseInventoryDialog';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   hasMeaningfulColorLabel,
@@ -39,8 +39,11 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [itemTypeFilter, setItemTypeFilter] = useState<string>('all');
+  const [zoneFilter, setZoneFilter] = useState<string>('all');
   const [logsModalOpen, setLogsModalOpen] = useState(false);
   const [selectedInventoryForLogs, setSelectedInventoryForLogs] = useState<WarehouseInventory | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WarehouseInventory | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [allocationModalOpen, setAllocationModalOpen] = useState(false);
   const [selectedAllocationDetails, setSelectedAllocationDetails] = useState<{
     inventory: WarehouseInventory;
@@ -488,15 +491,82 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     }
   };
 
-  const filteredInventory = inventory.filter(item => {
-    const matchesSearch = searchTerm === '' || 
-      item.item_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.item_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.bin?.bin_code.toLowerCase().includes(searchTerm.toLowerCase());
+  const warehouseNames = useMemo(() => {
+    const s = new Set<string>();
+    inventory.forEach((i) => {
+      const n = i.bin?.rack?.floor?.warehouse?.name;
+      if (n) s.add(n);
+    });
+    return Array.from(s).sort();
+  }, [inventory]);
+
+  const filteredInventory = inventory.filter((item) => {
+    const t = searchTerm.trim().toLowerCase();
+    const matchesSearch =
+      t === '' ||
+      item.item_name.toLowerCase().includes(t) ||
+      (item.item_code || '').toLowerCase().includes(t) ||
+      (item.bin?.bin_code || '').toLowerCase().includes(t) ||
+      (() => {
+        const fm = (item as any).fabric_master;
+        if (fm) {
+          return (
+            (fm.fabric_code || '').toLowerCase().includes(t) ||
+            (fm.fabric_name || '').toLowerCase().includes(t)
+          );
+        }
+        const im = (item as any).item_master;
+        if (im) {
+          return (
+            (im.item_code || '').toLowerCase().includes(t) ||
+            (im.item_name || '').toLowerCase().includes(t)
+          );
+        }
+        return false;
+      })();
     const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
     const matchesItemType = itemTypeFilter === 'all' || item.item_type === itemTypeFilter;
-    return matchesSearch && matchesStatus && matchesItemType;
+    const wh = item.bin?.rack?.floor?.warehouse?.name || '';
+    const matchesZone = zoneFilter === 'all' || wh === zoneFilter;
+    return matchesSearch && matchesStatus && matchesItemType && matchesZone;
   });
+
+  const handleExportReport = () => {
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const header = [
+      'Name',
+      'Type',
+      'Bin',
+      'Quantity',
+      'Unit',
+      'Status',
+      'Warehouse path',
+    ];
+    const lines = filteredInventory.map((item) => [
+      item.item_name,
+      item.item_type,
+      item.bin?.bin_code ?? '',
+      String(item.quantity),
+      item.unit,
+      item.status,
+      [
+        item.bin?.rack?.floor?.warehouse?.name,
+        `Floor ${item.bin?.rack?.floor?.floor_number ?? ''}`,
+        item.bin?.rack?.rack_code,
+      ]
+        .filter(Boolean)
+        .join(' > '),
+    ]);
+    const csv = [header.join(','), ...lines.map((row) => row.map(esc).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `storage-zone-inventory-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Report exported');
+  };
 
   useEffect(() => {
     loadInventory();
@@ -534,10 +604,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     return INVENTORY_STATUS_CONFIGS[status as keyof typeof INVENTORY_STATUS_CONFIGS] || INVENTORY_STATUS_CONFIGS.IN_STORAGE;
   };
 
-  const getItemTypeConfig = (itemType: string) => {
-    return ITEM_TYPE_CONFIGS[itemType as keyof typeof ITEM_TYPE_CONFIGS] || ITEM_TYPE_CONFIGS.ITEM;
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -549,77 +615,118 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     );
   }
 
+  const totalQtyRaw = inventory.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const totalAllocatedQty = inventory.reduce(
+    (sum, item) => sum + Number((item as any).allocated_quantity || 0),
+    0
+  );
+  const primaryUnit = inventory[0]?.unit || '';
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold flex items-center gap-2">
-            <Archive className="h-6 w-6 text-green-600" />
-            Storage Zone Inventory
-          </h2>
-          <p className="text-muted-foreground">
-            Items currently stored in warehouse storage bins
-          </p>
+    <div className="space-y-4">
+      <div className="rounded-[14px] border border-[#e5e7eb] bg-white p-5 sm:p-6 flex flex-col gap-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex gap-3 items-start min-w-0">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#dcfce7]">
+              <Archive className="h-5 w-5 text-green-700" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-lg font-semibold leading-7 tracking-tight text-[#101828]">
+                Storage Zone Inventory
+              </h3>
+              <p className="text-sm text-[#6a7282]">
+                Items currently stored in warehouse storage bins
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0 gap-2 rounded-lg border-black/10 bg-white text-[#0a0a0a] hover:bg-[#fafafa]"
+            onClick={handleExportReport}
+          >
+            <Download className="h-4 w-4" />
+            Export Report
+          </Button>
         </div>
-        <Button onClick={loadInventory} variant="outline">
-          Refresh
-        </Button>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div
+            className="relative overflow-hidden rounded-[10px] border border-[#bedbff] p-4"
+            style={{
+              background: 'linear-gradient(164.271deg, rgb(239, 246, 255) 0%, rgb(219, 234, 254) 100%)',
+            }}
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#155dfc]">
+                <Package className="h-5 w-5 text-white" />
+              </div>
+              <p className="text-sm font-medium text-[#4a5565]">Total Items</p>
+            </div>
+            <p className="mt-3 text-[30px] font-bold leading-9 tracking-tight text-[#101828]">
+              {inventory.length}
+            </p>
+            <p className="mt-1 text-sm text-[#4a5565]">Items in storage</p>
+          </div>
+
+          <div
+            className="relative overflow-hidden rounded-[10px] border border-[#b9f8cf] p-4"
+            style={{
+              background: 'linear-gradient(164.271deg, rgb(240, 253, 244) 0%, rgb(220, 252, 231) 100%)',
+            }}
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#00a63e]">
+                <Archive className="h-5 w-5 text-white" />
+              </div>
+              <p className="text-sm font-medium text-[#4a5565]">Bins Used</p>
+            </div>
+            <p className="mt-3 text-[30px] font-bold leading-9 tracking-tight text-[#101828]">
+              {binSummaries.length}
+            </p>
+            <p className="mt-1 text-sm text-[#4a5565]">Storage locations</p>
+          </div>
+
+          <div
+            className="relative overflow-hidden rounded-[10px] border border-[#e9d4ff] p-4"
+            style={{
+              background: 'linear-gradient(164.271deg, rgb(250, 245, 255) 0%, rgb(243, 232, 255) 100%)',
+            }}
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#9810fa]">
+                <Truck className="h-5 w-5 text-white" />
+              </div>
+              <p className="text-sm font-medium text-[#4a5565]">Total Quantity</p>
+            </div>
+            <p className="mt-3 text-[30px] font-bold leading-9 tracking-tight text-[#101828]">
+              {Math.round(totalQtyRaw)}
+              {primaryUnit ? ` ${primaryUnit}` : ''}
+            </p>
+            <p className="mt-1 text-sm text-[#4a5565]">
+              {Math.round(totalAllocatedQty)}
+              {primaryUnit ? ` ${primaryUnit}` : ''} allocated
+            </p>
+          </div>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <Archive className="h-4 w-4 text-green-600" />
-              <div>
-                <p className="text-sm font-medium">Total Items</p>
-                <p className="text-2xl font-bold">{inventory.length}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <Package className="h-4 w-4 text-blue-600" />
-              <div>
-                <p className="text-sm font-medium">Bins Used</p>
-                <p className="text-2xl font-bold">{binSummaries.length}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <Filter className="h-4 w-4 text-purple-600" />
-              <div>
-                <p className="text-sm font-medium">Total Quantity</p>
-                <p className="text-2xl font-bold">{Math.round(inventory.reduce((sum, item) => sum + item.quantity, 0))}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex flex-col md:flex-row gap-4">
-            <div className="flex-1">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search by item name, code, or bin..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </div>
-
+      <div className="rounded-[14px] border border-[#e5e7eb] bg-white px-4 py-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+          <div className="relative flex-1 min-w-0">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#717182]" />
+            <Input
+              placeholder="Search by name, code, or location..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="h-9 rounded-lg border-0 bg-[#f3f3f5] pl-10 pr-3 text-sm text-[#0a0a0a] placeholder:text-[#717182]"
+            />
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-end">
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full md:w-48">
-                <SelectValue placeholder="Filter by status" />
+              <SelectTrigger className="h-9 w-full rounded-lg border-0 bg-[#f3f3f5] sm:w-[160px] text-[#0a0a0a]">
+                <SelectValue placeholder="All Status" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
@@ -631,8 +738,8 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
             </Select>
 
             <Select value={itemTypeFilter} onValueChange={setItemTypeFilter}>
-              <SelectTrigger className="w-full md:w-48">
-                <SelectValue placeholder="Filter by type" />
+              <SelectTrigger className="h-9 w-full rounded-lg border-0 bg-[#f3f3f5] sm:w-[160px] text-[#0a0a0a]">
+                <SelectValue placeholder="All Types" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
@@ -640,38 +747,52 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 <SelectItem value="ITEM">Item</SelectItem>
               </SelectContent>
             </Select>
-          </div>
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Inventory Items ({filteredInventory.length})</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <Table>
+            <Select value={zoneFilter} onValueChange={setZoneFilter}>
+              <SelectTrigger className="h-9 w-full rounded-lg border-0 bg-[#f3f3f5] sm:w-[160px] text-[#0a0a0a]">
+                <SelectValue placeholder="All Zones" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Zones</SelectItem>
+                {warehouseNames.map((name) => (
+                  <SelectItem key={name} value={name}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-3">
+          <h3 className="text-lg font-semibold leading-7 tracking-tight text-[#101828]">Inventory Items</h3>
+          <p className="text-sm text-[#6a7282]">
+            Showing {filteredInventory.length} of {inventory.length} items
+          </p>
+        </div>
+        <div className="overflow-x-auto rounded-[14px] border border-[#e5e7eb] bg-white">
+          <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>Image</TableHead>
-                  <TableHead>Code</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Fabric</TableHead>
-                  <TableHead>Color</TableHead>
-                  <TableHead>Material/GSM</TableHead>
-                  <TableHead>Brand</TableHead>
-                  <TableHead>Size</TableHead>
-                  <TableHead>Bin & Inventory</TableHead>
-                  <TableHead>Allocated</TableHead>
-                  <TableHead>Actions</TableHead>
+                <TableRow className="border-b border-black/10 bg-[#f9fafb] hover:bg-[#f9fafb]">
+                  <TableHead className="text-[#0a0a0a] font-medium">Name</TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium">Type</TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium">Fabric</TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium">Color</TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium">Material/GSM</TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium">Brand</TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium">Size</TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium">Bin &amp; Inventory</TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium">Allocated</TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium">Status</TableHead>
+                  <TableHead className="text-right text-[#0a0a0a] font-medium">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredInventory.map((item) => {
                   const statusConfig = getStatusConfig(item.status);
-                  const itemTypeConfig = getItemTypeConfig(item.item_type);
-                  
+
                   // Get master data based on item type
                   const fabricMaster = (item as any).fabric_master;
                   const itemMaster = (item as any).item_master;
@@ -679,7 +800,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                   
                   // Determine display values based on item type
                   let displayImage: string | undefined;
-                  let displayCode: string;
                   let displayName: string;
                   let displayType: string;
                   let displayFabric: string;
@@ -694,10 +814,10 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
 
                   if (item.item_type === 'FABRIC' && fabricMaster) {
                     displayImage = fabricMaster.image || null;
-                    displayCode = fabricMaster.fabric_code || '-';
                     displayName = fabricMaster.fabric_name || item.item_name;
                     displayType = 'Fabric';
-                    displayFabric = fabricMaster.fabric_for_supplier || '-';
+                    displayFabric =
+                      fabricMaster.type || fabricMaster.fabric_name || fabricMaster.fabric_for_supplier || '-';
                     displayColor = lineFabricColor || fabricMaster.color || '-';
                     if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
                     displayColorHex =
@@ -711,7 +831,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                     displaySize = '-';
                   } else if (item.item_type === 'ITEM' && itemMaster) {
                     displayImage = itemMaster.image || item.grn_item?.item_image_url;
-                    displayCode = itemMaster.item_code || '-';
                     displayName = itemMaster.item_name || item.item_name;
                     displayType = itemMaster.item_type || '-';
                     displayFabric = '-';
@@ -724,7 +843,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                     displaySize = itemMaster.size || '-';
                   } else if (item.item_type === 'PRODUCT' && product) {
                     displayImage = product.main_image || product.image_url || product.image1 || item.grn_item?.item_image_url;
-                    displayCode = product.sku || '-';
                     displayName = product.name || item.item_name;
                     displayType = product.class || '-';
                     displayFabric = '-';
@@ -741,9 +859,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                     } else {
                     displayImage = item.grn_item?.item_image_url;
                     }
-                    // If item_code looks like a URL, don't use it
-                    const itemCode = item.item_code || '';
-                    displayCode = (itemCode.startsWith('http://') || itemCode.startsWith('https://')) ? '-' : itemCode;
                     displayName = item.item_name;
                     displayType = item.item_type === 'FABRIC' ? 'Fabric' : item.item_type || '-';
                     displayFabric = item.item_type === 'FABRIC' ? '-' : '-';
@@ -765,34 +880,76 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                   
                   const allocatedQuantity = Number((item as any).allocated_quantity || 0);
                   const availableQuantity = Math.max(Number(item.quantity || 0) - allocatedQuantity, 0);
+                  const qtyNum = Number(item.quantity || 0);
+                  const lowStock =
+                    item.status === 'IN_STORAGE' &&
+                    availableQuantity > 0 &&
+                    qtyNum > 0 &&
+                    availableQuantity / qtyNum < 0.25;
+
+                  let statusBadge: React.ReactNode;
+                  if (item.status === 'IN_STORAGE') {
+                    if (availableQuantity <= 0 && qtyNum > 0) {
+                      statusBadge = (
+                        <span className="inline-flex rounded-lg border border-black/10 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
+                          Allocated
+                        </span>
+                      );
+                    } else if (lowStock) {
+                      statusBadge = (
+                        <span className="inline-flex rounded-lg border border-black/10 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
+                          Low Stock
+                        </span>
+                      );
+                    } else {
+                      statusBadge = (
+                        <span className="inline-flex rounded-lg border border-black/10 bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">
+                          Available
+                        </span>
+                      );
+                    }
+                  } else {
+                    statusBadge = (
+                      <span
+                        className={`inline-flex rounded-lg border border-black/10 px-2 py-0.5 text-xs font-medium ${statusConfig.bgColor} ${statusConfig.color}`}
+                      >
+                        {statusConfig.label}
+                      </span>
+                    );
+                  }
 
                   return (
                     <TableRow key={`${item.id}-${item.bin_id}`}>
                       <TableCell>
-                        {displayImage && (
-                          <img
-                            src={displayImage}
-                            alt={displayName}
-                            className="w-16 h-16 object-cover rounded border"
-                            onError={(e) => { 
-                              // Hide image container when it fails to load
-                              const img = e.currentTarget as HTMLImageElement;
-                              img.style.display = 'none';
-                            }}
-                          />
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <span className="font-mono font-medium text-sm">{displayCode || '-'}</span>
-                      </TableCell>
-                      <TableCell>
-                        <div className="font-medium">{displayName || '-'}</div>
+                        <div className="flex min-w-0 max-w-[240px] items-center gap-3">
+                          {displayImage ? (
+                            <img
+                              src={displayImage}
+                              alt=""
+                              className="h-10 w-10 shrink-0 rounded-md border border-[#e5e7eb] object-cover"
+                              onError={(e) => {
+                                const img = e.currentTarget as HTMLImageElement;
+                                img.style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <div
+                              className="h-10 w-10 shrink-0 rounded-md border border-dashed border-[#e5e7eb] bg-[#f9fafb]"
+                              aria-hidden
+                            />
+                          )}
+                          <span className="truncate text-sm font-medium text-[#101828]">
+                            {displayName || '—'}
+                          </span>
+                        </div>
                       </TableCell>
                       <TableCell>
                         {displayType && displayType !== '-' ? (
-                          <Badge variant="secondary">{displayType}</Badge>
+                          <span className="inline-flex rounded-lg border border-black/10 bg-white px-2 py-0.5 text-xs font-medium text-[#0a0a0a]">
+                            {displayType}
+                          </span>
                         ) : (
-                          '-'
+                          '—'
                         )}
                       </TableCell>
                       <TableCell>
@@ -800,14 +957,16 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <span>{displayColor !== '-' ? displayColor : '-'}</span>
                           {displayColorHex ? (
                             <div
-                              className="w-4 h-4 shrink-0 rounded-full border border-border"
+                              className="h-6 w-6 shrink-0 rounded-full border-2 border-[#e5e7eb] shadow-sm"
                               style={{ backgroundColor: displayColorHex }}
                               title={displayColor}
                             />
                           ) : null}
+                          <span className="text-sm text-[#4a5565]">
+                            {displayColor !== '-' ? displayColor : '—'}
+                          </span>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -848,17 +1007,18 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                         {allocatedQuantity > 0 ? (
                           <Button
                             variant="link"
-                            className="p-0 h-auto"
+                            className="h-auto p-0 text-sm font-semibold text-[#101828]"
                             onClick={() => handleOpenAllocationDetails(item)}
                           >
                             {allocatedQuantity} {item.unit}
                           </Button>
                         ) : (
-                          <span className="text-muted-foreground">0 {item.unit}</span>
+                          <span className="text-sm text-[#6a7282]">0 {item.unit}</span>
                         )}
                       </TableCell>
-                      <TableCell>
-                        <div className="flex gap-2">
+                      <TableCell>{statusBadge}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
                           <Button
                             size="sm"
                             variant="ghost"
@@ -882,6 +1042,20 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                             <History className="h-3 w-3" />
                             Logs {(item as any).consolidatedIds?.length > 1 && `(${(item as any).consolidatedIds.length})`}
                           </Button>
+
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="flex items-center gap-1 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => {
+                              setDeleteTarget(item);
+                              setDeleteOpen(true);
+                            }}
+                            title="Remove this stock line"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Delete
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -889,7 +1063,14 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 })}
               </TableBody>
             </Table>
-            
+            {filteredInventory.length === 0 && (
+              <div className="border-t border-[#e5e7eb] px-4 py-12 text-center">
+                <Archive className="mx-auto mb-4 h-12 w-12 text-[#6a7282]" />
+                <p className="text-sm text-[#6a7282]">No items found in storage zone</p>
+              </div>
+            )}
+          </div>
+
             {/* Inventory Logs Modal */}
             {selectedInventoryForLogs && (
               <InventoryLogsModal
@@ -900,6 +1081,16 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 consolidatedIds={(selectedInventoryForLogs as any).consolidatedIds}
               />
             )}
+
+            <DeleteWarehouseInventoryDialog
+              open={deleteOpen}
+              onOpenChange={(o) => {
+                setDeleteOpen(o);
+                if (!o) setDeleteTarget(null);
+              }}
+              item={deleteTarget as any}
+              onDeleted={() => loadInventory()}
+            />
             {selectedAllocationDetails && (
               <Dialog
                 open={allocationModalOpen}
@@ -943,15 +1134,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 </DialogContent>
               </Dialog>
             )}
-            {filteredInventory.length === 0 && (
-              <div className="text-center py-8">
-                <Archive className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">No items found in storage zone</p>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+      </div>
     </div>
   );
 };

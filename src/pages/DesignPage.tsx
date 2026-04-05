@@ -2,7 +2,7 @@ import { format } from 'date-fns';
 import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import "./OrdersPageViewSwitch.css";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { ShoppingCart, Eye, Package, Truck, Clock, CheckCircle, Filter, FileImage, X } from "lucide-react";
@@ -374,13 +374,27 @@ const DesignPage = () => {
           </Card>
         </div>
 
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "pending" | "completed")} className="space-y-6">
-          <TabsList>
-            <TabsTrigger value="pending">Pending ({pendingOrders.length})</TabsTrigger>
-            <TabsTrigger value="completed">Completed ({completedOrders.length})</TabsTrigger>
-          </TabsList>
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <label
+              htmlFor="design-page-view-switch"
+              className="orders-view-switch"
+              aria-label="Switch between pending and completed design orders"
+            >
+              <input
+                id="design-page-view-switch"
+                type="checkbox"
+                role="switch"
+                aria-checked={activeTab === "completed"}
+                checked={activeTab === "completed"}
+                onChange={(e) => setActiveTab(e.target.checked ? "completed" : "pending")}
+              />
+              <span>Pending ({pendingOrders.length})</span>
+              <span>Completed ({completedOrders.length})</span>
+            </label>
+          </div>
 
-          <TabsContent value="pending" className="space-y-6">
+          {activeTab === "pending" && (
         <Card>
           <CardHeader>
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
@@ -549,9 +563,9 @@ const DesignPage = () => {
             )}
           </CardContent>
         </Card>
-          </TabsContent>
+          )}
 
-          <TabsContent value="completed" className="space-y-6">
+          {activeTab === "completed" && (
             <Card>
               <CardHeader>
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
@@ -719,8 +733,8 @@ const DesignPage = () => {
                 )}
               </CardContent>
             </Card>
-          </TabsContent>
-        </Tabs>
+          )}
+        </div>
 
         <Dialog open={filterDialogColumn !== null} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
           <DialogContent className="max-w-md">

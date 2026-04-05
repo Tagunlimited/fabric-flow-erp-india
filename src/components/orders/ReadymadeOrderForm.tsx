@@ -21,6 +21,7 @@ import { cn, formatCurrency } from '@/lib/utils';
 import { usePageState } from '@/contexts/AppCacheContext';
 import { initializeSizePrices, calculateSizeBasedTotal, calculateAverageUnitPrice } from '@/utils/priceCalculation';
 import { getSortedSizes, sortSizesByMasterOrder } from '@/utils/sizeSorting';
+import { BrandingPlacementCombobox } from './BrandingPlacementCombobox';
 
 interface Customer {
   id: string;
@@ -1683,10 +1684,9 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
                       
                       <div className="space-y-2">
                         <Label>Placement</Label>
-                        <Input
+                        <BrandingPlacementCombobox
                           value={brandingItem.placement}
-                          onChange={(e) => updateBrandingItem(index, brandingIndex, 'placement', e.target.value)}
-                          placeholder="e.g., Front chest, Back, etc."
+                          onChange={(v) => updateBrandingItem(index, brandingIndex, 'placement', v)}
                         />
                       </div>
                       

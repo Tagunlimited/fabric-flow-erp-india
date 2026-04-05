@@ -30,6 +30,7 @@ import {
 import { useCachedData } from "@/hooks/useCachedData";
 import { usePageCaching } from "@/components/CachedPageWrapper";
 import { CachedPageWrapper } from "@/components/CachedPageWrapper";
+import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 
 interface Order {
   id: string;
@@ -234,6 +235,7 @@ function OrdersPageContent() {
 
       if (error) throw error;
 
+      playOrderStatusChangeSound();
       toast.success(`Order status changed to ${newStatus.replace('_', ' ').toUpperCase()}`);
       refetchOrders();
     } catch (error) {

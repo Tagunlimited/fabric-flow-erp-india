@@ -188,6 +188,13 @@ export function CustomerSearchSelect({
     setShowCreateCustomer(false);
   };
 
+  // Close when parent sets value (e.g. after selection) so popover never stays stuck open
+  useEffect(() => {
+    if (value) {
+      setOpen(false);
+    }
+  }, [value]);
+
   const handleCreateCustomer = () => {
     updateDialogState(prev => ({
       ...(prev || { open: false, showCreateCustomer: false }),
@@ -208,7 +215,7 @@ export function CustomerSearchSelect({
 
   return (
     <>
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={setOpen} modal>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -243,8 +250,20 @@ export function CustomerSearchSelect({
               {customers.map((customer) => (
                 <div
                   key={customer.id}
-                  onClick={() => handleSelect(customer.id)}
-                  className="flex flex-col items-start p-3 cursor-pointer hover:bg-accent rounded-sm"
+                  role="option"
+                  tabIndex={0}
+                  aria-selected={value === customer.id}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    handleSelect(customer.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleSelect(customer.id);
+                    }
+                  }}
+                  className="flex flex-col items-start p-3 cursor-pointer hover:bg-accent rounded-sm outline-none focus:bg-accent"
                 >
                   <div className="flex items-center w-full">
                     <Check

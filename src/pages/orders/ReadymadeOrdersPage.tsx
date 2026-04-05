@@ -16,7 +16,10 @@ import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { usePersistentTabState } from "@/hooks/usePersistentTabState";
-import { cn } from "@/lib/utils";
+import { cn, formatDateIndian } from "@/lib/utils";
+import { fetchOrderIdsWithActiveCreditReceipt } from "@/utils/orderFinancials";
+import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
+import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 
 interface Order {
   id: string;
@@ -37,6 +40,8 @@ interface Order {
   total_amount: number;
   final_amount: number;
   balance_amount: number;
+  payment_due_date?: string | null;
+  has_credit_receipt?: boolean;
 }
 
 const ReadymadeOrdersPage = () => {
@@ -132,9 +137,18 @@ const ReadymadeOrdersPage = () => {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      
-      if (data && data.length > 0) {
-        const salesManagerIds = (data as any[])
+
+      const raw = (data as any[]) || [];
+      const orderIds = raw.map((o) => o.id).filter(Boolean);
+      const creditSet =
+        orderIds.length > 0 ? await fetchOrderIdsWithActiveCreditReceipt(orderIds) : new Set<string>();
+      const withFlags = raw.map((o) => ({
+        ...o,
+        has_credit_receipt: creditSet.has(o.id),
+      }));
+
+      if (withFlags.length > 0) {
+        const salesManagerIds = withFlags
           .map((order: any) => order.sales_manager)
           .filter(Boolean)
           .filter((value: any, index: number, self: any[]) => self.indexOf(value) === index);
@@ -154,8 +168,8 @@ const ReadymadeOrdersPage = () => {
           }
         }
       }
-      
-      setOrders((data as any[]) || []);
+
+      setOrders(withFlags);
     } catch (error) {
       console.error('Error fetching readymade orders:', error);
       toast.error('Failed to fetch orders');
@@ -173,6 +187,7 @@ const ReadymadeOrdersPage = () => {
 
       if (error) throw error;
 
+      playOrderStatusChangeSound();
       toast.success(`Order status changed to ${newStatus.replace('_', ' ').toUpperCase()}`);
       fetchOrders();
     } catch (error) {
@@ -493,7 +508,22 @@ const ReadymadeOrdersPage = () => {
                               </div>
                             </TableCell>
                             <TableCell>₹{order.final_amount?.toFixed(2) || '0.00'}</TableCell>
-                            <TableCell>₹{order.balance_amount?.toFixed(2) || '0.00'}</TableCell>
+                            <TableCell>
+                              <div className="space-y-1">
+                                <div>₹{order.balance_amount?.toFixed(2) || '0.00'}</div>
+                                {(order.has_credit_receipt ||
+                                  (!!order.payment_due_date && (order.balance_amount ?? 0) > 0)) && (
+                                  <div className="flex flex-wrap gap-1">
+                                    {order.has_credit_receipt && <CreditOrderBadge />}
+                                    {order.payment_due_date && (order.balance_amount ?? 0) > 0 && (
+                                      <Badge variant="outline" className="text-[10px] font-normal px-1 py-0">
+                                        Due {formatDateIndian(order.payment_due_date)}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </TableCell>
                             <TableCell>
                               <div className="flex space-x-2">
                                 <Button
@@ -530,7 +560,6 @@ const ReadymadeOrdersPage = () => {
                 setTimeout(async () => {
                   await fetchOrders();
                 }, 100);
-                toast.success("Readymade order created successfully!");
               }}
             />
           </TabsContent>

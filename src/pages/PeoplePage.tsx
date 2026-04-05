@@ -1,7 +1,7 @@
 import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import "@/pages/OrdersPageViewSwitch.css";
 import { Users, Award, TrendingUp, UserPlus, Scissors, Palette, UserCheck } from "lucide-react";
 import { EmployeeCardList } from "@/components/people/EmployeeCardList";
 import { ProductionTeamList } from "@/components/people/ProductionTeamList";
@@ -9,6 +9,7 @@ import { getDepartmentCount } from "@/lib/database";
 import { useState, useEffect } from "react";
 
 const PeoplePage = () => {
+  const [peopleTab, setPeopleTab] = useState<'employees' | 'production-team'>('employees');
   const [departmentCount, setDepartmentCount] = useState<number>(0);
 
   useEffect(() => {
@@ -90,19 +91,31 @@ const PeoplePage = () => {
           </Card>
         </div>
 
-        <Tabs defaultValue="employees" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="employees" className="flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              Employees
-            </TabsTrigger>
-            <TabsTrigger value="production-team" className="flex items-center gap-2">
-              <Scissors className="h-4 w-4" />
-              Production Team
-            </TabsTrigger>
-          </TabsList>
+        <label
+          htmlFor="people-page-view-switch"
+          className="orders-view-switch"
+          aria-label="Switch between employees and production team"
+        >
+          <input
+            id="people-page-view-switch"
+            type="checkbox"
+            role="switch"
+            aria-checked={peopleTab === 'production-team'}
+            checked={peopleTab === 'production-team'}
+            onChange={(e) => setPeopleTab(e.target.checked ? 'production-team' : 'employees')}
+          />
+          <span className="flex items-center justify-center gap-2">
+            <Users className="h-4 w-4 shrink-0" />
+            Employees
+          </span>
+          <span className="flex items-center justify-center gap-2">
+            <Scissors className="h-4 w-4 shrink-0" />
+            Production Team
+          </span>
+        </label>
 
-          <TabsContent value="employees" className="space-y-6">
+          {peopleTab === 'employees' && (
+          <div className="space-y-6 mt-6">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -117,9 +130,11 @@ const PeoplePage = () => {
                 <EmployeeCardList />
               </CardContent>
             </Card>
-          </TabsContent>
+          </div>
+          )}
 
-          <TabsContent value="production-team" className="space-y-6">
+          {peopleTab === 'production-team' && (
+          <div className="space-y-6 mt-6">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -134,8 +149,8 @@ const PeoplePage = () => {
                 <ProductionTeamList />
               </CardContent>
             </Card>
-          </TabsContent>
-        </Tabs>
+          </div>
+          )}
       </div>
     </ErpLayout>
   );

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { BomToPOWizard } from './BomToPOWizard';
 import { getBomItemOrderStatus, getBomCompletionStatus } from '@/services/bomPOTracking';
+import { remainingQtyForNewPurchaseOrderLine } from './bomOrderLineUtils';
 import { BomItemOrderStatus } from '@/services/bomPOTracking';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -370,7 +371,55 @@ export function BomToPOWizardDialog({
         })
       );
 
-      const items: BomItemOrderStatus[] = processedItems;
+      const { data: allocRows, error: allocFetchError } = await supabase
+        .from('inventory_allocations' as any)
+        .select('bom_item_id, quantity')
+        .eq('bom_id', bomId);
+
+      if (allocFetchError) {
+        console.warn('Failed to load inventory allocations for BOM wizard', allocFetchError);
+      }
+
+      const allocByItem = new Map<string, number>();
+      for (const row of allocRows || []) {
+        const bid = row.bom_item_id != null ? String(row.bom_item_id) : '';
+        if (!bid) continue;
+        allocByItem.set(bid, (allocByItem.get(bid) || 0) + Number((row as { quantity?: number }).quantity || 0));
+      }
+
+      let orderStatusRows: Awaited<ReturnType<typeof getBomItemOrderStatus>> = [];
+      try {
+        orderStatusRows = await getBomItemOrderStatus(bomId);
+      } catch (e) {
+        console.warn('Failed to load bom_item_order_status for wizard', e);
+      }
+
+      const poOrderedByItem = new Map(
+        orderStatusRows.map((s) => [s.bom_item_id, Number(s.total_ordered || 0)])
+      );
+      const qtyTotalByItem = new Map(
+        orderStatusRows.map((s) => [s.bom_item_id, Number(s.total_required || 0)])
+      );
+
+      const items: BomItemOrderStatus[] = processedItems.map((p) => {
+        const bid = p.bom_item_id;
+        const qtyTotal =
+          qtyTotalByItem.get(bid) ||
+          Number(p.total_required ?? 0);
+        const alloc = allocByItem.get(bid) ?? 0;
+        const poOrd = poOrderedByItem.get(bid) ?? Number(p.total_ordered ?? 0);
+        const remaining = remainingQtyForNewPurchaseOrderLine({
+          qtyTotal,
+          inventoryAllocated: alloc,
+          totalOrderedOnPurchaseOrders: poOrd,
+        });
+        return {
+          ...p,
+          total_required: qtyTotal,
+          total_ordered: poOrd,
+          remaining_quantity: remaining,
+        };
+      });
 
       setBomItems(items);
 
