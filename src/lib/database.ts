@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 import type { Database } from '@/integrations/supabase/types';
 
 type Tables = Database['public']['Tables'];
@@ -208,6 +209,7 @@ export async function updateOrderStatus(id: string, status: Database['public']['
     return null;
   }
 
+  playOrderStatusChangeSound();
   return data;
 }
 

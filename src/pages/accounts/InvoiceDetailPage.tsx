@@ -27,6 +27,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 
 // Add sales manager to Order interface
 interface Order {
@@ -380,6 +381,7 @@ export default function InvoiceDetailPage() {
         console.error('Error updating order status:', orderUpdateError);
         toast.warning('Invoice created but failed to update order status');
       } else {
+        playOrderStatusChangeSound();
         toast.success('Invoice created successfully and order marked as completed');
       }
 

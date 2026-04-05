@@ -13,7 +13,25 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { ErpLayout } from '@/components/ErpLayout';
 import { useFormData } from '@/contexts/FormPersistenceContext';
-import { sortOrderLines, bomNumberForOrderLine } from './bomOrderLineUtils';
+import {
+  sortOrderLines,
+  bomNumberForOrderLine,
+  BOM_ORDER_ITEMS_SELECT,
+  orderLineFabricFromOrder,
+  orderLineFabricColorGsmSuffix,
+  orderLineBomProductColumnLabel,
+  orderLineProductDropdownOnly,
+  getBomLinePoQuantity,
+} from './bomOrderLineUtils';
+import {
+  type FabricMasterPickerRow,
+  uniqueFabricNameBases,
+  dedupedColorVariants,
+  gsmValuesForNameAndColor,
+  findFabricVariantRow,
+  deriveBaseFabricIdFromVariantId,
+  baseFabricIdForFabricName,
+} from '@/utils/fabricMasterPicker';
 import './BomLinePicker.css';
 
 type Customer = { 
@@ -68,6 +86,8 @@ type BomLineItem = {
   fabric_gsm?: string;
   // Mark if fabric is pre-filled from order
   is_prefilled?: boolean;
+  /** Order-form “Product” row id (one base variant per fabric_name); in-memory only */
+  fabric_base_id?: string;
   // New item_master fields
   item_code?: string;
   description?: string;
@@ -123,16 +143,6 @@ async function resolveBomNumberForSave(
   }
   const sorted = sortOrderLines(items as any[]);
   return bomNumberForOrderLine((ord as any).order_number, sorted, orderItemId);
-}
-
-function orderLineDisplayName(line: any): string {
-  if (!line) return '';
-  return (
-    line.product_description ||
-    line.product?.product_name ||
-    line.product?.name ||
-    ''
-  );
 }
 
 export type BomFormProps = {
@@ -201,7 +211,20 @@ export function BomForm({
   }, [isEditMode, isReadOnly, id, orderParam, embedded, resetBomData]);
   
   // Option lists by type
-  const [fabricOptions, setFabricOptions] = useState<{ id: string; label: string; image_url?: string | null; color?: string; gsm?: string; rate?: number }[]>([]);
+  const [fabricOptions, setFabricOptions] = useState<
+    {
+      id: string;
+      label: string;
+      image_url?: string | null;
+      image?: string | null;
+      color?: string;
+      gsm?: string;
+      rate?: number;
+      fabric_for_supplier?: string | null;
+      status?: string | null;
+      hex?: string | null;
+    }[]
+  >([]);
   const [itemOptions, setItemOptions] = useState<{ id: string; label: string; image_url?: string | null; type?: string; gst_rate?: number; uom?: string }[]>([]);
   const [productOptions, setProductOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
   
@@ -303,47 +326,55 @@ export function BomForm({
     return filtered;
   }, [itemOptions]);
 
-  // Get unique fabric names
-  const getUniqueFabricNames = useCallback(() => {
-    const names = new Set<string>();
-    fabricOptions.forEach(fabric => {
-      if (fabric.label) {
-        names.add(fabric.label);
-      }
-    });
-    return Array.from(names).sort();
-  }, [fabricOptions]);
+  const fabricPickerRows: FabricMasterPickerRow[] = useMemo(
+    () =>
+      fabricOptions.map((f) => ({
+        id: f.id,
+        fabric_name: f.label,
+        color: f.color,
+        gsm: f.gsm,
+        hex: f.hex,
+        status: f.status,
+        fabric_for_supplier: f.fabric_for_supplier,
+        image: f.image,
+        image_url: f.image_url,
+        rate: f.rate,
+      })),
+    [fabricOptions]
+  );
 
-  // Get colors for selected fabric name
-  const getColorsForFabric = useCallback((fabricName: string) => {
-    const colors = new Set<string>();
-    fabricOptions.forEach(fabric => {
-      if (fabric.label === fabricName && fabric.color) {
-        colors.add(fabric.color);
-      }
-    });
-    return Array.from(colors).sort();
-  }, [fabricOptions]);
+  const fabricNameBaseOptions = useMemo(
+    () => uniqueFabricNameBases(fabricPickerRows),
+    [fabricPickerRows]
+  );
 
-  // Get GSM for selected fabric name and color
-  const getGsmForFabricAndColor = useCallback((fabricName: string, color: string) => {
-    const gsm = new Set<string>();
-    fabricOptions.forEach(fabric => {
-      if (fabric.label === fabricName && fabric.color === color && fabric.gsm) {
-        gsm.add(fabric.gsm);
-      }
+  useEffect(() => {
+    if (fabricPickerRows.length === 0) return;
+    setItems((prev) => {
+      let changed = false;
+      const next = prev.map((it) => {
+        if (it.item_type !== 'fabric' || it.is_prefilled) return it;
+        if (it.fabric_base_id || !it.item_id) return it;
+        const base = deriveBaseFabricIdFromVariantId(fabricPickerRows, it.item_id);
+        if (!base) return it;
+        changed = true;
+        return { ...it, fabric_base_id: base };
+      });
+      return changed ? next : prev;
     });
-    return Array.from(gsm).sort();
-  }, [fabricOptions]);
+  }, [fabricPickerRows]);
 
-  // Get fabric by name, color, and GSM
-  const getFabricByDetails = useCallback((fabricName: string, color: string, gsm: string) => {
-    return fabricOptions.find(fabric => 
-      fabric.label === fabricName && 
-      fabric.color === color && 
-      fabric.gsm === gsm
-    );
-  }, [fabricOptions]);
+  /** Fabric table “Product” column: same as “Fabric on order” minus color/GSM. */
+  const fabricRowsProductLabel = useMemo(() => {
+    if (orderData?.order_items && bom.order_item_id) {
+      const line = (orderData.order_items as any[]).find((i: any) => i.id === bom.order_item_id);
+      if (line) {
+        const v = orderLineBomProductColumnLabel(line);
+        return v || '—';
+      }
+    }
+    return '—';
+  }, [orderData, bom.order_item_id]);
 
   useEffect(() => {
     fetchCustomers();
@@ -397,7 +428,10 @@ export function BomForm({
               ...prev,
               order_id: oid,
               order_item_id: resolvedItemId,
-              product_name: decodedOrderData.order_item.product_description || '',
+              product_name:
+                orderLineBomProductColumnLabel(decodedOrderData.order_item) ||
+                orderLineProductDropdownOnly(decodedOrderData.order_item) ||
+                '',
               product_image_url: productImageUrl,
               total_order_qty: decodedOrderData.order_item.quantity || 0,
               bom_number: prev.bom_number?.trim() ? prev.bom_number : suggested,
@@ -479,25 +513,64 @@ export function BomForm({
   };
 
   const fetchFabrics = async () => {
-    const { data, error } = await supabase
-      .from('fabric_master')
-      .select('id, fabric_name, color, gsm, rate, image, fabric_for_supplier')
-      .order('fabric_name');
-    
-    if (error) {
-      console.error('Error fetching fabrics:', error);
+    // Paginate like OrderForm — Supabase caps each request (~1000 rows); a single query omits the rest.
+    const fetchAllFabricRows = async () => {
+      const columns =
+        'id, fabric_name, color, gsm, rate, image, fabric_for_supplier, status, hex';
+      let all: any[] = [];
+      let from = 0;
+      const pageSize = 1000;
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data, error, count } = await supabase
+          .from('fabric_master')
+          .select(columns, { count: 'exact' })
+          .order('fabric_name')
+          .range(from, from + pageSize - 1);
+
+        if (error) {
+          console.error('Error fetching fabrics:', error);
+          return all;
+        }
+
+        if (data?.length) {
+          all = [...all, ...data];
+        }
+
+        if (count != null) {
+          if (all.length >= count) hasMore = false;
+          else from += pageSize;
+        } else {
+          if (!data || data.length < pageSize) hasMore = false;
+          else from += pageSize;
+        }
+      }
+
+      return all;
+    };
+
+    try {
+      const data = await fetchAllFabricRows();
+      setFabricOptions(
+        (data || []).map((f: any) => ({
+          id: f.id,
+          label: f.fabric_name,
+          fabric_for_supplier: f.fabric_for_supplier || null,
+          image_url: f.image_url || f.image || null,
+          image: f.image || null,
+          color: f.color,
+          gsm: f.gsm,
+          rate: f.rate,
+          status:
+            f.status != null && String(f.status).trim() !== '' ? f.status : 'active',
+          hex: f.hex ?? null,
+        }))
+      );
+    } catch (e) {
+      console.error('fetchFabrics failed:', e);
+      setFabricOptions([]);
     }
-    
-    setFabricOptions((data || []).map((f: any) => ({ 
-      id: f.id, 
-      label: f.fabric_name, 
-      fabric_for_supplier: f.fabric_for_supplier || null,
-      image_url: f.image_url || f.image || null,
-      image: f.image || null,
-      color: f.color,
-      gsm: f.gsm,
-      rate: f.rate
-    })));
   };
 
   const fetchItems = async () => {
@@ -593,25 +666,13 @@ export function BomForm({
     try {
       const { data: order, error: orderError } = await supabase
         .from('orders')
-        .select(`
+        .select(
+          `
           *,
           customer:customers(company_name),
-          order_items(
-            id,
-            product_id,
-            quantity,
-            unit_price,
-            total_price,
-            product_description,
-            category_image_url,
-            mockup_images,
-            specifications,
-            fabric_id,
-            gsm,
-            color,
-            created_at
-          )
-        `)
+          order_items(${BOM_ORDER_ITEMS_SELECT})
+        `
+        )
         .eq('id', orderId as any)
         .single();
 
@@ -719,7 +780,7 @@ export function BomForm({
         orderId: (order as any).id,
         order_item_id: line.id,
         lineQty,
-        product: orderLineDisplayName(line),
+        product: orderLineBomProductColumnLabel(line) || orderLineProductDropdownOnly(line),
       });
 
       const oid = (order as any).id as string;
@@ -730,7 +791,7 @@ export function BomForm({
         ...prev,
         order_id: oid,
         order_item_id: line.id,
-        product_name: orderLineDisplayName(line),
+        product_name: orderLineBomProductColumnLabel(line) || orderLineProductDropdownOnly(line),
         product_image_url: productImageUrl,
         total_order_qty: lineQty,
         bom_number: prev.bom_number?.trim() ? prev.bom_number : suggestedNumber,
@@ -738,6 +799,27 @@ export function BomForm({
     } catch (error) {
       console.error('Error fetching order data:', error);
       toast.error('Failed to load order data');
+    }
+  };
+
+  /** Load order + enriched lines for the grey “from order” panel (edit/read-only BOM without re-running fetchOrderData). */
+  const loadOrderLinkedOrderData = async (orderId: string) => {
+    try {
+      const { data: order, error } = await supabase
+        .from('orders')
+        .select(
+          `
+          id,
+          order_number,
+          customer:customers(company_name),
+          order_items(${BOM_ORDER_ITEMS_SELECT})
+        `
+        )
+        .eq('id', orderId as any)
+        .single();
+      if (!error && order) setOrderData(order as any);
+    } catch (e) {
+      console.warn('Could not load linked order for BOM context', e);
     }
   };
 
@@ -1099,6 +1181,11 @@ export function BomForm({
           toast.success('BOM loaded successfully for editing');
         }
       }
+
+      const linkedOid = (bomData as any)?.order_id;
+      if (linkedOid) {
+        await loadOrderLinkedOrderData(String(linkedOid));
+      }
       
     } catch (error) {
       console.error('Error fetching existing BOM:', error);
@@ -1211,85 +1298,89 @@ export function BomForm({
     }
   };
 
-  // Handle fabric name selection for new fabrics
-  const handleFabricNameSelection = (index: number, fabricName: string) => {
-    const colors = getColorsForFabric(fabricName);
-    // Find the fabric option to get fabric_for_supplier
-    const fabricOption = fabricOptions.find(f => f.label === fabricName);
-    
-    setFabricSelectionState(prev => ({
-      ...prev,
-      [index]: {
-        selectedFabricName: fabricName,
-        availableColors: colors,
-        selectedColor: undefined,
-        availableGsm: undefined,
-        selectedGsm: undefined
-      }
-    }));
+  const handleBomFabricBaseSelect = useCallback(
+    (itemRowId: string, baseId: string) => {
+      const base = fabricOptions.find((f) => f.id === baseId);
+      if (!base) return;
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === itemRowId && it.item_type === 'fabric'
+            ? {
+                ...it,
+                fabric_base_id: baseId,
+                fabric_name: base.label,
+                fabric_for_supplier: base.fabric_for_supplier ?? null,
+                fabric_color: '',
+                fabric_gsm: '',
+                item_id: '',
+                item_image_url: null,
+                item_name: '',
+              }
+            : it
+        )
+      );
+    },
+    [fabricOptions]
+  );
 
-    updateItem(index, {
-      item_id: '',
-      item_name: fabricName,
-      fabric_name: fabricName,
-      fabric_for_supplier: fabricOption?.fabric_for_supplier || null,
-      fabric_color: '',
-      fabric_gsm: '',
-      item_image_url: null
-    });
-  };
+  const handleBomFabricColorVariantSelect = useCallback(
+    (itemRowId: string, variantId: string) => {
+      const row = fabricOptions.find((f) => f.id === variantId);
+      if (!row) return;
+      const baseId =
+        baseFabricIdForFabricName(fabricPickerRows, row.label) ||
+        deriveBaseFabricIdFromVariantId(fabricPickerRows, variantId);
+      const img = row.image_url || row.image || null;
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === itemRowId && it.item_type === 'fabric'
+            ? {
+                ...it,
+                fabric_base_id: baseId || it.fabric_base_id,
+                fabric_name: row.label,
+                fabric_color: row.color || '',
+                fabric_gsm: row.gsm || '',
+                fabric_for_supplier: row.fabric_for_supplier ?? null,
+                item_id: variantId,
+                item_image_url: img,
+                item_name: '',
+              }
+            : it
+        )
+      );
+    },
+    [fabricOptions, fabricPickerRows]
+  );
 
-  // Handle color selection for new fabrics
-  const handleColorSelection = (index: number, color: string) => {
-    const state = fabricSelectionState[index];
-    if (!state?.selectedFabricName) return;
-
-    const gsm = getGsmForFabricAndColor(state.selectedFabricName, color);
-    setFabricSelectionState(prev => ({
-      ...prev,
-      [index]: {
-        ...prev[index],
-        selectedColor: color,
-        availableGsm: gsm
-      }
-    }));
-
-    updateItem(index, {
-      fabric_color: color,
-      fabric_gsm: '',
-      item_image_url: null
-    });
-  };
-
-  // Handle GSM selection for new fabrics
-  const handleGsmSelection = (index: number, gsm: string) => {
-    const state = fabricSelectionState[index];
-    if (!state?.selectedFabricName || !state?.selectedColor) return;
-
-    setFabricSelectionState(prev => ({
-      ...prev,
-      [index]: {
-        ...prev[index],
-        selectedGsm: gsm
-      }
-    }));
-
-    const fabric = getFabricByDetails(state.selectedFabricName, state.selectedColor, gsm);
-    if (fabric) {
-      updateItem(index, {
-        item_id: fabric.id,
-        item_name: fabric.label,
-      item_image_url: fabric.image_url || fabric.image || null,
-        fabric_name: fabric.label,
-        fabric_for_supplier: (fabric as any).fabric_for_supplier || null,
-        fabric_color: fabric.color || '',
-        fabric_gsm: fabric.gsm || '',
-      item_category: 'Fabric',
-      selected_item_type: 'fabric',
-        qty_per_product: 0 // Reset to 0 for new fabric
-      });
-    }
-  };
+  const handleBomFabricGsmInputChange = useCallback(
+    (itemRowId: string, gsmRaw: string) => {
+      const gsm = gsmRaw.trim();
+      setItems((prev) =>
+        prev.map((it) => {
+          if (it.id !== itemRowId || it.item_type !== 'fabric') return it;
+          const name = it.fabric_name || '';
+          const color = it.fabric_color || '';
+          if (!name || !color) {
+            return { ...it, fabric_gsm: gsm, item_name: '' };
+          }
+          const match = findFabricVariantRow(fabricPickerRows, name, color, gsm);
+          if (match) {
+            const img = match.image_url || match.image || null;
+            return {
+              ...it,
+              fabric_gsm: match.gsm || gsm,
+              item_id: match.id,
+              fabric_for_supplier: match.fabric_for_supplier ?? it.fabric_for_supplier,
+              item_image_url: img,
+              item_name: '',
+            };
+          }
+          return { ...it, fabric_gsm: gsm, item_id: '', item_name: '' };
+        })
+      );
+    },
+    [fabricPickerRows]
+  );
 
   // Helper function to calculate qty_total based on item type
   const calculateQtyTotal = (item: BomLineItem, totalOrderQty: number): number => {
@@ -1775,11 +1866,18 @@ export function BomForm({
       }
 
       if (nextAction === 'create-po') {
-        const poItems = bomItems.map((item) => ({
-          ...item,
-          item_type: item.category === 'Fabric' ? 'fabric' : 'item',
-          quantity: item.qty_total ?? item.to_order ?? 0,
-        }));
+        const poItems = bomItems
+          .map((item) => ({
+            ...item,
+            item_type: item.category === 'Fabric' ? 'fabric' : 'item',
+            quantity: getBomLinePoQuantity(item),
+          }))
+          .filter((row) => Number(row.quantity) > 0);
+
+        if (poItems.length === 0) {
+          toast.error('Nothing left to purchase — lines show zero quantity to order.');
+          return;
+        }
 
         const bomPayload = {
           id: bomId,
@@ -1899,29 +1997,32 @@ export function BomForm({
               This order has multiple products. Choose which line this BOM is for. Each line has its own fabric and items.
             </p>
             <div className="bom-line-radio-inputs" role="radiogroup" aria-label="Product lines">
-              {sortOrderLines(orderData.order_items as any[]).map((item: any) => (
-                <label key={item.id} className="cursor-pointer">
-                  <input
-                    type="radio"
-                    name="bom-new-order-line"
-                    className="bom-line-radio-input"
-                    onChange={() =>
-                      navigate(
-                        `/bom/new?order=${encodeURIComponent(orderData.id)}&orderItemId=${encodeURIComponent(item.id)}`
-                      )
-                    }
-                  />
-                  <span className="bom-line-radio-tile">
-                    <span className="bom-line-radio-label">
-                      {orderLineDisplayName(item) || 'Product'}
-                      <span className="block text-xs font-normal text-muted-foreground mt-0.5">
-                        {item.quantity ?? 0} pcs
-                        {item.fabric_id ? ' · Fabric on order' : ''}
+              {sortOrderLines(orderData.order_items as any[]).map((item: any) => {
+                const fabricSuffix = orderLineFabricColorGsmSuffix(item);
+                return (
+                  <label key={item.id} className="cursor-pointer">
+                    <input
+                      type="radio"
+                      name="bom-new-order-line"
+                      className="bom-line-radio-input"
+                      onChange={() =>
+                        navigate(
+                          `/bom/new?order=${encodeURIComponent(orderData.id)}&orderItemId=${encodeURIComponent(item.id)}`
+                        )
+                      }
+                    />
+                    <span className="bom-line-radio-tile">
+                      <span className="bom-line-radio-label">
+                        {orderLineBomProductColumnLabel(item) || orderLineProductDropdownOnly(item) || '—'}
+                        <span className="block text-xs font-normal text-muted-foreground mt-0.5">
+                          {item.quantity ?? 0} pcs
+                          {fabricSuffix ? ` · ${fabricSuffix}` : item.fabric_id ? ' · Fabric on order' : ''}
+                        </span>
                       </span>
                     </span>
-                  </span>
-                </label>
-              ))}
+                  </label>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
@@ -1970,17 +2071,33 @@ export function BomForm({
           </div>
           
           {orderData && (
-            <div className="p-3 bg-muted/50 rounded-lg space-y-1">
+            <div className="p-3 bg-muted/50 rounded-lg space-y-1.5">
               <div className="text-sm text-muted-foreground">Created from Order: {orderData.order_number}</div>
               <div className="text-sm text-muted-foreground">Customer: {orderData.customer?.company_name}</div>
-              {bom.order_item_id && Array.isArray(orderData.order_items) && (
-                <div className="text-sm font-medium text-foreground">
-                  Order line:{' '}
-                  {orderLineDisplayName(
-                    (orderData.order_items as any[]).find((i: any) => i.id === bom.order_item_id)
-                  ) || bom.product_name}
-                </div>
-              )}
+              {bom.order_item_id && Array.isArray(orderData.order_items) && (() => {
+                const line = (orderData.order_items as any[]).find((i: any) => i.id === bom.order_item_id);
+                if (!line) {
+                  return (
+                    <div className="text-sm font-medium text-foreground">
+                      Product: —
+                    </div>
+                  );
+                }
+                const fabricOnOrder = orderLineFabricFromOrder(line);
+                const productLabel = orderLineBomProductColumnLabel(line);
+                return (
+                  <>
+                    <div className="text-sm font-medium text-foreground">
+                      Product: {productLabel || '—'}
+                    </div>
+                    {fabricOnOrder ? (
+                      <div className="text-sm text-muted-foreground">
+                        <span className="font-medium text-foreground/90">Fabric on order:</span> {fabricOnOrder}
+                      </div>
+                    ) : null}
+                  </>
+                );
+              })()}
             </div>
           )}
         </CardContent>
@@ -2013,6 +2130,33 @@ export function BomForm({
           ) : (
             <div className="space-y-4">
                   {items.filter(item => item.item_type === 'fabric').map((item) => {
+                    const colorVariants = item.fabric_base_id
+                      ? dedupedColorVariants(fabricPickerRows, item.fabric_base_id)
+                      : [];
+                    const colorSelectValue = (() => {
+                      if (!item.fabric_color || colorVariants.length === 0) return undefined;
+                      const exact = colorVariants.find(
+                        (v) =>
+                          (v.color || '') === item.fabric_color &&
+                          String(v.gsm || '').trim() === String(item.fabric_gsm || '').trim()
+                      );
+                      return (
+                        exact?.id ??
+                        colorVariants.find((v) => (v.color || '') === item.fabric_color)?.id
+                      );
+                    })();
+                    const baseRow = item.fabric_base_id
+                      ? fabricOptions.find((f) => f.id === item.fabric_base_id)
+                      : null;
+                    const gsmDatalistOptions =
+                      item.fabric_name && item.fabric_color
+                        ? gsmValuesForNameAndColor(
+                            fabricPickerRows,
+                            item.fabric_name,
+                            item.fabric_color
+                          )
+                        : [];
+                    const gsmListId = `bom-fabric-gsm-${item.id}`;
                     return (
                     <div key={item.id} className="flex items-center gap-4 p-4 border rounded-lg">
                       {/* Fabric Image - Only show if image exists */}
@@ -2032,8 +2176,36 @@ export function BomForm({
                       ) : null}
 
                       {/* Fabric Details */}
-                      <div className="flex-1 grid grid-cols-6 gap-4 items-center">
-                        {/* Fabric Name */}
+                      <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-4 items-center">
+                        {/* Product — order line context (prefilled) or Order-form fabric name list (manual row) */}
+                        <div className="min-w-0 lg:col-span-1">
+                          <Label className="text-sm font-medium">Product</Label>
+                          {isReadOnly || item.is_prefilled ? (
+                            <div
+                              className="text-sm font-medium text-foreground break-words"
+                              title={fabricRowsProductLabel}
+                            >
+                              {fabricRowsProductLabel}
+                            </div>
+                          ) : (
+                            <Select
+                              value={item.fabric_base_id || undefined}
+                              onValueChange={(v) => handleBomFabricBaseSelect(item.id, v)}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Select product" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {fabricNameBaseOptions.map((b) => (
+                                  <SelectItem key={b.id} value={b.id}>
+                                    {b.fabric_name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )}
+                        </div>
+                        {/* Fabric — DB display from base row (manual); prefilled/read-only unchanged */}
                         <div>
                           <Label className="text-sm font-medium">Fabric</Label>
                           {isReadOnly ? (
@@ -2045,32 +2217,10 @@ export function BomForm({
                               {item.fabric_for_supplier || item.fabric_name || 'N/A'}
                             </div>
                           ) : (
-                            <div className="space-y-1">
-                              {/* Show fabric_for_supplier as primary display when available */}
-                              {item.fabric_for_supplier ? (
-                                <div className="text-sm font-medium">
-                                  {item.fabric_for_supplier}
-                                </div>
-                              ) : (
-                                <div className="text-sm font-medium text-muted-foreground">
-                                  {item.fabric_name || fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName || 'N/A'}
-                                </div>
-                              )}
-                            <Select
-                              value={fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName || ''}
-                              onValueChange={(value) => handleFabricNameSelection(getItemIndex(item.id), value)}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Select Fabric" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {getUniqueFabricNames().map(name => (
-                                  <SelectItem key={name} value={name}>
-                                    {name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <div className="text-sm font-medium text-foreground break-words">
+                              {baseRow
+                                ? baseRow.fabric_for_supplier || baseRow.label || '—'
+                                : '—'}
                             </div>
                           )}
                         </div>
@@ -2088,17 +2238,27 @@ export function BomForm({
                             </div>
                           ) : (
                             <Select
-                              value={fabricSelectionState[getItemIndex(item.id)]?.selectedColor || ''}
-                              onValueChange={(value) => handleColorSelection(getItemIndex(item.id), value)}
-                              disabled={!fabricSelectionState[getItemIndex(item.id)]?.selectedFabricName}
+                              value={colorSelectValue || undefined}
+                              onValueChange={(v) => handleBomFabricColorVariantSelect(item.id, v)}
+                              disabled={!item.fabric_base_id}
                             >
                               <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Select Color" />
+                                <SelectValue placeholder="Select color" />
                               </SelectTrigger>
                               <SelectContent>
-                                {(fabricSelectionState[getItemIndex(item.id)]?.availableColors || []).map(color => (
-                                  <SelectItem key={color} value={color}>
-                                    {color}
+                                {colorVariants.map((v) => (
+                                  <SelectItem key={v.id} value={v.id}>
+                                    <div className="flex items-center gap-2">
+                                      {v.hex ? (
+                                        <span
+                                          className="h-4 w-4 shrink-0 rounded-full border border-border"
+                                          style={{
+                                            backgroundColor: v.hex.startsWith('#') ? v.hex : `#${v.hex}`,
+                                          }}
+                                        />
+                                      ) : null}
+                                      <span>{v.color || '—'}</span>
+                                    </div>
                                   </SelectItem>
                                 ))}
                               </SelectContent>
@@ -2118,22 +2278,23 @@ export function BomForm({
                               {item.fabric_gsm ? `${item.fabric_gsm} Gsm` : 'N/A'}
                             </div>
                           ) : (
-                            <Select
-                              value={item.fabric_gsm || fabricSelectionState[getItemIndex(item.id)]?.selectedGsm || ''}
-                              onValueChange={(value) => handleGsmSelection(getItemIndex(item.id), value)}
-                              disabled={!fabricSelectionState[getItemIndex(item.id)]?.selectedColor}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Select GSM" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {(fabricSelectionState[getItemIndex(item.id)]?.availableGsm || []).map(gsm => (
-                                  <SelectItem key={gsm} value={gsm}>
-                                    {gsm} Gsm
-                                  </SelectItem>
+                            <>
+                              <Input
+                                value={item.fabric_gsm || ''}
+                                list={gsmListId}
+                                onChange={(e) => handleBomFabricGsmInputChange(item.id, e.target.value)}
+                                placeholder={
+                                  gsmDatalistOptions.length > 0 ? 'Select or type GSM' : 'GSM'
+                                }
+                                disabled={!item.fabric_color}
+                                className="w-full"
+                              />
+                              <datalist id={gsmListId}>
+                                {gsmDatalistOptions.map((g) => (
+                                  <option key={g} value={g} />
                                 ))}
-                              </SelectContent>
-                            </Select>
+                              </datalist>
+                            </>
                           )}
                         </div>
 

@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { calculateOrderSummary } from "@/utils/priceCalculation";
+import { sumActiveReceiptAmountsForOrder } from "@/utils/orderFinancials";
 import { format, parse, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
 
@@ -116,41 +117,68 @@ async function loadSalesDashboard(): Promise<{
       orderIds.length
         ? supabase
             .from("receipts")
-            .select("id, reference_id, reference_number, amount")
+            .select("id, reference_id, reference_number, amount, status")
             .in("reference_id", orderIds)
         : Promise.resolve({ data: [] as any[] }),
       orderNumbers.length
         ? supabase
             .from("receipts")
-            .select("id, reference_id, reference_number, amount")
+            .select("id, reference_id, reference_number, amount, status")
             .in("reference_number", orderNumbers)
         : Promise.resolve({ data: [] as any[] }),
     ]);
 
+  let chargesRows: { order_id: string; amount_incl_gst: number | null }[] = [];
+  if (orderIds.length > 0) {
+    const { data: ch, error: chargesError } = await supabase
+      .from("order_additional_charges")
+      .select("order_id, amount_incl_gst")
+      .in("order_id", orderIds);
+    if (chargesError) {
+      console.warn("order_additional_charges fetch for sales dashboard:", chargesError);
+    } else {
+      chargesRows = (ch || []) as typeof chargesRows;
+    }
+  }
+
   const receiptMap = new Map<
     string,
-    { id: string; reference_id: string | null; reference_number: string | null; amount: number | null }
+    {
+      id: string;
+      reference_id: string | null;
+      reference_number: string | null;
+      amount: number | null;
+      status?: string | null;
+    }
   >();
   [...(receiptsById || []), ...(receiptsByNumber || [])].forEach((r: any) => {
     if (r?.id) receiptMap.set(r.id, r);
   });
   const receiptRows = Array.from(receiptMap.values());
 
+  const additionalByOrderId = new Map<string, number>();
+  for (const row of chargesRows) {
+    if (!row?.order_id) continue;
+    const amt = Number(row.amount_incl_gst || 0);
+    additionalByOrderId.set(row.order_id, (additionalByOrderId.get(row.order_id) ?? 0) + amt);
+  }
+
   const itemsByOrder = groupItemsByOrderId(itemRows || []);
 
   const enriched: EnrichedOrder[] = list.map((order: any) => {
     const items = itemsByOrder[order.id] || [];
+    const additionalSum = additionalByOrderId.get(order.id) ?? 0;
     let revenue: number;
     if (items.length > 0) {
-      revenue = calculateOrderSummary(items, order).grandTotal;
+      revenue = calculateOrderSummary(items, order).grandTotal + additionalSum;
     } else {
       revenue = Number(order.final_amount || order.total_amount || 0);
     }
-    const received = receiptRows.reduce((sum, receipt) => {
-      const match =
-        receipt.reference_id === order.id || receipt.reference_number === order.order_number;
-      return match ? sum + Number(receipt.amount || 0) : sum;
-    }, 0);
+    const received = sumActiveReceiptAmountsForOrder(
+      receiptRows,
+      order.id,
+      order.order_number
+    );
     const balance = Math.max(revenue - received, 0);
     return {
       id: order.id,
@@ -374,7 +402,7 @@ export function EnhancedDashboard() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title="Total revenue"
-          subtitle="Order value (incl. GST)"
+          subtitle="Lines + GST + additional charges"
           value={inr(totals.totalRevenue)}
           valueCompact={inrCompact(totals.totalRevenue)}
           icon={IndianRupee}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -32,15 +32,44 @@ import { toast } from 'sonner';
 import { Loader2, Plus, Search, Trash2, ListPlus } from 'lucide-react';
 import { logInventoryAddition } from '@/utils/inventoryLogging';
 import { cn } from '@/lib/utils';
+import {
+  type FabricMasterPickerRow,
+  FABRIC_GSM_EMPTY_SELECT_VALUE,
+  colorVariantsForFabricNameAndGsm,
+  gsmValuesForFabricName,
+  uniqueFabricNameBases,
+} from '@/utils/fabricMasterPicker';
 
 type Zone = 'RECEIVING_ZONE' | 'STORAGE';
 
-type FabricRow = {
-  id: string;
-  fabric_code: string;
-  fabric_name: string;
-  color?: string | null;
-};
+const FABRIC_CATALOG_PAGE_SIZE = 1000;
+
+async function fetchAllFabricMasterForPicker(): Promise<FabricMasterPickerRow[]> {
+  let all: FabricMasterPickerRow[] = [];
+  let from = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error, count } = await supabase
+      .from('fabric_master')
+      .select('id, fabric_code, fabric_name, color, gsm, hex, status', { count: 'exact' })
+      .order('fabric_name')
+      .range(from, from + FABRIC_CATALOG_PAGE_SIZE - 1);
+
+    if (error) throw error;
+    const rows = (data as FabricMasterPickerRow[]) || [];
+    all = [...all, ...rows];
+
+    if (count != null) {
+      hasMore = all.length < count;
+    } else {
+      hasMore = rows.length === FABRIC_CATALOG_PAGE_SIZE;
+    }
+    from += FABRIC_CATALOG_PAGE_SIZE;
+  }
+
+  return all;
+}
 
 type ItemRow = {
   id: string;
@@ -63,6 +92,8 @@ export type PendingInventoryLine = {
   itemName: string;
   itemCode: string;
   color: string | null;
+  /** Fabric variant GSM (for display / traceability). */
+  gsm?: string | null;
   quantity: number;
   unit: string;
 };
@@ -226,10 +257,13 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
   const [zone, setZone] = useState<Zone>('RECEIVING_ZONE');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [fabrics, setFabrics] = useState<FabricRow[]>([]);
-  const [items, setItems] = useState<ItemRow[]>([]);
+  const [itemSearchResults, setItemSearchResults] = useState<ItemRow[]>([]);
+  const [fabricCatalog, setFabricCatalog] = useState<FabricMasterPickerRow[]>([]);
+  const [loadingFabricCatalog, setLoadingFabricCatalog] = useState(false);
+  const [selectedBaseFabricId, setSelectedBaseFabricId] = useState('');
+  const [selectedGsmSelectValue, setSelectedGsmSelectValue] = useState('');
+  const [selectedVariantId, setSelectedVariantId] = useState('');
   const [bins, setBins] = useState<BinRow[]>([]);
-  const [selectedFabric, setSelectedFabric] = useState<FabricRow | null>(null);
   const [selectedItem, setSelectedItem] = useState<ItemRow | null>(null);
   const [binId, setBinId] = useState('');
   const [quantity, setQuantity] = useState('');
@@ -240,6 +274,41 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
   const [loadingBins, setLoadingBins] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  const fabricNameBases = useMemo(
+    () => uniqueFabricNameBases(fabricCatalog),
+    [fabricCatalog]
+  );
+
+  const selectedBaseFabric = useMemo(
+    () => fabricCatalog.find((r) => r.id === selectedBaseFabricId) ?? null,
+    [fabricCatalog, selectedBaseFabricId]
+  );
+
+  const gsmOptionsForFabric = useMemo(
+    () =>
+      selectedBaseFabric
+        ? gsmValuesForFabricName(fabricCatalog, selectedBaseFabric.fabric_name)
+        : [],
+    [fabricCatalog, selectedBaseFabric]
+  );
+
+  const colorVariantsForPick = useMemo(
+    () =>
+      selectedBaseFabric && selectedGsmSelectValue
+        ? colorVariantsForFabricNameAndGsm(
+            fabricCatalog,
+            selectedBaseFabric.fabric_name,
+            selectedGsmSelectValue
+          )
+        : [],
+    [fabricCatalog, selectedBaseFabric, selectedGsmSelectValue]
+  );
+
+  const selectedFabricVariant = useMemo(
+    () => fabricCatalog.find((r) => r.id === selectedVariantId) ?? null,
+    [fabricCatalog, selectedVariantId]
+  );
+
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => window.clearTimeout(t);
@@ -248,9 +317,10 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
   const resetDraft = useCallback(() => {
     setSearch('');
     setDebouncedSearch('');
-    setFabrics([]);
-    setItems([]);
-    setSelectedFabric(null);
+    setItemSearchResults([]);
+    setSelectedBaseFabricId('');
+    setSelectedGsmSelectValue('');
+    setSelectedVariantId('');
     setSelectedItem(null);
     setQuantity('');
   }, []);
@@ -268,8 +338,34 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
       setKind('FABRIC');
       setZone('RECEIVING_ZONE');
       setUnit('meters');
+      setFabricCatalog([]);
     }
   }, [open, resetForm]);
+
+  useEffect(() => {
+    if (!open || kind !== 'FABRIC') return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingFabricCatalog(true);
+        const rows = await fetchAllFabricMasterForPicker();
+        if (!cancelled) setFabricCatalog(rows);
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) {
+          toast.error('Failed to load fabric catalog');
+          setFabricCatalog([]);
+        }
+      } finally {
+        if (!cancelled) setLoadingFabricCatalog(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, kind]);
 
   useEffect(() => {
     if (kind === 'FABRIC') {
@@ -312,9 +408,8 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
   }, [open, zone, loadBins]);
 
   useEffect(() => {
-    if (!open || debouncedSearch.length < 2) {
-      setFabrics([]);
-      setItems([]);
+    if (!open || kind !== 'ITEM' || debouncedSearch.length < 2) {
+      setItemSearchResults([]);
       setLoadingSearch(false);
       return;
     }
@@ -329,25 +424,14 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
           .replace(/[(),]/g, '');
         const like = `%${q}%`;
 
-        if (kind === 'FABRIC') {
-          const { data, error } = await supabase
-            .from('fabric_master')
-            .select('id, fabric_code, fabric_name, color')
-            .or(`fabric_name.ilike.${like},fabric_code.ilike.${like}`)
-            .limit(25);
+        const { data, error } = await supabase
+          .from('item_master')
+          .select('id, item_code, item_name, color')
+          .or(`item_name.ilike.${like},item_code.ilike.${like}`)
+          .limit(25);
 
-          if (error) throw error;
-          if (!cancelled) setFabrics((data as FabricRow[]) || []);
-        } else {
-          const { data, error } = await supabase
-            .from('item_master')
-            .select('id, item_code, item_name, color')
-            .or(`item_name.ilike.${like},item_code.ilike.${like}`)
-            .limit(25);
-
-          if (error) throw error;
-          if (!cancelled) setItems((data as ItemRow[]) || []);
-        }
+        if (error) throw error;
+        if (!cancelled) setItemSearchResults((data as ItemRow[]) || []);
       } catch (e) {
         console.error(e);
         if (!cancelled) toast.error('Search failed');
@@ -372,21 +456,33 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
       return;
     }
 
-    const fabric = kind === 'FABRIC' ? selectedFabric : null;
     const rawItem = kind === 'ITEM' ? selectedItem : null;
-    if (kind === 'FABRIC' && !fabric) {
-      toast.error('Select a fabric from search results');
-      return;
+    if (kind === 'FABRIC') {
+      if (!selectedFabricVariant) {
+        toast.error('Select fabric, GSM, and color');
+        return;
+      }
     }
     if (kind === 'ITEM' && !rawItem) {
       toast.error('Select an item from search results');
       return;
     }
 
-    const itemId = fabric?.id ?? rawItem!.id;
-    const itemName = fabric?.fabric_name ?? rawItem!.item_name;
-    const itemCode = fabric?.fabric_code ?? rawItem!.item_code;
-    const color = fabric?.color ?? rawItem?.color ?? null;
+    const itemId =
+      kind === 'FABRIC' ? selectedFabricVariant!.id : rawItem!.id;
+    const itemName =
+      kind === 'FABRIC' ? selectedFabricVariant!.fabric_name : rawItem!.item_name;
+    const itemCode =
+      kind === 'FABRIC'
+        ? String(selectedFabricVariant!.fabric_code ?? '').trim() ||
+          `FAB-${selectedFabricVariant!.id.slice(0, 8)}`
+        : rawItem!.item_code;
+    const color =
+      kind === 'FABRIC'
+        ? selectedFabricVariant!.color ?? null
+        : rawItem?.color ?? null;
+    const gsmLine =
+      kind === 'FABRIC' ? selectedFabricVariant!.gsm ?? null : null;
 
     const line: PendingInventoryLine = {
       key: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
@@ -395,6 +491,7 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
       itemName,
       itemCode,
       color,
+      gsm: gsmLine,
       quantity: qty,
       unit: unit.trim() || (kind === 'FABRIC' ? 'meters' : 'pcs'),
     };
@@ -417,7 +514,10 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
     });
 
     toast.success('Line added', {
-      description: `${itemName} · ${qty} ${line.unit}`,
+      description:
+        kind === 'FABRIC'
+          ? `${itemName} · ${gsmLine ?? '—'} · ${color ?? '—'} · ${qty} ${line.unit}`
+          : `${itemName} · ${qty} ${line.unit}`,
     });
     resetDraft();
   };
@@ -497,8 +597,9 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
             Add raw inventory
           </DialogTitle>
           <DialogDescription>
-            Build a list of fabrics and items with quantities, then save in one go. Duplicate master + unit
-            on the list merges quantities. Warehouse rows still merge with existing bin stock as before.
+            For fabric: choose Product (fabric name), then GSM, then color — same masters as on the order page.
+            For items: search and pick a line. Add quantities, then save in one go; duplicate master + unit merges
+            quantities. Warehouse rows still merge with existing bin stock as before.
           </DialogDescription>
         </DialogHeader>
 
@@ -511,12 +612,13 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
                   value={kind}
                   onValueChange={(v) => {
                     setKind(v as 'FABRIC' | 'ITEM');
-                    setSelectedFabric(null);
                     setSelectedItem(null);
                     setSearch('');
                     setDebouncedSearch('');
-                    setFabrics([]);
-                    setItems([]);
+                    setItemSearchResults([]);
+                    setSelectedBaseFabricId('');
+                    setSelectedGsmSelectValue('');
+                    setSelectedVariantId('');
                   }}
                 >
                   <SelectTrigger>
@@ -571,74 +673,156 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
 
             <div className="rounded-lg border border-border/80 bg-muted/15 p-3 space-y-3">
               <p className="text-sm font-medium">Add a line</p>
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">Search master (min. 2 characters)</Label>
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    className="pl-9"
-                    placeholder={kind === 'FABRIC' ? 'Fabric name or code…' : 'Item name or code…'}
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                  />
-                </div>
 
-                {(selectedFabric || selectedItem) && (
-                  <div className="flex items-center justify-between gap-2 rounded-md border border-border/80 bg-background px-3 py-2 text-sm">
-                    <div className="min-w-0 flex-1">
-                      <span className="text-muted-foreground">Selected </span>
-                      <span className="font-medium">
-                        {selectedFabric
-                          ? `${selectedFabric.fabric_name} (${selectedFabric.fabric_code})`
-                          : `${selectedItem!.item_name} (${selectedItem!.item_code})`}
-                      </span>
+              {kind === 'FABRIC' ? (
+                <div className="space-y-3">
+                  {loadingFabricCatalog && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Loading fabric catalog…
+                    </p>
+                  )}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="space-y-2">
+                      <Label>Fabric (Product)</Label>
+                      <Select
+                        value={selectedBaseFabricId || undefined}
+                        onValueChange={(v) => {
+                          setSelectedBaseFabricId(v);
+                          setSelectedGsmSelectValue('');
+                          setSelectedVariantId('');
+                        }}
+                        disabled={loadingFabricCatalog || fabricNameBases.length === 0}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select fabric name" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-60">
+                          {fabricNameBases.map((f) => (
+                            <SelectItem key={f.id} value={f.id}>
+                              {f.fabric_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 shrink-0 text-xs"
-                      onClick={() => {
-                        setSelectedFabric(null);
-                        setSelectedItem(null);
-                      }}
-                    >
-                      Change
-                    </Button>
+                    <div className="space-y-2">
+                      <Label>GSM</Label>
+                      <Select
+                        value={selectedGsmSelectValue || undefined}
+                        onValueChange={(v) => {
+                          setSelectedGsmSelectValue(v);
+                          setSelectedVariantId('');
+                        }}
+                        disabled={!selectedBaseFabricId || gsmOptionsForFabric.length === 0}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select GSM" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {gsmOptionsForFabric.map((g) => (
+                            <SelectItem key={g} value={g}>
+                              {g === FABRIC_GSM_EMPTY_SELECT_VALUE
+                                ? 'No GSM (blank in master)'
+                                : String(g)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Color</Label>
+                      <Select
+                        value={selectedVariantId || undefined}
+                        onValueChange={setSelectedVariantId}
+                        disabled={!selectedGsmSelectValue || colorVariantsForPick.length === 0}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select color" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-56">
+                          {colorVariantsForPick.map((row) => (
+                            <SelectItem key={row.id} value={row.id}>
+                              <div className="flex items-center gap-2">
+                                {row.hex && (
+                                  <div
+                                    className="h-5 w-5 shrink-0 rounded-full border border-border"
+                                    style={{
+                                      backgroundColor: row.hex.startsWith('#')
+                                        ? row.hex
+                                        : `#${row.hex}`,
+                                    }}
+                                  />
+                                )}
+                                <span>{row.color || '—'}</span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
-                )}
+                  {!loadingFabricCatalog &&
+                    selectedBaseFabricId &&
+                    selectedGsmSelectValue &&
+                    colorVariantsForPick.length === 0 && (
+                      <p className="text-xs text-destructive">
+                        No color variant for this fabric and GSM in the master. Check fabric_master rows.
+                      </p>
+                    )}
+                  {selectedFabricVariant && (
+                    <p className="text-xs text-muted-foreground rounded-md border border-border/60 bg-background px-3 py-2">
+                      <span className="font-medium text-foreground">Line: </span>
+                      {selectedFabricVariant.fabric_name}
+                      {' · '}
+                      {selectedFabricVariant.gsm
+                        ? `${selectedFabricVariant.gsm} GSM`
+                        : 'No GSM'}
+                      {' · '}
+                      {selectedFabricVariant.color || '—'}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">Search item (min. 2 characters)</Label>
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      className="pl-9"
+                      placeholder="Item name or code…"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                    />
+                  </div>
 
-                {loadingSearch && (
-                  <p className="text-xs text-muted-foreground flex items-center gap-1">
-                    <Loader2 className="h-3 w-3 animate-spin" /> Searching…
-                  </p>
-                )}
-                {!loadingSearch && debouncedSearch.length >= 2 && (
-                  <ul className="rounded-md border border-border/80 bg-muted/30 divide-y max-h-36 overflow-y-auto">
-                    {kind === 'FABRIC' &&
-                      fabrics.map((f) => (
-                        <li key={f.id}>
-                          <button
-                            type="button"
-                            className={cn(
-                              'w-full text-left px-3 py-2 text-sm hover:bg-muted/80 transition-colors',
-                              selectedFabric?.id === f.id && 'bg-primary/10'
-                            )}
-                            onClick={() => {
-                              setSelectedFabric(f);
-                              setSearch('');
-                              setDebouncedSearch('');
-                              setFabrics([]);
-                              setItems([]);
-                            }}
-                          >
-                            <span className="font-medium">{f.fabric_name}</span>
-                            <span className="text-muted-foreground text-xs ml-2">{f.fabric_code}</span>
-                          </button>
-                        </li>
-                      ))}
-                    {kind === 'ITEM' &&
-                      items.map((it) => (
+                  {selectedItem && (
+                    <div className="flex items-center justify-between gap-2 rounded-md border border-border/80 bg-background px-3 py-2 text-sm">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-muted-foreground">Selected </span>
+                        <span className="font-medium">
+                          {selectedItem.item_name} ({selectedItem.item_code})
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 shrink-0 text-xs"
+                        onClick={() => setSelectedItem(null)}
+                      >
+                        Change
+                      </Button>
+                    </div>
+                  )}
+
+                  {loadingSearch && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Searching…
+                    </p>
+                  )}
+                  {!loadingSearch && debouncedSearch.length >= 2 && (
+                    <ul className="rounded-md border border-border/80 bg-muted/30 divide-y max-h-36 overflow-y-auto">
+                      {itemSearchResults.map((it) => (
                         <li key={it.id}>
                           <button
                             type="button"
@@ -650,8 +834,7 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
                               setSelectedItem(it);
                               setSearch('');
                               setDebouncedSearch('');
-                              setFabrics([]);
-                              setItems([]);
+                              setItemSearchResults([]);
                             }}
                           >
                             <span className="font-medium">{it.item_name}</span>
@@ -659,15 +842,13 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
                           </button>
                         </li>
                       ))}
-                    {kind === 'FABRIC' && fabrics.length === 0 && (
-                      <li className="px-3 py-2 text-sm text-muted-foreground">No fabrics found</li>
-                    )}
-                    {kind === 'ITEM' && items.length === 0 && (
-                      <li className="px-3 py-2 text-sm text-muted-foreground">No items found</li>
-                    )}
-                  </ul>
-                )}
-              </div>
+                      {itemSearchResults.length === 0 && (
+                        <li className="px-3 py-2 text-sm text-muted-foreground">No items found</li>
+                      )}
+                    </ul>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 items-end">
                 <div className="space-y-2">
@@ -715,7 +896,8 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
               </div>
               {pendingLines.length === 0 ? (
                 <p className="text-sm text-muted-foreground border border-dashed rounded-lg px-3 py-6 text-center">
-                  No lines yet. Search, select a fabric or item, enter quantity, then click Add to list.
+                  No lines yet. For fabric: pick name, GSM, color, then quantity. For items: search, pick a line, then
+                  quantity. Click Add to list.
                 </p>
               ) : (
                 <div className="rounded-md border overflow-x-auto">
@@ -725,6 +907,8 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
                         <TableHead className="w-[72px]">Type</TableHead>
                         <TableHead>Code</TableHead>
                         <TableHead>Name</TableHead>
+                        <TableHead className="w-[100px]">Color</TableHead>
+                        <TableHead className="w-[72px]">GSM</TableHead>
                         <TableHead className="text-right w-[100px]">Qty</TableHead>
                         <TableHead className="w-[80px]">Unit</TableHead>
                         <TableHead className="w-[52px]" />
@@ -739,6 +923,12 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
                           <TableCell className="font-mono text-xs">{line.itemCode}</TableCell>
                           <TableCell className="max-w-[180px] truncate" title={line.itemName}>
                             {line.itemName}
+                          </TableCell>
+                          <TableCell className="text-xs max-w-[100px] truncate" title={line.color ?? ''}>
+                            {line.color ?? '—'}
+                          </TableCell>
+                          <TableCell className="text-xs tabular-nums">
+                            {line.itemType === 'FABRIC' ? line.gsm ?? '—' : '—'}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">{line.quantity}</TableCell>
                           <TableCell className="text-xs">{line.unit}</TableCell>

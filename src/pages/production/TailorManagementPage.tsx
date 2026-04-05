@@ -33,7 +33,7 @@ import { useToast } from "@/hooks/use-toast";
 import { TailorForm } from "@/components/people/TailorForm";
 import { BatchForm } from "@/components/people/BatchForm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { BackButton } from '@/components/common/BackButton';
+import "@/pages/OrdersPageViewSwitch.css";
 
 interface Tailor {
   id: string;
@@ -466,9 +466,6 @@ const TailorManagementPage = () => {
   return (
     <ErpLayout>
       <div className="space-y-6">
-        <div className="flex items-center">
-          <BackButton to="/people/production-team" label="Back to Production Team" />
-        </div>
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -517,26 +514,28 @@ const TailorManagementPage = () => {
         </div>
 
         {/* View Toggle */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Button
-              variant={viewMode === 'tailors' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setViewMode('tailors')}
-            >
-              <List className="w-4 h-4 mr-2" />
-              Tailor View
-            </Button>
-            <Button
-              variant={viewMode === 'batches' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setViewMode('batches')}
-            >
-              <Grid3X3 className="w-4 h-4 mr-2" />
-              Batch View
-            </Button>
-          </div>
-        </div>
+        <label
+          htmlFor="tailor-management-view-switch"
+          className="orders-view-switch"
+          aria-label="Switch between tailor list and batch list"
+        >
+          <input
+            id="tailor-management-view-switch"
+            type="checkbox"
+            role="switch"
+            aria-checked={viewMode === 'batches'}
+            checked={viewMode === 'batches'}
+            onChange={(e) => setViewMode(e.target.checked ? 'batches' : 'tailors')}
+          />
+          <span className="flex items-center justify-center gap-2">
+            <List className="w-4 h-4 shrink-0" />
+            Tailor View
+          </span>
+          <span className="flex items-center justify-center gap-2">
+            <Grid3X3 className="w-4 h-4 shrink-0" />
+            Batch View
+          </span>
+        </label>
 
         {/* View Tailor Dialog */}
         <Dialog open={!!viewingTailor} onOpenChange={() => setViewingTailor(null)}>

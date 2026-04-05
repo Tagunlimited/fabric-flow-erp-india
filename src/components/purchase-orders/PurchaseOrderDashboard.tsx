@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import './POPlanningSegmentedSwitch.css';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -116,6 +116,8 @@ export function PurchaseOrderDashboard() {
 
     loadPOs();
   }, [refreshFlag]);
+
+  const planningTabIdx = activeTab === 'pending' ? 0 : activeTab === 'in_progress' ? 1 : 2;
 
   const stats = useMemo(() => {
     const totalPendingQuantity = pendingItems.reduce((sum, item) => sum + Number(item.remaining_quantity || 0), 0);
@@ -309,14 +311,49 @@ export function PurchaseOrderDashboard() {
         </Card>
       </div>
 
-      <Tabs value={activeTab} onValueChange={value => setActiveTab(value as typeof activeTab)}>
-        <TabsList className="mb-4">
-          <TabsTrigger value="pending">Pending</TabsTrigger>
-          <TabsTrigger value="in_progress">In Progress</TabsTrigger>
-          <TabsTrigger value="completed">Completed</TabsTrigger>
-        </TabsList>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div
+          className="po-planning-segmented"
+          data-idx={planningTabIdx}
+          role="tablist"
+          aria-label="Purchase order planning views"
+        >
+          <span className="po-planning-segmented__thumb" aria-hidden />
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'pending'}
+            data-idx="0"
+            className="po-planning-segmented__btn"
+            onClick={() => setActiveTab('pending')}
+          >
+            Pending
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'in_progress'}
+            data-idx="1"
+            className="po-planning-segmented__btn"
+            onClick={() => setActiveTab('in_progress')}
+          >
+            In Progress
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'completed'}
+            data-idx="2"
+            className="po-planning-segmented__btn"
+            onClick={() => setActiveTab('completed')}
+          >
+            Completed
+          </button>
+        </div>
+      </div>
 
-        <TabsContent value="pending" className="space-y-4">
+      {activeTab === 'pending' && (
+        <div className="space-y-4">
           {loadingPending ? (
             <Card>
               <CardContent className="py-6">
@@ -339,9 +376,11 @@ export function PurchaseOrderDashboard() {
               {renderPendingSection('Item', itemGroups)}
                   </div>
           )}
-        </TabsContent>
+        </div>
+      )}
 
-        <TabsContent value="in_progress" className="space-y-4">
+      {activeTab === 'in_progress' && (
+        <div className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle>Purchase Orders Awaiting GRN ({inProgressPOs.length})</CardTitle>
@@ -407,9 +446,11 @@ export function PurchaseOrderDashboard() {
               )}
             </CardContent>
           </Card>
-        </TabsContent>
+        </div>
+      )}
 
-        <TabsContent value="completed" className="space-y-4">
+      {activeTab === 'completed' && (
+        <div className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle>Purchase Orders with GRN ({completedPOs.length})</CardTitle>
@@ -476,8 +517,8 @@ export function PurchaseOrderDashboard() {
               )}
             </CardContent>
           </Card>
-        </TabsContent>
-      </Tabs>
+        </div>
+      )}
 
       <BomToPOWizardDialog
         open={!!wizardBom}

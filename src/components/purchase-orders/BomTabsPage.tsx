@@ -4,7 +4,6 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Eye, Search, Package } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -14,10 +13,7 @@ import { calculateOrderSummary } from '@/utils/priceCalculation';
 // Import existing BomList component
 import { BomList } from './BomList';
 import { BomOrderLinePicker } from './BomOrderLinePicker';
-import { BomTabSparkleTrigger } from './BomTabSparkleTrigger';
-
-const bomTabTriggerReset =
-  'h-auto rounded-none border-0 bg-transparent p-0 shadow-none ring-offset-background data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=inactive]:bg-transparent focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2';
+import '../../pages/OrdersPageViewSwitch.css';
 
 type BomRowRef = { order_id: string; order_item_id: string | null };
 
@@ -43,7 +39,10 @@ interface Order {
   id: string;
   order_number: string;
   order_date: string;
-  delivery_date?: string;
+  /** Expected delivery from `orders.expected_delivery_date` */
+  expected_delivery_date?: string | null;
+  /** Legacy / alternate column if present */
+  delivery_date?: string | null;
   status: string;
   total_amount: number;
   final_amount: number;
@@ -475,11 +474,19 @@ function OrdersWithoutBom({ onOpenLinePicker, refreshTrigger }: OrdersWithoutBom
                       })}
                     </TableCell>
                     <TableCell>
-                      {order.delivery_date ? new Date(order.delivery_date).toLocaleDateString('en-GB', {
-                        day: '2-digit',
-                        month: 'short',
-                        year: '2-digit'
-                      }) : '-'}
+                      {(() => {
+                        const raw =
+                          order.expected_delivery_date ?? order.delivery_date;
+                        if (!raw) return '-';
+                        const d = new Date(raw);
+                        return Number.isNaN(d.getTime())
+                          ? '-'
+                          : d.toLocaleDateString('en-GB', {
+                              day: '2-digit',
+                              month: 'short',
+                              year: '2-digit',
+                            });
+                      })()}
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <Button
@@ -532,8 +539,11 @@ export function BomTabsPage() {
     setRefreshTrigger(prev => prev + 1);
   };
 
-  // Determine default tab: use URL param if present, otherwise default to 'create-bom'
-  const defaultTab = tabFromUrl === 'view-bom' ? 'view-bom' : 'create-bom';
+  const activeBomTab = tabFromUrl === 'view-bom' ? 'view-bom' : 'create-bom';
+
+  const setBomTab = (tab: 'create-bom' | 'view-bom') => {
+    navigate(`/bom?tab=${tab}`, { replace: true });
+  };
 
   return (
     <div className="space-y-6">
@@ -550,37 +560,43 @@ export function BomTabsPage() {
       </div>
 
       <div className="border rounded-lg p-4">
-        <Tabs
-          value={tabFromUrl || defaultTab}
-          onValueChange={(value) => {
-            navigate(`/bom?tab=${value}`, { replace: true });
-          }}
-          className="w-full"
-        >
-          <TabsList className="mb-6 flex h-auto w-full flex-wrap items-center justify-start gap-8 rounded-none border-0 bg-transparent p-0 shadow-none">
-            <TabsTrigger value="create-bom" asChild className={bomTabTriggerReset}>
-              <BomTabSparkleTrigger label="Create BOM" />
-            </TabsTrigger>
-            <TabsTrigger value="view-bom" asChild className={bomTabTriggerReset}>
-              <BomTabSparkleTrigger label="View BOMs" />
-            </TabsTrigger>
-          </TabsList>
-          
-        <TabsContent value="create-bom" className="space-y-4">
-          {pickOrder ? (
-            <BomOrderLinePicker orderId={pickOrder} onBack={closeLinePicker} />
-          ) : (
-            <OrdersWithoutBom onOpenLinePicker={openLinePicker} refreshTrigger={refreshTrigger} />
-          )}
-        </TabsContent>
-          
-          <TabsContent value="view-bom" className="space-y-4">
+        <div className="mb-6 flex justify-start">
+          <label
+            htmlFor="bom-page-view-switch"
+            className="orders-view-switch"
+            aria-label="Switch between creating a BOM and viewing existing BOMs"
+          >
+            <input
+              id="bom-page-view-switch"
+              type="checkbox"
+              role="switch"
+              aria-checked={activeBomTab === 'view-bom'}
+              checked={activeBomTab === 'view-bom'}
+              onChange={(e) => setBomTab(e.target.checked ? 'view-bom' : 'create-bom')}
+            />
+            <span>Create BOM</span>
+            <span>View BOMs</span>
+          </label>
+        </div>
+
+        {activeBomTab === 'create-bom' && (
+          <div className="space-y-4">
+            {pickOrder ? (
+              <BomOrderLinePicker orderId={pickOrder} onBack={closeLinePicker} />
+            ) : (
+              <OrdersWithoutBom onOpenLinePicker={openLinePicker} refreshTrigger={refreshTrigger} />
+            )}
+          </div>
+        )}
+
+        {activeBomTab === 'view-bom' && (
+          <div className="space-y-4">
             <div className="p-4 border rounded-lg">
               <h3 className="text-lg font-semibold mb-4">Existing BOMs</h3>
               <BomList refreshTrigger={refreshTrigger} />
             </div>
-          </TabsContent>
-        </Tabs>
+          </div>
+        )}
       </div>
     </div>
   );

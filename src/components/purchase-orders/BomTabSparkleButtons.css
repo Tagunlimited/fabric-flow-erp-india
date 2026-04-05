@@ -12,9 +12,12 @@
   position: relative;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
   transform-origin: center;
-  padding: 0.75rem 1.5rem;
+  min-height: 3.25rem;
+  min-width: 12.5rem;
+  padding: 1.125rem 2.375rem;
   background-color: transparent;
   border: none;
   border-radius: var(--bom-sparkle-radius);

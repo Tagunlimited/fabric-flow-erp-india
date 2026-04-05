@@ -1,0 +1,198 @@
+/* Three-segment pill — same palette as .orders-view-switch (shared: Assign Orders, QC, PO Planning, …) */
+.erp-segmented-3,
+.po-planning-segmented {
+  --_pad: 4px;
+  --_track: #70a9c5;
+  --_thumb: rgba(12, 74, 110, 1);
+  --_thumb-dim: rgba(12, 74, 110, 0.65);
+  --_txt: #ffffff;
+  --_ease: cubic-bezier(0.47, 1.64, 0.41, 0.8);
+  position: relative;
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 9999px;
+  padding: var(--_pad);
+  background: var(--_track);
+  isolation: isolate;
+  user-select: none;
+}
+
+.erp-segmented-3__thumb,
+.po-planning-segmented__thumb {
+  position: absolute;
+  top: var(--_pad);
+  bottom: var(--_pad);
+  left: var(--_pad);
+  width: calc((100% - 2 * var(--_pad)) / 3);
+  border-radius: 9999px;
+  background: var(--_thumb);
+  z-index: 0;
+  pointer-events: none;
+  box-shadow:
+    inset 0 1px 1px rgba(0, 0, 0, 0.3),
+    0 1px rgba(255, 255, 255, 0.3);
+  transition:
+    left 500ms var(--_ease),
+    background-color 300ms ease;
+}
+
+.erp-segmented-3[data-idx="0"] .erp-segmented-3__thumb,
+.po-planning-segmented[data-idx="0"] .po-planning-segmented__thumb {
+  left: var(--_pad);
+  background: var(--_thumb);
+}
+
+.erp-segmented-3[data-idx="1"] .erp-segmented-3__thumb,
+.po-planning-segmented[data-idx="1"] .po-planning-segmented__thumb {
+  left: calc(var(--_pad) + (100% - 2 * var(--_pad)) / 3);
+  background: var(--_thumb);
+}
+
+.erp-segmented-3[data-idx="2"] .erp-segmented-3__thumb,
+.po-planning-segmented[data-idx="2"] .po-planning-segmented__thumb {
+  left: calc(var(--_pad) + (2 * (100% - 2 * var(--_pad)) / 3));
+  background: var(--_thumb);
+}
+
+.erp-segmented-3__btn,
+.po-planning-segmented__btn {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--_txt);
+  background: transparent;
+  border: none;
+  border-radius: 9999px;
+  cursor: pointer;
+  opacity: 0.72;
+  transition: opacity 200ms ease;
+  white-space: nowrap;
+}
+
+.erp-segmented-3__btn:hover,
+.po-planning-segmented__btn:hover {
+  opacity: 0.95;
+}
+
+.erp-segmented-3__btn:focus-visible,
+.po-planning-segmented__btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.9);
+  outline-offset: 2px;
+}
+
+.erp-segmented-3[data-idx="0"] .erp-segmented-3__btn[data-idx="0"],
+.erp-segmented-3[data-idx="1"] .erp-segmented-3__btn[data-idx="1"],
+.erp-segmented-3[data-idx="2"] .erp-segmented-3__btn[data-idx="2"],
+.po-planning-segmented[data-idx="0"] .po-planning-segmented__btn[data-idx="0"],
+.po-planning-segmented[data-idx="1"] .po-planning-segmented__btn[data-idx="1"],
+.po-planning-segmented[data-idx="2"] .po-planning-segmented__btn[data-idx="2"] {
+  opacity: 1;
+}
+
+.erp-segmented-3--stretch,
+.po-planning-segmented--stretch {
+  width: 100%;
+}
+
+@media (max-width: 480px) {
+  .erp-segmented-3__btn,
+  .po-planning-segmented__btn {
+    padding: 0.5rem 0.4rem;
+    font-size: 0.75rem;
+  }
+}
+
+/* N-segment pill (Radix TabsList + TabsTrigger) — set --seg-count and --seg-active on the list */
+.erp-segmented {
+  --_pad: 4px;
+  --_track: #70a9c5;
+  --_thumb: rgba(12, 74, 110, 1);
+  --_txt: #ffffff;
+  --_ease: cubic-bezier(0.47, 1.64, 0.41, 0.8);
+  --seg-count: 3;
+  --seg-active: 0;
+  position: relative;
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: stretch;
+  border-radius: 9999px;
+  padding: var(--_pad);
+  background: var(--_track) !important;
+  isolation: isolate;
+  user-select: none;
+  gap: 0;
+  box-shadow: none;
+}
+
+.erp-segmented__thumb {
+  position: absolute;
+  top: var(--_pad);
+  bottom: var(--_pad);
+  left: calc(
+    var(--_pad) + (100% - 2 * var(--_pad)) * var(--seg-active) / var(--seg-count)
+  );
+  width: calc((100% - 2 * var(--_pad)) / var(--seg-count));
+  border-radius: 9999px;
+  background: var(--_thumb);
+  z-index: 0;
+  pointer-events: none;
+  box-shadow:
+    inset 0 1px 1px rgba(0, 0, 0, 0.3),
+    0 1px rgba(255, 255, 255, 0.3);
+  transition:
+    left 500ms var(--_ease),
+    width 500ms var(--_ease),
+    background-color 300ms ease;
+}
+
+.erp-segmented__btn {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--_txt) !important;
+  background: transparent !important;
+  border: none;
+  border-radius: 9999px;
+  cursor: pointer;
+  opacity: 0.72;
+  transition: opacity 200ms ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: none !important;
+}
+
+.erp-segmented__btn:hover {
+  opacity: 0.95;
+}
+
+.erp-segmented__btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.9);
+  outline-offset: 2px;
+}
+
+.erp-segmented__btn[data-state="active"] {
+  opacity: 1;
+}
+
+.erp-segmented--stretch {
+  width: 100%;
+}
+
+@media (max-width: 480px) {
+  .erp-segmented__btn {
+    padding: 0.5rem 0.35rem;
+    font-size: 0.7rem;
+  }
+}

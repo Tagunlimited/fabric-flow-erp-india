@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { SortableTableHeader } from "@/components/ui/sortable-table-header";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import "@/pages/OrdersPageViewSwitch.css";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { useNavigate } from "react-router-dom";
@@ -43,7 +43,6 @@ import { UpdateCuttingQuantityDialog } from "@/components/production/UpdateCutti
 import { ReassignBatchDialog } from "@/components/production/ReassignBatchDialog";
 import { buildBatchAssignmentDocumentData, type BatchAssignmentDocumentData } from '@/utils/batchAssignmentDocument';
 import { BatchAssignmentPreviewDialog } from '@/components/production/BatchAssignmentPreviewDialog';
-import { BackButton } from '@/components/common/BackButton';
 import { getOrderTotalQuantityFromItems } from '@/utils/orderItemLineQuantity';
 
 interface CuttingJob {
@@ -133,6 +132,7 @@ const CuttingManagerPage = () => {
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [sortField, setSortField] = useState<string>('dueDate');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [cuttingTab, setCuttingTab] = useState<'jobs' | 'completed'>('jobs');
 
   // Initialize with empty array - data will be loaded from backend
   const [cuttingJobs, setCuttingJobs] = useState<CuttingJob[]>([]);
@@ -883,9 +883,6 @@ const CuttingManagerPage = () => {
   return (
     <ErpLayout>
       <div className="space-y-6">
-        <div className="flex items-center">
-          <BackButton to="/production" label="Back to Production" />
-        </div>
         <div className="flex justify-between items-start">
         <div>
           <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
@@ -973,13 +970,25 @@ const CuttingManagerPage = () => {
           </Card>
         </div>
 
-        <Tabs defaultValue="jobs" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="jobs">Active Jobs</TabsTrigger>
-            <TabsTrigger value="completed">Completed Jobs</TabsTrigger>
-          </TabsList>
+        <label
+          htmlFor="cutting-manager-view-switch"
+          className="orders-view-switch"
+          aria-label="Switch between active and completed cutting jobs"
+        >
+          <input
+            id="cutting-manager-view-switch"
+            type="checkbox"
+            role="switch"
+            aria-checked={cuttingTab === 'completed'}
+            checked={cuttingTab === 'completed'}
+            onChange={(e) => setCuttingTab(e.target.checked ? 'completed' : 'jobs')}
+          />
+          <span>Active Jobs</span>
+          <span>Completed Jobs</span>
+        </label>
 
-          <TabsContent value="jobs" className="space-y-4">
+          {cuttingTab === 'jobs' && (
+          <div className="space-y-4">
 
             {/* Filters */}
             <Card>
@@ -1250,9 +1259,11 @@ const CuttingManagerPage = () => {
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
+          </div>
+          )}
 
-          <TabsContent value="completed" className="space-y-4">
+          {cuttingTab === 'completed' && (
+          <div className="space-y-4">
             {/* Filters */}
             <Card>
               <CardHeader>
@@ -1496,9 +1507,8 @@ const CuttingManagerPage = () => {
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
-
-        </Tabs>
+          </div>
+          )}
 
         {/* Update Cutting Quantity Dialog - Size Wise */}
         <UpdateCuttingQuantityDialog

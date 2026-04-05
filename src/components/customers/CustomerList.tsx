@@ -20,6 +20,28 @@ import { calculateLifetimeValue, formatCurrency } from '@/lib/utils';
 import * as XLSX from 'xlsx';
 import { useFormPersistence } from '@/contexts/FormPersistenceContext';
 
+/** Resolve display label for a customer_types row (schemas use `name` or `type_name`). */
+function customerTypeLabelFromRow(row: { name?: string | null; type_name?: string | null }): string {
+  const n = row.name?.trim();
+  const tn = row.type_name?.trim();
+  return (n || tn || 'Unnamed type').trim();
+}
+
+/** Map customer_type FK to label; keys are stringified ids (UUID or number). */
+function buildCustomerTypeLabelMap(types: { id: string | number; name?: string | null; type_name?: string | null }[]) {
+  const map = new Map<string, string>();
+  for (const t of types) {
+    const label = customerTypeLabelFromRow(t);
+    map.set(String(t.id), label);
+  }
+  return map;
+}
+
+function lookupCustomerTypeName(map: Map<string, string>, customerTypeId: unknown): string {
+  if (customerTypeId == null || customerTypeId === '') return 'Unknown';
+  return map.get(String(customerTypeId)) ?? 'Unknown';
+}
+
 interface Customer {
   id: string;
   customer_id: string;
@@ -27,7 +49,7 @@ interface Customer {
   gstin?: string;
   phone: string;
   email: string;
-  customer_type: number;
+  customer_type?: string | number | null;
   address: string;
   city: string;
   state: number;
@@ -47,6 +69,10 @@ export function CustomerList() {
   const [customerLifetimeValues, setCustomerLifetimeValues] = useState<Record<string, number>>({});
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState('all');
+  /** Options for type filter — ids from `customer_types`, labels from DB */
+  const [customerTypeFilterOptions, setCustomerTypeFilterOptions] = useState<
+    { id: string; label: string }[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const { saveFormData, getFormData, hasFormData } = useFormPersistence();
   const location = useLocation();
@@ -167,22 +193,47 @@ export function CustomerList() {
 
       if (error) throw error;
       
-      // Fetch customer types separately
-      const { data: customerTypes } = await supabase
+      // Fetch customer types (full row: schemas differ on `name` vs `type_name`, id may be int or uuid)
+      const { data: customerTypesRaw, error: typesError } = await supabase
         .from('customer_types')
-        .select('id, name');
-      
-      // Create a map for quick lookup
-      const customerTypeMap = new Map();
-      (customerTypes || []).forEach(type => {
-        customerTypeMap.set(type.id, type.name);
+        .select('*');
+
+      if (typesError) {
+        console.error('Error fetching customer_types:', typesError);
+      }
+
+      const customerTypesList = (customerTypesRaw || []) as {
+        id: string | number;
+        name?: string | null;
+        type_name?: string | null;
+        is_active?: boolean | null;
+        status?: string | null;
+      }[];
+
+      const activeTypes = customerTypesList.filter((t) => {
+        if (t.is_active === false) return false;
+        if (t.status != null && String(t.status).toLowerCase() === 'inactive') return false;
+        return true;
       });
-      
+
+      // Lookup map: all rows so labels stay correct for inactive / legacy type ids
+      const customerTypeMap = buildCustomerTypeLabelMap(customerTypesList);
+
+      const filterSource = activeTypes.length > 0 ? activeTypes : customerTypesList;
+      setCustomerTypeFilterOptions(
+        filterSource
+          .map((t) => ({
+            id: String(t.id),
+            label: customerTypeLabelFromRow(t),
+          }))
+          .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
+      );
+
       // Transform the data to include the names
-      const transformedData = (data || []).map(customer => ({
+      const transformedData = (data || []).map((customer) => ({
         ...customer,
-        customer_type_name: customerTypeMap.get(customer.customer_type) || 'Unknown',
-        state_name: customer.state || 'Unknown'
+        customer_type_name: lookupCustomerTypeName(customerTypeMap, customer.customer_type),
+        state_name: customer.state || 'Unknown',
       }));
       
       setCustomers(transformedData);
@@ -250,8 +301,8 @@ export function CustomerList() {
     }
 
     if (selectedType !== 'all') {
-      filtered = filtered.filter(customer => 
-        customer.customer_type_name?.toLowerCase() === selectedType.toLowerCase()
+      filtered = filtered.filter(
+        (customer) => String(customer.customer_type ?? '') === selectedType
       );
     }
 
@@ -837,10 +888,11 @@ export function CustomerList() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="wholesale">Wholesale</SelectItem>
-                <SelectItem value="retail">Retail</SelectItem>
-                <SelectItem value="ecommerce">Ecommerce</SelectItem>
-                <SelectItem value="staff">Staff</SelectItem>
+                {customerTypeFilterOptions.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -1127,10 +1179,6 @@ export function CustomerList() {
                 } : null}
                 onOrderCreated={() => {
                   handleOrderDialogClose();
-                  toast({
-                    title: "Success",
-                    description: "Readymade order created successfully",
-                  });
                 }}
               />
             ) : (
@@ -1138,10 +1186,6 @@ export function CustomerList() {
                 preSelectedCustomer={selectedCustomerForOrder}
                 onOrderCreated={() => {
                   handleOrderDialogClose();
-                  toast({
-                    title: "Success",
-                    description: "Custom order created successfully",
-                  });
                 }}
               />
             )}

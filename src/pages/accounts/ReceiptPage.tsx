@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ErpLayout } from '@/components/ErpLayout';
-import { BackButton } from '@/components/common/BackButton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,16 +12,18 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelect';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { formatCurrency, formatDateIndian } from '@/lib/utils';
 import { getCustomerMobile } from '@/lib/customerContact';
-import { calculateOrderSummary } from '@/utils/priceCalculation';
+import { getOrderCalculatedTotals, fetchOrderIdsWithActiveCreditReceipt } from '@/utils/orderFinancials';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar as CalendarIcon, Download, Printer, Search } from 'lucide-react';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import '../OrdersPageViewSwitch.css';
+import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 
 type ReferenceType = 'order';
 
@@ -35,6 +36,10 @@ interface ReferenceResult {
   customer_name?: string;
   total_amount?: number;
   balance_amount?: number;
+  /** Populated for orders; used in UI / receipt preview */
+  additional_charges?: Array<{ particular: string; amount_incl_gst: number }>;
+  payment_due_date?: string | null;
+  has_credit_receipt?: boolean;
 }
 
 interface Customer {
@@ -51,70 +56,10 @@ interface Customer {
   gstin: string | null;
 }
 
-/** Compute order total from items (+ optional additional charges) and pending = total - receipts. Matches quotation total. */
-let orderAdditionalChargesAvailable: boolean | null = null;
-
-function isMissingRelationError(err: any): boolean {
-  const msg = String(err?.message || '').toLowerCase();
-  const details = String(err?.details || '').toLowerCase();
-  return (
-    msg.includes('relation') ||
-    msg.includes('does not exist') ||
-    msg.includes('not found') ||
-    details.includes('relation') ||
-    details.includes('does not exist')
-  );
-}
-
-async function safeFetchOrderAdditionalCharges(orderId: string): Promise<Array<{ amount_incl_gst?: number }>> {
-  if (orderAdditionalChargesAvailable === false) return [];
-  const { data, error } = await supabase
-    .from('order_additional_charges')
-    .select('amount_incl_gst')
-    .eq('order_id', orderId);
-
-  if (error) {
-    if (isMissingRelationError(error)) {
-      orderAdditionalChargesAvailable = false;
-      return [];
-    }
-    // Non-schema errors should still surface in console for investigation
-    console.warn('order_additional_charges fetch error:', error);
-    return [];
-  }
-
-  orderAdditionalChargesAvailable = true;
-  return (data || []) as Array<{ amount_incl_gst?: number }>;
-}
-
-async function getOrderCalculatedTotals(orderId: string, orderNumber: string): Promise<{ calculatedTotal: number; totalReceipts: number; pendingAmount: number }> {
-  const { data: order } = await supabase
-    .from('orders')
-    .select('id, final_amount, gst_rate')
-    .eq('id', orderId)
-    .single();
-  const { data: orderItems } = await supabase
-    .from('order_items')
-    .select('*, size_prices, sizes_quantities, specifications')
-    .eq('order_id', orderId);
-  const { data: existingReceipts } = await supabase
-    .from('receipts')
-    .select('amount')
-    .eq('reference_id', orderId)
-    .eq('reference_type', 'order');
-  const additionalCharges = await safeFetchOrderAdditionalCharges(orderId);
-
-  let calculatedTotal = order?.final_amount ?? 0;
-  if (orderItems && orderItems.length > 0 && order) {
-    const summary = calculateOrderSummary(orderItems, order);
-    calculatedTotal = summary.grandTotal;
-  }
-  const additionalTotal = (additionalCharges || []).reduce((s, c) => s + Number((c as any).amount_incl_gst || 0), 0);
-  calculatedTotal += additionalTotal;
-
-  const totalReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
-  const pendingAmount = Math.max(0, calculatedTotal - totalReceipts);
-  return { calculatedTotal, totalReceipts, pendingAmount };
+function defaultCreditDueDate(): Date {
+  const d = new Date();
+  d.setDate(d.getDate() + 30);
+  return d;
 }
 
 export default function ReceiptPage() {
@@ -124,6 +69,12 @@ export default function ReceiptPage() {
   const navState: any = location.state as any;
   const prefill: any = navState?.prefill;
   const initialTab: 'view' | 'create' = navState?.tab === 'create' ? 'create' : 'view';
+  const [activeReceiptTab, setActiveReceiptTab] = useState<'view' | 'create'>(initialTab);
+
+  useEffect(() => {
+    const t = (location.state as { tab?: string } | null)?.tab === 'create' ? 'create' : 'view';
+    setActiveReceiptTab(t);
+  }, [location.key]);
 
   // Customer selection
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -135,6 +86,8 @@ export default function ReceiptPage() {
   const [selected, setSelected] = useState<ReferenceResult | null>(null);
   const [refOpen, setRefOpen] = useState(false);
   const [openPreview, setOpenPreview] = useState(false);
+  /** Snapshot for receipt preview after form clears `selected` */
+  const [previewOrderSnapshot, setPreviewOrderSnapshot] = useState<ReferenceResult | null>(null);
   const [receiptNumber, setReceiptNumber] = useState('');
   const [date, setDate] = useState<Date>(new Date());
   const [receiptAmount, setReceiptAmount] = useState<number>(0);
@@ -162,8 +115,8 @@ export default function ReceiptPage() {
   const [editNotes, setEditNotes] = useState('');
   const [editDate, setEditDate] = useState<Date>(new Date());
   
-  // Credit order state
-  const [isCreditOrder, setIsCreditOrder] = useState(false);
+  /** Required when using Credit Order (₹0); overwritten on each credit receipt per order. */
+  const [creditPaymentDueDate, setCreditPaymentDueDate] = useState<Date>(() => defaultCreditDueDate());
 
   // When customerId changes, load basic customer details
   useEffect(() => {
@@ -200,16 +153,25 @@ export default function ReceiptPage() {
       try {
         const { data: ord } = await supabase
           .from('orders')
-          .select('id, order_number, order_date, customer_id')
+          .select('id, order_number, order_date, customer_id, payment_due_date')
           .eq('id', prefill.id)
           .single();
         if (!ord) return;
         const { calculatedTotal, pendingAmount } = await getOrderCalculatedTotals(ord.id, ord.order_number);
+        const { data: chRows } = await supabase
+          .from('order_additional_charges')
+          .select('particular, amount_incl_gst')
+          .eq('order_id', ord.id);
+        const prefillCharges = (chRows || []).map((r: any) => ({
+          particular: String(r.particular || ''),
+          amount_incl_gst: Number(r.amount_incl_gst || 0),
+        }));
         const { data: cust } = await supabase
           .from('customers')
           .select('*')
           .eq('id', ord.customer_id)
           .single();
+        const creditSet = await fetchOrderIdsWithActiveCreditReceipt([ord.id]);
         setCustomer((cust || null) as Customer | null);
         setCustomerId(ord.customer_id);
         setSelected({
@@ -221,6 +183,9 @@ export default function ReceiptPage() {
           customer_name: cust?.company_name,
           total_amount: calculatedTotal,
           balance_amount: pendingAmount,
+          additional_charges: prefillCharges.length > 0 ? prefillCharges : undefined,
+          payment_due_date: (ord as { payment_due_date?: string | null }).payment_due_date ?? null,
+          has_credit_receipt: creditSet.has(ord.id),
         });
         setReceiptReference(ord.order_number);
         setAmount(String(pendingAmount ?? ''));
@@ -292,7 +257,7 @@ export default function ReceiptPage() {
         // Orders for customer only
         let ordersQuery = supabase
           .from('orders')
-          .select('id, order_number, customer_id, order_date, final_amount, balance_amount, gst_rate')
+          .select('id, order_number, customer_id, order_date, final_amount, balance_amount, gst_rate, payment_due_date')
           .eq('customer_id', customer.id)
           .limit(20);
         if (refSearch) {
@@ -300,30 +265,31 @@ export default function ReceiptPage() {
         }
         const { data: orders } = await ordersQuery;
         if (orders) {
-          // Fetch order items for each order to calculate correct totals
-          for (const o of orders) {
-            const { data: orderItems } = await supabase
-              .from('order_items')
-              .select('*, size_prices, sizes_quantities, specifications')
-              .eq('order_id', o.id);
-            
-            // Calculate correct total using size-based pricing
-            let calculatedTotal = o.final_amount; // Fallback to final_amount
-            if (orderItems && orderItems.length > 0) {
-              const summary = calculateOrderSummary(orderItems, o);
-              calculatedTotal = summary.grandTotal;
+          const orderIdList = (orders as any[]).map((o) => o.id).filter(Boolean);
+          const chargesByOrder = new Map<string, Array<{ particular: string; amount_incl_gst: number }>>();
+          if (orderIdList.length > 0) {
+            const { data: chargeRows, error: chErr } = await supabase
+              .from('order_additional_charges')
+              .select('order_id, particular, amount_incl_gst')
+              .in('order_id', orderIdList as any);
+            if (!chErr && chargeRows) {
+              for (const row of chargeRows as any[]) {
+                if (!row?.order_id) continue;
+                const list = chargesByOrder.get(row.order_id) || [];
+                list.push({
+                  particular: String(row.particular || ''),
+                  amount_incl_gst: Number(row.amount_incl_gst || 0),
+                });
+                chargesByOrder.set(row.order_id, list);
+              }
             }
-            
-            // Calculate pending amount (calculated total - existing receipts)
-            const { data: existingReceipts } = await supabase
-              .from('receipts')
-              .select('amount')
-              .eq('reference_id', o.id)
-              .eq('reference_type', 'order');
-            
-            const totalReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
-            const pendingAmount = calculatedTotal - totalReceipts;
-            
+          }
+
+          const creditOrderIds = await fetchOrderIdsWithActiveCreditReceipt(orderIdList);
+
+          for (const o of orders) {
+            const { calculatedTotal, pendingAmount } = await getOrderCalculatedTotals(o.id, o.order_number);
+            const extraLines = chargesByOrder.get(o.id) || [];
             res.push({
               id: o.id,
               type: 'order',
@@ -333,6 +299,9 @@ export default function ReceiptPage() {
               customer_name: customer.company_name,
               total_amount: calculatedTotal,
               balance_amount: pendingAmount,
+              additional_charges: extraLines.length > 0 ? extraLines : undefined,
+              payment_due_date: (o as { payment_due_date?: string | null }).payment_due_date ?? null,
+              has_credit_receipt: creditOrderIds.has(o.id),
             });
           }
         }
@@ -359,13 +328,18 @@ export default function ReceiptPage() {
       return;
     }
 
+    if (isCredit) {
+      if (!creditPaymentDueDate || Number.isNaN(creditPaymentDueDate.getTime())) {
+        toast.error('Please select payment due date for the credit order');
+        return;
+      }
+    }
+
     try {
       setGeneratingReceipt(true);
-      console.log('Starting receipt generation with:', { selected, amount, customer });
 
       // Validate amount doesn't exceed order total
       if (selected.type === 'order') {
-        console.log('Validating order amount...');
         const { data: order, error: orderError } = await supabase
           .from('orders')
           .select('id, final_amount, balance_amount, gst_rate')
@@ -373,53 +347,20 @@ export default function ReceiptPage() {
           .single();
 
         if (orderError) {
-          console.error('Error fetching order:', orderError);
           toast.error('Failed to fetch order details');
           return;
         }
 
         if (order) {
-          console.log('Order found:', order);
-          const { calculatedTotal: orderTotal } = await getOrderCalculatedTotals(order.id, selected.number);
-          const calculatedTotal = orderTotal;
+          const { calculatedTotal, totalReceipts } = await getOrderCalculatedTotals(order.id, selected.number);
+          const totalWithNewReceipt = totalReceipts + Number(amount || 0);
 
-          // Calculate total existing receipts for this order (match by order id for accuracy)
-          const { data: existingReceipts, error: receiptsError } = await supabase
-            .from('receipts')
-            .select('amount')
-            .eq('reference_id', order.id)
-            .eq('reference_type', 'order');
-
-          if (receiptsError) {
-            console.error('Error fetching existing receipts:', receiptsError);
-            toast.error('Failed to validate existing receipts');
-            return;
-          }
-
-          const totalExistingReceipts = (existingReceipts || []).reduce((sum, r) => sum + Number(r.amount), 0);
-          const totalWithNewReceipt = totalExistingReceipts + Number(amount || 0);
-
-          console.log('Receipt validation:', {
-            totalExistingReceipts,
-            newAmount: Number(amount || 0),
-            totalWithNewReceipt,
-            calculatedTotal,
-            orderAmount: Number(order.final_amount),
-            isCredit
-          });
-
-          // Skip overpayment validation for credit orders (₹0 amount)
           if (!isCredit && totalWithNewReceipt > calculatedTotal) {
             toast.error(`Total receipts (${formatCurrency(totalWithNewReceipt)}) cannot exceed order amount (${formatCurrency(calculatedTotal)})`);
             return;
           }
-        } else {
-          console.warn('Order not found for validation');
         }
       }
-
-      // Receipt number will be auto-generated by database trigger
-      console.log('Receipt number will be auto-generated by database...');
 
       // Create receipt
       const payload = {
@@ -436,8 +377,6 @@ export default function ReceiptPage() {
         notes: isCredit ? 'Credit order - Payment pending' : (notes || null),
         entry_date: date.toISOString()
       };
-
-      console.log('Creating receipt with payload:', payload);
 
       // Try to create receipt with retry logic for race conditions
       let newReceipt = null;
@@ -483,31 +422,31 @@ export default function ReceiptPage() {
         return;
       }
 
-      console.log('Receipt created successfully:', newReceipt);
-
       // Update order balance if reference is order (use same calculated total as quotation)
       if (selected.type === 'order') {
-        console.log('Updating order balance...');
         const { data: order, error: orderUpdateError } = await supabase
           .from('orders')
           .select('id, order_type, status')
           .eq('order_number', selected.number)
           .single();
 
-        if (orderUpdateError) {
-          console.error('Error fetching order for balance update:', orderUpdateError);
-        } else if (order) {
+        if (!orderUpdateError && order) {
           const { pendingAmount: newBalance } = await getOrderCalculatedTotals(order.id, selected.number);
-          const updateData: any = { balance_amount: newBalance };
+          const updateData: Record<string, unknown> = { balance_amount: newBalance };
           if (order.order_type === 'readymade' && order.status === 'pending') {
             updateData.status = 'confirmed';
           }
+          if (isCredit && creditPaymentDueDate) {
+            updateData.payment_due_date = creditPaymentDueDate.toISOString().split('T')[0];
+          }
           const { error: balanceUpdateError } = await supabase
             .from('orders')
-            .update(updateData)
+            .update(updateData as any)
             .eq('id', order.id);
           if (balanceUpdateError) {
             console.error('Error updating order balance:', balanceUpdateError);
+          } else if ('status' in updateData && updateData.status != null) {
+            playOrderStatusChangeSound();
           }
         }
       }
@@ -549,6 +488,13 @@ export default function ReceiptPage() {
       setReceiptReference(selected.number);
       
       setReceiptNumber(newReceipt.receipt_number);
+      const snap: ReferenceResult = {
+        ...selected,
+        ...(isCredit && creditPaymentDueDate
+          ? { payment_due_date: creditPaymentDueDate.toISOString().split('T')[0], has_credit_receipt: true }
+          : {}),
+      };
+      setPreviewOrderSnapshot(snap);
       setOpenPreview(true);
 
       // Refresh order data to update UI
@@ -560,6 +506,7 @@ export default function ReceiptPage() {
       setVerifiedBy('');
       setNotes('');
       setSelected(null);
+      if (isCredit) setCreditPaymentDueDate(defaultCreditDueDate());
 
       // Refresh receipts list
       await fetchReceipts();
@@ -912,7 +859,7 @@ export default function ReceiptPage() {
         if (r.reference_number) {
           const { data } = await supabase
             .from('orders')
-            .select('id, customer_id, order_number, order_date, final_amount, balance_amount')
+            .select('id, customer_id, order_number, order_date, final_amount, balance_amount, payment_due_date')
             .eq('order_number', r.reference_number)
             .single();
           ord = data;
@@ -920,7 +867,7 @@ export default function ReceiptPage() {
         if (!ord && r.reference_id) {
           const { data } = await supabase
             .from('orders')
-            .select('id, customer_id, order_number, order_date, final_amount, balance_amount')
+            .select('id, customer_id, order_number, order_date, final_amount, balance_amount, payment_due_date')
             .eq('id', r.reference_id)
             .single();
           ord = data;
@@ -938,7 +885,16 @@ export default function ReceiptPage() {
       setReceiptReference(r.reference_number || '');
       if (ord) {
         const { calculatedTotal, pendingAmount } = await getOrderCalculatedTotals(ord.id, ord.order_number);
-        setSelected({
+        const { data: chRows } = await supabase
+          .from('order_additional_charges')
+          .select('particular, amount_incl_gst')
+          .eq('order_id', ord.id);
+        const extraLines = (chRows || []).map((row: any) => ({
+          particular: String(row.particular || ''),
+          amount_incl_gst: Number(row.amount_incl_gst || 0),
+        }));
+        const creditSet = await fetchOrderIdsWithActiveCreditReceipt([ord.id]);
+        const refRow: ReferenceResult = {
           id: ord.id,
           type: 'order',
           number: ord.order_number,
@@ -947,9 +903,14 @@ export default function ReceiptPage() {
           customer_name: customer?.company_name,
           total_amount: calculatedTotal,
           balance_amount: pendingAmount,
-        });
+          additional_charges: extraLines.length > 0 ? extraLines : undefined,
+          payment_due_date: ord.payment_due_date ?? null,
+          has_credit_receipt: creditSet.has(ord.id),
+        };
+        setSelected(refRow);
+        setPreviewOrderSnapshot(refRow);
       } else {
-        setSelected({
+        const fallbackRef: ReferenceResult = {
           id: '',
           type: 'order',
           number: r.reference_number || '',
@@ -958,7 +919,9 @@ export default function ReceiptPage() {
           customer_name: customer?.company_name,
           total_amount: Number(r.amount) || 0,
           balance_amount: undefined,
-        });
+        };
+        setSelected(fallbackRef);
+        setPreviewOrderSnapshot(fallbackRef);
       }
       setOpenPreview(true);
     } catch (e) {
@@ -971,24 +934,33 @@ export default function ReceiptPage() {
     try {
       const { data: order } = await supabase
         .from('orders')
-        .select('id, order_number, customer_id, order_date')
+        .select('id, order_number, customer_id, order_date, payment_due_date')
         .eq('order_number', orderNumber)
         .single();
 
       if (!order) return;
       const { calculatedTotal, pendingAmount } = await getOrderCalculatedTotals(order.id, orderNumber);
+      const creditSet = await fetchOrderIdsWithActiveCreditReceipt([order.id]);
+      const patch = {
+        total_amount: calculatedTotal,
+        balance_amount: pendingAmount,
+        payment_due_date: (order as { payment_due_date?: string | null }).payment_due_date ?? null,
+        has_credit_receipt: creditSet.has(order.id),
+      };
 
       if (selected && selected.number === orderNumber) {
         setSelected({
           ...selected,
-          total_amount: calculatedTotal,
-          balance_amount: pendingAmount,
+          ...patch,
         });
       }
+      setPreviewOrderSnapshot((prev) =>
+        prev && prev.number === orderNumber ? { ...prev, ...patch } : prev
+      );
       setResults(prevResults =>
         prevResults.map(r =>
           r.number === orderNumber
-            ? { ...r, total_amount: calculatedTotal, balance_amount: pendingAmount }
+            ? { ...r, ...patch }
             : r
         ));
     } catch (error) {
@@ -996,20 +968,31 @@ export default function ReceiptPage() {
     }
   };
 
+  const receiptOrderContext = previewOrderSnapshot ?? selected;
+
   return (
     <ErpLayout>
       <div className="space-y-6">
-        <div className="flex items-center">
-          <BackButton to="/accounts/invoices" label="Back to Accounts" />
+        <div className="flex justify-between items-center">
+          <label
+            htmlFor="receipt-page-view-switch"
+            className="orders-view-switch"
+            aria-label="Switch between viewing transactions and creating a receipt"
+          >
+            <input
+              id="receipt-page-view-switch"
+              type="checkbox"
+              role="switch"
+              aria-checked={activeReceiptTab === 'create'}
+              checked={activeReceiptTab === 'create'}
+              onChange={(e) => setActiveReceiptTab(e.target.checked ? 'create' : 'view')}
+            />
+            <span>View Txn</span>
+            <span>Create Receipt</span>
+          </label>
         </div>
-        <Tabs defaultValue={initialTab} className="w-full">
-          <TabsList>
-            <TabsTrigger value="view">View Txn</TabsTrigger>
-            <TabsTrigger value="create">Create Receipt</TabsTrigger>
-          </TabsList>
 
-          {/* View Txn */}
-          <TabsContent value="view">
+        {activeReceiptTab === 'view' && (
             <Card>
               <CardHeader>
                 <CardTitle>Receipt Transactions</CardTitle>
@@ -1078,10 +1061,9 @@ export default function ReceiptPage() {
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
+        )}
 
-          {/* Create Receipt */}
-          <TabsContent value="create">
+        {activeReceiptTab === 'create' && (
             <Card>
               <CardHeader>
                 <CardTitle>Create Receipt</CardTitle>
@@ -1142,8 +1124,36 @@ export default function ReceiptPage() {
                   </PopoverContent>
                 </Popover>
                 {selected && (
-                  <div className="text-xs text-muted-foreground mt-1">
-                    Pending Amount: <span className="font-semibold text-amber-700">{formatCurrency(selected.balance_amount ?? 0)}</span>
+                  <div className="text-xs text-muted-foreground mt-1.5 space-y-1 rounded-md border bg-muted/30 p-2">
+                    <div>
+                      Order total:{' '}
+                      <span className="font-semibold text-foreground">{formatCurrency(selected.total_amount ?? 0)}</span>
+                    </div>
+                    {selected.additional_charges && selected.additional_charges.length > 0 && (
+                      <div className="space-y-0.5 pl-1 border-l-2 border-primary/30">
+                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Additional charges</div>
+                        {selected.additional_charges.map((c, i) => (
+                          <div key={i} className="flex justify-between gap-2">
+                            <span className="truncate">{c.particular?.trim() || 'Charge'}</span>
+                            <span className="font-mono shrink-0">{formatCurrency(c.amount_incl_gst)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div>
+                      Pending:{' '}
+                      <span className="font-semibold text-amber-700">{formatCurrency(selected.balance_amount ?? 0)}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {selected.has_credit_receipt && (
+                        <CreditOrderBadge>Credit order</CreditOrderBadge>
+                      )}
+                      {selected.payment_due_date && (
+                        <Badge variant="outline" className="text-[10px] font-normal">
+                          Due {formatDateIndian(selected.payment_due_date)}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1162,6 +1172,29 @@ export default function ReceiptPage() {
                   </PopoverContent>
                 </Popover>
               </div>
+            </div>
+
+            <div className="rounded-lg border border-dashed p-3 space-y-2 bg-muted/20">
+              <Label className="text-sm font-medium">Payment due date (for credit orders)</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button type="button" variant="outline" className="w-full max-w-xs justify-start">
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {formatDateIndian(creditPaymentDueDate)}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={creditPaymentDueDate}
+                    onSelect={(d) => d && setCreditPaymentDueDate(d)}
+                    initialFocus
+                  />
+                </PopoverContent>
+              </Popover>
+              <p className="text-xs text-muted-foreground">
+                Required when you use &quot;Credit Order (₹0)&quot;. Saves to the order as expected collection date.
+              </p>
             </div>
 
             {/* Payment details */}
@@ -1229,11 +1262,16 @@ export default function ReceiptPage() {
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
-        </Tabs>
+        )}
 
         {/* Preview Dialog */}
-        <Dialog open={openPreview} onOpenChange={setOpenPreview}>
+        <Dialog
+          open={openPreview}
+          onOpenChange={(open) => {
+            setOpenPreview(open);
+            if (!open) setPreviewOrderSnapshot(null);
+          }}
+        >
           <DialogContent className="max-w-4xl">
             <DialogHeader>
               <DialogTitle>Receipt Preview — {receiptNumber}</DialogTitle>
@@ -1318,10 +1356,31 @@ export default function ReceiptPage() {
                 </div>
                 <div className="space-y-1 text-right">
                   <div><span className="font-medium">Amount:</span> {formatCurrency(receiptAmount)}</div>
-                  {selected?.type === 'order' && selected?.total_amount != null && (
+                  {receiptOrderContext?.type === 'order' && receiptOrderContext?.total_amount != null && (
                     <>
-                      <div><span className="font-medium">Order Total:</span> {formatCurrency(selected.total_amount)}</div>
-                      <div><span className="font-medium">Pending Amount:</span> <span className="text-amber-700 font-semibold">{formatCurrency(selected.balance_amount ?? 0)}</span></div>
+                      <div className="flex flex-wrap gap-1 justify-end">
+                        {receiptOrderContext.has_credit_receipt && (
+                          <CreditOrderBadge>Credit order</CreditOrderBadge>
+                        )}
+                        {receiptOrderContext.payment_due_date && (
+                          <Badge variant="outline" className="text-[10px] font-normal">
+                            Due {formatDateIndian(receiptOrderContext.payment_due_date)}
+                          </Badge>
+                        )}
+                      </div>
+                      <div><span className="font-medium">Order Total:</span> {formatCurrency(receiptOrderContext.total_amount)}</div>
+                      {receiptOrderContext.additional_charges && receiptOrderContext.additional_charges.length > 0 && (
+                        <div className="text-left space-y-0.5 pt-1 border-t border-dashed">
+                          <div className="font-medium text-xs text-muted-foreground">Additional charges</div>
+                          {receiptOrderContext.additional_charges.map((c, i) => (
+                            <div key={i} className="flex justify-between gap-2 text-sm">
+                              <span className="truncate">{c.particular?.trim() || 'Charge'}</span>
+                              <span>{formatCurrency(c.amount_incl_gst)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div><span className="font-medium">Pending Amount:</span> <span className="text-amber-700 font-semibold">{formatCurrency(receiptOrderContext.balance_amount ?? 0)}</span></div>
                     </>
                   )}
                   {referenceId && <div><span className="font-medium">Reference ID:</span> {referenceId}</div>}

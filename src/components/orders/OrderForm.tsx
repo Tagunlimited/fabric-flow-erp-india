@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelect';
 import { ProductCustomizationModal } from './ProductCustomizationModal';
+import { BrandingPlacementCombobox } from './BrandingPlacementCombobox';
 import { CustomizationColorChips } from '@/components/common/CustomizationColorChips';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +25,17 @@ import { getOrderItemDisplayImageForForm, getImageSrcFromFileOrUrl } from '@/uti
 import { usePageState } from '@/contexts/AppCacheContext';
 import { getSortedSizes, sortSizesQuantities, SizeType as SizeTypeUtil } from '@/utils/sizeSorting';
 import { initializeSizePrices, calculateSizeBasedTotal, calculateAverageUnitPrice } from '@/utils/priceCalculation';
+
+function formatOrderCreateError(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const e = error as { message?: string; details?: string; hint?: string; code?: string };
+    const parts = [e.message, e.details, e.hint].filter((p): p is string => Boolean(p && String(p).trim()));
+    if (parts.length) return parts.join(' — ');
+    if (e.code) return `Error ${e.code}`;
+  }
+  return 'Failed to create order';
+}
 
 interface Customer {
   id: string;
@@ -319,14 +331,16 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
   // DISABLED: Visibility change handler - using centralized visibility manager
   // No action needed on visibility change to prevent unwanted refreshes
 
-  const resetData = useCallback(() => {
+  const resetData = useCallback((options?: { silent?: boolean }) => {
     resetFormState();
     setMainImages({});
     setSelectedCustomer(null);
     setSelectedCategoryImage('');
     setIsCategoryLocked(false);
     setSelectedSizesForPriceEdit({});
-    toast.success('Form reset successfully');
+    if (!options?.silent) {
+      toast.success('Form reset successfully');
+    }
   }, [resetFormState]);
 
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -793,11 +807,9 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
           if (data) {
             allFabrics = [...allFabrics, ...data];
-            console.log(`📦 Fetched ${data.length} fabrics (batch ${Math.floor(from / pageSize) + 1}), total so far: ${allFabrics.length}`);
-            
+
             // Check if we've fetched all records
             if (count !== null) {
-              console.log(`📊 Total fabrics in database: ${count}`);
               if (allFabrics.length >= count) {
                 hasMore = false;
               } else {
@@ -833,26 +845,14 @@ const getSelectedFabricVariant = (productIndex: number) => {
       if (sizeTypesRes.data) setSizeTypes(sizeTypesRes.data as any);
       if (allFabrics) {
         const fabricsData = allFabrics as any;
-        console.log(`📦 Loaded ${fabricsData.length} fabrics from database (all records)`);
-        const activeFabrics = fabricsData.filter((f: any) => f.status === 'active');
-        console.log(`✅ Active fabrics: ${activeFabrics.length}`);
-        const uniqueNames = new Set(fabricsData.map((f: any) => f.fabric_name)).size;
-        console.log(`📝 Unique fabric names: ${uniqueNames}`);
-        const uniqueNameGsmCombos = new Set(fabricsData.map((f: any) => `${f.fabric_name}|${f.gsm || ''}`)).size;
-        console.log(`🔢 Unique fabric_name × GSM combinations: ${uniqueNameGsmCombos}`);
-        console.log(`📋 All unique fabric names:`, Array.from(new Set(fabricsData.map((f: any) => f.fabric_name))).sort());
         setFabrics(fabricsData);
       }
       if (employeesRes.data) {
-        console.log('Employees fetched:', employeesRes.data);
         // Filter employees to only show those from Sales Department
         const salesEmployees = (employeesRes.data as any[]).filter((emp: any) => 
           emp.department && emp.department.toLowerCase().includes('sales')
         );
-        console.log('Sales employees filtered:', salesEmployees);
         setEmployees(salesEmployees as any);
-      } else {
-        console.log('No employees found or error:', employeesRes.error);
       }
       if (brandingTypesRes.data) setBrandingTypes(brandingTypesRes.data as any);
     } catch (error) {
@@ -946,7 +946,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
       
       // Only process if fabric has a name
       if (!fabricName) {
-        console.warn('Skipping fabric without name:', fabric);
         return;
       }
       
@@ -963,24 +962,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
     const result = Array.from(fabricMap.values()).sort((a, b) => {
       return (a.fabric_name || '').localeCompare(b.fabric_name || '');
     });
-    
-    // Detailed logging for debugging
-    const uniqueFabricNames = new Set(result.map(f => f.fabric_name || '')).size;
-    // Also check what's in the fabrics array
-    const totalFabricsInState = fabrics.length;
-    const activeInState = fabrics.filter(f => f.status === 'active').length;
-    const uniqueNamesInState = new Set(fabrics.map(f => f.fabric_name || '')).size;
-    
-    console.log(`📊 Product Dropdown Statistics:`);
-    console.log(`   Total fabrics in state: ${totalFabricsInState}`);
-    console.log(`   Active fabrics in state: ${activeInState}`);
-    console.log(`   Unique fabric names in state: ${uniqueNamesInState}`);
-    console.log(`   Active fabrics after filter: ${allActiveFabrics.length}`);
-    console.log(`   Unique fabric names in result: ${uniqueFabricNames}`);
-    console.log(`   Total unique product options: ${result.length}`);
-    
-    // Log all fabric names to see what we have
-    console.log(`   All fabric names in database:`, Array.from(new Set(fabrics.map(f => f.fabric_name || ''))).sort());
     
     return result;
   };
@@ -1382,7 +1363,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
           
           // Set initial status: 'designing_done' if mockup images exist, otherwise 'pending'
           const initialStatus: 'designing_done' | 'pending' = hasMockupImages ? 'designing_done' : 'pending';
-          console.log(`Setting initial order status to '${initialStatus}' (has mockup images: ${hasMockupImages})`);
 
       const orderData = {
         order_number: orderNumber,
@@ -1402,8 +1382,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
         notes: ''
       };
 
-          console.log(`Attempt ${attempt + 1}: Inserting order data:`, orderData);
-      
           const { data, error: orderError } = await supabase
         .from('orders')
         .insert(orderData as any)
@@ -1413,7 +1391,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
       if (orderError) {
             // If it's a duplicate key error, retry with a new order number
             if (orderError.code === '23505' && attempt < maxRetries - 1) {
-              console.warn(`Duplicate order number detected on attempt ${attempt + 1}, retrying...`);
               await new Promise(resolve => setTimeout(resolve, 100)); // Small delay before retry
               continue;
             }
@@ -1421,7 +1398,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
       }
 
           orderResult = data;
-      console.log('Order created successfully:', orderResult);
           break; // Success, exit the retry loop
         } catch (retryError: any) {
           if (attempt === maxRetries - 1) {
@@ -1509,41 +1485,52 @@ const getSelectedFabricVariant = (productIndex: number) => {
           }
         };
 
-        console.log('Inserting order item data:', orderItemData);
-        console.log('Customizations being saved:', product.customizations);
-        
         const { error: itemError } = await supabase
           .from('order_items')
           .insert(orderItemData as any);
 
         if (itemError) {
-          console.error('Order item insertion error:', itemError);
-          console.error('Order item data that failed:', JSON.stringify(orderItemData, null, 2));
+          console.error('Order item insert failed:', formatOrderCreateError(itemError));
           throw itemError;
         }
+      }
 
-        console.log(`Order item ${productIndex + 1} created successfully`);
+      const orderId = (orderResult as any).id as string;
+      const chargesToInsert = formData.additional_charges
+        .filter((c) => c.particular?.trim() && Number(c.rate) > 0)
+        .map((charge) => ({
+          order_id: orderId,
+          particular: charge.particular.trim(),
+          rate: Number(charge.rate),
+          gst_percentage: Number(charge.gst_percentage ?? 0),
+          amount_incl_gst: Number(charge.amount_incl_gst ?? 0),
+        }));
+
+      if (chargesToInsert.length > 0) {
+        const { error: chargesError } = await supabase
+          .from('order_additional_charges')
+          .insert(chargesToInsert as any);
+        if (chargesError) {
+          console.error('order_additional_charges insert failed:', formatOrderCreateError(chargesError));
+          throw chargesError;
+        }
       }
 
       toast.success('Order created successfully!');
-      
-      // Clear saved form data after successful order creation
-      resetData();
-      
-      console.log('OrderForm: Order created successfully, navigating...');
+
+      // Clear saved form data after successful order creation (no extra "form reset" toast)
+      resetData({ silent: true });
       
       // Call callback if provided (for dialog mode), otherwise navigate to orders page
       if (onOrderCreated) {
-        console.log('OrderForm: Calling onOrderCreated callback');
         onOrderCreated();
       } else {
-        console.log('OrderForm: Navigating to /orders');
         navigate('/orders');
       }
     } catch (error) {
-      console.error('Error creating order:', error);
-      console.error('Error details:', JSON.stringify(error, null, 2));
-      toast.error('Failed to create order');
+      const msg = formatOrderCreateError(error);
+      console.error('Order create failed:', msg, error);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -1988,15 +1975,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
               <SelectValue placeholder="Select product" />
             </SelectTrigger>
             <SelectContent>
-              {(() => {
-                const filteredFabrics = getFilteredFabricNames(productIndex);
-                console.log(`Product dropdown: ${filteredFabrics.length} products visible`);
-                return filteredFabrics.map((fabric) => (
+              {getFilteredFabricNames(productIndex).map((fabric) => (
                 <SelectItem key={fabric.id} value={fabric.id}>
                   {fabric.fabric_name}
                 </SelectItem>
-                ));
-              })()}
+              ))}
             </SelectContent>
           </Select>
         </div>
@@ -2885,10 +2868,9 @@ const getSelectedFabricVariant = (productIndex: number) => {
                             
                             <div className="space-y-2">
                               <Label>Placement</Label>
-                              <Input
+                              <BrandingPlacementCombobox
                                 value={brandingItem.placement}
-                                onChange={(e) => updateBrandingItem(productIndex, brandingIndex, 'placement', e.target.value)}
-                                placeholder="e.g., Front chest, Back, etc."
+                                onChange={(v) => updateBrandingItem(productIndex, brandingIndex, 'placement', v)}
                               />
                             </div>
                             

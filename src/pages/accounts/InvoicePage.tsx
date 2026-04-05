@@ -11,7 +11,8 @@ import { formatCurrency } from '@/lib/utils';
 import { getCustomerMobile } from '@/lib/customerContact';
 import { Eye, Plus } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import '../OrdersPageViewSwitch.css';
+import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 
 interface Order {
   id: string;
@@ -286,6 +287,7 @@ export default function InvoicePage() {
         console.error('Error updating order status:', orderUpdateError);
         toast.warning('Invoice created but failed to update order status');
       } else {
+        playOrderStatusChangeSound();
         toast.success('Invoice created successfully and order marked as completed');
       }
       
@@ -403,17 +405,27 @@ export default function InvoicePage() {
           <p className="text-muted-foreground mt-1">View all dispatched orders and create invoices</p>
         </div>
         
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'pending' | 'completed')}>
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="pending">
-              Pending ({pendingOrders.length})
-            </TabsTrigger>
-            <TabsTrigger value="completed">
-              Completed ({completedOrders.length})
-            </TabsTrigger>
-          </TabsList>
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <label
+              htmlFor="invoice-page-view-switch"
+              className="orders-view-switch"
+              aria-label="Switch between pending orders and completed invoices"
+            >
+              <input
+                id="invoice-page-view-switch"
+                type="checkbox"
+                role="switch"
+                aria-checked={activeTab === 'completed'}
+                checked={activeTab === 'completed'}
+                onChange={(e) => setActiveTab(e.target.checked ? 'completed' : 'pending')}
+              />
+              <span>Pending ({pendingOrders.length})</span>
+              <span>Completed ({completedOrders.length})</span>
+            </label>
+          </div>
 
-          <TabsContent value="pending">
+          {activeTab === 'pending' && (
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -450,9 +462,9 @@ export default function InvoicePage() {
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
+          )}
 
-          <TabsContent value="completed">
+          {activeTab === 'completed' && (
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -489,8 +501,8 @@ export default function InvoicePage() {
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
-        </Tabs>
+          )}
+        </div>
       </div>
     </ErpLayout>
   );

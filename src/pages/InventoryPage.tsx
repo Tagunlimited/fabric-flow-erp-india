@@ -1,15 +1,24 @@
+import { useState } from "react";
 import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Package, AlertTriangle, CheckCircle, TrendingDown, Grid, Ruler } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Tabs, TabsContent, TabsTrigger } from "@/components/ui/tabs";
+import { ErpSegmentedTabList } from "@/components/ui/ErpSegmentedTabList";
+import { Package, AlertTriangle, CheckCircle, TrendingDown } from "lucide-react";
 import { ProductCategoryManager } from "@/components/inventory/ProductCategoryManager";
 import { FabricManagerNew } from "@/components/inventory/FabricManagerNew";
 import { SizeTypeManager } from "@/components/inventory/SizeTypeManager";
 
+const INVENTORY_TAB_ORDER = [
+  "overview",
+  "items",
+  "categories",
+  "fabrics",
+  "sizes",
+] as const;
+
 const InventoryPage = () => {
-  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<(typeof INVENTORY_TAB_ORDER)[number]>("overview");
+  const activeIdx = INVENTORY_TAB_ORDER.indexOf(activeTab);
 
   return (
     <ErpLayout>
@@ -81,14 +90,45 @@ const InventoryPage = () => {
           </Card>
         </div>
 
-        <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="items">Inventory Items</TabsTrigger>
-            <TabsTrigger value="categories">Product Categories</TabsTrigger>
-            <TabsTrigger value="fabrics">Fabrics</TabsTrigger>
-            <TabsTrigger value="sizes">Size Types</TabsTrigger>
-          </TabsList>
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) =>
+            setActiveTab(v as (typeof INVENTORY_TAB_ORDER)[number])
+          }
+          className="space-y-6"
+        >
+          <ErpSegmentedTabList segmentCount={INVENTORY_TAB_ORDER.length} activeIndex={activeIdx}>
+            <TabsTrigger
+              value="overview"
+              className="erp-segmented__btn focus-visible:ring-0 focus-visible:ring-offset-0"
+            >
+              Overview
+            </TabsTrigger>
+            <TabsTrigger
+              value="items"
+              className="erp-segmented__btn focus-visible:ring-0 focus-visible:ring-offset-0"
+            >
+              Inventory Items
+            </TabsTrigger>
+            <TabsTrigger
+              value="categories"
+              className="erp-segmented__btn focus-visible:ring-0 focus-visible:ring-offset-0"
+            >
+              Product Categories
+            </TabsTrigger>
+            <TabsTrigger
+              value="fabrics"
+              className="erp-segmented__btn focus-visible:ring-0 focus-visible:ring-offset-0"
+            >
+              Fabrics
+            </TabsTrigger>
+            <TabsTrigger
+              value="sizes"
+              className="erp-segmented__btn focus-visible:ring-0 focus-visible:ring-offset-0"
+            >
+              Size Types
+            </TabsTrigger>
+          </ErpSegmentedTabList>
 
           <TabsContent value="overview" className="space-y-6">
             <Card className="shadow-erp-md">
