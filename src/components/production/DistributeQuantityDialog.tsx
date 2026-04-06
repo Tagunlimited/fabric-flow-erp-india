@@ -49,6 +49,15 @@ interface BatchQuantity {
   };
 }
 
+export type LineAssignmentSavePayload = {
+  orderItemId: string | null;
+  sessionOutcome:
+    | 'advance_wizard'
+    | 'wizard_complete'
+    | 'single_exit'
+    | 'legacy_per_line_pdf';
+};
+
 interface DistributeQuantityDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -66,10 +75,17 @@ interface DistributeQuantityDialogProps {
   orderItems: any[];
   /** When set, header and size-type sorting follow this order line (multi-product orders). */
   selectedOrderItemId?: string | null;
-  /** After save, opens A5 job card preview from parent (survives this dialog unmount). */
+  /** After save, opens A5 job card preview from parent (single-line / legacy per-save PDF). */
   onJobCardDocumentReady?: (doc: BatchAssignmentDocumentData) => void;
-  /** Notifies parent which order line just got saved. */
-  onLineAssignmentSaved?: (orderItemId: string | null) => void;
+  /** Multi-line wizard: after last line save, parent refreshes and builds full-order job card. */
+  onRequestFullOrderJobCard?: (orderId: string) => void | Promise<void>;
+  /**
+   * Multi-product batch wizard: how this save should behave after distribute.
+   * null = legacy (per-line job card PDF when onJobCardDocumentReady is set).
+   */
+  assignmentSessionMode?: 'continue_wizard' | 'this_line_only' | null;
+  /** Notifies parent how the save fits the wizard / session. */
+  onLineAssignmentSaved?: (payload: LineAssignmentSavePayload) => void;
 }
 
 export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> = ({
@@ -87,6 +103,8 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
   orderItems,
   selectedOrderItemId = null,
   onJobCardDocumentReady,
+  onRequestFullOrderJobCard,
+  assignmentSessionMode = null,
   onLineAssignmentSaved,
 }) => {
   const selectedLine =
@@ -518,10 +536,51 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
         description: `Batch assignments saved for order ${orderNumber}`,
       });
 
+      const persistCb = onAssignmentsSaved ?? onSuccess;
+      const orderItemIds = (orderItems || []).map((i: any) => i.id).filter(Boolean) as string[];
+      const idx = selectedOrderItemId ? orderItemIds.indexOf(selectedOrderItemId) : -1;
+      const isLastLine = idx < 0 || idx === orderItemIds.length - 1;
+      const isMulti = orderItemIds.length > 1;
+
+      const notify = (sessionOutcome: LineAssignmentSavePayload['sessionOutcome']) => {
+        onLineAssignmentSaved?.({
+          orderItemId: selectedOrderItemId ?? null,
+          sessionOutcome,
+        });
+      };
+
+      // Assign this product only & close — no automatic job card (user uses row PDF later).
+      if (assignmentSessionMode === 'this_line_only') {
+        notify('single_exit');
+        persistCb();
+        onClose();
+        return;
+      }
+
+      // Multi-line wizard: defer PDF until last line; then full-order job card from parent.
+      if (isMulti && assignmentSessionMode === 'continue_wizard') {
+        if (!isLastLine) {
+          notify('advance_wizard');
+          persistCb();
+          onClose();
+          return;
+        }
+        notify('wizard_complete');
+        persistCb();
+        void Promise.resolve(onRequestFullOrderJobCard?.(orderId)).then(() => {
+          toast({
+            title: 'Job card ready',
+            description: 'Review the preview for all assigned lines — print or export A5 landscape PDF.',
+          });
+        });
+        onClose();
+        return;
+      }
+
+      // Legacy: single-line order (or no session mode) — per-save job card from current distribution.
       console.log('📄 Building stitching job card preview...');
       const doc = await buildJobCardDocumentAfterSave();
-      const persistCb = onAssignmentsSaved ?? onSuccess;
-      onLineAssignmentSaved?.(selectedOrderItemId || null);
+      notify('legacy_per_line_pdf');
 
       if (doc && doc.batchAssignments.length > 0 && onJobCardDocumentReady) {
         onJobCardDocumentReady(doc);

@@ -41,7 +41,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleBatchAssignmentDialog";
 import { UpdateCuttingQuantityDialog } from "@/components/production/UpdateCuttingQuantityDialog";
 import { ReassignBatchDialog } from "@/components/production/ReassignBatchDialog";
-import { buildBatchAssignmentDocumentData, type BatchAssignmentDocumentData } from '@/utils/batchAssignmentDocument';
+import { type BatchAssignmentDocumentData } from '@/utils/batchAssignmentDocument';
+import { buildStitchingJobCardDocumentForJob } from '@/utils/stitchingJobCardFromJob';
 import { BatchAssignmentPreviewDialog } from '@/components/production/BatchAssignmentPreviewDialog';
 import { getOrderTotalQuantityFromItems } from '@/utils/orderItemLineQuantity';
 
@@ -221,199 +222,17 @@ const CuttingManagerPage = () => {
     refreshData();
   };
 
-  // PDF generation function for completed jobs
+  // PDF generation function for completed jobs (shared builder with batch wizard completion)
   const handleGeneratePDF = async (job: CuttingJob) => {
     setGeneratingPDF(job.id);
     try {
-      console.log('🚀 Starting PDF generation for job:', job.jobNumber);
-      
-      // Fetch stitching prices from order_assignments
-      const { data: priceData, error: priceError } = await supabase
-        .from('order_assignments' as any)
-        .select('cutting_price_single_needle, cutting_price_overlock_flatlock')
-        .eq('order_id', job.id as any)
-        .single();
-
-      if (priceError) {
-        console.error('❌ Error fetching pricing data:', priceError);
-        return;
-      }
-
-      // Fetch order details - fetch order_items separately to avoid relationship issues
-      const { data: orderData, error: orderError } = await supabase
-        .from('orders' as any)
-        .select('*')
-        .eq('id', job.id as any)
-        .single();
-
-      if (orderError) {
-        console.error('❌ Error fetching order data:', orderError);
-        return;
-      }
-
-      // Fetch order items separately
-      const { data: orderItemsData, error: itemsError } = await supabase
-        .from('order_items' as any)
-        .select('*')
-        .eq('order_id', job.id as any);
-
-      if (itemsError) {
-        console.error('❌ Error fetching order items:', itemsError);
-        return;
-      }
-
-      // Fetch product categories and fabric details separately
-      const categoryIds = Array.from(new Set((orderItemsData || []).map((item: any) => item.product_category_id).filter(Boolean)));
-      const fabricIds = Array.from(new Set((orderItemsData || []).map((item: any) => item.fabric_id).filter(Boolean)));
-
-      let categoriesMap: Record<string, any> = {};
-      if (categoryIds.length > 0) {
-        const { data: categories } = await supabase
-          .from('product_categories')
-          .select('id, category_name, category_image_url')
-          .in('id', categoryIds);
-        (categories || []).forEach((cat: any) => {
-          categoriesMap[cat.id] = cat;
-        });
-      }
-
-      let fabricMap: Record<string, any> = {};
-      if (fabricIds.length > 0) {
-        const { data: fabrics } = await supabase
-          .from('fabric_master')
-          .select('id, fabric_name, color, gsm, image, hex')
-          .in('id', fabricIds);
-        (fabrics || []).forEach((fabric: any) => {
-          fabricMap[fabric.id] = fabric;
-        });
-      }
-
-      // Enrich order items with related data
-      const enrichedOrderItems = (orderItemsData || []).map((item: any) => {
-        // Parse customizations from specifications
-        let customizations: any[] = [];
-        try {
-          const specs = typeof item.specifications === 'string' 
-            ? JSON.parse(item.specifications || '{}') 
-            : (item.specifications || {});
-          customizations = specs.customizations || [];
-        } catch (e) {
-          console.error('Error parsing customizations:', e);
-        }
-
-        return {
-          ...item,
-          product_categories: categoriesMap[item.product_category_id],
-          fabric: fabricMap[item.fabric_id],
-          customizations: customizations
-        };
-      });
-
-      // Fetch sales manager information
-      let salesManager: { name: string; avatarUrl?: string } | undefined;
-      if (orderData && !orderError && (orderData as any).sales_manager) {
-        try {
-          const { data: salesManagerData } = await supabase
-            .from('employees' as any)
-            .select('id, full_name, avatar_url')
-            .eq('id', (orderData as any).sales_manager as any)
-            .single();
-          if (salesManagerData && !('error' in salesManagerData)) {
-            salesManager = {
-              name: (salesManagerData as any).full_name,
-              avatarUrl: (salesManagerData as any).avatar_url || undefined
-            };
-          }
-        } catch (e) {
-          console.error('Error fetching sales manager:', e);
-        }
-      }
-
-      // Fetch company settings
-      const { data: companySettings, error: settingsError } = await supabase
-        .from('company_settings')
-        .select('*')
-        .single();
-
-      if (settingsError) {
-        console.error('❌ Error fetching company settings:', settingsError);
-        return;
-      }
-
-      const snRate = (priceData && !priceError && !('error' in (priceData as any)))
-        ? ((priceData as any).cutting_price_single_needle || 0)
-        : 0;
-      const ofRate = (priceData && !priceError && !('error' in (priceData as any)))
-        ? ((priceData as any).cutting_price_overlock_flatlock || 0)
-        : 0;
-
-      const rawBatches = (job.batchAssignments || []).map((assignment) => {
-        let sizeDistributions: Array<{ size: string; quantity: number }> = [];
-
-        if (Array.isArray(assignment.size_distributions)) {
-          sizeDistributions = assignment.size_distributions.map((sd: any) => ({
-            size: sd.size_name || sd.size || '',
-            quantity: typeof sd.quantity === 'number' ? sd.quantity : 0,
-          }));
-        } else if (assignment.size_distributions && typeof assignment.size_distributions === 'object') {
-          sizeDistributions = Object.entries(assignment.size_distributions)
-            .filter(([_, qty]) => typeof qty === 'number' && qty > 0)
-            .map(([size, qty]) => ({ size, quantity: qty as number }));
-        }
-
-        const assignedQuantity = sizeDistributions.reduce((sum, sd) => sum + sd.quantity, 0);
-
-        return {
-          batchName: assignment.batch_name || 'Unknown Batch',
-          batchLeaderName: assignment.batch_leader_name || 'Unknown Leader',
-          batchLeaderAvatarUrl: assignment.batch_leader_avatar_url || undefined,
-          tailorType: assignment.tailor_type || 'single_needle',
-          sizeDistributions,
-          snRate,
-          ofRate,
-          assignedQuantity,
-        };
-      });
-
-      // Collect all customizations from all order items
-      const allCustomizations: any[] = [];
-      enrichedOrderItems.forEach((item: any) => {
-        if (item.customizations && Array.isArray(item.customizations)) {
-          item.customizations.forEach((cust: any) => {
-            allCustomizations.push(cust);
-          });
-        }
-      });
-
-      // Generate PDF
-      if (!companySettings || settingsError || 'error' in (companySettings as any)) {
-        console.error('❌ Invalid company settings');
-        return;
-      }
-
-      if (!orderData || orderError || 'error' in (orderData as any)) {
-        console.error('❌ Invalid order data');
-        return;
-      }
-
-      const doc = buildBatchAssignmentDocumentData({
-        orderNumber: job.orderNumber,
-        customerName: job.customerName,
-        orderItems: enrichedOrderItems,
-        rawBatches,
-        companySettings: companySettings as any,
-        salesManager,
-        customizations: allCustomizations,
-        dueDate: (orderData as any).expected_delivery_date,
-      });
-
-      if (doc.batchAssignments.length === 0) {
+      const doc = await buildStitchingJobCardDocumentForJob(job);
+      if (!doc || doc.batchAssignments.length === 0) {
         console.warn('No batch rows for job card');
         return;
       }
       setStitchJobCardDoc(doc);
       setStitchJobCardOpen(true);
-      console.log('✅ Job card preview ready');
     } catch (error) {
       console.error('❌ Error generating PDF:', error);
     } finally {
@@ -421,8 +240,36 @@ const CuttingManagerPage = () => {
     }
   };
 
+  const handleRequestFullOrderJobCard = async (orderId: string) => {
+    try {
+      const jobs = await refreshData();
+      const job = jobs?.find((j) => j.id === orderId);
+      if (!job) {
+        console.error('Job not found after refresh for order', orderId);
+        setBatchAssignmentOpen(false);
+        setSelectedJobForBatch(null);
+        return;
+      }
+      const doc = await buildStitchingJobCardDocumentForJob(job);
+      if (!doc || doc.batchAssignments.length === 0) {
+        console.warn('Full-order job card could not be built');
+        setBatchAssignmentOpen(false);
+        setSelectedJobForBatch(null);
+        return;
+      }
+      setStitchJobCardDoc(doc);
+      setStitchJobCardOpen(true);
+      setBatchAssignmentOpen(false);
+      setSelectedJobForBatch(null);
+    } catch (e) {
+      console.error('handleRequestFullOrderJobCard', e);
+      setBatchAssignmentOpen(false);
+      setSelectedJobForBatch(null);
+    }
+  };
+
   // Load assigned cutting jobs from DB (order_assignments) and enrich with order/customer/BOM
-    const loadCuttingJobs = async () => {
+    const loadCuttingJobs = async (): Promise<CuttingJob[]> => {
       try {
         // First, get order IDs that have cutting assignments from both tables
         const { data: rows } = await supabase
@@ -450,7 +297,7 @@ const CuttingManagerPage = () => {
         
         if (allOrderIds.length === 0) {
           setCuttingJobs([]);
-          return;
+          return [];
         }
         
         // Fetch multiple cutting masters from order_cutting_assignments
@@ -501,7 +348,7 @@ const CuttingManagerPage = () => {
         if (ordersError) {
           console.error('Error fetching orders:', ordersError);
           setCuttingJobs([]);
-          return;
+          return [];
         }
 
         // Fetch order items separately
@@ -734,10 +581,13 @@ const CuttingManagerPage = () => {
           }
         }))).filter((job): job is CuttingJob => job !== null && job !== undefined);
 
-        setCuttingJobs(jobsWithBatchAssignments as CuttingJob[]);
+        const nextJobs = jobsWithBatchAssignments as CuttingJob[];
+        setCuttingJobs(nextJobs);
+        return nextJobs;
       } catch (err) {
         console.error('Error loading cutting jobs:', err);
         setCuttingJobs([]);
+        return [];
       }
     };
 
@@ -747,10 +597,10 @@ const CuttingManagerPage = () => {
   }, []);
 
   // Add refresh function
-  const refreshData = async () => {
+  const refreshData = async (): Promise<CuttingJob[]> => {
     setRefreshing(true);
     try {
-      await loadCuttingJobs();
+      return await loadCuttingJobs();
     } finally {
       setRefreshing(false);
     }
@@ -1539,7 +1389,9 @@ const CuttingManagerPage = () => {
         orderId={selectedJobForBatch?.id || ''}
         orderNumber={selectedJobForBatch?.orderNumber || ''}
         customerName={selectedJobForBatch?.customerName || ''}
+        cutQuantitiesBySize={selectedJobForBatch?.cutQuantitiesBySize}
         onSuccess={handleBatchAssignmentSuccess}
+        onRequestFullOrderJobCard={handleRequestFullOrderJobCard}
         onJobCardDocumentReady={(doc) => {
           setStitchJobCardDoc(doc);
           setStitchJobCardOpen(true);
