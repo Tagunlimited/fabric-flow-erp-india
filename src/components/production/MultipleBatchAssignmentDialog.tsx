@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -13,8 +13,18 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Users, Clock, User, Plus, Trash2, Calculator, Package } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { DistributeQuantityDialog } from './DistributeQuantityDialog';
+import {
+  DistributeQuantityDialog,
+  type LineAssignmentSavePayload,
+} from './DistributeQuantityDialog';
 import type { BatchAssignmentDocumentData } from '@/utils/batchAssignmentDocument';
+import { isOrderItemEligibleForBatchAssignment } from '@/utils/cutQuantitiesStorage';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useSizeTypes } from '@/hooks/useSizeTypes';
 import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
@@ -64,7 +74,11 @@ interface MultipleBatchAssignmentDialogProps {
   onSuccess: () => void;
   existingAssignments?: BatchAssignment[];
   orderItems?: any[];
+  /** From Cutting job — used to allow batch assign only for lines with recorded cutting. */
+  cutQuantitiesBySize?: unknown;
   onJobCardDocumentReady?: (doc: BatchAssignmentDocumentData) => void;
+  /** After last line of multi-line wizard: refresh job and open full-order job card. */
+  onRequestFullOrderJobCard?: (orderId: string) => void | Promise<void>;
 }
 
 export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDialogProps> = ({
@@ -76,7 +90,9 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
   onSuccess,
   existingAssignments = [],
   orderItems = [],
+  cutQuantitiesBySize,
   onJobCardDocumentReady,
+  onRequestFullOrderJobCard,
 }) => {
   const { sizeTypes } = useSizeTypes();
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -84,9 +100,23 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
   const [selectedOrderItemId, setSelectedOrderItemId] = useState<string | null>(null);
   const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set());
   const [showDistributeDialog, setShowDistributeDialog] = useState(false);
+  const [distributeSessionMode, setDistributeSessionMode] = useState<
+    'continue_wizard' | 'this_line_only'
+  >('continue_wizard');
   const [loading, setLoading] = useState(false);
   const [fetchingData, setFetchingData] = useState(false);
   const { toast } = useToast();
+
+  const orderItemIds = useMemo(
+    () => orderItems.map((i: any) => i.id).filter(Boolean) as string[],
+    [orderItems]
+  );
+
+  const lineEligible = useCallback(
+    (itemId: string) =>
+      isOrderItemEligibleForBatchAssignment(cutQuantitiesBySize, itemId, orderItemIds),
+    [cutQuantitiesBySize, orderItemIds]
+  );
 
   const selectedLine =
     orderItems.find((i: any) => i.id === selectedOrderItemId) || orderItems[0] || null;
@@ -96,17 +126,30 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
     if (isOpen) {
       setSelectedBatches(new Set());
       setShowDistributeDialog(false);
+      setDistributeSessionMode('continue_wizard');
       fetchData();
+    } else {
+      setShowDistributeDialog(false);
     }
   }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen || !orderItems?.length) return;
     setSelectedOrderItemId((prev) => {
-      if (prev && orderItems.some((i: any) => i.id === prev)) return prev;
+      if (prev && orderItems.some((i: any) => i.id === prev) && lineEligible(prev)) {
+        return prev;
+      }
+      const firstEligible = orderItems.find((i: any) => lineEligible(i.id));
+      if (firstEligible) return firstEligible.id;
+      toast({
+        title: 'No cutting recorded',
+        description:
+          'Record cutting quantities for at least one product line before assigning batches.',
+        variant: 'destructive',
+      });
       return orderItems[0]?.id ?? null;
     });
-  }, [isOpen, orderItems]);
+  }, [isOpen, orderItems, lineEligible]);
 
   const fetchData = async () => {
     setFetchingData(true);
@@ -337,15 +380,32 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
     };
   }, [isOpen, orderId, orderItems, selectedOrderItemId, sizeTypes]);
 
-  const handleDistributeClick = () => {
+  const openDistributeDialog = (mode: 'continue_wizard' | 'this_line_only') => {
     if (selectedBatches.size === 0) {
       toast({
-        title: "Error",
-        description: "Please select at least one batch",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Please select at least one batch',
+        variant: 'destructive',
       });
       return;
     }
+    if (!selectedOrderItemId) {
+      toast({
+        title: 'Error',
+        description: 'Select a product line first',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (!lineEligible(selectedOrderItemId)) {
+      toast({
+        title: 'Line not eligible',
+        description: 'Record cutting for this product line before assigning batches.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setDistributeSessionMode(mode);
     setShowDistributeDialog(true);
   };
 
@@ -357,21 +417,46 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
     setShowDistributeDialog(false);
   };
 
-  const handleLineAssignmentSaved = (savedOrderItemId: string | null) => {
-    if (!savedOrderItemId || !orderItems || orderItems.length <= 1) return;
-    const currentIndex = orderItems.findIndex((i: any) => i.id === savedOrderItemId);
-    const hasNext = currentIndex >= 0 && currentIndex < orderItems.length - 1;
-    if (hasNext) {
-      setSelectedOrderItemId(orderItems[currentIndex + 1].id);
-      setSelectedBatches(new Set());
-      toast({
-        title: 'Line assigned',
-        description: 'Proceed to assign batches for the next product line.',
-      });
-    } else {
-      // Last line saved; parent refresh handles completed/active placement.
+  const handleLineAssignmentSaved = (payload: LineAssignmentSavePayload) => {
+    if (payload.sessionOutcome === 'single_exit') {
       onSuccess();
       onClose();
+      return;
+    }
+    if (payload.sessionOutcome === 'wizard_complete') {
+      return;
+    }
+    if (payload.sessionOutcome === 'legacy_per_line_pdf') {
+      return;
+    }
+    if (
+      payload.sessionOutcome === 'advance_wizard' &&
+      payload.orderItemId &&
+      orderItems.length > 1
+    ) {
+      const currentIndex = orderItems.findIndex((i: any) => i.id === payload.orderItemId);
+      const hasNext = currentIndex >= 0 && currentIndex < orderItems.length - 1;
+      if (hasNext) {
+        let nextIdx = currentIndex + 1;
+        while (nextIdx < orderItems.length && !lineEligible(orderItems[nextIdx].id)) {
+          nextIdx += 1;
+        }
+        if (nextIdx < orderItems.length) {
+          setSelectedOrderItemId(orderItems[nextIdx].id);
+          setSelectedBatches(new Set());
+          toast({
+            title: 'Line assigned',
+            description: 'Select batches for the next product line.',
+          });
+        } else {
+          setSelectedBatches(new Set());
+          toast({
+            title: 'No further eligible lines',
+            description:
+              'Record cutting for the remaining products before assigning batches for those lines.',
+          });
+        }
+      }
     }
   };
 
@@ -470,29 +555,53 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
               <div className="space-y-2">
                 <Label className="text-sm font-medium">Product line</Label>
                 <p className="text-xs text-muted-foreground">
-                  Choose which product to assign batches for. Sizes below match this line only.
+                  Only lines with recorded cutting (partial or full) can be assigned. Sizes below match
+                  the selected line.
                 </p>
-                <div className="bom-line-radio-inputs" role="radiogroup" aria-label="Product line">
-                  {orderItems.map((it: any) => (
-                    <label key={it.id} className="cursor-pointer">
-                      <input
-                        type="radio"
-                        name="batch-assignment-product-line"
-                        className="bom-line-radio-input"
-                        checked={selectedOrderItemId === it.id}
-                        onChange={() => setSelectedOrderItemId(it.id)}
-                      />
-                      <span className="bom-line-radio-tile">
-                        <span className="bom-line-radio-label">
-                          {it.product_description || it.product_category?.category_name || 'Product'}
-                          <span className="block text-xs font-normal text-muted-foreground mt-0.5">
-                            {getOrderItemLineQuantity(it)} pcs
+                <TooltipProvider delayDuration={200}>
+                  <div className="bom-line-radio-inputs" role="radiogroup" aria-label="Product line">
+                    {orderItems.map((it: any) => {
+                      const eligible = lineEligible(it.id);
+                      const row = (
+                        <label
+                          key={it.id}
+                          className={eligible ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}
+                        >
+                          <input
+                            type="radio"
+                            name="batch-assignment-product-line"
+                            className="bom-line-radio-input"
+                            checked={selectedOrderItemId === it.id}
+                            disabled={!eligible}
+                            onChange={() => eligible && setSelectedOrderItemId(it.id)}
+                          />
+                          <span className="bom-line-radio-tile">
+                            <span className="bom-line-radio-label">
+                              {it.product_description || it.product_category?.category_name || 'Product'}
+                              <span className="block text-xs font-normal text-muted-foreground mt-0.5">
+                                {getOrderItemLineQuantity(it)} pcs
+                                {!eligible && (
+                                  <span className="block text-amber-700 dark:text-amber-500 mt-0.5">
+                                    No cutting recorded yet
+                                  </span>
+                                )}
+                              </span>
+                            </span>
                           </span>
-                        </span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
+                        </label>
+                      );
+                      if (eligible) return row;
+                      return (
+                        <Tooltip key={it.id}>
+                          <TooltipTrigger asChild>{row}</TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs">
+                            Record cutting quantities for this line before batch assignment.
+                          </TooltipContent>
+                        </Tooltip>
+                      );
+                    })}
+                  </div>
+                </TooltipProvider>
               </div>
             )}
 
@@ -572,16 +681,27 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
                 </div>
         </div>
 
-          <DialogFooter className="flex justify-end space-x-3">
+          <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:space-x-3">
           <Button variant="outline" onClick={onClose} disabled={loading}>
             Cancel
           </Button>
-          <Button 
-              onClick={handleDistributeClick} 
+          {orderItems.length > 1 && (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => openDistributeDialog('this_line_only')}
               disabled={loading || selectedBatches.size === 0 || fetchingData}
-              className="bg-purple-600 hover:bg-purple-700"
+            >
+              Assign this product only &amp; close
+            </Button>
+          )}
+          <Button
+            type="button"
+            onClick={() => openDistributeDialog('continue_wizard')}
+            disabled={loading || selectedBatches.size === 0 || fetchingData}
+            className="bg-purple-600 hover:bg-purple-700"
           >
-              Distribute Qty
+            {orderItems.length > 1 ? 'Distribute Qty (continue)' : 'Distribute Qty'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -605,6 +725,8 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
           orderItems={orderItems}
           selectedOrderItemId={selectedOrderItemId}
           onJobCardDocumentReady={onJobCardDocumentReady}
+          onRequestFullOrderJobCard={onRequestFullOrderJobCard}
+          assignmentSessionMode={orderItems.length > 1 ? distributeSessionMode : null}
         />
       )}
     </>

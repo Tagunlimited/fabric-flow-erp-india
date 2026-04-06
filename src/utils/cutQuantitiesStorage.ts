@@ -72,6 +72,27 @@ export function normalizeToByOrderItem(
   return out;
 }
 
+/** Total cut pieces recorded for one order line (sum across sizes). */
+export function getTotalCutForOrderItem(
+  raw: unknown,
+  orderItemId: string,
+  allOrderItemIds: string[]
+): number {
+  if (!orderItemId || allOrderItemIds.length === 0) return 0;
+  const byItem = normalizeToByOrderItem(raw, allOrderItemIds);
+  const sizes = byItem[orderItemId] || {};
+  return Object.values(sizes).reduce((s, n) => s + (Number(n) || 0), 0);
+}
+
+/** True if this line has any recorded cutting (partial or full). */
+export function isOrderItemEligibleForBatchAssignment(
+  raw: unknown,
+  orderItemId: string,
+  allOrderItemIds: string[]
+): boolean {
+  return getTotalCutForOrderItem(raw, orderItemId, allOrderItemIds) > 0;
+}
+
 export function buildStoredPayloadFromByOrderItem(
   byOrderItem: Record<string, Record<string, number>>
 ): { by_order_item: Record<string, Record<string, number>> } {
