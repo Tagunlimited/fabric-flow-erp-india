@@ -2,6 +2,7 @@ import { supabase } from '@/integrations/supabase/client';
 import {
   buildBatchAssignmentDocumentData,
   type BatchAssignmentDocumentData,
+  type RawBatchAssignmentInput,
 } from '@/utils/batchAssignmentDocument';
 
 /** Minimal job shape needed to build the stitching job card (matches CuttingManager batch assignment rows). */
@@ -10,6 +11,9 @@ export interface StitchingJobCardJob {
   orderNumber: string;
   customerName: string;
   batchAssignments?: Array<{
+    id?: string;
+    batch_id?: string;
+    notes?: string;
     batch_name?: string;
     batch_leader_name?: string;
     batch_leader_avatar_url?: string;
@@ -21,6 +25,164 @@ export interface StitchingJobCardJob {
       quantity?: number;
     }> | Record<string, number>;
   }>;
+}
+
+function parseOrderItemIdFromNotes(notes: unknown): string | null {
+  if (notes == null) return null;
+  const m = String(notes).match(/\[line:([0-9a-f-]{36})\]/i);
+  return m ? m[1] : null;
+}
+
+function normalizeAssignmentSizeDistributions(assignment: {
+  size_distributions?: Array<{ size_name?: string; size?: string; quantity?: unknown }> | Record<string, number>;
+}): { size: string; quantity: number }[] {
+  let sizeDistributions: Array<{ size: string; quantity: number }> = [];
+  const raw = assignment.size_distributions;
+  if (Array.isArray(raw)) {
+    sizeDistributions = raw.map((sd) => ({
+      size: sd.size_name || sd.size || '',
+      quantity: typeof sd.quantity === 'number' ? sd.quantity : Number(sd.quantity) || 0,
+    }));
+  } else if (raw && typeof raw === 'object') {
+    sizeDistributions = Object.entries(raw)
+      .filter(([_, qty]) => typeof qty === 'number' && qty > 0)
+      .map(([size, qty]) => ({ size, quantity: qty as number }));
+  }
+  return sizeDistributions;
+}
+
+/**
+ * One physical batch (same batch_id) may have multiple DB rows (one per order line). Merge into a single card page.
+ */
+function mergeSizeMapToSorted(map: Map<string, number>): { size: string; quantity: number }[] {
+  return [...map.entries()]
+    .map(([size, quantity]) => ({ size, quantity }))
+    .filter((x) => x.quantity > 0)
+    .sort((a, b) => a.size.localeCompare(b.size));
+}
+
+function mergeAssignmentsToRawBatches(
+  assignments: NonNullable<StitchingJobCardJob['batchAssignments']>,
+  snRate: number,
+  ofRate: number,
+  validOrderItemIds: Set<string>
+): RawBatchAssignmentInput[] {
+  type Acc = {
+    batchName: string;
+    batchLeaderName: string;
+    batchLeaderAvatarUrl?: string;
+    tailorType: string;
+    /** Per order line — sizes for that line only */
+    lineSizeMaps: Map<string, Map<string, number>>;
+    /** Assignments without [line:] — merged sizes */
+    globalSizeMap: Map<string, number>;
+    assignedQuantities: Record<string, number>;
+    anyUntagged: boolean;
+  };
+
+  const groups = new Map<string, Acc>();
+
+  for (const assignment of assignments) {
+    const batchKey =
+      assignment.batch_id != null && String(assignment.batch_id).trim() !== ''
+        ? String(assignment.batch_id)
+        : `__noid__${assignment.id ?? 'row'}`;
+
+    const sizeDistributions = normalizeAssignmentSizeDistributions(assignment);
+    const rowQty = sizeDistributions.reduce((sum, sd) => sum + sd.quantity, 0);
+    const lineIdRaw = parseOrderItemIdFromNotes(assignment.notes);
+    const lineId = lineIdRaw && validOrderItemIds.has(lineIdRaw) ? lineIdRaw : null;
+
+    if (!groups.has(batchKey)) {
+      groups.set(batchKey, {
+        batchName: assignment.batch_name || 'Unknown Batch',
+        batchLeaderName: assignment.batch_leader_name || 'Unknown Leader',
+        batchLeaderAvatarUrl: assignment.batch_leader_avatar_url || undefined,
+        tailorType: assignment.tailor_type || 'single_needle',
+        lineSizeMaps: new Map(),
+        globalSizeMap: new Map(),
+        assignedQuantities: {},
+        anyUntagged: false,
+      });
+    }
+    const g = groups.get(batchKey)!;
+
+    if (lineId) {
+      if (!g.lineSizeMaps.has(lineId)) g.lineSizeMaps.set(lineId, new Map());
+      const lm = g.lineSizeMaps.get(lineId)!;
+      for (const sd of sizeDistributions) {
+        if (!sd.size) continue;
+        lm.set(sd.size, (lm.get(sd.size) || 0) + sd.quantity);
+      }
+      g.assignedQuantities[lineId] = (g.assignedQuantities[lineId] || 0) + rowQty;
+    } else {
+      g.anyUntagged = true;
+      for (const sd of sizeDistributions) {
+        if (!sd.size) continue;
+        g.globalSizeMap.set(sd.size, (g.globalSizeMap.get(sd.size) || 0) + sd.quantity);
+      }
+    }
+  }
+
+  const result: RawBatchAssignmentInput[] = [];
+  for (const g of groups.values()) {
+    const productSizeBreakdown: Array<{ orderItemId: string; sizes: { size: string; quantity: number }[] }> = [];
+    for (const [orderItemId, m] of g.lineSizeMaps.entries()) {
+      const sizes = mergeSizeMapToSorted(m);
+      if (sizes.length > 0) {
+        productSizeBreakdown.push({ orderItemId, sizes });
+      }
+    }
+
+    const combinedSizes = mergeSizeMapToSorted(g.globalSizeMap);
+    const lineQtySum = productSizeBreakdown.reduce(
+      (s, b) => s + b.sizes.reduce((t, x) => t + x.quantity, 0),
+      0
+    );
+    const globalQtySum = combinedSizes.reduce((s, x) => s + x.quantity, 0);
+    const assignedQuantity = lineQtySum + globalQtySum;
+
+    const mergedMap = new Map<string, number>();
+    for (const m of g.lineSizeMaps.values()) {
+      for (const [sz, q] of m.entries()) {
+        mergedMap.set(sz, (mergedMap.get(sz) || 0) + q);
+      }
+    }
+    for (const [sz, q] of g.globalSizeMap.entries()) {
+      mergedMap.set(sz, (mergedMap.get(sz) || 0) + q);
+    }
+    const sizeDistributions = mergeSizeMapToSorted(mergedMap);
+
+    let orderItemIds: string[] | undefined;
+    let assignedQuantities: Record<string, number> | undefined;
+
+    if (!g.anyUntagged && Object.keys(g.assignedQuantities).length > 0) {
+      const filtered = Object.fromEntries(
+        Object.entries(g.assignedQuantities).filter(([id]) => validOrderItemIds.has(id))
+      );
+      if (Object.keys(filtered).length > 0) {
+        orderItemIds = Object.keys(filtered);
+        assignedQuantities = filtered;
+      }
+    }
+
+    result.push({
+      batchName: g.batchName,
+      batchLeaderName: g.batchLeaderName,
+      batchLeaderAvatarUrl: g.batchLeaderAvatarUrl,
+      tailorType: g.tailorType,
+      sizeDistributions,
+      snRate,
+      ofRate,
+      assignedQuantity,
+      orderItemIds,
+      assignedQuantities,
+      productSizeBreakdown: productSizeBreakdown.length > 0 ? productSizeBreakdown : undefined,
+      combinedSizes: combinedSizes.length > 0 ? combinedSizes : undefined,
+    });
+  }
+
+  return result;
 }
 
 /**
@@ -150,33 +312,13 @@ export async function buildStitchingJobCardDocumentForJob(
         ? (priceData as any).cutting_price_overlock_flatlock || 0
         : 0;
 
-    const rawBatches = (job.batchAssignments || []).map((assignment) => {
-      let sizeDistributions: Array<{ size: string; quantity: number }> = [];
-
-      if (Array.isArray(assignment.size_distributions)) {
-        sizeDistributions = assignment.size_distributions.map((sd: any) => ({
-          size: sd.size_name || sd.size || '',
-          quantity: typeof sd.quantity === 'number' ? sd.quantity : 0,
-        }));
-      } else if (assignment.size_distributions && typeof assignment.size_distributions === 'object') {
-        sizeDistributions = Object.entries(assignment.size_distributions)
-          .filter(([_, qty]) => typeof qty === 'number' && qty > 0)
-          .map(([size, qty]) => ({ size, quantity: qty as number }));
-      }
-
-      const assignedQuantity = sizeDistributions.reduce((sum, sd) => sum + sd.quantity, 0);
-
-      return {
-        batchName: assignment.batch_name || 'Unknown Batch',
-        batchLeaderName: assignment.batch_leader_name || 'Unknown Leader',
-        batchLeaderAvatarUrl: assignment.batch_leader_avatar_url || undefined,
-        tailorType: assignment.tailor_type || 'single_needle',
-        sizeDistributions,
-        snRate,
-        ofRate,
-        assignedQuantity,
-      };
-    });
+    const validOrderItemIds = new Set((enrichedOrderItems || []).map((i: any) => String(i.id)));
+    const rawBatches = mergeAssignmentsToRawBatches(
+      job.batchAssignments || [],
+      snRate,
+      ofRate,
+      validOrderItemIds
+    );
 
     const allCustomizations: any[] = [];
     enrichedOrderItems.forEach((item: any) => {
@@ -200,6 +342,8 @@ export async function buildStitchingJobCardDocumentForJob(
       salesManager,
       customizations: allCustomizations,
       dueDate: (orderData as any).expected_delivery_date,
+      orderDate: (orderData as any).order_date,
+      orderNotes: (orderData as any).notes ? String((orderData as any).notes) : undefined,
     });
 
     if (doc.batchAssignments.length === 0) {

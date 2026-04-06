@@ -294,7 +294,8 @@ export function EmployeeAccessManagement() {
           { title: 'Production Dashboard', url: '/production', icon: 'Factory', sort_order: 1, is_active: true },
           { title: 'Assign Orders', url: '/production/assign-orders', icon: 'Users', sort_order: 2, is_active: true },
           { title: 'Cutting Manager', url: '/production/cutting-manager', icon: 'Scissors', sort_order: 3, is_active: true },
-          { title: 'Tailor Management', url: '/production/tailor-management', icon: 'Users', sort_order: 4, is_active: true }
+          { title: 'Tailor Management', url: '/production/tailor-management', icon: 'Users', sort_order: 4, is_active: true },
+          { title: 'Order Completion Report', url: '/production/order-completion-report', icon: 'ClipboardList', sort_order: 5, is_active: true }
         ]},
         { title: 'Quality Check', url: '/quality', icon: 'CheckCircle', sort_order: 9, is_active: true, children: [
           { title: 'Picker', url: '/production/picker', icon: 'Package', sort_order: 1, is_active: true },

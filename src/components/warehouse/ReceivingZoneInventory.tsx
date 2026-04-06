@@ -614,7 +614,11 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                     displayCode = fabricMaster.fabric_code || '-';
                     displayName = fabricMaster.fabric_name || item.item_name;
                     displayType = 'Fabric';
-                    displayFabric = fabricMaster.fabric_for_supplier || '-';
+                    displayFabric =
+                      (fabricMaster.fabric_for_supplier && String(fabricMaster.fabric_for_supplier).trim()) ||
+                      fabricMaster.fabric_name ||
+                      fabricMaster.type ||
+                      '-';
                     displayColor = lineFabricColor || fabricMaster.color || '-';
                     if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
                     displayColorHex =

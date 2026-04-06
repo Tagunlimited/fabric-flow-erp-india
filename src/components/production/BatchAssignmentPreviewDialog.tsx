@@ -1,4 +1,4 @@
-import React, { useRef, useCallback } from 'react';
+import React, { useRef, useCallback, Fragment } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -126,11 +126,17 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
         year: 'numeric',
       })
     : '—';
-  const todayStr = new Date().toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
+  const orderDateStr = documentData.orderDate
+    ? new Date(documentData.orderDate).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      })
+    : new Date().toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      });
 
   return (
     <>
@@ -173,7 +179,7 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
           <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>Stitching job card — preview</DialogTitle>
             <DialogDescription>
-              A5 landscape, one page per batch. Use Print or Export PDF when ready.
+              A5 landscape, one page per batch (all products on that batch on the same page). Print or export PDF.
             </DialogDescription>
           </DialogHeader>
 
@@ -183,18 +189,25 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
               className={`${PRINT_ROOT_CLASS} flex flex-col items-center gap-6 py-4`}
             >
               {documentData.batchAssignments.map((batch, pageIndex) => {
-                const sizesSorted = [...batch.sizeDistributions].filter((x) => x.quantity > 0);
+                const mode = normalizeTailorType(batch.tailorType);
                 const tailorLabel =
-                  normalizeTailorType(batch.tailorType) === 'single_needle'
-                    ? 'Single Needle (SN)'
-                    : 'Overlock / Flatlock (OF)';
-                const firstImgItem = documentData.orderItems[0];
-                const productImg = firstImgItem ? getOrderItemDisplayImage(firstImgItem) : null;
+                  mode === 'single_needle' ? 'Single Needle (SN)' : 'Overlock / Flatlock (OF)';
+
+                const batchItems = (documentData.orderItems || []).filter((it: any) =>
+                  batch.batchOrderItemIds?.includes(String(it.id))
+                );
+                const itemImageForRow = (row: (typeof batch.productEarningRows)[0], ri: number) => {
+                  const byId = row.orderItemId
+                    ? batchItems.find((it: any) => String(it.id) === String(row.orderItemId))
+                    : undefined;
+                  const it = byId || batchItems[ri];
+                  return it ? getOrderItemDisplayImage(it) : null;
+                };
 
                 return (
                   <article
                     key={`${batch.batchName}-${pageIndex}`}
-                    className="ba-a5-page bg-white text-[#0a0a0a] shadow-md overflow-hidden"
+                    className="ba-a5-page bg-white text-black shadow-md overflow-hidden"
                     style={{
                       width: '210mm',
                       height: '148mm',
@@ -204,10 +217,9 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
                       fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
                     }}
                   >
-                    {/* Header — Figma blue bar */}
                     <div
                       className="flex items-start justify-between px-4 py-2 text-white"
-                      style={{ background: '#155dfc', minHeight: '46px' }}
+                      style={{ background: '#1a1a1a', minHeight: '46px' }}
                     >
                       <div>
                         <div className="text-[17px] font-semibold leading-tight tracking-tight">
@@ -221,135 +233,176 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
                       </div>
                     </div>
 
-                    {/* Orange batch bar */}
                     <div
                       className="px-4 py-1 text-white font-semibold text-[11px]"
-                      style={{ background: '#fe9a00' }}
+                      style={{ background: '#404040' }}
                     >
                       Batch: {escapeHtml(batch.batchName)} · Leader: {escapeHtml(batch.batchLeaderName)}
                     </div>
 
-                    <div className="px-3 pt-2 pb-1 flex flex-wrap gap-x-6 gap-y-1 border-b border-gray-200">
+                    <div className="px-3 pt-2 pb-1 flex flex-wrap gap-x-6 gap-y-1 border-b border-neutral-400">
                       <div>
-                        <div className="text-gray-500 text-[8px]">Customer</div>
+                        <div className="text-neutral-600 text-[8px]">Customer</div>
                         <div className="font-medium text-[10px]">{escapeHtml(documentData.customerName)}</div>
                       </div>
                       <div>
-                        <div className="text-gray-500 text-[8px]">Order date</div>
-                        <div className="text-[10px]">{todayStr}</div>
+                        <div className="text-neutral-600 text-[8px]">Order date</div>
+                        <div className="text-[10px]">{orderDateStr}</div>
                       </div>
                       <div>
-                        <div className="text-gray-500 text-[8px]">Deadline</div>
-                        <div className="text-[10px] text-red-600 font-medium">{deliveryDate}</div>
+                        <div className="text-neutral-600 text-[8px]">Deadline</div>
+                        <div className="text-[10px] font-semibold border-b border-black border-dotted inline-block">
+                          {deliveryDate}
+                        </div>
                       </div>
                     </div>
 
-                    {/* Totals + product SN/OF */}
-                    <div className="px-3 py-1.5 bg-slate-50 border-b border-gray-200">
-                      <div className="text-[10px] font-semibold text-slate-800 mb-1">Earnings (this order)</div>
+                    {documentData.orderNotes ? (
+                      <div className="px-3 py-1 border-b border-neutral-400 bg-white">
+                        <div className="text-[8px] font-semibold text-neutral-700">Order notes (production)</div>
+                        <div className="text-[8px] text-neutral-900 whitespace-pre-wrap">{escapeHtml(documentData.orderNotes)}</div>
+                      </div>
+                    ) : null}
+
+                    <div className="px-3 py-1.5 bg-neutral-100 border-b border-neutral-400">
+                      <div className="text-[10px] font-semibold text-black mb-1">Earnings (this batch)</div>
                       <div className="flex flex-wrap gap-3 text-[9px] mb-1.5">
                         <span>
-                          <span className="text-gray-500">Grand total:</span>{' '}
-                          <strong>₹{documentData.summaryTotals.grandTotal.toFixed(2)}</strong>
+                          <span className="text-neutral-600">Batch total:</span>{' '}
+                          <strong>₹{batch.totalEarning.toFixed(2)}</strong>
                         </span>
                         <span>
-                          <span className="text-gray-500">SN total:</span>{' '}
-                          <strong>₹{documentData.summaryTotals.totalSn.toFixed(2)}</strong>
+                          <span className="text-neutral-600">SN:</span>{' '}
+                          <strong>₹{batch.snEarning.toFixed(2)}</strong>
                         </span>
                         <span>
-                          <span className="text-gray-500">OF total:</span>{' '}
-                          <strong>₹{documentData.summaryTotals.totalOf.toFixed(2)}</strong>
+                          <span className="text-neutral-600">OF:</span>{' '}
+                          <strong>₹{batch.ofEarning.toFixed(2)}</strong>
                         </span>
                       </div>
                       <table className="w-full border-collapse text-[8px]">
                         <thead>
-                          <tr className="bg-white border border-gray-200">
-                            <th className="text-left p-1 border border-gray-200 font-semibold">Product</th>
-                            <th className="text-left p-1 border border-gray-200 font-semibold">Category</th>
-                            <th className="text-right p-1 border border-gray-200 font-semibold">Line qty</th>
-                            <th className="text-right p-1 border border-gray-200 font-semibold">SN ₹</th>
-                            <th className="text-right p-1 border border-gray-200 font-semibold">OF ₹</th>
-                            <th className="text-right p-1 border border-gray-200 font-semibold">Line ₹</th>
+                          <tr className="bg-white border border-neutral-400">
+                            <th className="text-center p-1 border border-neutral-400 font-semibold w-[48px]">
+                              Img
+                            </th>
+                            <th className="text-left p-1 border border-neutral-400 font-semibold">Product</th>
+                            <th className="text-left p-1 border border-neutral-400 font-semibold">Category</th>
+                            <th className="text-right p-1 border border-neutral-400 font-semibold">Batch qty</th>
+                            <th className="text-right p-1 border border-neutral-400 font-semibold">SN ₹</th>
+                            <th className="text-right p-1 border border-neutral-400 font-semibold">OF ₹</th>
+                            <th className="text-right p-1 border border-neutral-400 font-semibold">Line ₹</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {documentData.productEarningRows.map((row, ri) => (
-                            <tr key={ri} className="bg-white">
-                              <td className="p-1 border border-gray-200">{escapeHtml(row.label)}</td>
-                              <td className="p-1 border border-gray-200">{escapeHtml(row.category)}</td>
-                              <td className="p-1 border border-gray-200 text-right">{row.orderQty}</td>
-                              <td className="p-1 border border-gray-200 text-right">{row.snEarning.toFixed(2)}</td>
-                              <td className="p-1 border border-gray-200 text-right">{row.ofEarning.toFixed(2)}</td>
-                              <td className="p-1 border border-gray-200 text-right font-medium">
-                                {row.lineTotal.toFixed(2)}
-                              </td>
-                            </tr>
-                          ))}
+                          {batch.productEarningRows.map((row, ri) => {
+                            const rowImg = itemImageForRow(row, ri);
+                            return (
+                            <Fragment key={ri}>
+                              <tr className="bg-white">
+                                <td className="p-0.5 border border-neutral-400 align-middle text-center w-[48px]">
+                                  {rowImg ? (
+                                    <img
+                                      src={rowImg}
+                                      alt=""
+                                      className="w-10 h-10 object-cover border border-neutral-500 rounded-sm mx-auto block"
+                                    />
+                                  ) : (
+                                    <div className="w-10 h-10 mx-auto border border-dashed border-neutral-400 rounded-sm bg-neutral-100 flex items-center justify-center text-[6px] text-neutral-500">
+                                      —
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="p-1 border border-neutral-400">{escapeHtml(row.label)}</td>
+                                <td className="p-1 border border-neutral-400">{escapeHtml(row.category)}</td>
+                                <td className="p-1 border border-neutral-400 text-right">{row.orderQty}</td>
+                                <td className="p-1 border border-neutral-400 text-right">{row.snEarning.toFixed(2)}</td>
+                                <td className="p-1 border border-neutral-400 text-right">{row.ofEarning.toFixed(2)}</td>
+                                <td className="p-1 border border-neutral-400 text-right font-medium">
+                                  {row.lineTotal.toFixed(2)}
+                                </td>
+                              </tr>
+                              {(row.sizeBreakdown?.length ||
+                                row.lineCustomizations ||
+                                row.lineRemarks) && (
+                                <tr className="bg-neutral-50">
+                                  <td colSpan={7} className="p-1.5 border border-neutral-400 text-[7px] align-top">
+                                    {row.sizeBreakdown && row.sizeBreakdown.length > 0 ? (
+                                      <div className="mb-1">
+                                        <span className="font-semibold text-neutral-800">Sizes in this batch: </span>
+                                        <span className="inline-flex flex-wrap gap-0.5">
+                                          {row.sizeBreakdown.map((s) => (
+                                            <span
+                                              key={s.size}
+                                              className="inline-block px-1 py-0.5 border border-neutral-500 rounded-sm bg-white font-medium"
+                                            >
+                                              {escapeHtml(s.size)}: {s.quantity}
+                                            </span>
+                                          ))}
+                                        </span>
+                                      </div>
+                                    ) : null}
+                                    {row.lineCustomizations ? (
+                                      <div className="mb-0.5 text-neutral-900">
+                                        <span className="font-semibold">Customizations: </span>
+                                        {escapeHtml(row.lineCustomizations)}
+                                      </div>
+                                    ) : null}
+                                    {row.lineRemarks ? (
+                                      <div className="text-neutral-900">
+                                        <span className="font-semibold">Line remarks: </span>
+                                        {escapeHtml(row.lineRemarks)}
+                                      </div>
+                                    ) : null}
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
 
-                    {/* This batch detail + sizes */}
-                    <div className="px-3 py-1.5 flex gap-2">
-                      <div className="shrink-0 w-[52px] h-[52px] border border-gray-300 rounded overflow-hidden bg-gray-100 flex items-center justify-center">
-                        {productImg ? (
-                          <img src={productImg} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          <span className="text-[7px] text-gray-400">Img</span>
-                        )}
+                    <div className="px-3 py-1.5 border-t border-neutral-300">
+                      <div className="text-[10px] font-semibold text-black">This batch / tailor</div>
+                      <div className="text-[8px] text-neutral-700 mt-0.5">
+                        Batch type: {tailorLabel} · Qty assigned: <strong>{batch.assignedQuantity}</strong> pcs · SN ₹
+                        {batch.snRate.toFixed(2)}/pc · OF ₹{batch.ofRate.toFixed(2)}/pc
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[10px] font-semibold text-slate-800">This batch / tailor</div>
-                        <div className="text-[8px] text-gray-600 mt-0.5">
-                          Type: {tailorLabel} · Qty: <strong>{batch.assignedQuantity}</strong> pcs · SN rate ₹
-                          {batch.snRate.toFixed(2)} · OF rate ₹{batch.ofRate.toFixed(2)}
-                        </div>
-                        <div className="text-[8px] mt-0.5">
-                          <span className="text-gray-500">Batch earning —</span> SN:{' '}
-                          <strong>₹{batch.snEarning.toFixed(2)}</strong> · OF:{' '}
-                          <strong>₹{batch.ofEarning.toFixed(2)}</strong> ·{' '}
-                          <strong>Total ₹{batch.totalEarning.toFixed(2)}</strong>
-                        </div>
+                      <div className="text-[8px] mt-0.5">
+                        <span className="text-neutral-600">Batch earning —</span> SN:{' '}
+                        <strong>₹{batch.snEarning.toFixed(2)}</strong> · OF:{' '}
+                        <strong>₹{batch.ofEarning.toFixed(2)}</strong> ·{' '}
+                        <strong>Total ₹{batch.totalEarning.toFixed(2)}</strong>
                       </div>
                     </div>
 
-                    <div className="px-3 pb-1">
-                      <div className="text-[9px] font-semibold text-slate-800 mb-0.5">Size distribution</div>
-                      <div
-                        className="grid gap-0.5"
-                        style={{
-                          gridTemplateColumns: `repeat(${Math.min(sizesSorted.length || 1, 14)}, minmax(0, 1fr))`,
-                        }}
-                      >
-                        {sizesSorted.map((sd) => (
-                          <div
-                            key={sd.size}
-                            className="text-center border border-gray-200 rounded-sm bg-gray-50 py-0.5 px-0.5"
-                          >
-                            <div className="text-[7px] font-semibold text-gray-600">{escapeHtml(sd.size)}</div>
-                            <div className="text-[9px] font-bold">{sd.quantity}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {documentData.customizations?.length ? (
-                      <div className="px-3 pb-2 pt-0 border-t border-gray-100 mt-auto">
-                        <div className="text-[9px] font-semibold mb-0.5">Customizations</div>
-                        <div className="text-[7px] text-gray-700 line-clamp-3">
-                          {documentData.customizations.slice(0, 6).map((c, i) => (
-                            <span key={i}>
-                              {`${escapeHtml(c.partName || 'Part')}: ${escapeHtml(
-                                String(c.selectedAddonName || c.customValue || '')
-                              )}`}
-                              {i < Math.min(documentData.customizations.length, 6) - 1 ? ' · ' : ''}
-                            </span>
+                    {batch.combinedSizeBreakdown && batch.combinedSizeBreakdown.length > 0 ? (
+                      <div className="px-3 pb-1 border-t border-neutral-300 pt-1">
+                        <div className="text-[9px] font-semibold text-black mb-0.5">
+                          Sizes (assignment not linked to a product line)
+                        </div>
+                        <div
+                          className="grid gap-0.5"
+                          style={{
+                            gridTemplateColumns: `repeat(${Math.min(batch.combinedSizeBreakdown.length || 1, 14)}, minmax(0, 1fr))`,
+                          }}
+                        >
+                          {batch.combinedSizeBreakdown.map((sd) => (
+                            <div
+                              key={sd.size}
+                              className="text-center border border-neutral-400 rounded-sm bg-neutral-50 py-0.5 px-0.5"
+                            >
+                              <div className="text-[7px] font-semibold text-neutral-700">{escapeHtml(sd.size)}</div>
+                              <div className="text-[9px] font-bold">{sd.quantity}</div>
+                            </div>
                           ))}
                         </div>
                       </div>
                     ) : null}
 
-                    <div className="px-3 py-0.5 text-[7px] text-gray-400 text-center border-t border-gray-100">
+                    <div className="px-3 py-0.5 text-[7px] text-neutral-500 text-center border-t border-neutral-300">
                       Page {pageIndex + 1} of {documentData.batchAssignments.length} · {escapeHtml(batch.batchName)}
                     </div>
                   </article>

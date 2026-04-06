@@ -356,15 +356,23 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
         if (batch?.batch_leader_avatar_url) batchLeaderAvatarUrl = batch.batch_leader_avatar_url;
         else if (batch?.batch_leader_avatar) batchLeaderAvatarUrl = batch.batch_leader_avatar;
 
+        const sortedSizes = [...sizeDistributions].sort((a, b) => a.size.localeCompare(b.size));
         return {
           batchName: batch?.batch_name || '',
           batchLeaderName: batch?.batch_leader_name || '',
           batchLeaderAvatarUrl,
           tailorType: batch?.tailor_type || 'single_needle',
-          sizeDistributions,
+          sizeDistributions: sortedSizes,
           snRate,
           ofRate,
           assignedQuantity,
+          orderItemIds: selectedOrderItemId ? [selectedOrderItemId] : undefined,
+          assignedQuantities:
+            selectedOrderItemId ? { [selectedOrderItemId]: assignedQuantity } : undefined,
+          productSizeBreakdown:
+            selectedOrderItemId && sortedSizes.length > 0
+              ? [{ orderItemId: selectedOrderItemId, sizes: sortedSizes }]
+              : undefined,
         };
       }).filter((b) => b.assignedQuantity > 0);
 
@@ -382,6 +390,8 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
         salesManager,
         customizations: customizationsForDoc,
         dueDate: (orderData as any).expected_delivery_date,
+        orderDate: (orderData as any).order_date,
+        orderNotes: (orderData as any).notes ? String((orderData as any).notes) : undefined,
       });
 
       console.log('✅ Job card document prepared');

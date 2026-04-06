@@ -817,7 +817,10 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                     displayName = fabricMaster.fabric_name || item.item_name;
                     displayType = 'Fabric';
                     displayFabric =
-                      fabricMaster.type || fabricMaster.fabric_name || fabricMaster.fabric_for_supplier || '-';
+                      (fabricMaster.fabric_for_supplier && String(fabricMaster.fabric_for_supplier).trim()) ||
+                      fabricMaster.fabric_name ||
+                      fabricMaster.type ||
+                      '-';
                     displayColor = lineFabricColor || fabricMaster.color || '-';
                     if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
                     displayColorHex =

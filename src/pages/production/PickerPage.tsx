@@ -1,17 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import "@/pages/OrdersPageViewSwitch.css";
+import "@/pages/production/PickerTailorCard.css";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
-import { Search, Users, Scissors, ShoppingCart, Shirt, Package, ClipboardList, Printer, Check } from "lucide-react";
+import { Search, Users, Scissors, ShoppingCart, Shirt, Package, ClipboardList, Printer, Check, ArrowLeft } from "lucide-react";
 import PickerQuantityDialog from "@/components/production/PickerQuantityDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
+import { getOrderItemDisplayImage, getOrderItemListThumbnailUrl } from "@/utils/orderItemImageUtils";
 import { getBinsForProduct } from "@/utils/inventoryAdjustmentAPI";
 import type { BinInfo, BinSizeInfo } from "@/utils/inventoryAdjustmentAPI";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,6 +20,23 @@ import { toast } from "sonner";
 import { useCompanySettings } from "@/hooks/CompanySettingsContext";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizesByMasterOrder, sortSizeDistributionsByMasterOrder, getFallbackSizeOrder } from "@/utils/sizeSorting";
+import { parseLineOrderItemIdFromNotes } from "@/utils/orderBatchAssignmentLine";
+
+/** Hides itself if URL missing or image fails to load */
+function PickerBatchOrderThumb({ src }: { src?: string | null }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) return null;
+  return (
+    <div className="picker-batch-order-thumb">
+      <img
+        src={src}
+        alt=""
+        className="picker-batch-order-thumb-img"
+        onError={() => setFailed(true)}
+      />
+    </div>
+  );
+}
 
 interface TailorListItem {
   id: string;
@@ -91,6 +109,45 @@ interface GroupedProduct {
   size_variants?: Record<string, ProductSizeVariant>;
 }
 
+type GroupedBatchOrderSummary = {
+  order_id: string;
+  order_number?: string;
+  customer_name?: string;
+  thumbnail_urls: string[];
+  product_count: number;
+  total_quantity: number;
+  picked_quantity: number;
+  rejected_quantity: number;
+  leftToPick: number;
+  assignments: any[];
+};
+
+function mergePickerRejectedSizes(
+  assignments: any[]
+): { size_name: string; rejected_quantity: number; remarks?: string }[] {
+  const map = new Map<string, { size_name: string; rejected_quantity: number; remarks?: string }>();
+  for (const a of assignments) {
+    for (const rs of a.rejected_sizes || []) {
+      const key = rs.size_name;
+      const prev = map.get(key);
+      if (!prev) {
+        map.set(key, {
+          size_name: key,
+          rejected_quantity: Number(rs.rejected_quantity || 0),
+          remarks: rs.remarks,
+        });
+      } else {
+        map.set(key, {
+          size_name: key,
+          rejected_quantity: prev.rejected_quantity + Number(rs.rejected_quantity || 0),
+          remarks: prev.remarks || rs.remarks,
+        });
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
 export default function PickerPage() {
   const { config: company } = useCompanySettings();
   const { sizeTypes, loading: loadingSizeTypes } = useSizeTypes();
@@ -108,7 +165,21 @@ export default function PickerPage() {
     customerName?: string;
     sizeDistributions: { size_name: string; quantity: number }[];
     productImage?: string;
+    productDescription?: string;
+    preferredSizeTypeId?: string | null;
   } | null>(null);
+  const [batchDrillStep, setBatchDrillStep] = useState<"orders" | "products">("orders");
+  const [drillOrderId, setDrillOrderId] = useState<string | null>(null);
+  const [drillOrderNumber, setDrillOrderNumber] = useState("");
+  const batchDrillRef = useRef<{ step: "orders" | "products"; orderId: string | null }>({
+    step: "orders",
+    orderId: null,
+  });
+  const lastBatchOpenedForDrillRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    batchDrillRef.current = { step: batchDrillStep, orderId: drillOrderId };
+  }, [batchDrillStep, drillOrderId]);
   const [rejectedOpen, setRejectedOpen] = useState(false);
   const [rejectedOrderNumber, setRejectedOrderNumber] = useState("");
   const [rejectedItems, setRejectedItems] = useState<{ size_name: string; rejected_quantity: number; remarks?: string }[]>([]);
@@ -720,58 +791,77 @@ export default function PickerPage() {
           Object.keys(orderSet).forEach(b => { ordersCountByBatch[b] = orderSet[b].size; });
         } catch {}
 
-        // Fetch product images for each batch's orders
+        // Product thumbnails per order: BOM image first, then mockup column/specs, then category (same as QC page)
         if (batchIds.length > 0 && Object.keys(orderSet).length > 0) {
           try {
-            for (const [batchId, orderIdSet] of Object.entries(orderSet)) {
-              const orderIds = Array.from(orderIdSet);
-              if (orderIds.length === 0) continue;
-              
-              // Fetch order items with images
+            const allOrderIds = Array.from(
+              new Set(
+                Object.values(orderSet).flatMap((s) => Array.from(s as Set<string>))
+              )
+            ).filter(Boolean);
+            if (allOrderIds.length > 0) {
+              const orderTypeById: Record<string, string | null | undefined> = {};
+              try {
+                const { data: orderRows } = await (supabase as any)
+                  .from('orders')
+                  .select('id, order_type')
+                  .in('id', allOrderIds as any);
+                (orderRows || []).forEach((o: any) => {
+                  if (o?.id) orderTypeById[o.id] = o.order_type ?? null;
+                });
+              } catch {}
+
+              const bomByOrder: Record<string, string> = {};
+              try {
+                const { data: boms } = await (supabase as any)
+                  .from('bom_records')
+                  .select('order_id, product_image_url')
+                  .in('order_id', allOrderIds as any);
+                (boms || []).forEach((b: any) => {
+                  if (b?.order_id && b?.product_image_url) bomByOrder[b.order_id] = b.product_image_url;
+                });
+              } catch {}
+
               const { data: orderItems } = await (supabase as any)
                 .from('order_items')
-                .select('order_id, specifications, mockup_images')
-                .in('order_id', orderIds);
-              
-              const images: string[] = [];
-              const processedOrders = new Set<string>();
-              
+                .select('order_id, specifications, mockup_images, category_image_url')
+                .in('order_id', allOrderIds as any);
+
+              const itemsByOrder: Record<string, any[]> = {};
               (orderItems || []).forEach((item: any) => {
-                if (processedOrders.has(item.order_id)) return; // One image per order
-                
-                let imageUrl = null;
-                
-                // Priority 1: Check mockup_images column (TEXT[] array)
-                if (item.mockup_images && Array.isArray(item.mockup_images) && item.mockup_images.length > 0) {
-                  const firstMockup = item.mockup_images[0];
-                  if (firstMockup && typeof firstMockup === 'string' && firstMockup.trim()) {
-                    imageUrl = firstMockup.trim();
-                  }
-                }
-                
-                // Priority 2: Try mockup image from specifications
-                if (!imageUrl) {
-                try {
-                  const specs = typeof item.specifications === 'string' 
-                    ? JSON.parse(item.specifications) 
-                    : item.specifications;
-                  if (specs?.mockup_images && Array.isArray(specs.mockup_images) && specs.mockup_images.length > 0) {
-                      const firstMockup = specs.mockup_images[0];
-                      if (firstMockup && typeof firstMockup === 'string' && firstMockup.trim()) {
-                        imageUrl = firstMockup.trim();
-                      }
-                  }
-                } catch {}
-                }
-                
-                // Only add image if it's a mockup (do NOT fall back to category image)
-                if (imageUrl) {
-                  images.push(imageUrl);
-                  processedOrders.add(item.order_id);
-                }
+                const oid = item?.order_id as string | undefined;
+                if (!oid) return;
+                if (!itemsByOrder[oid]) itemsByOrder[oid] = [];
+                itemsByOrder[oid].push(item);
               });
-              
-              orderImagesByBatch[batchId] = images;
+
+              const thumbsForOrder = (orderId: string): string[] => {
+                const seen = new Set<string>();
+                const out: string[] = [];
+                const push = (u: string | null | undefined) => {
+                  if (!u || typeof u !== 'string') return;
+                  const t = u.trim();
+                  if (!t || seen.has(t)) return;
+                  seen.add(t);
+                  out.push(t);
+                };
+                const ot = orderTypeById[orderId];
+                for (const line of itemsByOrder[orderId] || []) {
+                  const thumb = getOrderItemListThumbnailUrl(line, { order_type: ot ?? undefined });
+                  push(thumb);
+                }
+                const bom = bomByOrder[orderId];
+                if (bom) push(bom);
+                return out;
+              };
+
+              for (const [batchId, orderIdSet] of Object.entries(orderSet)) {
+                const images: string[] = [];
+                for (const oid of Array.from(orderIdSet as Set<string>)) {
+                  images.push(...thumbsForOrder(oid));
+                }
+                orderImagesByBatch[batchId] = images;
+              }
             }
           } catch (error) {
             console.error('Error fetching order images:', error);
@@ -897,6 +987,12 @@ export default function PickerPage() {
   };
 
   const openBatchOrders = async (batchId: string) => {
+    if (lastBatchOpenedForDrillRef.current !== batchId) {
+      lastBatchOpenedForDrillRef.current = batchId;
+      setBatchDrillStep("orders");
+      setDrillOrderId(null);
+      setDrillOrderNumber("");
+    }
     setActiveBatchId(batchId);
     setLoadingBatchOrders(true);
     try {
@@ -912,6 +1008,7 @@ export default function PickerPage() {
       let pickedByAssignment: Record<string, number> = {};
       let rejectedByAssignment: Record<string, number> = {};
       let rejectedSizesByAssignment: Record<string, { size_name: string; rejected_quantity: number; remarks?: string }[]> = {};
+      const notesByAssignmentId: Record<string, string> = {};
       if (assignmentIds.length > 0) {
         try {
           const { data: pickedRows } = await (supabase as any)
@@ -930,7 +1027,10 @@ export default function PickerPage() {
             .select('id, notes')
             .in('id', assignmentIds as any);
           (asn || []).forEach((a: any) => {
-            if (!a?.id || !a?.notes) return;
+            if (!a?.id) return;
+            const rawNotes = a.notes != null ? String(a.notes) : "";
+            notesByAssignmentId[a.id] = rawNotes;
+            if (!a.notes) return;
             try {
               const parsed = JSON.parse(a.notes);
               if (parsed && parsed.picked_by_size && typeof parsed.picked_by_size === 'object') {
@@ -961,45 +1061,169 @@ export default function PickerPage() {
       }
 
       const orderIds = Array.from(new Set((rows || []).map((r: any) => r.order_id).filter(Boolean)));
-      let ordersMap: Record<string, { order_number?: string; customer_id?: string; mockup_image?: string; category_image?: string; size_type_id?: string | null }> = {};
+      let ordersMap: Record<string, { order_number?: string; customer_id?: string; order_type?: string | null; size_type_id?: string | null }> = {};
+      const bomByOrder: Record<string, string> = {};
+      const itemsByOrder: Record<string, any[]> = {};
       if (orderIds.length > 0) {
         const { data: orders } = await (supabase as any)
           .from('orders')
-          .select('id, order_number, customer_id')
+          .select('id, order_number, customer_id, order_type')
           .in('id', orderIds as any);
-        (orders || []).forEach((o: any) => { ordersMap[o.id] = { order_number: o.order_number, customer_id: o.customer_id }; });
-        
-        // Fetch order items to get product images (mockup or category) and size_type_id
+        (orders || []).forEach((o: any) => {
+          ordersMap[o.id] = {
+            order_number: o.order_number,
+            customer_id: o.customer_id,
+            order_type: o.order_type ?? null,
+          };
+        });
+
+        try {
+          const { data: boms } = await (supabase as any)
+            .from('bom_records')
+            .select('order_id, product_image_url')
+            .in('order_id', orderIds as any);
+          (boms || []).forEach((b: any) => {
+            if (b?.order_id && b?.product_image_url) bomByOrder[b.order_id] = b.product_image_url;
+          });
+        } catch {}
+
         const { data: orderItems } = await (supabase as any)
           .from('order_items')
-          .select('order_id, specifications, category_image_url, size_type_id')
+          .select(
+            'id, order_id, product_description, specifications, category_image_url, mockup_images, size_type_id'
+          )
           .in('order_id', orderIds as any);
-        
+
         (orderItems || []).forEach((item: any) => {
           if (!ordersMap[item.order_id]) return;
-          
-          // Try to get mockup image from specifications
-          let mockupImage = null;
-          try {
-            const specs = typeof item.specifications === 'string' ? JSON.parse(item.specifications) : item.specifications;
-            if (specs?.mockup_images && Array.isArray(specs.mockup_images) && specs.mockup_images.length > 0) {
-              mockupImage = specs.mockup_images[0];
-            }
-          } catch {}
-          
-          // Set mockup image if available, otherwise use category image
-          if (mockupImage && !ordersMap[item.order_id].mockup_image) {
-            ordersMap[item.order_id].mockup_image = mockupImage;
-          }
-          if (item.category_image_url && !ordersMap[item.order_id].category_image) {
-            ordersMap[item.order_id].category_image = item.category_image_url;
-          }
-          // Store size_type_id (use first non-null value found)
-          if (item.size_type_id && !ordersMap[item.order_id].size_type_id) {
-            ordersMap[item.order_id].size_type_id = item.size_type_id;
+          const oid = item.order_id as string;
+          if (!itemsByOrder[oid]) itemsByOrder[oid] = [];
+          itemsByOrder[oid].push(item);
+          if (item.size_type_id && !ordersMap[oid].size_type_id) {
+            ordersMap[oid].size_type_id = item.size_type_id;
           }
         });
       }
+
+      const parseItemSpecifications = (raw: unknown): Record<string, any> | null => {
+        if (!raw) return null;
+        if (typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, any>;
+        if (typeof raw === "string") {
+          try {
+            const p = JSON.parse(raw);
+            return p && typeof p === "object" ? p : null;
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      };
+
+      const describeOrderLine = (item: any | null): string => {
+        if (!item) return "";
+        const pd = item.product_description;
+        if (typeof pd === "string" && pd.trim()) return pd.trim();
+        const specs = parseItemSpecifications(item.specifications);
+        if (specs) {
+          const n = specs.product_name || specs.class || specs.category;
+          if (typeof n === "string" && n.trim()) return n.trim();
+        }
+        return "";
+      };
+
+      /** How well this line matches assigned sizes (by overlapping qty). */
+      const scoreLineAgainstAssignment = (item: any, sizeDistributions: any[]): number => {
+        const assignSizes = new Set(
+          (Array.isArray(sizeDistributions) ? sizeDistributions : [])
+            .map((sd: any) => normalizeSizeLabel(sd.size_name))
+            .filter((s: string) => s && !isUniversalSizeLabel(s))
+        );
+        if (assignSizes.size === 0) return 0;
+        const specs = parseItemSpecifications(item.specifications);
+        const sq =
+          specs?.sizes_quantities && typeof specs.sizes_quantities === "object"
+            ? specs.sizes_quantities
+            : {};
+        let score = 0;
+        for (const [k, v] of Object.entries(sq)) {
+          if (assignSizes.has(normalizeSizeLabel(k))) score += Number(v) || 0;
+        }
+        return score;
+      };
+
+      const rankLinesForAssignment = (orderId: string, sizeDistributions: any[]): any[] => {
+        const lines = itemsByOrder[orderId] || [];
+        if (lines.length <= 1) return lines;
+        return [...lines].sort(
+          (a, b) =>
+            scoreLineAgainstAssignment(b, sizeDistributions) -
+            scoreLineAgainstAssignment(a, sizeDistributions)
+        );
+      };
+
+      const resolveAssignmentLinePresentation = (
+        orderId: string,
+        sizeDistributions: any[]
+      ): { thumbnailUrl?: string; product_line_description: string } => {
+        const ot = ordersMap[orderId]?.order_type ?? undefined;
+        const ranked = rankLinesForAssignment(orderId, sizeDistributions);
+        if (ranked.length === 0) {
+          return {
+            thumbnailUrl: bomByOrder[orderId],
+            product_line_description: "",
+          };
+        }
+        for (const line of ranked) {
+          const thumb = getOrderItemListThumbnailUrl(line, { order_type: ot });
+          if (thumb) {
+            return {
+              thumbnailUrl: thumb,
+              product_line_description: describeOrderLine(line),
+            };
+          }
+        }
+        const primary = ranked[0];
+        return {
+          thumbnailUrl: bomByOrder[orderId],
+          product_line_description: describeOrderLine(primary),
+        };
+      };
+
+      const orderItemsById = new Map<string, any>();
+      for (const oid of Object.keys(itemsByOrder)) {
+        for (const it of itemsByOrder[oid] || []) {
+          orderItemsById.set(it.id, it);
+        }
+      }
+
+      const resolvePresentationForAssignment = (
+        assignmentId: string,
+        orderId: string,
+        sizeDistributions: any[]
+      ): { thumbnailUrl?: string; product_line_description: string; size_type_id: string | null } => {
+        const lineId = parseLineOrderItemIdFromNotes(notesByAssignmentId[assignmentId]);
+        const ot = ordersMap[orderId]?.order_type ?? undefined;
+        if (lineId) {
+          const item = orderItemsById.get(lineId);
+          if (item && item.order_id === orderId) {
+            const thumb = getOrderItemListThumbnailUrl(item, { order_type: ot });
+            return {
+              thumbnailUrl: thumb || bomByOrder[orderId],
+              product_line_description: describeOrderLine(item),
+              size_type_id: item.size_type_id || ordersMap[orderId]?.size_type_id || null,
+            };
+          }
+        }
+        const pres = resolveAssignmentLinePresentation(orderId, sizeDistributions);
+        const ranked = rankLinesForAssignment(orderId, sizeDistributions);
+        const firstLine = ranked[0];
+        return {
+          thumbnailUrl: pres.thumbnailUrl,
+          product_line_description: pres.product_line_description,
+          size_type_id: firstLine?.size_type_id || ordersMap[orderId]?.size_type_id || null,
+        };
+      };
+
       const customerIds = Array.from(new Set(Object.values(ordersMap).map(o => o.customer_id).filter(Boolean)));
       let customersMap: Record<string, string> = {};
       if (customerIds.length > 0) {
@@ -1010,21 +1234,25 @@ export default function PickerPage() {
         (customers || []).forEach((c: any) => { customersMap[c.id] = c.company_name; });
       }
 
-      const enriched = (rows || []).map((r: any) => ({
+      const enriched = (rows || []).map((r: any) => {
+        const dist = Array.isArray(r.size_distributions) ? r.size_distributions : [];
+        const pres = resolvePresentationForAssignment(r.assignment_id, r.order_id, dist);
+        return {
         assignment_id: r.assignment_id,
         order_id: r.order_id,
         order_number: ordersMap[r.order_id]?.order_number,
         customer_name: customersMap[ordersMap[r.order_id]?.customer_id || ''],
-        mockup_image: ordersMap[r.order_id]?.mockup_image,
-        category_image: ordersMap[r.order_id]?.category_image,
-        size_type_id: ordersMap[r.order_id]?.size_type_id || null,
+        product_thumbnail_url: pres.thumbnailUrl,
+        product_line_description: pres.product_line_description,
+        size_type_id: pres.size_type_id,
         assignment_date: r.assignment_date,
         total_quantity: Number(r.total_quantity || 0),
         picked_quantity: Number(pickedByAssignment[r.assignment_id] || 0),
         rejected_quantity: Number(rejectedByAssignment[r.assignment_id] || 0),
         rejected_sizes: rejectedSizesByAssignment[r.assignment_id] || [],
-        size_distributions: Array.isArray(r.size_distributions) ? r.size_distributions : [],
-      }));
+        size_distributions: dist,
+      };
+      });
       // Show orders that have work to do: pending items OR rejected items needing replacement
       // Key insight: If picked >= total, then all assigned items are picked.
       // If there are rejected items but picked >= total, replacements have already been picked,
@@ -1047,6 +1275,15 @@ export default function PickerPage() {
         return remainingToPick > 0;
       });
       setBatchOrders(pending);
+      const drill = batchDrillRef.current;
+      if (drill.step === "products" && drill.orderId) {
+        const still = pending.some((o: any) => o.order_id === drill.orderId);
+        if (!still) {
+          setBatchDrillStep("orders");
+          setDrillOrderId(null);
+          setDrillOrderNumber("");
+        }
+      }
       setOrdersDialogOpen(true);
     } catch (e) {
       setBatchOrders([]);
@@ -1062,7 +1299,9 @@ export default function PickerPage() {
       orderNumber: assignment.order_number,
       customerName: assignment.customer_name,
       sizeDistributions: assignment.size_distributions || [],
-      productImage: assignment.mockup_image || undefined,
+      productImage: assignment.product_thumbnail_url || undefined,
+      productDescription: assignment.product_line_description || undefined,
+      preferredSizeTypeId: assignment.size_type_id || undefined,
     });
     setPickerOpen(true);
   };
@@ -1072,6 +1311,272 @@ export default function PickerPage() {
     if (!q) return tailors;
     return tailors.filter(t => t.full_name.toLowerCase().includes(q));
   }, [tailorSearch, tailors]);
+
+  const groupedBatchOrderSummaries = useMemo((): GroupedBatchOrderSummary[] => {
+    const byOrder = new Map<string, any[]>();
+    for (const o of batchOrders) {
+      const k = o.order_id as string;
+      if (!byOrder.has(k)) byOrder.set(k, []);
+      byOrder.get(k)!.push(o);
+    }
+    return Array.from(byOrder.entries()).map(([order_id, items]) => {
+      const first = items[0];
+      const seen = new Set<string>();
+      const thumbnail_urls: string[] = [];
+      for (const i of items) {
+        const u = i.product_thumbnail_url as string | undefined;
+        if (u && !seen.has(u)) {
+          seen.add(u);
+          thumbnail_urls.push(u);
+        }
+      }
+      const total_quantity = items.reduce((s, i) => s + Number(i.total_quantity || 0), 0);
+      const picked_quantity = items.reduce((s, i) => s + Number(i.picked_quantity || 0), 0);
+      const rejected_quantity = items.reduce((s, i) => s + Number(i.rejected_quantity || 0), 0);
+      const pendingItems = Math.max(0, total_quantity - picked_quantity);
+      const rejectedNeedingReplacement = picked_quantity < total_quantity ? rejected_quantity : 0;
+      const leftToPick = pendingItems + rejectedNeedingReplacement;
+      return {
+        order_id,
+        order_number: first.order_number,
+        customer_name: first.customer_name,
+        thumbnail_urls,
+        product_count: items.length,
+        total_quantity,
+        picked_quantity,
+        rejected_quantity,
+        leftToPick,
+        assignments: items,
+      };
+    });
+  }, [batchOrders]);
+
+  const renderPickerBatchOrderSummaryCard = (s: GroupedBatchOrderSummary, onActivate: () => void) => {
+    const leftQuantity = s.leftToPick;
+    const mergedRejected = mergePickerRejectedSizes(s.assignments);
+    return (
+      <div
+        key={s.order_id}
+        className="picker-batch-order-card"
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onActivate();
+          }
+        }}
+        onClick={onActivate}
+      >
+        <div className="picker-batch-order-top">
+          <div className="picker-batch-order-glass" aria-hidden />
+          <div className="picker-batch-order-head">
+            <div className="picker-batch-order-thumbs-stack" aria-hidden>
+              {s.thumbnail_urls.length > 0 ? (
+                s.thumbnail_urls.slice(0, 4).map((url, idx) => (
+                  <PickerBatchOrderThumb key={`${s.order_id}-t-${idx}-${url.slice(-24)}`} src={url} />
+                ))
+              ) : (
+                <div className="picker-batch-order-thumb picker-batch-order-thumb-placeholder" />
+              )}
+              {s.assignments.length > 4 ? (
+                <span className="picker-batch-order-thumb-more">+{s.assignments.length - 4}</span>
+              ) : null}
+            </div>
+            <div className="picker-batch-order-head-text">
+              <div className="picker-batch-order-title" title={s.order_number ? `Order #${s.order_number}` : undefined}>
+                Order #{s.order_number}
+              </div>
+              <div className="picker-batch-order-desc">
+                {s.product_count} product{s.product_count === 1 ? "" : "s"} in this batch
+              </div>
+              <div className="picker-batch-order-sub">{s.customer_name || "Unknown Customer"}</div>
+            </div>
+          </div>
+          <div className="picker-batch-order-stats">
+            <span className="picker-batch-order-stat">
+              <b>{s.total_quantity || 0}</b> total qty
+            </span>
+            <span className="picker-batch-order-stat">
+              <b>{s.picked_quantity || 0}</b> picked
+            </span>
+          </div>
+          {s.rejected_quantity > 0 && (
+            <button
+              type="button"
+              className="picker-batch-order-rejected"
+              onClick={(e) => {
+                e.stopPropagation();
+                setRejectedOrderNumber(s.order_number || "");
+                setRejectedItems(mergedRejected);
+                setRejectedOpen(true);
+              }}
+            >
+              Rejected · {s.rejected_quantity}
+            </button>
+          )}
+        </div>
+        <div
+          className={`picker-batch-order-bottom ${leftQuantity === 0 && (s.total_quantity || 0) > 0 ? "complete" : ""}`}
+        >
+          {leftQuantity > 0 ? (
+            <>Left to pick · {leftQuantity}</>
+          ) : (s.total_quantity || 0) > 0 ? (
+            <span className="inline-flex items-center justify-center gap-1.5">
+              <Check className="h-3.5 w-3.5 shrink-0" />
+              All picked
+            </span>
+          ) : (
+            "No quantity"
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderPickerBatchProductCard = (o: any, onActivate: () => void) => {
+    const totalQty = Number(o.total_quantity || 0);
+    const picked = Number(o.picked_quantity || 0);
+    const pendingItems = Math.max(0, totalQty - picked);
+    const rejected = Number(o.rejected_quantity || 0);
+    const rejectedNeedingReplacement = picked < totalQty ? rejected : 0;
+    const leftQuantity = pendingItems + rejectedNeedingReplacement;
+    const distributions = Array.isArray(o.size_distributions) ? o.size_distributions : [];
+    const sortedSizes = sortSizeDistributions(distributions, (o as any).size_type_id);
+    return (
+      <div
+        key={o.assignment_id}
+        className="picker-batch-order-card"
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onActivate();
+          }
+        }}
+        onClick={onActivate}
+      >
+        <div className="picker-batch-order-top">
+          <div className="picker-batch-order-glass" aria-hidden />
+          <div className="picker-batch-order-head">
+            <PickerBatchOrderThumb src={o.product_thumbnail_url} />
+            <div className="picker-batch-order-head-text">
+              <div className="picker-batch-order-title" title={o.order_number ? `Order #${o.order_number}` : undefined}>
+                Order #{o.order_number}
+              </div>
+              {o.product_line_description ? (
+                <div className="picker-batch-order-desc">{o.product_line_description}</div>
+              ) : null}
+              <div className="picker-batch-order-sub">{o.customer_name || "Unknown Customer"}</div>
+            </div>
+          </div>
+          <div className="picker-batch-order-stats">
+            <span className="picker-batch-order-stat">
+              <b>{o.total_quantity || 0}</b> total qty
+            </span>
+            <span className="picker-batch-order-stat">
+              <b>{o.picked_quantity || 0}</b> picked
+            </span>
+          </div>
+          {o.rejected_quantity > 0 && (
+            <button
+              type="button"
+              className="picker-batch-order-rejected"
+              onClick={(e) => {
+                e.stopPropagation();
+                setRejectedOrderNumber(o.order_number);
+                setRejectedItems(o.rejected_sizes || []);
+                setRejectedOpen(true);
+              }}
+            >
+              Rejected · {o.rejected_quantity}
+            </button>
+          )}
+          {sortedSizes.length > 0 && (
+            <div className="picker-batch-order-sizes">
+              {sortedSizes.map((sd: any) => {
+                const sizeLeft = (sd.quantity || 0) - (sd.picked_quantity || 0);
+                return (
+                  <span key={String(sd.size_name)} className="picker-batch-order-size-pill">
+                    {sd.size_name}: {sd.quantity || 0} ({sizeLeft} left)
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div
+          className={`picker-batch-order-bottom ${leftQuantity === 0 && totalQty > 0 ? "complete" : ""}`}
+        >
+          {leftQuantity > 0 ? (
+            <>Left to pick · {leftQuantity}</>
+          ) : totalQty > 0 ? (
+            <span className="inline-flex items-center justify-center gap-1.5">
+              <Check className="h-3.5 w-3.5 shrink-0" />
+              All picked
+            </span>
+          ) : (
+            "No quantity"
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderBatchOrdersDrillPanel = () => {
+    if (loadingBatchOrders) {
+      return <p className="text-sm sm:text-base text-muted-foreground">Loading...</p>;
+    }
+    if (batchOrders.length === 0) {
+      return (
+        <p className="text-sm sm:text-base text-muted-foreground">No pending orders for this batch.</p>
+      );
+    }
+    if (batchDrillStep === "orders") {
+      return (
+        <div className="picker-batch-order-grid">
+          {groupedBatchOrderSummaries.map((s) =>
+            renderPickerBatchOrderSummaryCard(s, () => {
+              setBatchDrillStep("products");
+              setDrillOrderId(s.order_id);
+              setDrillOrderNumber(s.order_number || "");
+            })
+          )}
+        </div>
+      );
+    }
+    const productsForOrder = batchOrders.filter((o) => o.order_id === drillOrderId);
+    return (
+      <>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1"
+            onClick={() => {
+              setBatchDrillStep("orders");
+              setDrillOrderId(null);
+              setDrillOrderNumber("");
+            }}
+          >
+            <ArrowLeft className="h-4 w-4 shrink-0" />
+            All orders
+          </Button>
+          <span className="text-sm text-muted-foreground">
+            Order #{drillOrderNumber}
+            {productsForOrder[0]?.customer_name ? ` · ${productsForOrder[0].customer_name}` : ""}
+          </span>
+        </div>
+        <div className="picker-batch-order-grid">
+          {productsForOrder.map((o) =>
+            renderPickerBatchProductCard(o, () => openPickerForAssignment(o))
+          )}
+        </div>
+      </>
+    );
+  };
 
   return (
     <ErpLayout>
@@ -1136,246 +1641,147 @@ export default function PickerPage() {
                   <p className="text-sm sm:text-base text-muted-foreground">No tailors found.</p>
                 ) : (
                   <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-3 gap-3 sm:gap-4">
+                  <div className="picker-tailor-grid">
                     {filteredTailors.map((t) => {
                       const pendingQty = Math.max(0, (t.assigned_quantity || 0) - (t.picked_quantity || 0));
+                      const imgs = t.order_images || [];
                       return (
-                        <Card key={t.id} className="border shadow-erp-md cursor-pointer hover:shadow-lg transition relative min-h-[280px] rounded-xl w-full" onClick={() => openBatchOrders(t.id)}>
-                          <CardContent className="p-4 sm:p-5 relative h-full flex flex-col">
-                            {/* Top Section: Avatar + Name + Batch Code */}
-                            <div className="flex items-start gap-3 mb-6">
-                              <Avatar className="w-20 h-20 flex-shrink-0">
-                                <AvatarImage src={t.avatar_url || undefined} alt={t.full_name} />
-                                <AvatarFallback className="text-base font-semibold">{t.full_name.charAt(0)}</AvatarFallback>
-                              </Avatar>
-                              <div className="flex-1 min-w-0">
-                                <div className="font-bold text-lg text-slate-900 truncate">{t.full_name}</div>
-                                {t.batch_code && (
-                                  <div className="text-sm text-muted-foreground mt-0.5">BATCH: {t.batch_code}</div>
-                                )}
+                        <div
+                          key={t.id}
+                          className="picker-tailor-card"
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openBatchOrders(t.id);
+                            }
+                          }}
+                          onClick={() => openBatchOrders(t.id)}
+                        >
+                          <div className="picker-tailor-card-top">
+                            <div className="picker-tailor-glass" aria-hidden />
+                            {t.rejected_quantity > 0 && (
+                              <button
+                                type="button"
+                                className="picker-tailor-rejected"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openBatchRejectedDetails(t.id, t.full_name);
+                                }}
+                              >
+                                Rejected · {t.rejected_quantity}
+                              </button>
+                            )}
+                            <div className="picker-tailor-meta">
+                              <span>{t.assigned_orders} orders assigned</span>
+                              <span>Qty {t.assigned_quantity ?? 0}</span>
+                            </div>
+                            <div className="picker-tailor-user">
+                              <div className="picker-tailor-avatar-wrap">
+                                <Avatar className="h-11 w-11 border-2 border-white/15 shadow-md">
+                                  <AvatarImage src={t.avatar_url || undefined} alt={t.full_name} className="object-cover" />
+                                  <AvatarFallback className="picker-tailor-avatar-fallback border-0">
+                                    {(t.full_name || "?").charAt(0).toUpperCase()}
+                                  </AvatarFallback>
+                                </Avatar>
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="picker-tailor-name">{t.full_name}</div>
+                                <div className="picker-tailor-status">
+                                  <span className="picker-tailor-dot" aria-hidden />
+                                  {t.batch_code ? `Batch ${t.batch_code}` : "Production batch"}
+                                </div>
                               </div>
                             </div>
-
-                            {/* Badges with Absolute Positioning */}
-                            {/* Rejected Qty - Top Right */}
-                            {t.rejected_quantity > 0 && (
-                              <Badge 
-                                className="absolute top-4 sm:top-5 right-4 sm:right-5 bg-red-500 hover:bg-red-600 text-white text-xs px-4 py-2 cursor-pointer z-10 shadow-sm rounded-full w-[180px] flex items-center justify-center" 
-                                onClick={(e) => { e.stopPropagation(); openBatchRejectedDetails(t.id, t.full_name); }}
-                                style={{ top: '16px' }}
+                            {imgs.length > 0 ? (
+                              <div
+                                className="picker-tailor-products"
+                                onClick={(e) => e.stopPropagation()}
+                                role="presentation"
                               >
-                                Rejected Qty: {t.rejected_quantity}
-                              </Badge>
-                            )}
-
-                            {/* Assigned Orders - Middle Left */}
-                            <Badge 
-                              className="absolute left-4 sm:left-5 bg-blue-100 text-blue-800 text-xs px-4 py-2 rounded-full w-[180px] flex items-center justify-center"
-                              style={{ top: '50%', transform: 'translateY(-50%)' }}
-                            >
-                              Assigned Orders: {t.assigned_orders}
-                            </Badge>
-
-                            {/* Assigned Qty - Middle Right */}
-                            {t.assigned_quantity > 0 && (
-                              <Badge 
-                                className="absolute right-4 sm:right-5 bg-purple-100 text-purple-800 text-xs px-4 py-2 rounded-full w-[180px] flex items-center justify-center"
-                                style={{ top: '50%', transform: 'translateY(-50%)' }}
-                              >
-                                Assigned Qty: {t.assigned_quantity}
-                              </Badge>
-                            )}
-
-                            {/* Pending Qty - Bottom Right */}
-                            {pendingQty > 0 ? (
-                              <Badge 
-                                className="absolute bottom-4 sm:bottom-5 right-4 sm:right-5 bg-yellow-500 hover:bg-yellow-600 text-white text-xs px-4 py-2 shadow-sm rounded-full w-[180px] flex items-center justify-center"
-                                style={{ bottom: '16px' }}
-                              >
-                                Pending Qty: {pendingQty}
-                              </Badge>
-                            ) : pendingQty === 0 && t.assigned_quantity > 0 ? (
-                              <Badge 
-                                className="absolute bottom-4 sm:bottom-5 right-4 sm:right-5 bg-green-500 hover:bg-green-600 text-white text-xs px-4 py-2 shadow-sm rounded-full w-[180px] flex items-center justify-center gap-1.5"
-                                style={{ bottom: '16px' }}
-                              >
-                                <Check className="h-3.5 w-3.5" />
-                                All Completed
-                              </Badge>
-                            ) : null}
-
-                            {/* Product Images Row - Bottom with Overlapping Circular Images */}
-                            {t.order_images && t.order_images.length > 0 && (
-                              <div className="flex items-center mt-auto pt-4 relative" style={{ height: '64px' }}>
-                                {t.order_images.slice(0, 3).map((img, idx) => (
-                                  <img 
-                                    key={idx} 
-                                    src={img} 
-                                    alt={`Product ${idx + 1}`}
-                                    className="w-16 h-16 rounded-full object-cover border-2 border-white flex-shrink-0 shadow-sm cursor-pointer"
-                                    style={{ 
-                                      marginLeft: idx > 0 ? '-16px' : '0',
-                                      zIndex: 3 - idx,
-                                      position: 'relative'
-                                    }}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      openImageGallery(t.id, t.order_images || []);
-                                    }}
-                                    onError={(e) => {
-                                      (e.target as HTMLImageElement).style.display = 'none';
-                                    }}
-                                  />
-                                ))}
-                                {t.order_images.length > 3 && (
-                                  <div 
-                                    className="relative w-16 h-16 rounded-full overflow-hidden cursor-pointer border-2 border-white flex-shrink-0 shadow-sm"
-                                    style={{ 
-                                      marginLeft: '-16px',
-                                      zIndex: 0
-                                    }}
-                                    onClick={(e) => { 
-                                      e.stopPropagation(); 
-                                      openImageGallery(t.id, t.order_images || []); 
-                                    }}
-                                  >
-                                    <img 
-                                      src={t.order_images[3]} 
-                                      alt="More products"
-                                      className="w-full h-full object-cover blur-sm"
+                                <div className="picker-tailor-products-inner">
+                                  {imgs.slice(0, 3).map((img, idx) => (
+                                    <img
+                                      key={`${t.id}-${idx}-${img.slice(-32)}`}
+                                      src={img}
+                                      alt=""
+                                      className="picker-tailor-product-img"
+                                      style={{ marginLeft: idx > 0 ? -14 : 0, zIndex: 10 - idx }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openImageGallery(t.id, imgs);
+                                      }}
                                       onError={(e) => {
-                                        (e.target as HTMLImageElement).style.display = 'none';
+                                        (e.target as HTMLImageElement).style.display = "none";
                                       }}
                                     />
-                                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-full">
-                                      <span className="text-white font-bold text-sm">+{t.order_images.length - 3}</span>
+                                  ))}
+                                  {imgs.length > 3 && (
+                                    <div
+                                      className="picker-tailor-product-more"
+                                      style={{ marginLeft: -14, zIndex: 0 }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openImageGallery(t.id, imgs);
+                                      }}
+                                    >
+                                      <img
+                                        src={imgs[3]}
+                                        alt=""
+                                        onError={(e) => {
+                                          (e.target as HTMLImageElement).style.display = "none";
+                                        }}
+                                      />
+                                      <span>+{imgs.length - 3}</span>
                                     </div>
-                                  </div>
-                                )}
+                                  )}
+                                </div>
                               </div>
+                            ) : null}
+                            <div className="picker-tailor-actions">
+                              <div className="picker-tailor-btn">Assigned orders · {t.assigned_orders}</div>
+                              <div className="picker-tailor-btn secondary">Total quantity · {t.assigned_quantity ?? 0}</div>
+                            </div>
+                          </div>
+                          <div className="picker-tailor-expand">
+                            <div className="picker-tailor-section">
+                              <div className="picker-tailor-section-title">Picking</div>
+                              <div className="picker-tailor-section-text">
+                                Open this batch to record picks and view order lines.
+                                {t.rejected_quantity > 0
+                                  ? ` ${t.rejected_quantity} rejected piece(s) — use Rejected above for details.`
+                                  : ""}
+                              </div>
+                            </div>
+                          </div>
+                          <div
+                            className={`picker-tailor-bottom ${pendingQty === 0 && (t.assigned_quantity || 0) > 0 ? "complete" : ""}`}
+                          >
+                            {pendingQty > 0 ? (
+                              <>Pending qty · {pendingQty}</>
+                            ) : (t.assigned_quantity || 0) > 0 ? (
+                              <span className="inline-flex items-center justify-center gap-1.5">
+                                <Check className="h-4 w-4 shrink-0" />
+                                All assigned quantity picked
+                              </span>
+                            ) : (
+                              "No assignments"
                             )}
-                          </CardContent>
-                        </Card>
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
 
                   {activeBatchId && (
                     <div className="mt-4 sm:mt-6 space-y-3">
-                      <div className="text-sm sm:text-base font-medium">Orders for selected batch</div>
-                      {loadingBatchOrders ? (
-                        <p className="text-sm sm:text-base text-muted-foreground">Loading...</p>
-                      ) : batchOrders.length === 0 ? (
-                        <p className="text-sm sm:text-base text-muted-foreground">No pending orders for this batch.</p>
-                      ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-                          {batchOrders.map((o) => {
-                            // Calculate left to pick: pending items (assigned - picked) + rejected items needing replacement
-                            const pending = Math.max(0, (o.total_quantity || 0) - (o.picked_quantity || 0));
-                            const rejected = Number(o.rejected_quantity || 0);
-                            const leftQuantity = pending + rejected;
-                            return (
-                              <Card 
-                                key={o.assignment_id} 
-                                className="border-0 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer bg-gradient-to-br from-white to-slate-50/50 overflow-hidden group"
-                                onClick={() => openPickerForAssignment(o)}
-                              >
-                                <CardContent className="p-5 sm:p-6">
-                                  <div className="flex flex-col gap-4">
-                                    {/* Header with Image and Order Info */}
-                                    <div className="flex items-start gap-4">
-                                      {/* Circular Product Image */}
-                                      <div className="flex-shrink-0">
-                                        <Avatar className="w-16 h-16 sm:w-20 sm:h-20 border-2 border-slate-200 shadow-sm">
-                                          <AvatarImage 
-                                            src={o.mockup_image || undefined} 
-                                            alt={o.order_number}
-                                            className="object-cover"
-                                          />
-                                          <AvatarFallback className="bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600 text-sm font-semibold">
-                                            {o.order_number?.slice(-3) || 'N/A'}
-                                          </AvatarFallback>
-                                        </Avatar>
-                                      </div>
-                                      
-                                      {/* Order Details */}
-                                      <div className="flex-1 min-w-0">
-                                        <div className="font-bold text-base sm:text-lg text-slate-900 truncate mb-1">
-                                          Order #{o.order_number}
-                                        </div>
-                                        <div className="text-sm text-slate-600 truncate">
-                                          {o.customer_name || 'Unknown Customer'}
-                                        </div>
-                                      </div>
-                                    </div>
-                                    
-                                    {/* Quantity Badges */}
-                                    <div className="space-y-2 pt-2 border-t border-slate-100">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <div className="flex flex-col">
-                                          <span className="text-xs text-slate-500 mb-1">Total Qty</span>
-                                          <Badge className="bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold px-3 py-1.5 w-fit">
-                                            {o.total_quantity || 0}
-                                          </Badge>
-                                        </div>
-                                        <div className="flex flex-col">
-                                          <span className="text-xs text-slate-500 mb-1">Picked</span>
-                                          <Badge className="bg-green-500 hover:bg-green-600 text-white text-sm font-semibold px-3 py-1.5 w-fit">
-                                            {o.picked_quantity || 0}
-                                          </Badge>
-                                        </div>
-                                      </div>
-                                      
-                                      {/* Left to Pick - Prominent Display */}
-                                      <div className="flex flex-col pt-2">
-                                        <span className="text-xs text-slate-500 mb-1.5 font-medium">Left to Pick</span>
-                                        <Badge className="bg-orange-500 hover:bg-orange-600 text-white text-base font-bold px-4 py-2 w-fit shadow-sm">
-                                          {leftQuantity}
-                                        </Badge>
-                                      </div>
-                                      
-                                      {/* Rejected Quantity */}
-                                      {o.rejected_quantity > 0 && (
-                                        <div className="pt-1">
-                                          <Badge 
-                                            className="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-3 py-1.5 w-fit cursor-pointer" 
-                                            onClick={(e) => { 
-                                              e.stopPropagation(); 
-                                              setRejectedOrderNumber(o.order_number); 
-                                              setRejectedItems(o.rejected_sizes || []); 
-                                              setRejectedOpen(true); 
-                                            }}
-                                          >
-                                            Rejected: {o.rejected_quantity}
-                                          </Badge>
-                                        </div>
-                                      )}
-                                    </div>
-                                    
-                                    {/* Size Distribution */}
-                                    {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 && (
-                                      <div className="pt-2 border-t border-slate-100">
-                                        <div className="text-xs text-slate-500 mb-2 font-medium">Size Breakdown</div>
-                                        <div className="flex flex-wrap gap-1.5">
-                                          {sortSizeDistributions(o.size_distributions, (o as any).size_type_id).map((sd: any) => (
-                                            <Badge 
-                                              key={sd.size_name} 
-                                              variant="outline" 
-                                              className="text-xs bg-slate-50 border-slate-200 text-slate-700 px-2 py-0.5"
-                                            >
-                                              {sd.size_name}: {sd.quantity || 0}
-                                            </Badge>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                </CardContent>
-                              </Card>
-                            );
-                          })}
-                        </div>
-                      )}
+                      <div className="text-sm sm:text-base font-medium">
+                        {batchDrillStep === "products"
+                          ? `Order #${drillOrderNumber} — pick a product`
+                          : "Orders for selected batch"}
+                      </div>
+                      {renderBatchOrdersDrillPanel()}
                     </div>
                   )}
                   </>
@@ -1569,132 +1975,27 @@ export default function PickerPage() {
           </div>
           )}
         {/* Orders list dialog per batch */}
-        <Dialog open={ordersDialogOpen} onOpenChange={(v) => { if (!v) { setOrdersDialogOpen(false); fetchTailorsWithAssignedCounts(); } }}>
+        <Dialog
+          open={ordersDialogOpen}
+          onOpenChange={(v) => {
+            if (!v) {
+              setOrdersDialogOpen(false);
+              setBatchDrillStep("orders");
+              setDrillOrderId(null);
+              setDrillOrderNumber("");
+              fetchTailorsWithAssignedCounts();
+            }
+          }}
+        >
           <DialogContent className="max-w-[95vw] sm:max-w-2xl lg:max-w-4xl xl:max-w-6xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle className="text-lg sm:text-xl">Orders for selected batch</DialogTitle>
+              <DialogTitle className="text-lg sm:text-xl">
+                {batchDrillStep === "products"
+                  ? `Order #${drillOrderNumber} — pick a product`
+                  : "Orders for selected batch"}
+              </DialogTitle>
             </DialogHeader>
-            {loadingBatchOrders ? (
-              <p className="text-sm sm:text-base text-muted-foreground">Loading...</p>
-            ) : batchOrders.length === 0 ? (
-              <p className="text-sm sm:text-base text-muted-foreground">No pending orders for this batch.</p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-                {batchOrders.map((o) => {
-                  // Calculate left to pick: pending items (assigned - picked) + rejected items needing replacement
-                  const pending = Math.max(0, (o.total_quantity || 0) - (o.picked_quantity || 0));
-                  const rejected = Number(o.rejected_quantity || 0);
-                  const leftQuantity = pending + rejected;
-                  return (
-                    <Card 
-                      key={o.assignment_id} 
-                      className="border-0 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer bg-gradient-to-br from-white to-slate-50/50 overflow-hidden group"
-                      onClick={() => { setOrdersDialogOpen(false); openPickerForAssignment(o); }}
-                    >
-                      <CardContent className="p-5 sm:p-6">
-                        <div className="flex flex-col gap-4">
-                          {/* Header with Image and Order Info */}
-                          <div className="flex items-start gap-4">
-                            {/* Circular Product Image */}
-                            <div className="flex-shrink-0">
-                              <Avatar className="w-16 h-16 sm:w-20 sm:h-20 border-2 border-slate-200 shadow-sm">
-                                <AvatarImage 
-                                  src={o.mockup_image || undefined} 
-                                  alt={o.order_number}
-                                  className="object-cover"
-                                />
-                                <AvatarFallback className="bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600 text-sm font-semibold">
-                                  {o.order_number?.slice(-3) || 'N/A'}
-                                </AvatarFallback>
-                              </Avatar>
-                            </div>
-                            
-                            {/* Order Details */}
-                            <div className="flex-1 min-w-0">
-                              <div className="font-bold text-base sm:text-lg text-slate-900 truncate mb-1">
-                                Order #{o.order_number}
-                              </div>
-                              <div className="text-sm text-slate-600 truncate">
-                                {o.customer_name || 'Unknown Customer'}
-                              </div>
-                            </div>
-                          </div>
-                          
-                          {/* Quantity Badges */}
-                          <div className="space-y-2 pt-2 border-t border-slate-100">
-                            <div className="grid grid-cols-2 gap-2">
-                              <div className="flex flex-col">
-                                <span className="text-xs text-slate-500 mb-1">Total Qty</span>
-                                <Badge className="bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold px-3 py-1.5 w-fit">
-                                  {o.total_quantity || 0}
-                                </Badge>
-                              </div>
-                              <div className="flex flex-col">
-                                <span className="text-xs text-slate-500 mb-1">Picked</span>
-                                <Badge className="bg-green-500 hover:bg-green-600 text-white text-sm font-semibold px-3 py-1.5 w-fit">
-                                  {o.picked_quantity || 0}
-                                </Badge>
-                              </div>
-                            </div>
-                            
-                            {/* Left to Pick - Prominent Display */}
-                            <div className="flex flex-col pt-2">
-                              <span className="text-xs text-slate-500 mb-1.5 font-medium">Left to Pick</span>
-                              <Badge className="bg-orange-500 hover:bg-orange-600 text-white text-base font-bold px-4 py-2 w-fit shadow-sm">
-                                {(() => {
-                                  // Calculate left to pick: pending items (assigned - picked) + rejected items needing replacement
-                                  const pending = Math.max(0, (o.total_quantity || 0) - (o.picked_quantity || 0));
-                                  const rejected = Number(o.rejected_quantity || 0);
-                                  return pending + rejected;
-                                })()}
-                              </Badge>
-                            </div>
-                            
-                            {/* Rejected Quantity */}
-                            {o.rejected_quantity > 0 && (
-                              <div className="pt-1">
-                                <Badge 
-                                  className="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-3 py-1.5 w-fit cursor-pointer" 
-                                  onClick={(e) => { 
-                                    e.stopPropagation(); 
-                                    setRejectedOrderNumber(o.order_number); 
-                                    setRejectedItems(o.rejected_sizes || []); 
-                                    setRejectedOpen(true); 
-                                  }}
-                                >
-                                  Rejected: {o.rejected_quantity}
-                                </Badge>
-                              </div>
-                            )}
-                          </div>
-                          
-                          {/* Size Distribution */}
-                          {Array.isArray(o.size_distributions) && o.size_distributions.length > 0 && (
-                            <div className="pt-2 border-t border-slate-100">
-                              <div className="text-xs text-slate-500 mb-2 font-medium">Size Breakdown</div>
-                              <div className="flex flex-wrap gap-1.5">
-                                {sortSizeDistributions(o.size_distributions, (o as any).size_type_id).map((sd: any) => {
-                                  const sizeLeft = (sd.quantity || 0) - (sd.picked_quantity || 0);
-                                  return (
-                                    <Badge 
-                                      key={sd.size_name} 
-                                      variant="outline" 
-                                      className="text-xs bg-slate-50 border-slate-200 text-slate-700 px-2 py-0.5"
-                                    >
-                                      {sd.size_name}: {sd.quantity || 0} ({sizeLeft} left)
-                                    </Badge>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </div>
-            )}
+            {renderBatchOrdersDrillPanel()}
           </DialogContent>
         </Dialog>
 
@@ -1787,6 +2088,8 @@ export default function PickerPage() {
             customerName={pickerContext.customerName}
             sizeDistributions={pickerContext.sizeDistributions}
             productImage={pickerContext.productImage}
+            productDescription={pickerContext.productDescription}
+            preferredSizeTypeId={pickerContext.preferredSizeTypeId}
           />
         )}
 

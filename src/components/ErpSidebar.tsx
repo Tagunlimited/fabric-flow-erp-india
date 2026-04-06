@@ -137,7 +137,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Production Dashboard", url: "/production", icon: LayoutDashboard },
         { title: "Assign Orders", url: "/production/assign-orders", icon: UserCheck },
         { title: "Cutting Manager", url: "/production/cutting-manager", icon: Scissors },
-        { title: "Tailor Management", url: "/production/tailor-management", icon: UsersRound }
+        { title: "Tailor Management", url: "/production/tailor-management", icon: UsersRound },
+        { title: "Order Completion Report", url: "/production/order-completion-report", icon: ClipboardList }
       ]
     },
     { title: "Quality Check", url: "/quality", icon: CheckCircle,
@@ -181,6 +182,18 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
   ];
 }
 
+/** Merges static-defined children into DB-driven menus when URLs are missing (e.g. new route before migration). */
+function mergeMissingStaticChildren(dynamicItems: SidebarItem[], staticItems: SidebarItem[]): SidebarItem[] {
+  return dynamicItems.map((dyn) => {
+    if (!dyn.children?.length) return dyn;
+    const staticMatch = staticItems.find((s) => s.title === dyn.title && s.children?.length);
+    if (!staticMatch?.children) return dyn;
+    const seen = new Set(dyn.children.map((c) => c.url).filter(Boolean) as string[]);
+    const extras = staticMatch.children.filter((c) => c.url && !seen.has(c.url));
+    if (extras.length === 0) return dyn;
+    return { ...dyn, children: [...dyn.children, ...extras] };
+  });
+}
 
 interface SidebarItemComponentProps {
   item: SidebarItem;
@@ -498,16 +511,20 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
 
   // Build items based on role and permissions
   const staticSidebarItems = buildSidebarItems(location.pathname, pendingOrdersCount);
-  const dynamicItems = convertDynamicSidebarItems(dynamicSidebarItems);
+  const dynamicItemsBase = convertDynamicSidebarItems(dynamicSidebarItems);
   
   // Use dynamic items if permissions are loaded and properly set up
   // For admin users, use static sidebar if permissions system is not set up
   // For non-admin users, always use dynamic permissions (even if empty)
   const shouldUseDynamicItems = !permissionsLoading && permissionsSetup && (userRole !== 'admin' || dynamicSidebarItems.length > 0);
   
+  const dynamicItemsMerged = shouldUseDynamicItems
+    ? mergeMissingStaticChildren(dynamicItemsBase, staticSidebarItems)
+    : dynamicItemsBase;
+
   // For non-admin users, show loading state instead of static sidebar during loading
   // For admin users, always show static sidebar if dynamic items are not available
-  const sidebarItems = shouldUseDynamicItems ? dynamicItems : 
+  const sidebarItems = shouldUseDynamicItems ? dynamicItemsMerged : 
     (userRole !== 'admin' && permissionsLoading ? [] : staticSidebarItems);
   
   // Debug logging for sidebar decision (only log when there are issues)

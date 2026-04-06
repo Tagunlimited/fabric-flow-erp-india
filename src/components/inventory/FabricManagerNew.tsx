@@ -89,7 +89,7 @@ export function FabricManagerNew() {
   const [columnWidths, setColumnWidths] = useState(() => {
     const defaults = {
       fabricDetails: 160,
-      type: 96,
+      type: 140,
       color: 128,
       gsm: 64,
       rate: 80,
@@ -513,7 +513,7 @@ export function FabricManagerNew() {
   const resetColumnWidths = () => {
     const defaultWidths = {
       fabricDetails: 160,
-      type: 96,
+      type: 140,
       color: 128,
       gsm: 64,
       rate: 80,
@@ -531,7 +531,8 @@ export function FabricManagerNew() {
       fabric.fabric_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
       fabric.fabric_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       fabric.color?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      fabric.type?.toLowerCase().includes(searchTerm.toLowerCase());
+      fabric.type?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      fabric.fabric_for_supplier?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesType = filterType === 'all' || fabric.type === filterType;
     
@@ -842,7 +843,7 @@ export function FabricManagerNew() {
       <div className="flex gap-4 items-center">
         <div className="flex-1">
           <Input
-            placeholder="Search fabrics by code, name, color, or type..."
+            placeholder="Search fabrics by code, name, color, type, or fabric for supplier..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="max-w-md"
@@ -1020,7 +1021,7 @@ export function FabricManagerNew() {
                 <TableHeader>
                   <TableRow>
                     <TableHead style={{ width: `${columnWidths.fabricDetails}px` }}>Fabric Details</TableHead>
-                    <TableHead style={{ width: `${columnWidths.type}px` }}>Type</TableHead>
+                    <TableHead style={{ width: `${columnWidths.type}px` }}>Fabric for supplier</TableHead>
                     <TableHead style={{ width: `${columnWidths.color}px` }}>Color</TableHead>
                     <TableHead style={{ width: `${columnWidths.gsm}px` }}>GSM</TableHead>
                     <TableHead style={{ width: `${columnWidths.rate}px` }}>Rate</TableHead>
@@ -1074,7 +1075,9 @@ export function FabricManagerNew() {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell>{fabric.type}</TableCell>
+                      <TableCell>
+                        {(fabric.fabric_for_supplier && fabric.fabric_for_supplier.trim()) || '—'}
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-3">
                           {fabric.hex ? (

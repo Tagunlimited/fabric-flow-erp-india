@@ -45,6 +45,7 @@ import ProductionPage from "./pages/ProductionPage";
 import AssignOrdersPage from "./pages/production/AssignOrdersPage";
 import CuttingManagerPage from "./pages/production/CuttingManagerPage";
 import TailorManagementPage from "./pages/production/TailorManagementPage";
+import OrderCompletionReportPage from "./pages/production/OrderCompletionReportPage";
 import PickerPage from "./pages/production/PickerPage";
 import QualityPage from "./pages/QualityPage";
 import QCPage from "./pages/quality/QCPage";
@@ -440,6 +441,11 @@ const App = () => {
                 <Route path="/production/tailor-management" element={
                   <ProtectedRouteWithCompanySettings>
                     <TailorManagementPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/production/order-completion-report" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <OrderCompletionReportPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/production/picker" element={

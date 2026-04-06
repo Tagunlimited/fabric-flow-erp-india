@@ -22,6 +22,9 @@ interface PickerQuantityDialogProps {
   customerName?: string;
   sizeDistributions: SizeItem[];
   productImage?: string;
+  productDescription?: string;
+  /** When set (e.g. from `[line:order_item_id]` resolution on Picker), skips arbitrary order_items join for size sort order */
+  preferredSizeTypeId?: string | null;
 }
 
 export default function PickerQuantityDialog({
@@ -33,6 +36,8 @@ export default function PickerQuantityDialog({
   customerName,
   sizeDistributions,
   productImage,
+  productDescription,
+  preferredSizeTypeId,
 }: PickerQuantityDialogProps) {
   const { toast } = useToast();
   const { sizeTypes } = useSizeTypes();
@@ -42,48 +47,49 @@ export default function PickerQuantityDialog({
   const [saving, setSaving] = useState(false);
   const [sizeTypeId, setSizeTypeId] = useState<string | null>(null);
 
-  // Fetch size_type_id from assignment/order when dialog opens
+  // Fetch size_type_id from assignment/order when dialog opens (skipped when picker passes resolved line)
   useEffect(() => {
-    if (isOpen && assignmentId) {
-      const fetchSizeTypeId = async () => {
-        try {
-          // Get order_id from assignment
-          const { data: assignment } = await supabase
-            .from('order_batch_assignments')
-            .select('order_id, order_items!inner(size_type_id)')
-            .eq('id', assignmentId)
-            .limit(1)
-            .maybeSingle();
-          
-          if (assignment && (assignment as any).order_items) {
-            const orderItem = Array.isArray((assignment as any).order_items) 
-              ? (assignment as any).order_items[0]
-              : (assignment as any).order_items;
-            if (orderItem?.size_type_id) {
-              setSizeTypeId(orderItem.size_type_id);
-              return;
-            }
-          }
-          
-          // Fallback: try to get from order directly
-          const orderId = (assignment as any)?.order_id;
-          if (orderId) {
-            const { data: orderItems } = await supabase
-              .from('order_items')
-              .select('size_type_id')
-              .eq('order_id', orderId)
-              .limit(1);
-            if (orderItems && orderItems.length > 0 && orderItems[0].size_type_id) {
-              setSizeTypeId(orderItems[0].size_type_id);
-            }
-          }
-        } catch (error) {
-          console.error('Error fetching size_type_id:', error);
-        }
-      };
-      fetchSizeTypeId();
+    if (!isOpen || !assignmentId) return;
+    if (preferredSizeTypeId) {
+      setSizeTypeId(preferredSizeTypeId);
+      return;
     }
-  }, [isOpen, assignmentId]);
+    const fetchSizeTypeId = async () => {
+      try {
+        const { data: assignment } = await supabase
+          .from('order_batch_assignments')
+          .select('order_id, order_items!inner(size_type_id)')
+          .eq('id', assignmentId)
+          .limit(1)
+          .maybeSingle();
+
+        if (assignment && (assignment as any).order_items) {
+          const orderItem = Array.isArray((assignment as any).order_items)
+            ? (assignment as any).order_items[0]
+            : (assignment as any).order_items;
+          if (orderItem?.size_type_id) {
+            setSizeTypeId(orderItem.size_type_id);
+            return;
+          }
+        }
+
+        const orderId = (assignment as any)?.order_id;
+        if (orderId) {
+          const { data: orderItems } = await supabase
+            .from('order_items')
+            .select('size_type_id')
+            .eq('order_id', orderId)
+            .limit(1);
+          if (orderItems && orderItems.length > 0 && orderItems[0].size_type_id) {
+            setSizeTypeId(orderItems[0].size_type_id);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching size_type_id:', error);
+      }
+    };
+    fetchSizeTypeId();
+  }, [isOpen, assignmentId, preferredSizeTypeId]);
 
   // Sort size distributions using master order
   const sortedSizeDistributions = useMemo(() => {
@@ -279,21 +285,23 @@ export default function PickerQuantityDialog({
       <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle>Pick quantities for order {orderNumber}</DialogTitle>
+          {productDescription ? (
+            <p className="text-sm font-medium text-foreground pt-1">{productDescription}</p>
+          ) : null}
         </DialogHeader>
         <div className="space-y-4">
-          {/* Product Image Display */}
-          {productImage && (
+          {productImage ? (
             <div className="flex justify-center">
-              <img 
-                src={productImage} 
-                alt="Product"
+              <img
+                src={productImage}
+                alt={productDescription || "Product"}
                 className="w-40 h-40 object-cover rounded-lg border-2 border-primary shadow-md"
                 onError={(e) => {
-                  e.currentTarget.style.display = 'none';
+                  e.currentTarget.style.display = "none";
                 }}
               />
             </div>
-          )}
+          ) : null}
           
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span>Customer:</span>
