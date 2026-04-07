@@ -40,13 +40,14 @@ export function LoginForm() {
     setError('');
 
     try {
-      // CRITICAL: Clear any existing session first to prevent user confusion
-      // This ensures we start with a clean slate and the correct user is loaded
-      console.log('🔐 Clearing any existing session before login...');
-      await supabase.auth.signOut();
-      
-      // Small delay to ensure sign out completes
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Only clear an existing session when it's a different user.
+      const { data: existing } = await supabase.auth.getSession();
+      const currentEmail = existing.session?.user?.email?.toLowerCase();
+      if (currentEmail && currentEmail !== email.toLowerCase()) {
+        console.log('🔐 Existing session belongs to different user, signing out first...');
+        await supabase.auth.signOut();
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
 
       const { data, error: authError } = await supabase.auth.signInWithPassword({
         email,
@@ -119,8 +120,13 @@ export function LoginForm() {
         }, 500); // Small delay to ensure toast is visible
       }
     } catch (err: any) {
-      setError(err.message || 'Login failed');
-      toast.error(err.message || 'Login failed');
+      const rawMessage = err?.message || 'Login failed';
+      const isNetworkError = /failed to fetch|503|service unavailable|network/i.test(rawMessage);
+      const message = isNetworkError
+        ? 'Network/auth service temporarily unavailable. Please refresh and try again.'
+        : rawMessage;
+      setError(message);
+      toast.error(message);
       // Ensure we're signed out on error
       await supabase.auth.signOut();
     } finally {

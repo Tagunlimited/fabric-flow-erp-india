@@ -1,7 +1,7 @@
 // Service Worker for offline caching and data persistence
-const CACHE_NAME = 'fabric-flow-erp-v1';
-const STATIC_CACHE_NAME = 'fabric-flow-static-v1';
-const DYNAMIC_CACHE_NAME = 'fabric-flow-dynamic-v1';
+const CACHE_NAME = 'fabric-flow-erp-v2';
+const STATIC_CACHE_NAME = 'fabric-flow-static-v2';
+const DYNAMIC_CACHE_NAME = 'fabric-flow-dynamic-v2';
 
 // Static assets to cache
 const STATIC_ASSETS = [
@@ -75,6 +75,12 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Never cache auth/session requests; always go to network.
+  if (shouldBypassCaching(request, url)) {
+    event.respondWith(networkOnly(request));
+    return;
+  }
+
   // Handle different types of requests
   if (isStaticAsset(request)) {
     // Cache first strategy for static assets
@@ -100,10 +106,7 @@ async function cacheFirst(request, cacheName) {
     }
 
     const networkResponse = await fetch(request);
-    if (networkResponse.ok) {
-      const cache = await caches.open(cacheName);
-      cache.put(request, networkResponse.clone());
-    }
+    await safeCachePut(request, networkResponse, cacheName);
     return networkResponse;
   } catch (error) {
     console.error('Cache first strategy failed:', error);
@@ -118,10 +121,7 @@ async function cacheFirst(request, cacheName) {
 async function networkFirst(request, cacheName) {
   try {
     const networkResponse = await fetch(request);
-    if (networkResponse.ok) {
-      const cache = await caches.open(cacheName);
-      cache.put(request, networkResponse.clone());
-    }
+    await safeCachePut(request, networkResponse, cacheName);
     return networkResponse;
   } catch (error) {
     // Only log if it's not a typical network error (aborted, failed fetch)
@@ -136,10 +136,8 @@ async function networkFirst(request, cacheName) {
     
     // Return offline page for navigation requests
     if (request.mode === 'navigate') {
-      return caches.match('/offline.html') || new Response('Offline', {
-        status: 503,
-        statusText: 'Service Unavailable'
-      });
+      const offlinePage = await caches.match('/offline.html');
+      return offlinePage || new Response('Offline', { status: 503, statusText: 'Service Unavailable' });
     }
     
     // For development, just pass through the original request instead of returning 503
@@ -159,9 +157,7 @@ async function staleWhileRevalidate(request, cacheName) {
   const cachedResponse = await cache.match(request);
 
   const fetchPromise = fetch(request).then((networkResponse) => {
-    if (networkResponse.ok) {
-      cache.put(request, networkResponse.clone());
-    }
+    safeCachePut(request, networkResponse, cacheName);
     return networkResponse;
   }).catch(() => {
     // Network failed, return cached version if available
@@ -187,6 +183,32 @@ function isAPIRequest(request) {
 function isPageRequest(request) {
   return request.mode === 'navigate' || 
          request.headers.get('accept').includes('text/html');
+}
+
+function shouldBypassCaching(request, url) {
+  const rangeHeader = request.headers.get('range');
+  const isRangeRequest = !!rangeHeader;
+  const isAuthPath = url.hostname.includes('supabase') && url.pathname.startsWith('/auth/v1/');
+  const isMediaPath = url.pathname.match(/\.(mp4|webm|mov|m4v|mp3|wav|ogg)$/i);
+  return isRangeRequest || isAuthPath || !!isMediaPath;
+}
+
+async function safeCachePut(request, response, cacheName) {
+  try {
+    if (!response) return;
+    if (response.type === 'opaque') return;
+    if (response.status !== 200) return;
+    if (request.headers.get('range')) return;
+    const cache = await caches.open(cacheName);
+    await cache.put(request, response.clone());
+  } catch (error) {
+    // Cache failures should never break network response path.
+    console.warn('Skipping cache write for request:', request.url, error?.message || error);
+  }
+}
+
+async function networkOnly(request) {
+  return fetch(request);
 }
 
 // Background sync for offline actions

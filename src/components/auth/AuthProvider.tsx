@@ -528,6 +528,37 @@ export function AuthProvider({ children }: AuthProviderProps) {
     profileFetchInProgressRef.current = false; // Reset fetch flag
     
     console.log('🚀 AuthProvider: Starting initialization...');
+
+    // Lightweight bootstrap: try one fast session read so login page
+    // doesn't wait entirely on auth listener timing.
+    const bootstrapSession = async () => {
+      try {
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise<{ data: { session: null } }>((resolve) =>
+          setTimeout(() => resolve({ data: { session: null } }), 2500)
+        );
+        const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]);
+
+        if (session?.user) {
+          const currentUserId = session.user.id;
+          if (lastUserIdRef.current !== currentUserId) {
+            lastUserIdRef.current = currentUserId;
+            setUser(session.user);
+          }
+          if (!profileRef.current && !profileFetchInProgressRef.current) {
+            refreshProfile(0, currentUserId, true).catch((err) => {
+              console.warn('⚠️ Bootstrap profile fetch failed (non-blocking):', err);
+            });
+          }
+          authInitializedRef.current = true;
+        }
+      } catch (error) {
+        console.warn('⚠️ Bootstrap session check failed (non-blocking):', error);
+      } finally {
+        setLoading((current) => (current ? false : current));
+      }
+    };
+    bootstrapSession();
     
     // Immediate safety timeout - force clear loading after 5 seconds to prevent infinite loading
     // This is a fallback in case onAuthStateChange doesn't fire
@@ -542,10 +573,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
     }, 5000);
     
-    // OPTIMIZATION: Rely entirely on onAuthStateChange listener instead of calling getSession()
-    // The listener fires INITIAL_SESSION and SIGNED_IN events which handle initialization
-    // This eliminates the 2-second delay from redundant session check
-    console.log('⏭️ Skipping getSession() - relying on onAuthStateChange listener for faster initialization');
+    console.log('✅ Auth bootstrap started; listener remains source of truth for transitions');
     
     // Listen for auth changes - with guards to prevent unnecessary updates
     const {
