@@ -11,6 +11,7 @@ export interface CompanyConfig {
   header_logo_url?: string;
   favicon_url?: string;
   authorized_signatory_url?: string;
+  payment_qr_url?: string;
   logo_sizes?: {
     sidebar_logo_height: string;
     sidebar_logo_width: string;
@@ -44,6 +45,7 @@ const defaultConfig: CompanyConfig = {
   header_logo_url: '/placeholder.svg',
   favicon_url: undefined,
   authorized_signatory_url: undefined,
+  payment_qr_url: undefined,
   logo_sizes: {
     sidebar_logo_height: '32px',
     sidebar_logo_width: 'auto',

@@ -1253,6 +1253,17 @@ export default function OrderDetailPage() {
   const [totalReceipts, setTotalReceipts] = useState<number>(0);
   const [hasActiveCreditReceipt, setHasActiveCreditReceipt] = useState(false);
   const [hasCuttingMaster, setHasCuttingMaster] = useState<boolean>(false);
+  const [statusDiagnostics, setStatusDiagnostics] = useState<{
+    hasReceipt: boolean;
+    hasBom: boolean;
+    hasCutting: boolean;
+    hasBatch: boolean;
+    totalPicked: number;
+    totalApproved: number;
+    totalRejected: number;
+    totalDispatched: number;
+    suggestedStatus: string;
+  } | null>(null);
 
   // Handle back navigation based on referrer and order type
   const handleBackNavigation = () => {
@@ -1412,6 +1423,92 @@ export default function OrderDetailPage() {
       fetchTotalReceipts();
     }
   }, [order?.order_number, order?.id]);
+
+  useEffect(() => {
+    const fetchStatusDiagnostics = async () => {
+      if (!isAdmin || !order?.id || !order?.order_number) {
+        setStatusDiagnostics(null);
+        return;
+      }
+      try {
+        const [{ data: receipts }, { data: boms }, { data: assignmentRows }, { data: cuttingRows }, { data: batchRows }] = await Promise.all([
+          (supabase as any)
+            .from('receipts')
+            .select('id')
+            .or(`and(reference_type.eq.order,reference_id.eq.${order.id}),reference_number.eq.${order.order_number}`)
+            .limit(1),
+          (supabase as any).from('bom_records').select('id').eq('order_id', order.id).limit(1),
+          (supabase as any)
+            .from('order_assignments')
+            .select('id, cutting_master_id, pattern_master_id')
+            .eq('order_id', order.id),
+          (supabase as any).from('order_cutting_assignments').select('id, cutting_master_id').eq('order_id', order.id),
+          (supabase as any).from('order_batch_assignments').select('id').eq('order_id', order.id),
+        ]);
+
+        const batchIds = ((batchRows || []) as any[]).map((b: any) => b.id).filter(Boolean);
+        let totalPicked = 0;
+        let totalApproved = 0;
+        let totalRejected = 0;
+
+        if (batchIds.length > 0) {
+          const [{ data: pickedRows }, { data: qcRows }] = await Promise.all([
+            (supabase as any)
+              .from('order_batch_size_distributions')
+              .select('picked_quantity')
+              .in('order_batch_assignment_id', batchIds as any),
+            (supabase as any)
+              .from('qc_reviews')
+              .select('approved_quantity, rejected_quantity')
+              .in('order_batch_assignment_id', batchIds as any),
+          ]);
+          totalPicked = (pickedRows || []).reduce((sum: number, r: any) => sum + Number(r.picked_quantity || 0), 0);
+          totalApproved = (qcRows || []).reduce((sum: number, r: any) => sum + Number(r.approved_quantity || 0), 0);
+          totalRejected = (qcRows || []).reduce((sum: number, r: any) => sum + Number(r.rejected_quantity || 0), 0);
+        }
+
+        const { data: dispatchRows } = await (supabase as any)
+          .from('dispatch_order_items')
+          .select('quantity')
+          .eq('order_id', order.id);
+        const totalDispatched = (dispatchRows || []).reduce((sum: number, r: any) => sum + Number(r.quantity || 0), 0);
+
+        const hasReceipt = !!(receipts && receipts.length > 0);
+        const hasBom = !!(boms && boms.length > 0);
+        const hasCutting = ((assignmentRows || []) as any[]).some((r: any) => !!(r.cutting_master_id || r.pattern_master_id))
+          || ((cuttingRows || []) as any[]).some((r: any) => !!r.cutting_master_id);
+        const hasBatch = !!(batchRows && batchRows.length > 0);
+
+        let suggestedStatus = 'pending';
+        if (hasReceipt) suggestedStatus = 'confirmed';
+        if (hasBom) suggestedStatus = 'under_procurement';
+        if (hasCutting) suggestedStatus = 'under_cutting';
+        if (hasBatch) suggestedStatus = 'under_stitching';
+        if (totalPicked > 0) suggestedStatus = 'under_qc';
+        if (totalApproved > 0 && totalApproved >= Math.max(totalPicked - totalRejected, 1)) suggestedStatus = 'ready_for_dispatch';
+        if (totalRejected > 0) suggestedStatus = 'rework';
+        if (totalDispatched > 0 && totalDispatched < Math.max(totalApproved - totalRejected, 1)) suggestedStatus = 'partial_dispatched';
+        if (totalDispatched >= Math.max(totalApproved - totalRejected, 1) && totalApproved > 0) suggestedStatus = 'dispatched';
+
+        setStatusDiagnostics({
+          hasReceipt,
+          hasBom,
+          hasCutting,
+          hasBatch,
+          totalPicked,
+          totalApproved,
+          totalRejected,
+          totalDispatched,
+          suggestedStatus,
+        });
+      } catch (error) {
+        console.error('Error loading status diagnostics:', error);
+        setStatusDiagnostics(null);
+      }
+    };
+
+    fetchStatusDiagnostics();
+  }, [isAdmin, order?.id, order?.order_number]);
 
   // DISABLED: Refresh receipts on focus - prevents unwanted auto-refresh
   // Receipts will only refresh when explicitly needed (e.g., after creating a receipt)
@@ -2803,6 +2900,30 @@ export default function OrderDetailPage() {
            </div>
            )}
          </div>
+
+        {isAdmin && statusDiagnostics && (
+          <Card className="print:hidden border-dashed">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Status Diagnostics (Admin)</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <div>Receipt: <span className="font-medium">{statusDiagnostics.hasReceipt ? 'Yes' : 'No'}</span></div>
+                <div>BOM: <span className="font-medium">{statusDiagnostics.hasBom ? 'Yes' : 'No'}</span></div>
+                <div>Cutting: <span className="font-medium">{statusDiagnostics.hasCutting ? 'Yes' : 'No'}</span></div>
+                <div>Batch: <span className="font-medium">{statusDiagnostics.hasBatch ? 'Yes' : 'No'}</span></div>
+                <div>Picked: <span className="font-medium">{statusDiagnostics.totalPicked}</span></div>
+                <div>Approved: <span className="font-medium">{statusDiagnostics.totalApproved}</span></div>
+                <div>Rejected: <span className="font-medium">{statusDiagnostics.totalRejected}</span></div>
+                <div>Dispatched: <span className="font-medium">{statusDiagnostics.totalDispatched}</span></div>
+              </div>
+              <div className="mt-3">
+                Suggested by recalc: <span className="font-semibold uppercase">{statusDiagnostics.suggestedStatus.replace(/_/g, ' ')}</span>
+                {' '}| Current: <span className="font-semibold uppercase">{order.status.replace(/_/g, ' ')}</span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Regular UI Content (not printed) */}
         <div className="print:hidden space-y-6">

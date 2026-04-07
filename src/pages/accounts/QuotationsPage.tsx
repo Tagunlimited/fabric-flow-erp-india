@@ -154,18 +154,19 @@ export default function QuotationsPage() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              <Table className="min-w-[900px]">
+            {/* Desktop/tablet table view */}
+            <div className="hidden md:block overflow-x-auto">
+              <Table className="min-w-[1080px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Order #</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Mobile</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Amount</TableHead>
-                    <TableHead>Sales Manager</TableHead>
-                    <TableHead>Action</TableHead>
+                    <TableHead className="w-[140px]">Order #</TableHead>
+                    <TableHead className="min-w-[180px]">Customer</TableHead>
+                    <TableHead className="w-[120px]">Mobile</TableHead>
+                    <TableHead className="w-[120px] whitespace-nowrap">Date</TableHead>
+                    <TableHead className="w-[120px] whitespace-nowrap">Status</TableHead>
+                    <TableHead className="w-[130px] text-right">Amount</TableHead>
+                    <TableHead className="min-w-[170px]">Sales Manager</TableHead>
+                    <TableHead className="w-[220px] whitespace-nowrap">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -176,17 +177,17 @@ export default function QuotationsPage() {
                   ) : (
                     orders.map((order) => (
                       <TableRow key={order.id}>
-                        <TableCell>{order.order_number}</TableCell>
-                        <TableCell>{order.customer?.company_name}</TableCell>
+                        <TableCell className="font-medium">{order.order_number}</TableCell>
+                        <TableCell className="max-w-[220px] truncate">{order.customer?.company_name}</TableCell>
                         <TableCell className="font-mono text-xs whitespace-nowrap">
                           {getCustomerMobile(order.customer as any) || '—'}
                         </TableCell>
-                        <TableCell>{new Date(order.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}</TableCell>
-                        <TableCell><Badge>{order.status}</Badge></TableCell>
-                        <TableCell>{formatCurrency(order.calculatedAmount ?? order.final_amount ?? 0)}</TableCell>
+                        <TableCell className="whitespace-nowrap">{new Date(order.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}</TableCell>
+                        <TableCell className="whitespace-nowrap"><Badge>{order.status}</Badge></TableCell>
+                        <TableCell className="text-right whitespace-nowrap">{formatCurrency(order.calculatedAmount ?? order.final_amount ?? 0)}</TableCell>
                         <TableCell>
                           {employeeMap[order.sales_manager || ''] ? (
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
                               {employeeMap[order.sales_manager!].avatar_url && (
                                 <img
                                   src={employeeMap[order.sales_manager!].avatar_url as string}
@@ -194,34 +195,105 @@ export default function QuotationsPage() {
                                   className="w-6 h-6 rounded-full object-cover"
                                 />
                               )}
-                              <span>{employeeMap[order.sales_manager!].full_name}</span>
+                              <span className="truncate">{employeeMap[order.sales_manager!].full_name}</span>
                             </div>
                           ) : (
                             '-'
                           )}
                         </TableCell>
                         <TableCell>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => navigate(`/accounts/quotations/${order.id}`)}
-                          >
-                            <Eye className="w-4 h-4 mr-1" /> Quotation
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="ml-2"
-                            onClick={() => navigate('/accounts/receipts', { state: { prefill: { type: 'order', id: order.id, number: order.order_number, date: order.order_date, customer_id: order.customer_id, amount: order.calculatedAmount ?? order.final_amount }, tab: 'create' } })}
-                          >
-                            Create Receipt
-                          </Button>
+                          <div className="flex flex-col xl:flex-row gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="whitespace-nowrap"
+                              onClick={() => navigate(`/accounts/quotations/${order.id}`)}
+                            >
+                              <Eye className="w-4 h-4 mr-1" /> Quotation
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="whitespace-nowrap"
+                              onClick={() => navigate('/accounts/receipts', { state: { prefill: { type: 'order', id: order.id, number: order.order_number, date: order.order_date, customer_id: order.customer_id, amount: order.calculatedAmount ?? order.final_amount }, tab: 'create' } })}
+                            >
+                              Create Receipt
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
               </Table>
+            </div>
+
+            {/* Mobile card view */}
+            <div className="md:hidden space-y-3">
+              {loading ? (
+                <Card className="border-dashed">
+                  <CardContent className="p-4 text-sm text-muted-foreground">Loading...</CardContent>
+                </Card>
+              ) : orders.length === 0 ? (
+                <Card className="border-dashed">
+                  <CardContent className="p-4 text-sm text-muted-foreground">No orders found.</CardContent>
+                </Card>
+              ) : (
+                orders.map((order) => (
+                  <Card key={order.id}>
+                    <CardContent className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Order #</p>
+                          <p className="font-semibold break-words">{order.order_number}</p>
+                        </div>
+                        <Badge>{order.status}</Badge>
+                      </div>
+
+                      <div>
+                        <p className="text-xs text-muted-foreground">Customer</p>
+                        <p className="font-medium break-words">{order.customer?.company_name || '-'}</p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Mobile</p>
+                          <p className="font-mono text-xs">{getCustomerMobile(order.customer as any) || '—'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Date</p>
+                          <p>{new Date(order.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Amount</p>
+                          <p className="font-medium">{formatCurrency(order.calculatedAmount ?? order.final_amount ?? 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Sales Manager</p>
+                          <p className="break-words">{employeeMap[order.sales_manager || '']?.full_name || '-'}</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => navigate(`/accounts/quotations/${order.id}`)}
+                        >
+                          <Eye className="w-4 h-4 mr-1" /> Quotation
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => navigate('/accounts/receipts', { state: { prefill: { type: 'order', id: order.id, number: order.order_number, date: order.order_date, customer_id: order.customer_id, amount: order.calculatedAmount ?? order.final_amount }, tab: 'create' } })}
+                        >
+                          Create Receipt
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
+              )}
             </div>
           </CardContent>
         </Card>

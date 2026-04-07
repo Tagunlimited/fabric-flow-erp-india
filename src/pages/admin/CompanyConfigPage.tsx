@@ -22,6 +22,7 @@ interface CompanyConfig {
   header_logo_url?: string;
   favicon_url?: string;
   authorized_signatory_url?: string;
+  payment_qr_url?: string;
   logo_sizes?: {
     sidebar_logo_height: string;
     sidebar_logo_width: string;
@@ -166,7 +167,7 @@ const CompanyConfigPage = () => {
     }
   };
 
-  const uploadCompanyAsset = async (file: File, type: 'logo' | 'sidebar_logo' | 'header_logo' | 'favicon' | 'authorized_signatory') => {
+  const uploadCompanyAsset = async (file: File, type: 'logo' | 'sidebar_logo' | 'header_logo' | 'favicon' | 'authorized_signatory' | 'payment_qr') => {
     try {
       setUploading(prev => ({ ...prev, [type]: true }));
       
@@ -188,10 +189,14 @@ const CompanyConfigPage = () => {
         .from('company-assets')
         .getPublicUrl(filePath);
 
-      setConfig(prev => ({
-        ...prev,
+      const updatedConfig = {
+        ...config,
         [`${type}_url`]: publicUrl
-      }));
+      } as CompanyConfig;
+
+      setConfig(updatedConfig);
+      // Persist asset change immediately so it survives refresh.
+      await saveConfig(updatedConfig);
 
       toast.success(`${type.replace('_', ' ')} uploaded successfully`);
     } catch (error) {
@@ -300,6 +305,7 @@ const CompanyConfigPage = () => {
                   />
                 </div>
               </div>
+
             </CardContent>
           </Card>
 
@@ -382,6 +388,33 @@ const CompanyConfigPage = () => {
                     onChange={(e) => handleInputChange('bank_details.branch', e.target.value)}
                     placeholder="Branch"
                   />
+                </div>
+              </div>
+
+              {/* Payment QR Code */}
+              <div className="pt-2 border-t">
+                <Label>Payment QR Code</Label>
+                <p className="text-sm text-muted-foreground mb-2">Upload payment QR image to show on invoice between bank details and totals</p>
+                <div className="mt-2 flex items-center gap-4">
+                  <Input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) uploadCompanyAsset(file, 'payment_qr');
+                    }}
+                    disabled={uploading.payment_qr}
+                  />
+                  {config.payment_qr_url && (
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={config.payment_qr_url}
+                        alt="Payment QR"
+                        className="w-14 h-14 object-contain border rounded bg-white"
+                      />
+                      <span className="text-xs text-muted-foreground">QR Preview</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </CardContent>

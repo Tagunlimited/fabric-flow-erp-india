@@ -233,7 +233,7 @@ export default function QuotationDetailPage() {
         setHasActiveCreditReceipt(false);
       }
       // Generate quotation number
-      const qNum = await generateQuotationNumber();
+      const qNum = await generateQuotationNumber(orderData as any);
       setQuotationNumber(qNum);
     } catch (error) {
       toast.error('Failed to load quotation details');
@@ -243,26 +243,55 @@ export default function QuotationDetailPage() {
   };
 
   // Generate unique quotation number: SO/YY-YY/MON/SEQ
-  const generateQuotationNumber = async () => {
-    // Get latest quotation for sequence
-    const now = new Date();
-    const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+  const generateQuotationNumber = async (orderData?: { id?: string; order_date?: string | null; created_at?: string | null }) => {
+    const sourceDate = orderData?.order_date ? new Date(orderData.order_date) : new Date();
+    const fyStart = sourceDate.getMonth() < 3 ? sourceDate.getFullYear() - 1 : sourceDate.getFullYear();
     const fyEnd = fyStart + 1;
     const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
-    const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-    // Get latest quotation for this FY/month
-    const { data, error } = await supabase
+    const month = sourceDate.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+
+    // Check current max sequence from existing quotations (if any).
+    const { data } = await supabase
       .from('quotations')
       .select('quotation_number')
       .ilike('quotation_number', `SO/${fyStr}/${month}/%`)
-      .order('created_at', { ascending: false })
-      .limit(1);
-    let nextSeq = 1;
+      .order('quotation_number', { ascending: false });
+
+    let maxExistingSeq = 0;
     if (data && data.length > 0) {
-      const lastNum = (data[0] as any)?.quotation_number;
-      const match = lastNum.match(/(\d+)$/);
-      if (match) nextSeq = parseInt(match[1]) + 1;
+      for (const row of data as any[]) {
+        const lastNum = row?.quotation_number;
+        const match = typeof lastNum === 'string' ? lastNum.match(/(\d+)$/) : null;
+        if (match) {
+          const seq = Number.parseInt(match[1], 10);
+          if (Number.isFinite(seq) && seq > maxExistingSeq) maxExistingSeq = seq;
+        }
+      }
     }
+
+    // Derive a stable serial index from monthly order chronology so
+    // quotations still increment even if quotation rows are not persisted yet.
+    let derivedOrderSeq = 1;
+    if (orderData?.id) {
+      const monthStart = new Date(sourceDate.getFullYear(), sourceDate.getMonth(), 1);
+      const monthEnd = new Date(sourceDate.getFullYear(), sourceDate.getMonth() + 1, 1);
+
+      const { data: monthlyOrders } = await supabase
+        .from('orders')
+        .select('id, order_date, created_at')
+        .gte('order_date', monthStart.toISOString().slice(0, 10))
+        .lt('order_date', monthEnd.toISOString().slice(0, 10))
+        .order('order_date', { ascending: true })
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true });
+
+      if (monthlyOrders && monthlyOrders.length > 0) {
+        const idx = (monthlyOrders as any[]).findIndex((o) => o?.id === orderData.id);
+        if (idx >= 0) derivedOrderSeq = idx + 1;
+      }
+    }
+
+    const nextSeq = Math.max(maxExistingSeq, derivedOrderSeq);
     const seqStr = nextSeq.toString().padStart(3, '0');
     return `SO/${fyStr}/${month}/${seqStr}`;
   };

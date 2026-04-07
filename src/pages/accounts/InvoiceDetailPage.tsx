@@ -606,8 +606,56 @@ export default function InvoiceDetailPage() {
                   </div>
                 </div>
 
-                {/* Totals - Compact */}
-                <div className="flex justify-end">
+                {/* Totals + Bank Details + Payment QR */}
+                <div className="flex justify-between items-start gap-6">
+                  <div className="flex-1 max-w-[360px]">
+                    {(company?.bank_details?.bank_name ||
+                      company?.bank_details?.account_number ||
+                      company?.bank_details?.ifsc_code ||
+                      company?.bank_details?.branch) && (
+                      <div>
+                        <div className="text-sm font-semibold mb-2">Bank Details:</div>
+                        {company?.bank_details?.bank_name && (
+                          <div className="py-0.5 text-sm leading-5">
+                            <span className="text-gray-700">Bank Name:</span>{' '}
+                            <span>{company.bank_details.bank_name}</span>
+                          </div>
+                        )}
+                        {company?.bank_details?.account_number && (
+                          <div className="py-0.5 text-sm leading-5">
+                            <span className="text-gray-700">A/C Number:</span>{' '}
+                            <span>{company.bank_details.account_number}</span>
+                          </div>
+                        )}
+                        {company?.bank_details?.ifsc_code && (
+                          <div className="py-0.5 text-sm leading-5">
+                            <span className="text-gray-700">IFSC:</span>{' '}
+                            <span>{company.bank_details.ifsc_code}</span>
+                          </div>
+                        )}
+                        {company?.bank_details?.branch && (
+                          <div className="py-0.5 text-sm leading-5">
+                            <span className="text-gray-700">Branch:</span>{' '}
+                            <span>{company.bank_details.branch}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="w-[180px] flex-shrink-0 flex justify-start pl-2">
+                    {company?.payment_qr_url ? (
+                      <div className="text-center">
+                        <img
+                          src={company.payment_qr_url}
+                          alt="Payment QR"
+                          className="w-32 h-32 object-contain border border-gray-300 rounded bg-white p-1"
+                        />
+                        <p className="text-[10px] text-gray-500 mt-1">Scan to Pay</p>
+                      </div>
+                    ) : null}
+                  </div>
+
                   <div className="w-64">
                     <div className="flex justify-between py-1 text-sm">
                       <span>Subtotal:</span>
@@ -675,17 +723,19 @@ export default function InvoiceDetailPage() {
                   </div>
                 </div>
 
-                {/* Authorized Signatory Section - Compact */}
+                {/* Authorized Signatory + Bank Details Section - Compact */}
                 <div className="mt-6 pt-4 border-t">
-                  <div className="flex justify-between items-end">
-                    {/* Customer Signature */}
-                    <div className="text-center">
-                      <div className="border-b border-gray-400 w-32 mb-1"></div>
-                      <div className="text-xs text-gray-600">Customer Signature</div>
+                  <div className="flex justify-between items-end gap-6">
+                    {/* Bottom-left block: customer signature */}
+                    <div className="flex-1">
+                      <div className="text-center max-w-[128px]">
+                        <div className="border-b border-gray-400 w-32 mb-1"></div>
+                        <div className="text-xs text-gray-600">Customer Signature</div>
+                      </div>
                     </div>
                     
                     {/* Company Authorized Signatory */}
-                    <div className="text-center">
+                    <div className="text-center flex-shrink-0">
                       <div className="mb-2">
                         {company?.authorized_signatory_url ? (
                           <img 
