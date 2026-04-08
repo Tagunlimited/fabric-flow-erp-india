@@ -156,12 +156,21 @@ export function InvoiceForm() {
     }
   }, [location.state]);
 
-  // Generate invoice number with TUC/IN/ prefix
+  const getFinancialYear = (date: Date) => {
+    const startYear = date.getMonth() < 3 ? date.getFullYear() - 1 : date.getFullYear();
+    const endYearShort = String(startYear + 1).slice(-2);
+    return `${startYear}-${endYearShort}`;
+  };
+
+  // Generate invoice number: TUC/YYYY-YY/TI/0001
   const generateInvoiceNumber = async () => {
     try {
+      const fy = getFinancialYear(new Date());
+      const prefix = `TUC/${fy}/TI/`;
       const { data, error } = await supabase
         .from('invoices')
         .select('invoice_number')
+        .ilike('invoice_number', `${prefix}%`)
         .order('created_at', { ascending: false })
         .limit(1);
 
@@ -170,16 +179,17 @@ export function InvoiceForm() {
       let nextNumber = 1;
       if (data && data.length > 0) {
         const lastInvoice = data[0];
-        const lastNumber = lastInvoice.invoice_number?.match(/TUC\/IN\/(\d+)/);
+        const lastNumber = lastInvoice.invoice_number?.match(/\/(\d{1,})$/);
         if (lastNumber) {
           nextNumber = parseInt(lastNumber[1]) + 1;
         }
       }
 
-      return `TUC/IN/${nextNumber.toString().padStart(3, '0')}`;
+      return `${prefix}${nextNumber.toString().padStart(4, '0')}`;
     } catch (error) {
       console.error('Error generating invoice number:', error);
-      return `TUC/IN/001`;
+      const fy = getFinancialYear(new Date());
+      return `TUC/${fy}/TI/0001`;
     }
   };
 

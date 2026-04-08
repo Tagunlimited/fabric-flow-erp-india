@@ -22,11 +22,19 @@ type DispatchRow = {
   id: string;
   dispatch_number: string;
   dispatch_date: string | null;
+  created_at?: string | null;
   status: string | null;
   courier_name: string | null;
   tracking_number: string | null;
   actual_delivery: string | null;
   estimated_delivery?: string | null;
+};
+
+type InvoiceRow = {
+  id: string;
+  order_id: string | null;
+  invoice_number: string | null;
+  created_at: string | null;
 };
 
 type OrderRow = {
@@ -53,15 +61,23 @@ function isMarkedDispatched(order: OrderRow): boolean {
 }
 
 function pickLatestDispatch(challans: DispatchRow[]): DispatchRow | null {
+  const sorted = [...(challans || [])].sort((a, b) => {
+    const da = a.dispatch_date || a.created_at || "";
+    const db = b.dispatch_date || b.created_at || "";
+    return db.localeCompare(da);
+  });
   const terminal = (challans || []).filter(
     (d) => d.status && TERMINAL_DISPATCH_STATUSES.has(d.status)
   );
-  if (terminal.length === 0) return null;
-  return [...terminal].sort((a, b) => {
-    const da = a.dispatch_date || "";
-    const db = b.dispatch_date || "";
-    return db.localeCompare(da);
-  })[0];
+  if (terminal.length > 0) {
+    return [...terminal].sort((a, b) => {
+      const da = a.dispatch_date || a.created_at || "";
+      const db = b.dispatch_date || b.created_at || "";
+      return db.localeCompare(da);
+    })[0];
+  }
+  // Fallback: show latest challan even if not in terminal status.
+  return sorted[0] || null;
 }
 
 function formatDate(value: string | null | undefined): string {
@@ -77,6 +93,7 @@ export default function OrderCompletionReportPage() {
     Array<{
       order: OrderRow;
       dispatch: DispatchRow | null;
+      invoiceNumber: string | null;
     }>
   >([]);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +117,7 @@ export default function OrderCompletionReportPage() {
             id,
             dispatch_number,
             dispatch_date,
+            created_at,
             status,
             courier_name,
             tracking_number,
@@ -114,11 +132,28 @@ export default function OrderCompletionReportPage() {
       if (qErr) throw qErr;
 
       const list = (data || []) as unknown as OrderRow[];
+      const orderIds = list.map((o) => o.id).filter(Boolean);
+      let invoiceByOrderId: Record<string, string> = {};
+      if (orderIds.length > 0) {
+        const { data: invoiceRows } = await supabase
+          .from("invoices")
+          .select("id, order_id, invoice_number, created_at")
+          .in("order_id", orderIds as any)
+          .order("created_at", { ascending: false });
+
+        for (const inv of (invoiceRows || []) as unknown as InvoiceRow[]) {
+          if (!inv.order_id || !inv.invoice_number) continue;
+          if (!invoiceByOrderId[inv.order_id]) {
+            invoiceByOrderId[inv.order_id] = inv.invoice_number;
+          }
+        }
+      }
       const filtered = list
         .filter(isMarkedDispatched)
         .map((order) => ({
           order,
           dispatch: pickLatestDispatch(order.dispatch_orders || []),
+          invoiceNumber: invoiceByOrderId[order.id] || null,
         }));
 
       setRows(filtered);
@@ -197,6 +232,7 @@ export default function OrderCompletionReportPage() {
                       <TableHead>Order date</TableHead>
                       <TableHead>Order status</TableHead>
                       <TableHead>Dispatch #</TableHead>
+                      <TableHead>Invoice #</TableHead>
                       <TableHead>Dispatch date</TableHead>
                       <TableHead>Challan status</TableHead>
                       <TableHead>Courier</TableHead>
@@ -205,7 +241,7 @@ export default function OrderCompletionReportPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {rows.map(({ order, dispatch: d }) => (
+                    {rows.map(({ order, dispatch: d, invoiceNumber }) => (
                       <TableRow key={order.id}>
                         <TableCell className="font-medium">
                           <button
@@ -224,6 +260,7 @@ export default function OrderCompletionReportPage() {
                           </Badge>
                         </TableCell>
                         <TableCell>{d?.dispatch_number || "—"}</TableCell>
+                        <TableCell>{invoiceNumber || "—"}</TableCell>
                         <TableCell>{formatDate(d?.dispatch_date)}</TableCell>
                         <TableCell>
                           <Badge

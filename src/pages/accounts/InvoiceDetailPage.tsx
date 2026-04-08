@@ -109,6 +109,28 @@ export default function InvoiceDetailPage() {
     if (id) fetchData(id);
   }, [id]);
 
+  const getFinancialYear = (date: Date) => {
+    const startYear = date.getMonth() < 3 ? date.getFullYear() - 1 : date.getFullYear();
+    const endYearShort = String(startYear + 1).slice(-2);
+    return `${startYear}-${endYearShort}`;
+  };
+
+  const generateInvoiceNumber = async () => {
+    const fy = getFinancialYear(new Date());
+    const prefix = `TUC/${fy}/TI/`;
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('invoice_number')
+      .ilike('invoice_number', `${prefix}%`)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    const last = data?.[0]?.invoice_number as string | undefined;
+    const match = last?.match(/\/(\d{1,})$/);
+    const next = match ? Number.parseInt(match[1], 10) + 1 : 1;
+    return `${prefix}${String(next).padStart(4, '0')}`;
+  };
+
   const fetchData = async (id: string) => {
     try {
       setLoading(true);
@@ -142,8 +164,9 @@ export default function InvoiceDetailPage() {
         orderData = orderDataResult;
         orderId = id;
         
-        // Generate invoice number for new invoices
-        setInvoiceNumber(`INV-${Date.now()}`);
+        // Generate invoice number for new invoices: TUC/YYYY-YY/TI/0001
+        const generatedInvoiceNumber = await generateInvoiceNumber();
+        setInvoiceNumber(generatedInvoiceNumber);
       }
 
       setOrder(orderData as any);

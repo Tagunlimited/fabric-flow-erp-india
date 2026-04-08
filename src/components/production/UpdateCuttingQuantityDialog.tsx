@@ -19,38 +19,23 @@ import {
 import { sizesFromOrderItem } from '@/utils/sizesFromOrderItem';
 import { getOrderItemLineQuantity } from '@/utils/orderItemLineQuantity';
 import { resolveSwatchHex } from '@/lib/grnColorSwatch';
-import { normalizeGsmVariants } from '@/components/purchase-orders/bomInventoryAllocation';
 import '@/components/purchase-orders/BomLinePicker.css';
 
 function normLower(s: string | null | undefined): string {
   return `${s ?? ''}`.trim().toLowerCase();
 }
 
-/**
- * Match warehouse `item_name` to a specific fabric_master variant (not just base name).
- */
-function warehouseItemNameMatchesFabricVariant(
+function warehouseItemNameMatchesVariant(
   itemName: string | undefined,
   fabric: { fabric_name?: string | null; color?: string | null; gsm?: string | number | null }
 ): boolean {
   const n = normLower(itemName);
   if (!n) return false;
-  const fname = normLower(fabric.fabric_name);
-  if (!fname) return false;
-  const nameOk = n === fname || n.includes(fname) || fname.includes(n);
-  if (!nameOk) return false;
+  const name = normLower(fabric.fabric_name);
   const color = normLower(fabric.color);
-  if (color && !n.includes(color)) return false;
-  const gsmVars = normalizeGsmVariants(`${fabric.gsm ?? ''}`);
-  if (gsmVars.length > 0) {
-    const gsmOk = gsmVars.some((g) => {
-      const g2 = normLower(g);
-      if (!g2) return false;
-      return n.includes(g2) || n.includes(g2.replace(/\s/g, ''));
-    });
-    if (!gsmOk) return false;
-  }
-  return true;
+  const gsm = normLower(String(fabric.gsm ?? ''));
+  if (!name || !color || !gsm) return false;
+  return n.includes(name) && n.includes(color) && n.includes(gsm);
 }
 
 function fabricSwatchCss(fabric: { color?: string | null; hex?: string | null } | null | undefined): string {
@@ -178,6 +163,22 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
           return;
         }
 
+        // Fallback source: some setups keep fabric quantities in fabric_inventory.
+        const { data: fabricInventoryRows, error: fabricInventoryError } = await supabase
+          .from('fabric_inventory' as any)
+          .select('fabric_id, quantity, approved_quantity')
+          .in('fabric_id', fabricIds as any);
+
+        const fabricInventoryMap: Record<string, number> = {};
+        if (!fabricInventoryError && fabricInventoryRows) {
+          (fabricInventoryRows as any[]).forEach((row: any) => {
+            const fid = row?.fabric_id as string | undefined;
+            if (!fid) return;
+            const qty = Number(row?.quantity ?? row?.approved_quantity ?? 0);
+            fabricInventoryMap[fid] = (fabricInventoryMap[fid] || 0) + qty;
+          });
+        }
+
         const { data: warehouseInventory, error: warehouseError } = await supabase
           .from('warehouse_inventory')
           .select('item_id, item_name, quantity, unit')
@@ -189,15 +190,13 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
         if (!warehouseError && warehouseInventory) {
           warehouseInventory.forEach((invRow: any) => {
             const fabricId = invRow.item_id as string | undefined;
-            const fabricName = invRow.item_name as string | undefined;
-
             let matchKey: string | null = null;
             if (fabricId && fabricIdSet.has(fabricId)) {
               matchKey = fabricId;
-            } else {
-              const candidates = (fabricData as any[]).filter(
-                (f: any) =>
-                  fabricIdSet.has(f.id) && warehouseItemNameMatchesFabricVariant(fabricName, f)
+            } else if (!fabricId && invRow.item_name) {
+              // Legacy safe fallback: only for rows without item_id, and only if exactly one variant matches.
+              const candidates = (fabricData as any[]).filter((f: any) =>
+                warehouseItemNameMatchesVariant(invRow.item_name, f)
               );
               if (candidates.length === 1) {
                 matchKey = candidates[0].id;
@@ -220,14 +219,10 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
         const fabrics: AvailableFabric[] = fabricData.map((fabric: any) => {
           const warehouseInv = warehouseInventoryMap[fabric.id];
           const masterQty = Number(fabric.inventory || 0);
+          const directFabricQty = Number(fabricInventoryMap[fabric.id] || 0);
           const whQty = warehouseInv ? Number(warehouseInv.quantity || 0) : null;
-          // Prefer the tighter figure when warehouse totals and fabric_master diverge (e.g. after deduction).
-          let inventoryQty: number;
-          if (whQty != null && whQty > 0) {
-            inventoryQty = masterQty > 0 ? Math.min(masterQty, whQty) : whQty;
-          } else {
-            inventoryQty = masterQty;
-          }
+          // Pick the most reliable non-zero source to avoid false zero in cutting dialog.
+          const inventoryQty = Math.max(masterQty, whQty ?? 0, directFabricQty);
           const inventoryUnit = fabric.uom || warehouseInv?.unit || 'kgs';
 
           return {
@@ -559,9 +554,9 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
         try {
           const { data: warehouseInventory, error: warehouseError } = await supabase
             .from('warehouse_inventory')
-            .select('id, quantity, item_id, item_name')
+            .select('id, quantity, item_id')
             .eq('item_type', 'FABRIC')
-            .or(`item_id.eq.${fabricUsage.fabric_id},item_name.eq.${selectedFabric?.fabric_name || ''}`);
+            .eq('item_id', fabricUsage.fabric_id);
 
           if (!warehouseError && warehouseInventory && warehouseInventory.length > 0) {
             // Update the first matching record (or you could update all matching records)

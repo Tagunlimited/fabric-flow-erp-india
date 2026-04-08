@@ -44,6 +44,28 @@ export default function DispatchQCPage() {
   const [savingDispatch, setSavingDispatch] = useState(false);
   const [dispatchQtyBySize, setDispatchQtyBySize] = useState<Record<string, number>>({});
   const [dispatchOrderId, setDispatchOrderId] = useState<string | null>(null);
+
+  const getFinancialYear = (date: Date) => {
+    const startYear = date.getMonth() < 3 ? date.getFullYear() - 1 : date.getFullYear();
+    const endYearShort = String(startYear + 1).slice(-2);
+    return `${startYear}-${endYearShort}`;
+  };
+
+  const generateDispatchNumber = async () => {
+    const fy = getFinancialYear(new Date());
+    const prefix = `TUC/${fy}/DC/`;
+    const { data, error } = await (supabase as any)
+      .from('dispatch_orders')
+      .select('dispatch_number')
+      .ilike('dispatch_number', `${prefix}%`)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    const last = (data?.[0]?.dispatch_number as string | undefined) || '';
+    const match = last.match(/\/(\d{1,})$/);
+    const next = match ? Number.parseInt(match[1], 10) + 1 : 1;
+    return `${prefix}${String(next).padStart(4, '0')}`;
+  };
   
   // Details modal state
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -561,7 +583,7 @@ export default function DispatchQCPage() {
     if (totalToSend <= 0) return;
     try {
       setSavingDispatch(true);
-      const dispatchNumber = `DSP-${Date.now()}`;
+      const dispatchNumber = await generateDispatchNumber();
       // Resolve delivery address (orders.delivery_address fallback to customer full address)
       let deliveryAddress = '-';
       try {

@@ -192,45 +192,13 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
       const map: Record<string, Record<string, { available: number; reserved: number; unit?: string }>> = {};
       (data || []).forEach((r: any) => {
         const fid = r.item_id as string; const zid = r.bin_id as string; const qty = Number(r.quantity || 0);
-        console.log('Processing warehouse item:', { item_id: fid, bin_id: zid, quantity: qty, item_name: r.item_name });
+        console.log('Processing warehouse item:', { item_id: fid, bin_id: zid, quantity: qty });
         if (!zid) {
           console.log('Skipping item - missing bin_id:', { zid });
           return;
         }
-        
-        // Try to match by item_id first, then by item_name if item_id is null
-        let matchKey = fid;
-        if (!fid) {
-          console.log('=== MATCHING PROCESS ===');
-          console.log('Warehouse item:', { item_name: r.item_name, quantity: qty });
-          console.log('Available order fabrics:', fabrics.map(f => ({ fabric_id: f.fabric_id, fabric_name: f.fabric_name })));
-          
-          // Find matching fabric by name (exact match first, then partial)
-          let matchingFabric = fabrics.find(f => f.fabric_name === r.item_name);
-          console.log('Exact match result:', { warehouse_name: r.item_name, found: !!matchingFabric, match: matchingFabric?.fabric_name });
-          
-          if (!matchingFabric) {
-            // Try partial match - extract fabric name from warehouse item_name
-            const warehouseFabricName = r.item_name.split(' - ')[0]; // "Poly Blend" from "Poly Blend - White - 200 GSM"
-            matchingFabric = fabrics.find(f => f.fabric_name === warehouseFabricName);
-            console.log('Trying partial match:', { warehouse_item: r.item_name, extracted_name: warehouseFabricName, found: !!matchingFabric, match: matchingFabric?.fabric_name });
-          }
-          
-          if (!matchingFabric) {
-            // Try reverse match - check if warehouse name is contained in order fabric name
-            const warehouseFabricName = r.item_name.split(' - ')[0];
-            matchingFabric = fabrics.find(f => f.fabric_name.includes(warehouseFabricName));
-            console.log('Trying reverse match:', { warehouse_name: warehouseFabricName, order_fabrics: fabrics.map(f => f.fabric_name), found: !!matchingFabric, match: matchingFabric?.fabric_name });
-          }
-          
-          if (matchingFabric) {
-            matchKey = matchingFabric.fabric_id;
-            console.log('Matched by name:', { item_name: r.item_name, fabric_name: matchingFabric.fabric_name, fabric_id: matchKey });
-          } else {
-            console.log('No fabric match found for item_name:', r.item_name, 'Available fabrics:', fabrics.map(f => f.fabric_name));
-            return;
-          }
-        }
+        if (!fid) return;
+        const matchKey = fid;
         
         if (!map[matchKey]) map[matchKey] = {};
         const prev = map[matchKey][zid] || { available: 0, reserved: 0, unit: r.unit };
@@ -240,11 +208,6 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
       
       // Debug log
       console.log('Zone availability loaded:', map);
-      console.log('Raw warehouse_inventory data:', data);
-      console.log('Order fabrics:', fabrics.map(f => ({ fabric_id: f.fabric_id, fabric_name: f.fabric_name })));
-      console.log('=== DEBUGGING MATCHING ===');
-      console.log('Warehouse fabric names:', data?.map(r => r.item_name));
-      console.log('Order fabric names:', fabrics.map(f => f.fabric_name));
       console.log('Final zone availability map:', map);
     } catch (e) { /* ignore */ }
   };
@@ -460,10 +423,10 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
         console.log(`Checking inventory for fabric ${fabric.fabric_name} in bin ${binId}`);
         const { data: inventoryCheck, error: inventoryCheckError } = await (supabase as any)
           .from('warehouse_inventory')
-          .select('quantity, item_name, item_id, bin_id')
+          .select('quantity, item_id, bin_id')
           .eq('item_type', 'FABRIC')
           .eq('bin_id', binId)
-          .or(`item_id.eq.${fabric.fabric_id},item_name.eq.${fabric.fabric_name}`);
+          .eq('item_id', fabric.fabric_id);
         
         if (inventoryCheckError) {
           console.error(`Error checking inventory for ${fabric.fabric_name}:`, inventoryCheckError);
@@ -526,10 +489,10 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
           console.log(`Finding inventory records for ${fabric.fabric_name} in bin ${binId}`);
           const { data: inventoryRecords, error: inventoryError } = await (supabase as any)
             .from('warehouse_inventory')
-            .select('id, quantity, item_name, item_id, bin_id')
+          .select('id, quantity, item_name, item_id, bin_id')
             .eq('item_type', 'FABRIC')
             .eq('bin_id', binId)
-            .or(`item_id.eq.${fabric.fabric_id},item_name.eq.${fabric.fabric_name}`);
+          .eq('item_id', fabric.fabric_id);
 
           if (inventoryError) {
             console.error(`Error fetching inventory for ${fabric.fabric_name}:`, inventoryError);
@@ -564,13 +527,6 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
             bestMatch = inventoryRecords
               .filter(r => r.item_id === fabric.fabric_id && Number(r.quantity || 0) > 0)
               .sort((a, b) => Number(b.quantity || 0) - Number(a.quantity || 0))[0];
-            
-            // If not found, try by item_name with available quantity
-            if (!bestMatch) {
-              bestMatch = inventoryRecords
-                .filter(r => r.item_name === fabric.fabric_name && Number(r.quantity || 0) > 0)
-                .sort((a, b) => Number(b.quantity || 0) - Number(a.quantity || 0))[0];
-            }
             
             // If still not found, try any record with available quantity
             if (!bestMatch) {

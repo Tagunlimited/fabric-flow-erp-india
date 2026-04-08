@@ -147,7 +147,7 @@ async function applyManualInventoryLine(args: {
 
   if (byId) existing = byId;
 
-  if (!existing) {
+  if (!existing && itemType !== 'FABRIC') {
     const { data: byCode } = await supabase
       .from('warehouse_inventory' as any)
       .select('*')

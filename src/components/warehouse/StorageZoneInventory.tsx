@@ -16,6 +16,7 @@ import {
   resolveSwatchHex,
   resolveWarehouseFabricSwatch,
 } from '@/lib/grnColorSwatch';
+import { buildWarehouseIdentityKey } from '@/utils/fabricVariantIdentity';
 
 interface StorageZoneInventoryProps {
   onViewDetails?: (inventory: WarehouseInventory) => void;
@@ -156,51 +157,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
         }
       }
       
-      // For fabrics without item_id or where ID lookup failed, try to match by fabric name
-      const fabricItemsWithoutMatch = filtered.filter((i: any) => 
-        i.item_type === 'FABRIC' && (!i.item_id || !fabricMap.has(i.item_id))
-      );
-      
-      if (fabricItemsWithoutMatch.length > 0) {
-        // Get unique fabric names from items without matches
-        const fabricNames = Array.from(new Set(
-          fabricItemsWithoutMatch
-            .map((i: any) => i.grn_item?.fabric_name || i.item_name)
-            .filter(Boolean)
-        )) as string[];
-        
-        if (fabricNames.length > 0) {
-          const { data: fabricsByNameData, error: fabricsByNameError } = await supabase
-            .from('fabric_master')
-            .select('id, fabric_code, fabric_name, color, type, gsm, image, hex, fabric_for_supplier')
-            .in('fabric_name', fabricNames);
-          
-          if (!fabricsByNameError && fabricsByNameData) {
-            // Create a map by fabric_name for easy lookup
-            const fabricByNameMap = new Map<string, any>();
-            fabricsByNameData.forEach((fabric: any) => {
-              fabricByNameMap.set(fabric.fabric_name.toLowerCase(), fabric);
-            });
-            
-            // Match fabrics by name and add to fabricMap
-            fabricItemsWithoutMatch.forEach((item: any) => {
-              const fabricName = (item.grn_item?.fabric_name || item.item_name || '').toLowerCase();
-              if (fabricByNameMap.has(fabricName)) {
-                const fabric = fabricByNameMap.get(fabricName);
-                // Store by item_id if available, or by a generated key
-                const key = item.item_id || `name_${fabricName}`;
-                fabricMap.set(key, fabric);
-                // Also update item.item_id if it was null
-                if (!item.item_id) {
-                  item.item_id = fabric.id;
-                }
-              }
-            });
-            console.log('✅ [StorageZone] Matched fabrics by name:', fabricsByNameData.length);
-          }
-        }
-      }
-      
       // Fetch item_master data
       let itemMasterMap = new Map<string, any>();
       if (itemIds.length > 0) {
@@ -239,15 +195,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
             return {
               ...item,
               fabric_master: fabricMap.get(item.item_id)
-            };
-          }
-          // If not found by ID, try to match by name
-          const fabricName = (item.grn_item?.fabric_name || item.item_name || '').toLowerCase();
-          const nameKey = `name_${fabricName}`;
-          if (fabricMap.has(nameKey)) {
-            return {
-              ...item,
-              fabric_master: fabricMap.get(nameKey)
             };
           }
           // Debug log if fabric not found
@@ -324,9 +271,21 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     inventoryData.forEach(item => {
       // Create a unique key for matching items
       const itemColor = item.grn_item?.item_color || item.grn_item?.fabric_color || '';
-      const key = item.item_id 
-        ? `${item.item_id}|${item.bin_id}|${item.status}|${item.unit}|${itemColor}`
-        : `${item.item_code}|${item.item_name}|${item.bin_id}|${item.status}|${item.unit}|${itemColor}`;
+      const itemGsm =
+        item.item_type === 'FABRIC'
+          ? String((item as any).fabric_master?.gsm ?? item.grn_item?.fabric_gsm ?? '')
+          : '';
+      const key = buildWarehouseIdentityKey({
+        itemType: item.item_type,
+        itemId: item.item_id,
+        itemCode: item.item_code,
+        itemName: item.item_name,
+        binId: item.bin_id,
+        status: item.status,
+        unit: item.unit,
+        color: itemColor,
+        gsm: itemGsm,
+      });
 
       const existing = consolidatedMap.get(key);
       
