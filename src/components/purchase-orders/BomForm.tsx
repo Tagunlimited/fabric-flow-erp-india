@@ -1894,7 +1894,7 @@ export function BomForm({
 
       if (!embedded) {
         setTimeout(() => {
-          navigate('/bom?tab=view-bom');
+          navigate('/bom?tab=complete');
         }, 1000);
       }
       

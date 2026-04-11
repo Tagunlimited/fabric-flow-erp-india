@@ -52,6 +52,44 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
     [profile?.role, user?.email]
   );
 
+  /** HR record (employees) is separate from auth profile; match by work/personal email. */
+  const [linkedEmployee, setLinkedEmployee] = useState<{
+    designation: string;
+    department: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const email = profile?.email?.trim();
+    if (!email) {
+      setLinkedEmployee(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data, error } = await supabase
+        .from('employees')
+        .select('designation, department')
+        .ilike('personal_email', email)
+        .limit(1);
+      if (cancelled) return;
+      const row = data?.[0];
+      if (error || !row?.designation) {
+        setLinkedEmployee(null);
+        return;
+      }
+      setLinkedEmployee({
+        designation: row.designation,
+        department: row.department || '',
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.email]);
+
+  const headerDepartment = (profile?.department || linkedEmployee?.department || '').trim();
+  const headerTitleOrRole = linkedEmployee?.designation?.trim() || displayRole;
+
   // Handle floating header
   useEffect(() => {
     const handleScroll = () => {
@@ -285,10 +323,10 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
                 </div>
                 <div className="hidden md:flex flex-col text-left">
                   <div className="font-medium text-sm text-foreground">{displayName}</div>
-                  {profile?.department && (
-                    <div className="text-xs text-muted-foreground">{profile.department}</div>
+                  {headerDepartment && (
+                    <div className="text-xs text-muted-foreground">{headerDepartment}</div>
                   )}
-                  <div className="text-xs text-muted-foreground capitalize">{displayRole}</div>
+                  <div className="text-xs text-muted-foreground capitalize">{headerTitleOrRole}</div>
                 </div>
               </div>
               {/* Notification, Install, Theme, Settings, Logout */}
