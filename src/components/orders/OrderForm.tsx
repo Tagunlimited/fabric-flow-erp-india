@@ -20,7 +20,7 @@ import { CalendarIcon, Plus, Trash2, Upload, X, Image, ChevronLeft, ChevronRight
 import { format } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { cn, formatCurrency } from '@/lib/utils';
+import { cn, formatCurrency, formatLocalDateYMD } from '@/lib/utils';
 import { getOrderItemDisplayImageForForm, getImageSrcFromFileOrUrl } from '@/utils/orderItemImageUtils';
 import { usePageState } from '@/contexts/AppCacheContext';
 import { getSortedSizes, sortSizesQuantities, SizeType as SizeTypeUtil } from '@/utils/sizeSorting';
@@ -1366,8 +1366,14 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
       const orderData = {
         order_number: orderNumber,
-        order_date: (formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)).toISOString(),
-        expected_delivery_date: (formData.expected_delivery_date instanceof Date ? formData.expected_delivery_date : new Date(formData.expected_delivery_date)).toISOString(),
+        order_date: formatLocalDateYMD(
+          formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)
+        ),
+        expected_delivery_date: formatLocalDateYMD(
+          formData.expected_delivery_date instanceof Date
+            ? formData.expected_delivery_date
+            : new Date(formData.expected_delivery_date)
+        ),
         customer_id: formData.customer_id,
         sales_manager: formData.sales_manager,
         total_amount: Number(subtotal),
@@ -2123,38 +2129,47 @@ const getSelectedFabricVariant = (productIndex: number) => {
     {(product.customizations || []).length > 0 && (
       <div className="space-y-2">
         <Label className="text-base font-semibold text-gray-700 mb-2 block">Customizations</Label>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {(product.customizations || []).map((customization, index) => (
-            <div key={`${customization.partId}-${index}`} className="relative p-3 border rounded-lg bg-white shadow-sm min-w-0">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => removeCustomization(productIndex, index)}
-                className="absolute top-2 right-2 h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
-              >
-                <X className="w-4 h-4" />
-              </Button>
-              <div className="pr-8 flex items-start gap-3">
+            <div
+              key={`${customization.partId}-${index}`}
+              className="p-3 border rounded-lg bg-white shadow-sm min-w-0 w-full"
+            >
+              <div className="flex items-start gap-3">
                 {customization.selectedAddonImageUrl && (
-                  <img 
-                    src={customization.selectedAddonImageUrl} 
+                  <img
+                    src={customization.selectedAddonImageUrl}
                     alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
-                    className="w-12 h-12 object-cover rounded-lg border-2 border-gray-100 flex-shrink-0"
+                    className="w-12 h-12 object-cover rounded-lg border-2 border-gray-100 shrink-0"
                     onError={(e) => {
                       e.currentTarget.style.display = 'none';
                     }}
                   />
                 )}
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-gray-900 truncate" title={customization.partName}>
-                    {customization.partName}
-                  </div>
-                  {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
-                    <div className="text-xs text-gray-600 truncate mt-1" title={customization.selectedAddonName}>
-                      {customization.selectedAddonName}
+                <div className="flex-1 min-w-0 space-y-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-gray-900 break-words whitespace-normal leading-snug">
+                        {customization.partName}
+                      </div>
+                      {customization.partType === 'dropdown' &&
+                        (customization.selectedAddonName || customization.selectedAddonId) && (
+                          <div className="text-xs text-gray-600 mt-1 break-words whitespace-normal leading-snug">
+                            {customization.selectedAddonName}
+                          </div>
+                        )}
                     </div>
-                  )}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeCustomization(productIndex, index)}
+                      className="shrink-0 h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                      aria-label={`Remove ${customization.partName}`}
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  </div>
                   {/* Only show quantity for number type parts, never for dropdown */}
                   {customization.partType !== 'dropdown' && customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
                     <div className="text-xs text-gray-600 mt-1">

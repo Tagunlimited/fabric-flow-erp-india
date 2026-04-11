@@ -31,6 +31,7 @@ import { useCachedData } from "@/hooks/useCachedData";
 import { usePageCaching } from "@/components/CachedPageWrapper";
 import { CachedPageWrapper } from "@/components/CachedPageWrapper";
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
+import { parseBusinessDateLocal } from '@/lib/utils';
 
 interface Order {
   id: string;
@@ -195,9 +196,15 @@ function OrdersPageContent() {
   const sortedOrders = [...filteredOrders].sort((a, b) => {
     switch (sortBy) {
       case 'date_asc':
-        return new Date(a.order_date).getTime() - new Date(b.order_date).getTime();
+        return (
+          (parseBusinessDateLocal(a.order_date)?.getTime() ?? new Date(a.order_date).getTime()) -
+          (parseBusinessDateLocal(b.order_date)?.getTime() ?? new Date(b.order_date).getTime())
+        );
       case 'date_desc':
-        return new Date(b.order_date).getTime() - new Date(a.order_date).getTime();
+        return (
+          (parseBusinessDateLocal(b.order_date)?.getTime() ?? new Date(b.order_date).getTime()) -
+          (parseBusinessDateLocal(a.order_date)?.getTime() ?? new Date(a.order_date).getTime())
+        );
       case 'amount_asc':
         return a.total_amount - b.total_amount;
       case 'amount_desc':
@@ -491,7 +498,10 @@ function OrdersPageContent() {
                             {order.customer?.company_name || 'N/A'}
                           </TableCell>
                           <TableCell>
-                            {format(new Date(order.order_date), 'MMM dd, yyyy')}
+                            {(() => {
+                              const d = parseBusinessDateLocal(order.order_date);
+                              return d ? format(d, 'MMM dd, yyyy') : '—';
+                            })()}
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center space-x-2">

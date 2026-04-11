@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { usePersistentTabState } from "@/hooks/usePersistentTabState";
-import { cn, formatDateIndian } from "@/lib/utils";
+import { cn, formatDateIndian, formatLocaleDateFromApi, parseBusinessDateLocal } from "@/lib/utils";
 import { fetchOrderIdsWithActiveCreditReceipt } from "@/utils/orderFinancials";
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
@@ -242,16 +242,26 @@ const ReadymadeOrdersPage = () => {
         order.order_number?.toLowerCase().includes(term) ||
         order.customer?.company_name?.toLowerCase().includes(term) ||
         order.status?.toLowerCase().includes(term) ||
-        (order.order_date && format(new Date(order.order_date), 'dd-MMM-yy').toLowerCase().includes(term)) ||
+        (order.order_date &&
+          (() => {
+            const d = parseBusinessDateLocal(order.order_date);
+            return d ? format(d, 'dd-MMM-yy').toLowerCase().includes(term) : false;
+          })()) ||
         (order.final_amount !== undefined && order.final_amount.toString().toLowerCase().includes(term)) ||
         (order.balance_amount !== undefined && order.balance_amount.toString().toLowerCase().includes(term))
       );
     })
     .sort((a, b) => {
       if (sortBy === "date_asc") {
-        return new Date(a.order_date).getTime() - new Date(b.order_date).getTime();
+        return (
+          (parseBusinessDateLocal(a.order_date)?.getTime() ?? new Date(a.order_date).getTime()) -
+          (parseBusinessDateLocal(b.order_date)?.getTime() ?? new Date(b.order_date).getTime())
+        );
       } else if (sortBy === "date_desc") {
-        return new Date(b.order_date).getTime() - new Date(a.order_date).getTime();
+        return (
+          (parseBusinessDateLocal(b.order_date)?.getTime() ?? new Date(b.order_date).getTime()) -
+          (parseBusinessDateLocal(a.order_date)?.getTime() ?? new Date(a.order_date).getTime())
+        );
       } else if (sortBy === "amount_asc") {
         return (a.final_amount || 0) - (b.final_amount || 0);
       } else if (sortBy === "amount_desc") {
@@ -471,18 +481,20 @@ const ReadymadeOrdersPage = () => {
                               </div>
                             </TableCell>
                             <TableCell>
-                              {new Date(order.order_date).toLocaleDateString('en-GB', {
+                              {formatLocaleDateFromApi(order.order_date, 'en-GB', {
                                 day: '2-digit',
                                 month: 'short',
                                 year: '2-digit'
                               })}
                             </TableCell>
                             <TableCell>
-                              {order.expected_delivery_date ? new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
-                                day: '2-digit',
-                                month: 'short',
-                                year: '2-digit'
-                              }) : 'N/A'}
+                              {order.expected_delivery_date
+                                ? formatLocaleDateFromApi(order.expected_delivery_date, 'en-GB', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    year: '2-digit'
+                                  })
+                                : 'N/A'}
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center space-x-2">

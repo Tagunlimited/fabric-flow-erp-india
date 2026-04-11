@@ -35,7 +35,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { calculateOrderSummary } from '@/utils/priceCalculation';
-import { cn, formatDateIndian } from '@/lib/utils';
+import { cn, formatDateIndian, formatLocaleDateFromApi, parseBusinessDateLocal } from '@/lib/utils';
 import { fetchOrderIdsWithActiveCreditReceipt, sumActiveReceiptAmountsForOrder } from '@/utils/orderFinancials';
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
@@ -141,7 +141,7 @@ function buildDateSearchText(raw: string | null | undefined): string {
   if (!raw) return '';
   const parts: string[] = [raw];
   try {
-    const d = new Date(raw);
+    const d = parseBusinessDateLocal(raw) ?? new Date(raw);
     if (!Number.isNaN(d.getTime())) {
       parts.push(format(d, 'dd-MMM-yy'));
       parts.push(format(d, 'dd/MM/yyyy'));
@@ -609,10 +609,16 @@ const OrdersPage = () => {
     const searched = orders.filter((order) => orderMatchesColumnFilters(order, columnFilters, salesManagers));
     return [...searched].sort((a, b) => {
       if (sortBy === "date_asc") {
-        return new Date(a.order_date).getTime() - new Date(b.order_date).getTime();
+        return (
+          (parseBusinessDateLocal(a.order_date)?.getTime() ?? new Date(a.order_date).getTime()) -
+          (parseBusinessDateLocal(b.order_date)?.getTime() ?? new Date(b.order_date).getTime())
+        );
       }
       if (sortBy === "date_desc") {
-        return new Date(b.order_date).getTime() - new Date(a.order_date).getTime();
+        return (
+          (parseBusinessDateLocal(b.order_date)?.getTime() ?? new Date(b.order_date).getTime()) -
+          (parseBusinessDateLocal(a.order_date)?.getTime() ?? new Date(a.order_date).getTime())
+        );
       }
       if (sortBy === "amount_asc") {
         return (a.final_amount || 0) - (b.final_amount || 0);
@@ -905,18 +911,20 @@ const OrdersPage = () => {
                               </div>
                             </TableCell>
                             <TableCell>
-                              {new Date(order.order_date).toLocaleDateString('en-GB', {
+                              {formatLocaleDateFromApi(order.order_date, 'en-GB', {
                                 day: '2-digit',
                                 month: 'short',
                                 year: '2-digit'
                               })}
                             </TableCell>
                             <TableCell>
-                              {order.expected_delivery_date ? new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
-                                day: '2-digit',
-                                month: 'short',
-                                year: '2-digit'
-                              }) : 'N/A'}
+                              {order.expected_delivery_date
+                                ? formatLocaleDateFromApi(order.expected_delivery_date, 'en-GB', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    year: '2-digit'
+                                  })
+                                : 'N/A'}
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center justify-start text-left">

@@ -44,6 +44,53 @@ export function initializeSizePrices(
   return sizePrices;
 }
 
+/** Parse `order_items.specifications` whether stored as object or JSON string. */
+export function parseOrderItemSpecifications(item: any): Record<string, any> {
+  const raw = item?.specifications;
+  if (raw == null) return {};
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw || '{}') || {};
+    } catch {
+      return {};
+    }
+  }
+  return raw;
+}
+
+/**
+ * Line subtotal for one order item (size-wise or qty × unit), merging row + specifications JSON.
+ */
+export function calculateOrderItemAmount(item: any): number {
+  if (!item) return 0;
+  const specs = parseOrderItemSpecifications(item);
+
+  const sizesQ: Record<string, number> =
+    item.sizes_quantities != null && Object.keys(item.sizes_quantities).length > 0
+      ? item.sizes_quantities
+      : (specs.sizes_quantities || {});
+
+  // Prefer specifications.size_prices when that key exists (saved source of truth). The
+  // order_items.size_prices column was historically not updated on edit and stayed stale.
+  let sizeP: { [size: string]: number } | undefined;
+  if (Object.prototype.hasOwnProperty.call(specs, 'size_prices')) {
+    sizeP = specs.size_prices;
+  } else {
+    sizeP = item.size_prices;
+  }
+  if (sizeP != null && typeof sizeP === 'object' && Object.keys(sizeP).length === 0) {
+    sizeP = undefined;
+  }
+
+  const defaultPrice = Number(item.price ?? item.unit_price ?? 0);
+  const qty = Number(item.quantity ?? 0);
+
+  if (sizesQ && Object.keys(sizesQ).length > 0) {
+    return calculateSizeBasedTotal(sizesQ, sizeP, defaultPrice);
+  }
+  return qty * defaultPrice;
+}
+
 /**
  * Calculate order summary (subtotal, GST, grand total) from order items
  * Handles size-based pricing and backward compatibility
@@ -52,32 +99,10 @@ export function calculateOrderSummary(orderItems: any[], order: any | null) {
   let subtotal = 0;
   let gstAmount = 0;
   orderItems.forEach(item => {
-    let amount = 0;
-    // Check if size-based pricing is available (new format)
-    if (item.size_prices && item.sizes_quantities) {
-      // New format: size-wise pricing
-      amount = calculateSizeBasedTotal(
-        item.sizes_quantities,
-        item.size_prices,
-        item.unit_price
-      );
-    } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
-      // Also check in specifications (for backward compatibility)
-      amount = calculateSizeBasedTotal(
-        item.specifications.sizes_quantities,
-        item.specifications.size_prices,
-        item.unit_price
-      );
-    } else {
-      // Old format: single unit_price (backward compatibility)
-      amount = item.quantity * item.unit_price;
-    }
-    
+    const amount = calculateOrderItemAmount(item);
     subtotal += amount;
-    // Try to get GST rate from item.gst_rate first, then from specifications, then from order
-    const gstRate = item.gst_rate ?? 
-                   (item.specifications?.gst_rate) ?? 
-                   (order?.gst_rate ?? 0);
+    const specs = parseOrderItemSpecifications(item);
+    const gstRate = item.gst_rate ?? specs.gst_rate ?? (order?.gst_rate ?? 0);
     gstAmount += (amount * gstRate) / 100;
   });
 

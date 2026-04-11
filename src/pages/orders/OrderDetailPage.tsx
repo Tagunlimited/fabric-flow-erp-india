@@ -29,7 +29,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { toast } from "sonner";
-import { formatCurrency, formatDateIndian } from "@/lib/utils";
+import { formatCurrency, formatDateIndian, formatLocalDateYMD, formatLocaleDateFromApi, parseBusinessDateLocal } from "@/lib/utils";
 import { ErpLayout } from "@/components/ErpLayout";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -42,7 +42,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { sortSizesQuantities, SizeType, sortSizesByMasterOrder } from '@/utils/sizeSorting';
-import { calculateSizeBasedTotal, calculateOrderSummary } from '@/utils/priceCalculation';
+import {
+  calculateSizeBasedTotal,
+  calculateOrderSummary,
+  calculateOrderItemAmount,
+  parseOrderItemSpecifications,
+} from '@/utils/priceCalculation';
 import { orderHasActiveCreditInReceiptRows, sumActiveReceiptAmountsForOrder } from '@/utils/orderFinancials';
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
@@ -200,31 +205,9 @@ function calculateGSTRatesBreakdown(orderItems: any[], order: Order | null) {
   const gstRatesMap = new Map<number, number>();
   
   orderItems.forEach(item => {
-    let amount = 0;
-    // Check if size-based pricing is available (new format)
-    if (item.size_prices && item.sizes_quantities) {
-      // New format: size-wise pricing
-      amount = calculateSizeBasedTotal(
-        item.sizes_quantities,
-        item.size_prices,
-        item.unit_price
-      );
-    } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
-      // Also check in specifications (for backward compatibility)
-      amount = calculateSizeBasedTotal(
-        item.specifications.sizes_quantities,
-        item.specifications.size_prices,
-        item.unit_price
-      );
-    } else {
-      // Old format: single unit_price (backward compatibility)
-      amount = item.quantity * item.unit_price;
-    }
-    
-    // Try to get GST rate from item.gst_rate first, then from specifications, then from order
-    const gstRate = item.gst_rate ?? 
-                   (item.specifications?.gst_rate) ?? 
-                   (order?.gst_rate ?? 0);
+    const amount = calculateOrderItemAmount(item);
+    const specs = parseOrderItemSpecifications(item);
+    const gstRate = item.gst_rate ?? specs.gst_rate ?? (order?.gst_rate ?? 0);
     
     if (gstRate > 0) {
       const gstAmount = (amount * gstRate) / 100;
@@ -292,8 +275,10 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
         }));
 
         setFormData({
-          order_date: new Date(order.order_date),
-          expected_delivery_date: new Date(order.expected_delivery_date),
+          order_date: parseBusinessDateLocal(order.order_date) ?? new Date(),
+          expected_delivery_date: order.expected_delivery_date
+            ? (parseBusinessDateLocal(order.expected_delivery_date) ?? new Date())
+            : new Date(),
           customer_id: order.customer_id,
           sales_manager: order.sales_manager || '',
           products: products,
@@ -551,11 +536,11 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
             </div>
             <div className="space-y-2">
               <Label>Order Date</Label>
-              <Input value={new Date(order.order_date).toLocaleDateString()} readOnly className="bg-muted" />
+              <Input value={formatLocaleDateFromApi(order.order_date)} readOnly className="bg-muted" />
             </div>
             <div className="space-y-2">
               <Label>Expected Delivery Date</Label>
-              <Input value={new Date(order.expected_delivery_date).toLocaleDateString()} readOnly className="bg-muted" />
+              <Input value={formatLocaleDateFromApi(order.expected_delivery_date)} readOnly className="bg-muted" />
             </div>
             <div className="space-y-2">
               <Label>Order Number</Label>
@@ -769,7 +754,7 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
                   />
                 ) : (
                   <p className="font-medium">
-                    {new Date(order.order_date).toLocaleDateString('en-GB', {
+                    {formatLocaleDateFromApi(order.order_date, 'en-GB', {
                       day: '2-digit',
                       month: 'long',
                       year: 'numeric'
@@ -789,7 +774,7 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
                 ) : (
                   order.expected_delivery_date && (
                     <p className="font-medium">
-                      {new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
+                      {formatLocaleDateFromApi(order.expected_delivery_date, 'en-GB', {
                         day: '2-digit',
                         month: 'long',
                         year: 'numeric'
@@ -1826,8 +1811,10 @@ export default function OrderDetailPage() {
     }
     
     setEditDraft({
-      order_date: order.order_date ? order.order_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
-      expected_delivery_date: order.expected_delivery_date ? order.expected_delivery_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
+      order_date: order.order_date ? order.order_date.slice(0, 10) : formatLocalDateYMD(new Date()),
+      expected_delivery_date: order.expected_delivery_date
+        ? order.expected_delivery_date.slice(0, 10)
+        : formatLocalDateYMD(new Date()),
       sales_manager: order.sales_manager || null,
       customer_id: order.customer_id || null,
       gst_rate: order.gst_rate ?? 0,
@@ -2019,22 +2006,24 @@ export default function OrderDetailPage() {
             });
           }
 
+          const resolvedSizePrices =
+            it.size_prices != null && Object.keys(it.size_prices).length > 0 ? it.size_prices : {};
+
           // Calculate item total using size-based pricing if available
           let itemTotal = 0;
-          if (it.size_prices && hasSizes) {
+          if (Object.keys(resolvedSizePrices).length > 0 && hasSizes) {
             Object.entries(normalizedSizes).forEach(([size, qty]) => {
-              const sizePrice = it.size_prices?.[size] ?? it.price ?? it.unit_price;
+              const sizePrice = resolvedSizePrices[size] ?? it.price ?? it.unit_price;
               itemTotal += (qty || 0) * sizePrice;
             });
           } else {
             itemTotal = computedQty * (it.unit_price || it.price || 0);
           }
-          
-          // Merge all fields into specifications
+
           const updatedSpecs = {
             ...existingSpecs,
             sizes_quantities: normalizedSizes,
-            size_prices: it.size_prices,
+            size_prices: resolvedSizePrices,
             size_type_id: it.size_type_id,
             remarks: it.remarks,
             customizations: it.customizations,
@@ -2055,6 +2044,8 @@ export default function OrderDetailPage() {
               total_price: itemTotal,
               gst_rate: it.gst_rate,
               sizes_quantities: normalizedSizes,
+              /** Keep JSONB column in sync with specifications — stale column broke ORDER SUMMARY after save */
+              size_prices: Object.keys(resolvedSizePrices).length > 0 ? resolvedSizePrices : null,
               remarks: it.remarks,
               specifications: updatedSpecs,
             })
@@ -2097,8 +2088,8 @@ export default function OrderDetailPage() {
       const { error: orderUpdateError } = await (supabase as any)
         .from('orders')
         .update({
-          order_date: new Date(editDraft.order_date).toISOString(),
-          expected_delivery_date: new Date(editDraft.expected_delivery_date).toISOString(),
+          order_date: editDraft.order_date,
+          expected_delivery_date: editDraft.expected_delivery_date,
           sales_manager: editDraft.sales_manager,
           customer_id: editDraft.customer_id,
           gst_rate: editDraft.gst_rate,
@@ -2455,7 +2446,7 @@ export default function OrderDetailPage() {
         `• Order Number: ${order.order_number}\n` +
         `• Total Amount: ${formatCurrency(order.final_amount)}\n` +
         `• Status: ${order.status.replace('_', ' ').toUpperCase()}\n` +
-        `• Date: ${new Date(order.order_date).toLocaleDateString('en-IN')}\n` +
+        `• Date: ${formatLocaleDateFromApi(order.order_date, 'en-IN')}\n` +
         `${salesManagerInfo}` +
         `Note: The PDF file has been downloaded. Please attach it before sending.\n\n` +
         `Thank you for your business.\n\n` +
@@ -3039,7 +3030,11 @@ export default function OrderDetailPage() {
                                     const v = parseFloat(e.target.value) || 0;
                                     setEditItems(prev => prev.map((p, i) => {
                                       if (i === itemIdx) {
-                                        return { ...p, price: v, unit_price: v };
+                                        const prevBase = Number(p.price ?? p.unit_price ?? 0);
+                                        // Changing base price must drop per-size overrides or totals keep old
+                                        // size_prices (e.g. Nos @ 345) while base shows 30.
+                                        const size_prices = v !== prevBase ? {} : (p.size_prices || {});
+                                        return { ...p, price: v, unit_price: v, size_prices };
                                       }
                                       return p;
                                     }));
@@ -3119,46 +3114,54 @@ export default function OrderDetailPage() {
                                 </div>
                                 
                                 {(it.customizations && it.customizations.length > 0) && (
-                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                                     {it.customizations.map((customization: any, cIdx: number) => (
                                       <div
                                         key={`${customization.partId || cIdx}-${cIdx}`}
-                                        className="relative p-3 border rounded-lg bg-white shadow-sm cursor-pointer"
+                                        className="p-3 border rounded-lg bg-white shadow-sm cursor-pointer min-w-0 w-full"
                                         onClick={() => {
                                           setActiveCustomizationIndex(itemIdx);
                                           setEditingCustomizationIndex(cIdx);
                                           setCustomizationModalOpen(true);
                                         }}
                                       >
-                                        <Button
-                                          type="button"
-                                          variant="ghost"
-                                          size="xs"
-                                          className="absolute top-2 right-2 h-5 w-5 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
-                                          onClick={() => handleRemoveCustomization(itemIdx, cIdx)}
-                                        >
-                                          <X className="w-3 h-3" />
-                                        </Button>
                                         <div className="flex items-start gap-2">
                                           {customization.selectedAddonImageUrl && (
                                             <img 
                                               src={customization.selectedAddonImageUrl} 
                                               alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
-                                              className="w-8 h-8 object-cover rounded border flex-shrink-0"
+                                              className="w-8 h-8 object-cover rounded border shrink-0"
                                               onError={(e) => {
                                                 e.currentTarget.style.display = 'none';
                                               }}
                                             />
                                           )}
-                                          <div className="flex-1 min-w-0">
-                                            <div className="font-medium text-xs truncate" title={customization.partName}>
-                                              {customization.partName}
-                                            </div>
-                                            {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
-                                              <div className="text-xs text-muted-foreground truncate" title={customization.selectedAddonName}>
-                                                {customization.selectedAddonName}
+                                          <div className="flex-1 min-w-0 space-y-1">
+                                            <div className="flex items-start justify-between gap-2">
+                                              <div className="min-w-0 flex-1">
+                                                <div className="font-medium text-xs text-foreground break-words whitespace-normal leading-snug">
+                                                  {customization.partName}
+                                                </div>
+                                                {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
+                                                  <div className="text-xs text-muted-foreground break-words whitespace-normal leading-snug mt-0.5">
+                                                    {customization.selectedAddonName}
+                                                  </div>
+                                                )}
                                               </div>
-                                            )}
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="xs"
+                                                className="shrink-0 h-5 w-5 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleRemoveCustomization(itemIdx, cIdx);
+                                                }}
+                                                aria-label={`Remove ${customization.partName}`}
+                                              >
+                                                <X className="w-3 h-3" />
+                                              </Button>
+                                            </div>
                                             {customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
                                               <div className="text-xs text-muted-foreground">
                                                 Qty: {customization.quantity}
@@ -3202,12 +3205,19 @@ export default function OrderDetailPage() {
                                         type="number"
                                         value={qty}
                                         onChange={(e) => {
-                                          const v = parseInt(e.target.value) || 0;
+                                          const raw = e.target.value;
+                                          const v = raw === '' ? 0 : parseInt(raw, 10);
+                                          const num = Number.isFinite(v) ? v : 0;
                                           setEditItems(prev => prev.map((p, i) => {
                                             if (i === itemIdx) {
-                                              const newSizes = { ...p.sizes_quantities, [size]: v };
-                                              const normalizedSizes = normalizeSizesQuantities(newSizes);
-                                              return { ...p, sizes_quantities: normalizedSizes, quantity: sumSizesQuantities(normalizedSizes) };
+                                              // Do not normalize here — normalize strips 0 qty and removes the size row,
+                                              // so the field disappears mid-edit and you cannot change again.
+                                              const newSizes = { ...(p.sizes_quantities || {}), [size]: num };
+                                              const quantity = Object.values(newSizes).reduce(
+                                                (s, q) => s + (Number(q) || 0),
+                                                0
+                                              );
+                                              return { ...p, sizes_quantities: newSizes, quantity };
                                             }
                                             return p;
                                           }));
@@ -3242,8 +3252,8 @@ export default function OrderDetailPage() {
                               </div>
                             )}
                             
-                            {/* Size-wise Prices */}
-                            {it.size_type_id && sortedSizes.length > 0 && it.size_prices && (
+                            {/* Size-wise Prices — always show when size rows exist; keep size_prices as {} not undefined */}
+                            {it.size_type_id && sortedSizes.length > 0 && (
                               <div className="space-y-2 border-t pt-4">
                                 <Label className="text-sm font-semibold">Size-wise Prices (Custom prices, leave empty to use base price)</Label>
                                 <div className="flex gap-2 overflow-x-auto pb-1">
@@ -3260,16 +3270,16 @@ export default function OrderDetailPage() {
                                             const v = parseFloat(e.target.value) || 0;
                                             setEditItems(prev => prev.map((p, i) => {
                                               if (i === itemIdx) {
-                                                const currentSizePrices = p.size_prices || {};
+                                                const currentSizePrices = { ...(p.size_prices || {}) };
                                                 const updatedSizePrices = { ...currentSizePrices };
                                                 if (v === p.price) {
                                                   delete updatedSizePrices[size];
                                                 } else {
                                                   updatedSizePrices[size] = v;
                                                 }
-                                                return { 
-                                                  ...p, 
-                                                  size_prices: Object.keys(updatedSizePrices).length > 0 ? updatedSizePrices : undefined
+                                                return {
+                                                  ...p,
+                                                  size_prices: updatedSizePrices,
                                                 };
                                               }
                                               return p;
@@ -3614,26 +3624,26 @@ export default function OrderDetailPage() {
                                     return customizations.length > 0 ? (
                                       <div>
                                         <p className="text-sm font-medium text-muted-foreground mb-3">Customizations:</p>
-                                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                                           {customizations.map((customization: any, idx: number) => (
-                                            <div key={idx} className="relative p-2 border rounded-lg bg-gray-50 min-w-0">
-                                              <div className="pr-6 flex items-start gap-2">
+                                            <div key={idx} className="p-3 border rounded-lg bg-gray-50 min-w-0 w-full">
+                                              <div className="flex items-start gap-2">
                                                 {customization.selectedAddonImageUrl && (
                                                   <img 
                                                     src={customization.selectedAddonImageUrl} 
                                                     alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
-                                                    className="w-8 h-8 object-cover rounded border flex-shrink-0"
+                                                    className="w-8 h-8 object-cover rounded border shrink-0"
                                                     onError={(e) => {
                                                       e.currentTarget.style.display = 'none';
                                                     }}
                                                   />
                                                 )}
-                                                <div className="flex-1 min-w-0">
-                                                  <div className="font-medium text-xs truncate" title={customization.partName}>
+                                                <div className="flex-1 min-w-0 space-y-1">
+                                                  <div className="font-medium text-sm break-words whitespace-normal leading-snug">
                                                     {customization.partName}
                                                   </div>
                                                   {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
-                                                    <div className="text-xs text-muted-foreground truncate" title={customization.selectedAddonName}>
+                                                    <div className="text-xs text-muted-foreground break-words whitespace-normal leading-snug">
                                                       {customization.selectedAddonName}
                                                     </div>
                                                   )}
@@ -3824,29 +3834,10 @@ export default function OrderDetailPage() {
                               // Use draft or original item as the primary source for display
                               const displayItem: any = draftItem || item;
 
-                              // Calculate amount using size-based pricing where available
-                              let amount = 0;
-                              if (draftItem && draftItem.size_prices && Object.keys(draftItem.sizes_quantities || {}).length > 0) {
-                                amount = calculateSizeBasedTotal(
-                                  draftItem.sizes_quantities || {},
-                                  draftItem.size_prices,
-                                  draftItem.price || draftItem.unit_price || 0
-                                );
-                              } else if (item.size_prices && item.sizes_quantities) {
-                                amount = calculateSizeBasedTotal(
-                                  item.sizes_quantities,
-                                  item.size_prices,
-                                  item.unit_price
-                                );
-                              } else if (item.specifications?.size_prices && item.specifications?.sizes_quantities) {
-                                amount = calculateSizeBasedTotal(
-                                  item.specifications.sizes_quantities,
-                                  item.specifications.size_prices,
-                                  item.unit_price
-                                );
-                              } else {
-                                amount = displayItem.quantity * (displayItem.unit_price || displayItem.price || 0);
-                              }
+                              // Keep row amounts in sync with edit draft (avoid falling back to stale `item` totals)
+                              const amount = draftItem
+                                ? calculateItemTotal(draftItem)
+                                : calculateOrderItemAmount(item);
 
                               // GST rate: prefer draft item, then item.specifications, then order-level
                               const gstRate = (draftItem?.gst_rate ?? 
@@ -3885,8 +3876,8 @@ export default function OrderDetailPage() {
                                       </div>
                                     </div>
                                   </td>
-                                   <td className="border border-gray-300 px-3 py-2 text-sm">
-                                     <div className="max-w-xs">
+                                   <td className="border border-gray-300 px-3 py-2 text-sm align-top min-w-[12rem] max-w-md">
+                                     <div className="min-w-0">
                                        {(() => {
                                          try {
                                           // Prefer customizations from draft item if available
@@ -3908,16 +3899,16 @@ export default function OrderDetailPage() {
                                                      <img 
                                                        src={customization.selectedAddonImageUrl} 
                                                        alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
-                                                       className="w-6 h-6 object-cover rounded border flex-shrink-0"
+                                                       className="w-6 h-6 object-cover rounded border shrink-0"
                                                        onError={(e) => {
                                                          e.currentTarget.style.display = 'none';
                                                        }}
                                                      />
                                                    )}
                                                    <div className="flex-1 min-w-0">
-                                                     <div className="font-medium truncate">{customization.partName}</div>
+                                                     <div className="font-medium break-words whitespace-normal leading-snug">{customization.partName}</div>
                                                      {customization.partType === 'dropdown' && (customization.selectedAddonName || customization.selectedAddonId) && (
-                                                       <div className="text-gray-600 truncate">{customization.selectedAddonName}</div>
+                                                       <div className="text-gray-600 break-words whitespace-normal leading-snug">{customization.selectedAddonName}</div>
                                                      )}
                                                      {/* Only show quantity for number type parts, never for dropdown */}
                                                      {customization.partType !== 'dropdown' && customization.partType === 'number' && customization.quantity && customization.quantity > 0 && (
@@ -3957,9 +3948,17 @@ export default function OrderDetailPage() {
                                        let sizePrices: { [size: string]: number } | undefined = undefined;
                                        let sizesQuantities: { [size: string]: number } | undefined = undefined;
                                        
-                                      if (draftItem && draftItem.size_prices && draftItem.sizes_quantities) {
-                                        sizePrices = draftItem.size_prices;
-                                        sizesQuantities = draftItem.sizes_quantities;
+                                      if (draftItem) {
+                                        sizesQuantities =
+                                          draftItem.sizes_quantities && Object.keys(draftItem.sizes_quantities).length > 0
+                                            ? draftItem.sizes_quantities
+                                            : undefined;
+                                        if (!sizesQuantities || Object.keys(sizesQuantities).length === 0) {
+                                          const specs = parseOrderItemSpecifications(item);
+                                          sizesQuantities =
+                                            specs.sizes_quantities || (item as any).sizes_quantities || undefined;
+                                        }
+                                        sizePrices = draftItem.size_prices ?? {};
                                       } else if (item.size_prices && item.sizes_quantities) {
                                         sizePrices = item.size_prices;
                                         sizesQuantities = item.sizes_quantities;
@@ -4028,9 +4027,17 @@ export default function OrderDetailPage() {
                                        let sizePrices: { [size: string]: number } | undefined = undefined;
                                        let sizesQuantities: { [size: string]: number } | undefined = undefined;
                                        
-                                      if (draftItem && draftItem.size_prices && draftItem.sizes_quantities) {
-                                        sizePrices = draftItem.size_prices;
-                                        sizesQuantities = draftItem.sizes_quantities;
+                                      if (draftItem) {
+                                        sizesQuantities =
+                                          draftItem.sizes_quantities && Object.keys(draftItem.sizes_quantities).length > 0
+                                            ? draftItem.sizes_quantities
+                                            : undefined;
+                                        if (!sizesQuantities || Object.keys(sizesQuantities).length === 0) {
+                                          const specs = parseOrderItemSpecifications(item);
+                                          sizesQuantities =
+                                            specs.sizes_quantities || (item as any).sizes_quantities || undefined;
+                                        }
+                                        sizePrices = draftItem.size_prices ?? {};
                                       } else if (item.size_prices && item.sizes_quantities) {
                                         sizePrices = item.size_prices;
                                         sizesQuantities = item.sizes_quantities;

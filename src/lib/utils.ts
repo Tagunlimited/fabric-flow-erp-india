@@ -40,15 +40,73 @@ export function formatIndianNumber(value: number): string {
 }
 
 /**
+ * Calendar date as YYYY-MM-DD in the user's local timezone.
+ * Use for Postgres DATE columns — avoids UTC shifts from toISOString().
+ */
+export function formatLocalDateYMD(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Parse a Postgres DATE (or DATE serialized as midnight UTC) as a local calendar day.
+ * `new Date("2026-04-12")` / midnight UTC is interpreted as UTC, which shows as the 11th in US timezones;
+ * this keeps the calendar day aligned with what was stored (12).
+ */
+export function parseBusinessDateLocal(input: string | null | undefined): Date | null {
+  if (input == null || typeof input !== 'string') return null;
+  const s = input.trim();
+  const datePart = s.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const y = Number(datePart.slice(0, 4));
+  const mo = Number(datePart.slice(5, 7));
+  const day = Number(datePart.slice(8, 10));
+  if (mo < 1 || mo > 12 || day < 1 || day > 31) return null;
+
+  if (s.length === 10) {
+    return new Date(y, mo - 1, day);
+  }
+
+  const rest = s.slice(10);
+  if (/^T00:00:00(\.\d+)?(Z|[+-]00:00)?$/i.test(rest)) {
+    return new Date(y, mo - 1, day);
+  }
+
+  return new Date(s);
+}
+
+/** Format a DATE / date-only API value for `toLocaleDateString` without UTC shift. */
+export function formatLocaleDateFromApi(
+  dateInput: string | null | undefined,
+  locales?: Intl.LocalesArgument,
+  options?: Intl.DateTimeFormatOptions
+): string {
+  if (!dateInput) return '';
+  const d = parseBusinessDateLocal(dateInput);
+  if (!d) return '';
+  return d.toLocaleDateString(locales, options);
+}
+
+/**
  * Format date in Indian format (dd-mmm-yy)
  * @param dateString - The date string to format
  * @returns Formatted date string in dd-mmm-yy format
  */
-export function formatDateIndian(dateString?: string): string {
-  if (!dateString) return '';
-  
-  const date = new Date(dateString);
-  if (isNaN(date.getTime())) return '';
+export function formatDateIndian(dateInput?: string | Date): string {
+  if (dateInput === null || dateInput === undefined || dateInput === '') return '';
+
+  let date: Date | null;
+  if (dateInput instanceof Date) {
+    date = isNaN(dateInput.getTime()) ? null : dateInput;
+  } else {
+    date = parseBusinessDateLocal(dateInput);
+  }
+  if (!date) return '';
   
   const day = String(date.getDate()).padStart(2, '0');
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -91,9 +149,9 @@ export function formatDateTimeIndian(dateString?: string): string {
  */
 export function formatDueDateIndian(dateString?: string): string {
   if (!dateString) return '';
-  
-  const date = new Date(dateString);
-  if (isNaN(date.getTime())) return '';
+
+  const date = parseBusinessDateLocal(dateString);
+  if (!date) return '';
   
   const day = String(date.getDate()).padStart(2, '0');
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',

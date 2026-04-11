@@ -17,7 +17,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { format } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { cn, formatCurrency } from '@/lib/utils';
+import { cn, formatCurrency, formatLocalDateYMD } from '@/lib/utils';
 import { usePageState } from '@/contexts/AppCacheContext';
 import { initializeSizePrices, calculateSizeBasedTotal, calculateAverageUnitPrice } from '@/utils/priceCalculation';
 import { getSortedSizes, sortSizesByMasterOrder } from '@/utils/sizeSorting';
@@ -799,8 +799,8 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
         .from('orders')
         .insert({
           order_number: orderNumber,
-          order_date: formData.order_date.toISOString().split('T')[0],
-          expected_delivery_date: formData.expected_delivery_date.toISOString().split('T')[0],
+          order_date: formatLocalDateYMD(formData.order_date),
+          expected_delivery_date: formatLocalDateYMD(formData.expected_delivery_date),
           customer_id: formData.customer_id,
           sales_manager: formData.sales_manager || null,
           order_type: 'readymade' as any,
