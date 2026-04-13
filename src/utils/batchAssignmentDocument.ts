@@ -2,6 +2,8 @@
  * Shared batch assignment “stitching job card” model: SN + OF earnings per batch qty, product split, totals.
  */
 
+import { buildLineRatesMapFromOrderItems } from '@/utils/orderItemCuttingRates';
+
 export interface BatchAssignmentDocumentCompany {
   company_name: string;
   address: string;
@@ -201,6 +203,11 @@ export interface RawBatchAssignmentInput {
   productSizeBreakdown?: Array<{ orderItemId: string; sizes: { size: string; quantity: number }[] }>;
   /** Sizes from assignments without [line:] tag (shown once per batch card) */
   combinedSizes?: { size: string; quantity: number }[];
+  /**
+   * Per order_item.id SN/OF rates (e.g. from order_items columns with order_assignments fallback).
+   * When set, batch and product earnings use qty × line rate instead of splitting one batch rate by weight.
+   */
+  lineRatesByOrderItemId?: Record<string, { sn: number; of: number }>;
 }
 
 function sortSizeEntries(sizes: { size: string; quantity: number }[]): { size: string; quantity: number }[] {
@@ -221,12 +228,6 @@ export function buildBatchAssignmentDocumentData(params: {
   orderNotes?: string;
 }): BatchAssignmentDocumentData {
   const batchAssignments: BatchAssignmentDocumentBatch[] = params.rawBatches.map((b) => {
-    const { snEarning, ofEarning, totalEarning } = computeBatchEarningParts(
-      b.assignedQuantity,
-      b.snRate,
-      b.ofRate
-    );
-
     let itemsInBatch = params.orderItems;
     if (b.orderItemIds && b.orderItemIds.length > 0) {
       const set = new Set(b.orderItemIds);
@@ -253,39 +254,126 @@ export function buildBatchAssignmentDocumentData(params: {
       }
     }
 
+    /** Resolve SN/OF per order line from order_items + batch header rates (order_assignments defaults). */
+    const derivedLineRates = buildLineRatesMapFromOrderItems(params.orderItems || [], {
+      cutting_price_single_needle: b.snRate,
+      cutting_price_overlock_flatlock: b.ofRate,
+    });
+    const callerOverride = b.lineRatesByOrderItemId;
+    const hasCallerOverride =
+      callerOverride && typeof callerOverride === 'object' && Object.keys(callerOverride).length > 0;
+    const lineRates: Record<string, { sn: number; of: number }> = hasCallerOverride
+      ? { ...derivedLineRates, ...callerOverride }
+      : derivedLineRates;
+
+    const usePerLineRates = Object.keys(lineRates).length > 0 && itemsInBatch.length > 0;
+
+    let snEarning: number;
+    let ofEarning: number;
+    let totalEarning: number;
+    let displaySnRate = b.snRate;
+    let displayOfRate = b.ofRate;
+
+    if (usePerLineRates) {
+      let sumSn = 0;
+      let sumOf = 0;
+      const qtySum = w.reduce((a, x) => a + x, 0) || 0;
+      for (let idx = 0; idx < itemsInBatch.length; idx++) {
+        const it = itemsInBatch[idx] as any;
+        const id = String(it.id);
+        const lineQty = w[idx] ?? 0;
+        const r = lineRates[id] || { sn: b.snRate, of: b.ofRate };
+        sumSn += lineQty * r.sn;
+        sumOf += lineQty * r.of;
+      }
+      snEarning = Math.round(sumSn * 100) / 100;
+      ofEarning = Math.round(sumOf * 100) / 100;
+      totalEarning = Math.round((snEarning + ofEarning) * 100) / 100;
+      if (qtySum > 0) {
+        displaySnRate = Math.round((snEarning / qtySum) * 10000) / 10000;
+        displayOfRate = Math.round((ofEarning / qtySum) * 10000) / 10000;
+      }
+    } else {
+      const parts = computeBatchEarningParts(b.assignedQuantity, b.snRate, b.ofRate);
+      snEarning = parts.snEarning;
+      ofEarning = parts.ofEarning;
+      totalEarning = parts.totalEarning;
+    }
+
     const breakdownByItemId = new Map(
       (b.productSizeBreakdown || []).map((x) => [x.orderItemId, sortSizeEntries(x.sizes)])
     );
 
-    let productEarningRows = buildProductEarningRowsWeighted(itemsInBatch, w, snEarning, ofEarning);
-    productEarningRows = productEarningRows.map((row, idx) => {
-      const it = itemsInBatch[idx];
-      const id = String(it.id);
-      let sizes = breakdownByItemId.get(id) || [];
-      if (sizes.length === 0 && itemsInBatch.length === 1 && b.sizeDistributions?.length) {
-        sizes = sortSizeEntries(b.sizeDistributions);
-      }
-      const cust = formatOrderItemCustomizationsText(it.customizations);
-      let rem = String(it.remarks || '').trim();
-      if (!rem && it.specifications) {
-        try {
-          const specs =
-            typeof it.specifications === 'string'
-              ? JSON.parse(it.specifications || '{}')
-              : it.specifications || {};
-          rem = String(specs?.remarks || '').trim();
-        } catch {
-          /* ignore */
+    let productEarningRows: ProductEarningRow[];
+    if (usePerLineRates) {
+      productEarningRows = itemsInBatch.map((it: any, idx: number) => {
+        const id = String(it.id);
+        const lineQty = w[idx] ?? 0;
+        const r = lineRates[id] || { sn: b.snRate, of: b.ofRate };
+        const rowSn = Math.round(lineQty * r.sn * 100) / 100;
+        const rowOf = Math.round(lineQty * r.of * 100) / 100;
+        let sizes = breakdownByItemId.get(id) || [];
+        if (sizes.length === 0 && itemsInBatch.length === 1 && b.sizeDistributions?.length) {
+          sizes = sortSizeEntries(b.sizeDistributions);
         }
-      }
-      return {
-        ...row,
-        orderItemId: id,
-        sizeBreakdown: sizes.length ? sizes : undefined,
-        lineRemarks: rem || undefined,
-        lineCustomizations: cust || undefined,
-      };
-    });
+        const cust = formatOrderItemCustomizationsText(it.customizations);
+        let rem = String(it.remarks || '').trim();
+        if (!rem && it.specifications) {
+          try {
+            const specs =
+              typeof it.specifications === 'string'
+                ? JSON.parse(it.specifications || '{}')
+                : it.specifications || {};
+            rem = String(specs?.remarks || '').trim();
+          } catch {
+            /* ignore */
+          }
+        }
+        return {
+          label: String(it.product_description || '').trim() || 'Product',
+          category:
+            String(it.product_categories?.category_name || it.product_category?.category_name || '').trim() || '—',
+          orderQty: lineQty,
+          snEarning: rowSn,
+          ofEarning: rowOf,
+          lineTotal: Math.round((rowSn + rowOf) * 100) / 100,
+          orderItemId: id,
+          sizeBreakdown: sizes.length ? sizes : undefined,
+          lineRemarks: rem || undefined,
+          lineCustomizations: cust || undefined,
+        };
+      });
+    } else {
+      productEarningRows = buildProductEarningRowsWeighted(itemsInBatch, w, snEarning, ofEarning);
+      productEarningRows = productEarningRows.map((row, idx) => {
+        const it = itemsInBatch[idx];
+        const id = String(it.id);
+        let sizes = breakdownByItemId.get(id) || [];
+        if (sizes.length === 0 && itemsInBatch.length === 1 && b.sizeDistributions?.length) {
+          sizes = sortSizeEntries(b.sizeDistributions);
+        }
+        const cust = formatOrderItemCustomizationsText(it.customizations);
+        let rem = String(it.remarks || '').trim();
+        if (!rem && it.specifications) {
+          try {
+            const specs =
+              typeof it.specifications === 'string'
+                ? JSON.parse(it.specifications || '{}')
+                : it.specifications || {};
+            rem = String(specs?.remarks || '').trim();
+          } catch {
+            /* ignore */
+          }
+        }
+        return {
+          ...row,
+          orderItemId: id,
+          sizeBreakdown: sizes.length ? sizes : undefined,
+          lineRemarks: rem || undefined,
+          lineCustomizations: cust || undefined,
+        };
+      });
+    }
 
     const batchOrderItemIds = itemsInBatch.map((it: any) => String(it.id));
     const combinedSizeBreakdown =
@@ -297,8 +385,8 @@ export function buildBatchAssignmentDocumentData(params: {
       batchLeaderAvatarUrl: b.batchLeaderAvatarUrl,
       tailorType: b.tailorType,
       sizeDistributions: b.sizeDistributions,
-      snRate: b.snRate,
-      ofRate: b.ofRate,
+      snRate: displaySnRate,
+      ofRate: displayOfRate,
       assignedQuantity: b.assignedQuantity,
       snEarning,
       ofEarning,

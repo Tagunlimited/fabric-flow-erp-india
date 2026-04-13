@@ -13,6 +13,7 @@ import {
   buildBatchAssignmentDocumentData,
   type BatchAssignmentDocumentData,
 } from '@/utils/batchAssignmentDocument';
+import { buildLineRatesMapFromOrderItems } from '@/utils/orderItemCuttingRates';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { useSizeTypes } from '@/hooks/useSizeTypes';
 import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
@@ -229,6 +230,11 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
       }
       console.log('✅ Pricing data fetched:', priceData);
 
+      const orderDefaults = {
+        cutting_price_single_needle: (priceData as any)?.cutting_price_single_needle,
+        cutting_price_overlock_flatlock: (priceData as any)?.cutting_price_overlock_flatlock,
+      };
+
       // Fetch order details - fetch order_items separately to avoid relationship issues
       console.log('📋 Fetching order details...');
       const { data: orderData, error: orderError } = await supabase
@@ -335,6 +341,11 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
       console.log('✅ Company settings fetched:', companySettings);
 
       console.log('🔧 Preparing batch assignment data...');
+      const lineRatesByOrderItemId = buildLineRatesMapFromOrderItems(
+        enrichedOrderItems as any[],
+        orderDefaults
+      );
+
       const rawBatches = selectedBatchIds.map((batchId) => {
         const batch = batches.find((b) => b.id === batchId);
         const batchQty = batchQuantities[batchId];
@@ -343,14 +354,8 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
           .map(([size, qty]) => ({ size, quantity: qty as number }));
 
         const assignedQuantity = sizeDistributions.reduce((sum, sd) => sum + sd.quantity, 0);
-        const snRate =
-          priceData && !priceError && !('error' in (priceData as any))
-            ? (priceData as any).cutting_price_single_needle || 0
-            : 0;
-        const ofRate =
-          priceData && !priceError && !('error' in (priceData as any))
-            ? (priceData as any).cutting_price_overlock_flatlock || 0
-            : 0;
+        const snRate = Math.max(0, Number(orderDefaults.cutting_price_single_needle) || 0);
+        const ofRate = Math.max(0, Number(orderDefaults.cutting_price_overlock_flatlock) || 0);
 
         let batchLeaderAvatarUrl: string | undefined;
         if (batch?.batch_leader_avatar_url) batchLeaderAvatarUrl = batch.batch_leader_avatar_url;
@@ -373,6 +378,7 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
             selectedOrderItemId && sortedSizes.length > 0
               ? [{ orderItemId: selectedOrderItemId, sizes: sortedSizes }]
               : undefined,
+          ...(Object.keys(lineRatesByOrderItemId).length > 0 ? { lineRatesByOrderItemId } : {}),
         };
       }).filter((b) => b.assignedQuantity > 0);
 

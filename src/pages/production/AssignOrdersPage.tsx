@@ -30,6 +30,84 @@ import { formatDueDateIndian } from '@/lib/utils';
 import { getOrderTotalQuantityFromItems } from '@/utils/orderItemLineQuantity';
 import { ReassignCuttingMasterDialog } from '@/components/production/ReassignCuttingMasterDialog';
 
+function firstImageFromArray(arr: unknown): string | undefined {
+  if (!Array.isArray(arr) || arr.length === 0) return undefined;
+  const v = arr[0];
+  return v != null && String(v).trim() !== '' ? String(v) : undefined;
+}
+
+/** Best preview image for an order line (mockup → reference → line/category image). */
+function resolveOrderItemLinePreviewImage(
+  item: {
+    mockup_images?: unknown;
+    reference_images?: unknown;
+    category_image_url?: string | null;
+    product_category_id?: string | null;
+  },
+  categoryFallback?: Record<string, string>
+): string | undefined {
+  return (
+    firstImageFromArray(item.mockup_images) ||
+    firstImageFromArray(item.reference_images) ||
+    (item.category_image_url && String(item.category_image_url).trim()) ||
+    (item.product_category_id && categoryFallback?.[item.product_category_id]) ||
+    undefined
+  );
+}
+
+function buildOrderItemLineRatesFromItems(
+  items: any[],
+  categoryLookup: Record<string, { category_name?: string | null; category_image_url?: string | null }>
+): OrderItemLineRates[] {
+  const imageFallback: Record<string, string> = {};
+  for (const [id, meta] of Object.entries(categoryLookup)) {
+    const u = meta.category_image_url;
+    if (u && String(u).trim()) imageFallback[id] = String(u);
+  }
+  return items.map((it: any, idx: number) => {
+    const cid = it.product_category_id ? String(it.product_category_id) : '';
+    const cat = cid ? categoryLookup[cid] : undefined;
+    const categoryName =
+      cat?.category_name != null && String(cat.category_name).trim()
+        ? String(cat.category_name).trim()
+        : undefined;
+    const descRaw =
+      it.product_description != null ? String(it.product_description).trim() : '';
+    const productDescription = descRaw || undefined;
+    const productLabel = descRaw || categoryName || `Product ${idx + 1}`;
+    return {
+      id: String(it.id),
+      lineIndex: idx + 1,
+      categoryName,
+      productDescription,
+      productLabel,
+      imageUrl: resolveOrderItemLinePreviewImage(it, imageFallback),
+      quantity: it.quantity != null ? Number(it.quantity) : undefined,
+      cuttingPriceSingleNeedle:
+        it.cutting_price_single_needle != null ? Number(it.cutting_price_single_needle) : null,
+      cuttingPriceOverlockFlatlock:
+        it.cutting_price_overlock_flatlock != null ? Number(it.cutting_price_overlock_flatlock) : null,
+    };
+  });
+}
+
+/** One sales line on an order — used for per-line stitching/cutting rates. */
+export interface OrderItemLineRates {
+  id: string;
+  /** 1-based position in the order (for labels like “Product 1 of 3”). */
+  lineIndex: number;
+  /** Product category name (from product_categories). */
+  categoryName?: string;
+  /** Full line description from order_items.product_description. */
+  productDescription?: string;
+  /** Compact label for tables / fallback. */
+  productLabel: string;
+  imageUrl?: string;
+  quantity?: number;
+  cuttingPriceSingleNeedle?: number | null;
+  cuttingPriceOverlockFlatlock?: number | null;
+}
+
 interface OrderAssignment {
   id: string;
   orderNumber: string;
@@ -71,6 +149,8 @@ interface OrderAssignment {
   stitchingRatesSet?: boolean;
   stitchingPriceSingleNeedle?: number;
   stitchingPriceOverlockFlatlock?: number;
+  /** Loaded from order_items; used when multiple products/lines need different SN/OF rates */
+  orderItemLines?: OrderItemLineRates[];
 }
 
 const AssignOrdersPage = () => {
@@ -120,11 +200,23 @@ const AssignOrdersPage = () => {
   const [multiAssignmentOrderId, setMultiAssignmentOrderId] = useState<string | null>(null);
   const [selectedCuttingMasters, setSelectedCuttingMasters] = useState<string[]>([]);
   
-  // Stitching rates dialog
+  // Stitching rates dialog (one row per order line, or a single synthetic row if no lines loaded)
   const [stitchingRatesOpen, setStitchingRatesOpen] = useState(false);
   const [stitchingRatesOrderId, setStitchingRatesOrderId] = useState<string | null>(null);
-  const [stitchingPriceSingleNeedle, setStitchingPriceSingleNeedle] = useState<string>('');
-  const [stitchingPriceOverlockFlatlock, setStitchingPriceOverlockFlatlock] = useState<string>('');
+  const [stitchingFormLines, setStitchingFormLines] = useState<
+    {
+      orderItemId: string;
+      lineIndex: number;
+      categoryName?: string;
+      productDescription?: string;
+      productLabel: string;
+      imageUrl?: string;
+      quantity?: number;
+      sn: string;
+      of: string;
+    }[]
+  >([]);
+  const [stitchingDialogLoading, setStitchingDialogLoading] = useState(false);
   const [isEditingStitchingRates, setIsEditingStitchingRates] = useState(false);
   
   // Reassignment dialog
@@ -163,6 +255,31 @@ const AssignOrdersPage = () => {
       case 'urgent': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-800';
     }
+  };
+
+  const formatStitchingRatesTableCell = (assignment: OrderAssignment) => {
+    const lines = assignment.orderItemLines || [];
+    const sn = assignment.stitchingPriceSingleNeedle;
+    const of = assignment.stitchingPriceOverlockFlatlock;
+    if (lines.length > 1) {
+      const pairs = lines.map((l) => ({
+        sn: l.cuttingPriceSingleNeedle ?? sn ?? null,
+        of: l.cuttingPriceOverlockFlatlock ?? of ?? null,
+      }));
+      const first = pairs[0];
+      const mixed = pairs.some(
+        (p) => p.sn !== first.sn || p.of !== first.of || p.sn == null || p.of == null
+      );
+      if (mixed) {
+        return <span className="text-muted-foreground">Per line</span>;
+      }
+    }
+    if (sn == null && of == null) return <span className="text-muted-foreground">-</span>;
+    return (
+      <span>
+        SN ₹{formatPrice(sn)} / OF ₹{formatPrice(of)}
+      </span>
+    );
   };
 
   // Persist assignment in DB
@@ -486,8 +603,11 @@ const AssignOrdersPage = () => {
         try {
           const { data: orderItemsData } = await supabase
             .from('order_items' as any)
-            .select('order_id, quantity, sizes_quantities, specifications')
-            .in('order_id', orderIds as any);
+            .select(
+              'id, order_id, quantity, sizes_quantities, specifications, product_description, cutting_price_single_needle, cutting_price_overlock_flatlock, product_category_id, category_image_url, reference_images, mockup_images'
+            )
+            .in('order_id', orderIds as any)
+            .order('created_at', { ascending: true });
           (orderItemsData || []).forEach((item: any) => {
             if (item?.order_id) {
               if (!orderItemsByOrder[item.order_id]) orderItemsByOrder[item.order_id] = [];
@@ -496,6 +616,36 @@ const AssignOrdersPage = () => {
           });
         } catch (e) {
           console.error('Failed to load order items:', e);
+        }
+
+        const orderItemCategoryIds = Array.from(
+          new Set(
+            (Object.values(orderItemsByOrder).flat() as any[])
+              .map((it: any) => it.product_category_id)
+              .filter(Boolean)
+          )
+        );
+        let orderItemCategoryLookup: Record<
+          string,
+          { category_name?: string | null; category_image_url?: string | null }
+        > = {};
+        if (orderItemCategoryIds.length > 0) {
+          try {
+            const { data: cats } = await supabase
+              .from('product_categories' as any)
+              .select('id, category_name, category_image_url')
+              .in('id', orderItemCategoryIds as any);
+            (cats || []).forEach((c: any) => {
+              if (c?.id) {
+                orderItemCategoryLookup[String(c.id)] = {
+                  category_name: c.category_name,
+                  category_image_url: c.category_image_url,
+                };
+              }
+            });
+          } catch (e) {
+            console.error('Failed to load category metadata for order lines:', e);
+          }
         }
 
         // Fetch cut_quantities_by_size from order_assignments for each order
@@ -680,7 +830,47 @@ const AssignOrdersPage = () => {
           // Use cutting prices as stitching rates (they are the same in this context)
           base.stitchingPriceSingleNeedle = a.cutting_price_single_needle != null ? Number(a.cutting_price_single_needle) : undefined;
           base.stitchingPriceOverlockFlatlock = a.cutting_price_overlock_flatlock != null ? Number(a.cutting_price_overlock_flatlock) : undefined;
-          base.stitchingRatesSet = (a.cutting_price_single_needle != null && a.cutting_price_overlock_flatlock != null);
+
+          const itemsForOrder = orderItemsByOrder[o.id] || [];
+          const lineRates: OrderItemLineRates[] = buildOrderItemLineRatesFromItems(
+            itemsForOrder,
+            orderItemCategoryLookup
+          );
+          if (lineRates.length > 0) {
+            base.orderItemLines = lineRates;
+          }
+
+          const headerRatesMissing =
+            (base.stitchingPriceSingleNeedle == null || base.stitchingPriceOverlockFlatlock == null) &&
+            lineRates.length > 0;
+          if (headerRatesMissing) {
+            const pick = lineRates.find(
+              (l) => l.cuttingPriceSingleNeedle != null && l.cuttingPriceOverlockFlatlock != null
+            );
+            if (pick) {
+              base.cuttingPriceSingleNeedle = base.cuttingPriceSingleNeedle ?? pick.cuttingPriceSingleNeedle ?? undefined;
+              base.cuttingPriceOverlockFlatlock =
+                base.cuttingPriceOverlockFlatlock ?? pick.cuttingPriceOverlockFlatlock ?? undefined;
+              base.stitchingPriceSingleNeedle =
+                base.stitchingPriceSingleNeedle ?? pick.cuttingPriceSingleNeedle ?? undefined;
+              base.stitchingPriceOverlockFlatlock =
+                base.stitchingPriceOverlockFlatlock ?? pick.cuttingPriceOverlockFlatlock ?? undefined;
+            }
+          }
+
+          const orderLevelRatesOk =
+            a.cutting_price_single_needle != null && a.cutting_price_overlock_flatlock != null;
+          const allLineRatesOk =
+            lineRates.length > 0 &&
+            lineRates.every(
+              (l) =>
+                l.cuttingPriceSingleNeedle != null && l.cuttingPriceOverlockFlatlock != null
+            );
+          /** Multi-line orders must have SN/OF on every order_items row; order_assignments alone is not enough. */
+          const multiLineOrder = lineRates.length > 1;
+          base.stitchingRatesSet = multiLineOrder
+            ? allLineRatesOk
+            : orderLevelRatesOk || allLineRatesOk;
           return base;
         });
 
@@ -697,15 +887,13 @@ const AssignOrdersPage = () => {
   // Helper function to check if an order is fully assigned (has cutting master and stitching rates)
   const isOrderFullyAssigned = (assignment: OrderAssignment): boolean => {
     const hasCuttingMaster = assignment.cuttingMasterId != null;
-    const hasStitchingRates = assignment.stitchingPriceSingleNeedle != null && assignment.stitchingPriceOverlockFlatlock != null;
-    return hasCuttingMaster && hasStitchingRates;
+    return hasCuttingMaster && Boolean(assignment.stitchingRatesSet);
   };
 
   // Helper function to check if an order needs assignment (missing cutting master or stitching rates)
   const isOrderNeedsAssignment = (assignment: OrderAssignment): boolean => {
     const hasCuttingMaster = assignment.cuttingMasterId != null;
-    const hasStitchingRates = assignment.stitchingPriceSingleNeedle != null && assignment.stitchingPriceOverlockFlatlock != null;
-    return !hasCuttingMaster || !hasStitchingRates;
+    return !hasCuttingMaster || !assignment.stitchingRatesSet;
   };
 
   // Helper function to check if reassignment is possible
@@ -831,6 +1019,25 @@ const AssignOrdersPage = () => {
       cutting_price_single_needle: prices?.singleNeedle ?? null,
       cutting_price_overlock_flatlock: prices?.overlockFlatlock ?? null
     });
+
+    const lines = assignments.find((x) => x.id === assignmentId)?.orderItemLines || [];
+    if (
+      lines.length === 1 &&
+      prices?.singleNeedle != null &&
+      prices?.overlockFlatlock != null
+    ) {
+      try {
+        await supabase
+          .from('order_items' as any)
+          .update({
+            cutting_price_single_needle: prices.singleNeedle,
+            cutting_price_overlock_flatlock: prices.overlockFlatlock,
+          } as any)
+          .eq('id', lines[0].id as any);
+      } catch (e) {
+        console.error('Failed to sync rates to order_items:', e);
+      }
+    }
   };
 
 
@@ -873,32 +1080,116 @@ const AssignOrdersPage = () => {
     setScheduleDialogOpen(false);
   };
 
-  // Function to set stitching rates
+  const parseStitchingRateInput = (s: string): number | null => {
+    const n = parseFloat(String(s).trim());
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const fetchOrderItemLinesForStitchingDialog = async (
+    orderId: string
+  ): Promise<OrderItemLineRates[]> => {
+    try {
+      const { data: items, error } = await supabase
+        .from('order_items' as any)
+        .select(
+          'id, product_description, quantity, cutting_price_single_needle, cutting_price_overlock_flatlock, product_category_id, category_image_url, reference_images, mockup_images'
+        )
+        .eq('order_id', orderId as any)
+        .order('created_at', { ascending: true });
+      if (error) {
+        console.error('Stitching dialog: order_items query failed:', error);
+        return [];
+      }
+      if (!items?.length) return [];
+      const categoryIds = Array.from(
+        new Set(items.map((i: any) => i.product_category_id).filter(Boolean))
+      );
+      let categoryLookup: Record<
+        string,
+        { category_name?: string | null; category_image_url?: string | null }
+      > = {};
+      if (categoryIds.length > 0) {
+        const { data: cats } = await supabase
+          .from('product_categories' as any)
+          .select('id, category_name, category_image_url')
+          .in('id', categoryIds as any);
+        (cats || []).forEach((c: any) => {
+          if (c?.id) {
+            categoryLookup[String(c.id)] = {
+              category_name: c.category_name,
+              category_image_url: c.category_image_url,
+            };
+          }
+        });
+      }
+      return buildOrderItemLineRatesFromItems(items, categoryLookup);
+    } catch (e) {
+      console.error('Failed to load order lines for stitching dialog:', e);
+      return [];
+    }
+  };
+
+  // Function to set stitching rates (per order line on order_items when multiple lines; always mirrors first line to order_assignments)
   const handleSetStitchingRates = async (orderId: string) => {
     try {
-      // Get the current assignment to include cutting master information
-      const assignment = assignments.find(a => a.id === orderId);
-      
+      const assignment = assignments.find((a) => a.id === orderId);
+      if (!assignment || stitchingFormLines.length === 0) return;
+
+      for (const row of stitchingFormLines) {
+        const sn = parseStitchingRateInput(row.sn);
+        const of = parseStitchingRateInput(row.of);
+        if (sn == null || of == null) {
+          toast.error('Enter single needle and overlock/flatlock rates for every row.');
+          return;
+        }
+      }
+
+      const rowsWithItemId = stitchingFormLines.filter((r) => r.orderItemId);
+      const orderOnly = rowsWithItemId.length === 0;
+
+      if (!orderOnly) {
+        for (const row of rowsWithItemId) {
+          const sn = parseStitchingRateInput(row.sn)!;
+          const of = parseStitchingRateInput(row.of)!;
+          const { error } = await supabase
+            .from('order_items' as any)
+            .update({
+              cutting_price_single_needle: sn,
+              cutting_price_overlock_flatlock: of,
+            } as any)
+            .eq('id', row.orderItemId as any);
+          if (error) {
+            console.error('Error updating order_items rates:', error);
+            toast.error('Failed to save per-line stitching rates');
+            return;
+          }
+        }
+      }
+
+      const firstForOrderAssignment = orderOnly
+        ? stitchingFormLines[0]
+        : rowsWithItemId[0];
+      const masterSn = parseStitchingRateInput(firstForOrderAssignment.sn)!;
+      const masterOf = parseStitchingRateInput(firstForOrderAssignment.of)!;
+
       const updateData = {
-        cutting_master_id: assignment?.cuttingMasterId || null,
-        cutting_master_name: assignment?.cuttingMasterName || null,
-        cutting_price_single_needle: stitchingPriceSingleNeedle ? parseFloat(stitchingPriceSingleNeedle) : null,
-        cutting_price_overlock_flatlock: stitchingPriceOverlockFlatlock ? parseFloat(stitchingPriceOverlockFlatlock) : null
+        cutting_master_id: assignment.cuttingMasterId || null,
+        cutting_master_name: assignment.cuttingMasterName || null,
+        cutting_price_single_needle: masterSn,
+        cutting_price_overlock_flatlock: masterOf,
       };
 
-      // First try to update existing record
       const { error: updateError } = await supabase
         .from('order_assignments')
         .update(updateData as any)
         .eq('order_id', orderId as any);
 
-      // If update failed (no existing record), insert new one
       if (updateError) {
         const { error: insertError } = await supabase
           .from('order_assignments')
           .insert({
             order_id: orderId,
-            ...updateData
+            ...updateData,
           } as any);
 
         if (insertError) {
@@ -908,46 +1199,98 @@ const AssignOrdersPage = () => {
         }
       }
 
-      // Update local state
-      setAssignments(prev => prev.map(assignment => 
-        assignment.id === orderId 
-          ? { 
-              ...assignment, 
-              stitchingRatesSet: true,
-              stitchingPriceSingleNeedle: stitchingPriceSingleNeedle ? parseFloat(stitchingPriceSingleNeedle) : undefined,
-              stitchingPriceOverlockFlatlock: stitchingPriceOverlockFlatlock ? parseFloat(stitchingPriceOverlockFlatlock) : undefined
-            }
-          : assignment
-      ));
+      if (orderOnly && (assignment.orderItemLines?.length ?? 0) === 1) {
+        const onlyLine = assignment.orderItemLines![0];
+        await supabase
+          .from('order_items' as any)
+          .update({
+            cutting_price_single_needle: masterSn,
+            cutting_price_overlock_flatlock: masterOf,
+          } as any)
+          .eq('id', onlyLine.id as any);
+      }
 
+      toast.success('Stitching rates saved');
       setStitchingRatesOpen(false);
-      setStitchingPriceSingleNeedle('');
-      setStitchingPriceOverlockFlatlock('');
+      setStitchingFormLines([]);
+      setStitchingRatesOrderId(null);
       setIsEditingStitchingRates(false);
+      setRefreshTrigger((prev) => prev + 1);
     } catch (error) {
       console.error('Error setting stitching rates:', error);
+      toast.error('Failed to set stitching rates');
     }
+  };
+
+  const openStitchingRatesDialog = async (orderId: string, editing: boolean) => {
+    const assignment = assignments.find((a) => a.id === orderId);
+    if (!assignment) return;
+    setStitchingRatesOrderId(orderId);
+    setIsEditingStitchingRates(editing);
+    setStitchingRatesOpen(true);
+    setStitchingDialogLoading(true);
+    setStitchingFormLines([]);
+
+    let lines = assignment.orderItemLines || [];
+    if (lines.length === 0) {
+      lines = await fetchOrderItemLinesForStitchingDialog(orderId);
+    }
+
+    const defSn =
+      assignment.stitchingPriceSingleNeedle != null
+        ? String(assignment.stitchingPriceSingleNeedle)
+        : '';
+    const defOf =
+      assignment.stitchingPriceOverlockFlatlock != null
+        ? String(assignment.stitchingPriceOverlockFlatlock)
+        : '';
+
+    if (lines.length === 0) {
+      setStitchingFormLines([
+        {
+          orderItemId: '',
+          lineIndex: 1,
+          categoryName: undefined,
+          productDescription: undefined,
+          productLabel: assignment.productName || 'Order',
+          imageUrl: assignment.productCategoryImage,
+          quantity: assignment.quantity,
+          sn: editing ? defSn : '',
+          of: editing ? defOf : '',
+        },
+      ]);
+    } else {
+      setStitchingFormLines(
+        lines.map((l) => ({
+          orderItemId: l.id,
+          lineIndex: l.lineIndex,
+          categoryName: l.categoryName,
+          productDescription: l.productDescription,
+          productLabel: l.productLabel,
+          imageUrl: l.imageUrl,
+          quantity: l.quantity,
+          sn:
+            l.cuttingPriceSingleNeedle != null
+              ? String(l.cuttingPriceSingleNeedle)
+              : defSn,
+          of:
+            l.cuttingPriceOverlockFlatlock != null
+              ? String(l.cuttingPriceOverlockFlatlock)
+              : defOf,
+        }))
+      );
+    }
+    setStitchingDialogLoading(false);
   };
 
   // Function to open stitching rates dialog in edit mode
   const handleEditStitchingRates = (orderId: string) => {
-    const assignment = assignments.find(a => a.id === orderId);
-    if (assignment) {
-      setStitchingRatesOrderId(orderId);
-      setStitchingPriceSingleNeedle(assignment.stitchingPriceSingleNeedle?.toString() || '');
-      setStitchingPriceOverlockFlatlock(assignment.stitchingPriceOverlockFlatlock?.toString() || '');
-      setIsEditingStitchingRates(true);
-      setStitchingRatesOpen(true);
-    }
+    void openStitchingRatesDialog(orderId, true);
   };
 
   // Function to open stitching rates dialog in create mode
   const handleCreateStitchingRates = (orderId: string) => {
-    setStitchingRatesOrderId(orderId);
-    setStitchingPriceSingleNeedle('');
-    setStitchingPriceOverlockFlatlock('');
-    setIsEditingStitchingRates(false);
-    setStitchingRatesOpen(true);
+    void openStitchingRatesDialog(orderId, false);
   };
 
   // Function to open reassignment dialog
@@ -1297,18 +1640,7 @@ const AssignOrdersPage = () => {
                           </TableCell>
                           {/* Stitching Price Column */}
                           <TableCell>
-                            <div className="text-xs">
-                              {(() => {
-                                const sn = assignment.stitchingPriceSingleNeedle;
-                                const of = assignment.stitchingPriceOverlockFlatlock;
-                                if (sn == null && of == null) return <span className="text-muted-foreground">-</span>;
-                                return (
-                                  <span>
-                                    SN ₹{formatPrice(sn)} / OF ₹{formatPrice(of)}
-                                  </span>
-                                );
-                              })()}
-                            </div>
+                            <div className="text-xs">{formatStitchingRatesTableCell(assignment)}</div>
                           </TableCell>
                           <TableCell>
                               <div className="flex items-center">
@@ -1516,18 +1848,7 @@ const AssignOrdersPage = () => {
                           </TableCell>
                           {/* Stitching Price Column */}
                           <TableCell>
-                            <div className="text-xs">
-                              {(() => {
-                                const sn = assignment.stitchingPriceSingleNeedle;
-                                const of = assignment.stitchingPriceOverlockFlatlock;
-                                if (sn == null && of == null) return <span className="text-muted-foreground">-</span>;
-                                return (
-                                  <span>
-                                    SN ₹{formatPrice(sn)} / OF ₹{formatPrice(of)}
-                                  </span>
-                                );
-                              })()}
-                            </div>
+                            <div className="text-xs">{formatStitchingRatesTableCell(assignment)}</div>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center">
@@ -1803,47 +2124,140 @@ const AssignOrdersPage = () => {
         </Dialog>
 
         {/* Set/Edit Stitching Rates Dialog */}
-        <Dialog open={stitchingRatesOpen} onOpenChange={setStitchingRatesOpen}>
-          <DialogContent className="max-w-md">
+        <Dialog
+          open={stitchingRatesOpen}
+          onOpenChange={(open) => {
+            setStitchingRatesOpen(open);
+            if (!open) {
+              setStitchingFormLines([]);
+              setStitchingRatesOrderId(null);
+              setIsEditingStitchingRates(false);
+              setStitchingDialogLoading(false);
+            }
+          }}
+        >
+          <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col gap-0">
             <DialogHeader>
               <DialogTitle>{isEditingStitchingRates ? 'Edit Stitching Rates' : 'Set Stitching Rates'}</DialogTitle>
               <DialogDescription>
-                {isEditingStitchingRates 
-                  ? 'Update the stitching rates for this order. These rates will be used for production planning.'
-                  : 'Set the stitching rates for this order. These rates will be used for production planning.'}
+                Set rates product by product. Each row shows the line image (when available) so you can match the
+                correct item. Order-level defaults in the database follow the first product for legacy flows.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="single-needle-rate">Single Needle Rate (₹)</Label>
-                <Input
-                  id="single-needle-rate"
-                  type="number"
-                  step="0.01"
-                  placeholder="Enter single needle rate"
-                  value={stitchingPriceSingleNeedle}
-                  onChange={(e) => setStitchingPriceSingleNeedle(e.target.value)}
-                />
+            {stitchingDialogLoading ? (
+              <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+                <span>Loading order lines…</span>
               </div>
-              <div>
-                <Label htmlFor="overlock-flatlock-rate">Overlock/Flatlock Rate (₹)</Label>
-                <Input
-                  id="overlock-flatlock-rate"
-                  type="number"
-                  step="0.01"
-                  placeholder="Enter overlock/flatlock rate"
-                  value={stitchingPriceOverlockFlatlock}
-                  onChange={(e) => setStitchingPriceOverlockFlatlock(e.target.value)}
-                />
+            ) : (
+              <div className="max-h-[min(60vh,480px)] space-y-4 overflow-y-auto pr-1 py-2">
+                {stitchingFormLines.map((row, idx) => {
+                  const total = stitchingFormLines.length;
+                  const label =
+                    total > 1 ? `Product ${row.lineIndex} of ${total}` : `Product ${row.lineIndex}`;
+                  return (
+                    <div
+                      key={row.orderItemId || `stitch-line-${idx}`}
+                      className="rounded-lg border bg-card p-4 shadow-sm"
+                    >
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                        <div className="mx-auto shrink-0 sm:mx-0">
+                          {row.imageUrl ? (
+                            <img
+                              src={row.imageUrl}
+                              alt=""
+                              className="h-28 w-28 rounded-md border object-cover bg-muted"
+                            />
+                          ) : (
+                            <div className="flex h-28 w-28 items-center justify-center rounded-md border border-dashed bg-muted px-2 text-center text-xs text-muted-foreground">
+                              No image
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="secondary" className="font-normal">
+                              {label}
+                            </Badge>
+                            {row.quantity != null && row.quantity > 0 && (
+                              <span className="text-sm text-muted-foreground">Qty: {row.quantity}</span>
+                            )}
+                          </div>
+                          {row.categoryName ? (
+                            <div className="rounded-md bg-muted/60 px-2.5 py-1.5 text-sm">
+                              <span className="text-muted-foreground">Category: </span>
+                              <span className="font-medium text-foreground">{row.categoryName}</span>
+                            </div>
+                          ) : null}
+                          {row.productDescription ? (
+                            <div className="space-y-1">
+                              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                Product description
+                              </p>
+                              <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap break-words">
+                                {row.productDescription}
+                              </p>
+                            </div>
+                          ) : (
+                            <p className="text-sm font-medium leading-snug text-foreground">
+                              {row.productLabel}
+                            </p>
+                          )}
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-1.5">
+                              <Label htmlFor={`stitch-sn-${idx}`}>Single needle (₹)</Label>
+                              <Input
+                                id={`stitch-sn-${idx}`}
+                                type="number"
+                                step="0.01"
+                                placeholder="0.00"
+                                value={row.sn}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setStitchingFormLines((prev) =>
+                                    prev.map((r, i) => (i === idx ? { ...r, sn: v } : r))
+                                  );
+                                }}
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label htmlFor={`stitch-of-${idx}`}>Overlock / flatlock (₹)</Label>
+                              <Input
+                                id={`stitch-of-${idx}`}
+                                type="number"
+                                step="0.01"
+                                placeholder="0.00"
+                                value={row.of}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setStitchingFormLines((prev) =>
+                                    prev.map((r, i) => (i === idx ? { ...r, of: v } : r))
+                                  );
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            </div>
-            <DialogFooter>
+            )}
+            <DialogFooter className="mt-4 sm:mt-0">
               <Button variant="outline" onClick={() => setStitchingRatesOpen(false)}>
                 Cancel
               </Button>
-              <Button 
+              <Button
                 onClick={() => stitchingRatesOrderId && handleSetStitchingRates(stitchingRatesOrderId)}
-                disabled={!stitchingPriceSingleNeedle && !stitchingPriceOverlockFlatlock}
+                disabled={
+                  stitchingDialogLoading ||
+                  stitchingFormLines.length === 0 ||
+                  stitchingFormLines.some((row) => {
+                    const sn = parseStitchingRateInput(row.sn);
+                    const of = parseStitchingRateInput(row.of);
+                    return sn == null || of == null;
+                  })
+                }
               >
                 {isEditingStitchingRates ? 'Update Rates' : 'Set Rates'}
               </Button>
