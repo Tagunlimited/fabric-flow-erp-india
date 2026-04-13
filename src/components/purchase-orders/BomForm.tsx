@@ -145,6 +145,32 @@ async function resolveBomNumberForSave(
   return bomNumberForOrderLine((ord as any).order_number, sorted, orderItemId);
 }
 
+function normalizeBomLineKeyPart(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+/** Stable key to detect duplicate BOM grid lines (same fabric/item listed twice). */
+function bomLineIdentityKey(item: BomLineItem): string {
+  const type = String(item.item_type || '').toLowerCase();
+  if (type === 'fabric') {
+    return [
+      'fabric',
+      normalizeBomLineKeyPart(item.fabric_name),
+      normalizeBomLineKeyPart(item.fabric_color),
+      normalizeBomLineKeyPart(item.fabric_gsm),
+    ].join('|');
+  }
+  return [
+    'item',
+    normalizeBomLineKeyPart(item.item_id),
+    normalizeBomLineKeyPart(item.item_code),
+    normalizeBomLineKeyPart(item.item_name),
+  ].join('|');
+}
+
 export type BomFormProps = {
   /** Render without ErpLayout; load order from props instead of URL */
   embedded?: boolean;
@@ -152,6 +178,11 @@ export type BomFormProps = {
   embeddedOrderItemId?: string;
   /** After a successful save in embedded mode (e.g. refresh line BOM state) */
   onEmbeddedBomSaved?: () => void;
+  /**
+   * When true, embedded "Save BOM & Create PO" is disabled until every other order line
+   * has a BOM (multi-line orders — avoids PO while BOM coverage is incomplete).
+   */
+  blockCreatePoUntilSiblingsReady?: boolean;
 };
 
 export function BomForm({
@@ -159,6 +190,7 @@ export function BomForm({
   embeddedOrderId,
   embeddedOrderItemId,
   onEmbeddedBomSaved,
+  blockCreatePoUntilSiblingsReady = false,
 }: BomFormProps = {}) {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -175,6 +207,7 @@ export function BomForm({
   const [needsOrderLineChoice, setNeedsOrderLineChoice] = useState(false);
 
   const [loading, setLoading] = useState(false);
+  const saveInFlightRef = useRef(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
   const bomFormInitial = useMemo(
@@ -1501,55 +1534,76 @@ export function BomForm({
       return;
     }
 
-    // Check for duplicate BOM (only for new BOMs)
-    if (!bom.id) {
-      try {
-        if (bom.order_id && bom.order_item_id) {
-          const { data: existingBoms, error: checkError } = await supabase
-            .from('bom_records')
-            .select('id')
-            .eq('order_id', bom.order_id as any)
-            .eq('order_item_id', bom.order_item_id as any);
-
-          if (checkError) {
-            console.log('Duplicate check failed, continuing with creation:', checkError);
-          } else if (existingBoms && existingBoms.length > 0) {
-            toast.error('A BOM already exists for this order line. Open it from View BOMs to edit.');
-            return;
-          }
-        } else if (bom.order_id && !bom.order_item_id) {
-          const { data: existingBoms, error: checkEnd } = await supabase
-            .from('bom_records')
-            .select('id')
-            .eq('order_id', bom.order_id as any)
-            .is('order_item_id', null);
-
-          if (checkEnd) {
-            console.log('Duplicate check failed, continuing with creation:', checkEnd);
-          } else if (existingBoms && existingBoms.length > 0) {
-            toast.error('A legacy order-level BOM already exists for this order. Edit it instead of creating another.');
-            return;
-          }
-        } else {
-          const { data: existingBoms, error: checkError } = await supabase
-            .from('bom_records')
-            .select('id')
-            .eq('product_name', bom.product_name as any)
-            .is('order_id', null);
-
-          if (checkError) {
-            console.log('Duplicate check failed, continuing with creation:', checkError);
-          } else if (existingBoms && existingBoms.length > 0) {
-            toast.error(`A BOM without an order link already exists for product "${bom.product_name}". Please edit the existing BOM instead.`);
-            return;
-          }
-        }
-      } catch (error) {
-        console.log('Duplicate check failed, continuing with creation');
+    const seenLineKeys = new Set<string>();
+    let duplicateBomLine = false;
+    for (const line of items) {
+      const k = bomLineIdentityKey(line);
+      if (seenLineKeys.has(k)) {
+        duplicateBomLine = true;
+        break;
       }
+      seenLineKeys.add(k);
+    }
+    if (duplicateBomLine) {
+      toast.warning(
+        'This BOM lists the same fabric or item more than once. Remove duplicates to avoid duplicate purchase lines.'
+      );
     }
 
+    if (saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
+
     try {
+      // Check for duplicate BOM (only for new BOMs)
+      if (!bom.id) {
+        try {
+          if (bom.order_id && bom.order_item_id) {
+            const { data: existingBoms, error: checkError } = await supabase
+              .from('bom_records')
+              .select('id')
+              .eq('order_id', bom.order_id as any)
+              .eq('order_item_id', bom.order_item_id as any);
+
+            if (checkError) {
+              console.log('Duplicate check failed, continuing with creation:', checkError);
+            } else if (existingBoms && existingBoms.length > 0) {
+              toast.error('A BOM already exists for this order line. Open it from View BOMs to edit.');
+              return;
+            }
+          } else if (bom.order_id && !bom.order_item_id) {
+            const { data: existingBoms, error: checkEnd } = await supabase
+              .from('bom_records')
+              .select('id')
+              .eq('order_id', bom.order_id as any)
+              .is('order_item_id', null);
+
+            if (checkEnd) {
+              console.log('Duplicate check failed, continuing with creation:', checkEnd);
+            } else if (existingBoms && existingBoms.length > 0) {
+              toast.error('A legacy order-level BOM already exists for this order. Edit it instead of creating another.');
+              return;
+            }
+          } else {
+            const { data: existingBoms, error: checkError } = await supabase
+              .from('bom_records')
+              .select('id')
+              .eq('product_name', bom.product_name as any)
+              .is('order_id', null);
+
+            if (checkError) {
+              console.log('Duplicate check failed, continuing with creation:', checkError);
+            } else if (existingBoms && existingBoms.length > 0) {
+              toast.error(
+                `A BOM without an order link already exists for product "${bom.product_name}". Please edit the existing BOM instead.`
+              );
+              return;
+            }
+          }
+        } catch (error) {
+          console.log('Duplicate check failed, continuing with creation');
+        }
+      }
+
       setLoading(true);
 
       const trimmedBn =
@@ -1813,41 +1867,53 @@ export function BomForm({
          toast.warning('No items to save. Please add at least one item to the BOM.');
        }
        
+       /** Rows merged with DB `id` after insert — required so PO hydration gets `bom_item_id`. */
+       let rowsForNav: Record<string, any>[] = bomItems;
+
        if (bomItems.length > 0) {
          console.log('Attempting to save BOM items:', bomItems);
         console.log('BOM ID:', bomId);
         console.log('BOM Items count:', bomItems.length);
         console.log('First BOM item sample:', bomItems[0]);
-        
-        try {
-          // Try to save to bom_record_items (the correct table)
-          let result = await supabase
-             .from('bom_record_items')
-             .insert(bomItems);
 
-          if (result.error) {
-            console.log('bom_record_items failed, trying bom_items...');
-            // Fallback to bom_items table with legacy-compatible payload
-            result = await supabase
-              .from('bom_items')
-              .insert(legacyBomItems);
-              
-            if (result.error) {
-              console.error('Both table attempts failed:', result.error);
-              console.error('Error details:', JSON.stringify(result.error, null, 2));
-              console.error('BOM items data:', JSON.stringify(bomItems, null, 2));
-              throw new Error(`Failed to save BOM items: ${result.error.message}`);
-            } else {
-              console.log('Successfully saved BOM items to bom_items (fallback)');
-            }
-          } else {
-            console.log('Successfully saved BOM items to bom_record_items');
+        const bomRecordItemSelect =
+          'id, bom_id, item_id, item_code, item_name, category, unit_of_measure, qty_per_product, qty_total, stock, to_order, item_image_url, fabric_name, fabric_color, fabric_gsm';
+
+        const primaryRes = await supabase
+          .from('bom_record_items')
+          .insert(bomItems)
+          .select(bomRecordItemSelect);
+
+        if (primaryRes.error) {
+          console.log('bom_record_items failed, trying bom_items...');
+          const legacyRes = await supabase.from('bom_items').insert(legacyBomItems).select('id');
+
+          if (legacyRes.error) {
+            console.error('Both table attempts failed:', legacyRes.error);
+            console.error('Error details:', JSON.stringify(legacyRes.error, null, 2));
+            console.error('BOM items data:', JSON.stringify(bomItems, null, 2));
+            throw new Error(`Failed to save BOM items: ${legacyRes.error.message}`);
           }
-        } catch (itemsError) {
-          console.error('Error saving BOM items:', itemsError);
-          console.error('BOM items that failed to save:', JSON.stringify(bomItems, null, 2));
-          // Don't throw here - BOM record is already saved successfully
-          toast.warning('BOM saved but some items may not have been saved correctly. Please check and edit if needed.');
+
+          const legacyData = legacyRes.data || [];
+          if (legacyData.length !== bomItems.length) {
+            console.warn('Legacy BOM items insert count mismatch', legacyData.length, bomItems.length);
+          }
+          rowsForNav = bomItems.map((row, i) => ({
+            ...row,
+            id: (legacyData[i] as { id?: string } | undefined)?.id,
+          }));
+          console.log('Successfully saved BOM items to bom_items (fallback)');
+        } else {
+          const data = primaryRes.data || [];
+          if (data.length !== bomItems.length) {
+            console.warn('bom_record_items insert count mismatch', data.length, bomItems.length);
+          }
+          rowsForNav = bomItems.map((row, i) => ({
+            ...row,
+            id: (data[i] as { id?: string } | undefined)?.id,
+          }));
+          console.log('Successfully saved BOM items to bom_record_items');
         }
       } else {
         console.warn('No BOM items to save');
@@ -1866,7 +1932,7 @@ export function BomForm({
       }
 
       if (nextAction === 'create-po') {
-        const poItems = bomItems
+        const poItems = rowsForNav
           .map((item) => ({
             ...item,
             item_type: item.category === 'Fabric' ? 'fabric' : 'item',
@@ -1910,6 +1976,7 @@ export function BomForm({
       }
     } finally {
       setLoading(false);
+      saveInFlightRef.current = false;
     }
   };
 
@@ -2544,7 +2611,12 @@ export function BomForm({
         <Button
           type="button"
           onClick={() => save('create-po')}
-          disabled={loading || !!(needsOrderLineChoice && !id)}
+          disabled={
+            loading ||
+            !!(needsOrderLineChoice && !id) ||
+            !isSaveAndCreatePoReady ||
+            blockCreatePoUntilSiblingsReady
+          }
           className={`fixed right-6 top-1/2 -translate-y-1/2 z-50 rounded-full px-5 py-6 transition-all duration-300 ${
             isSaveAndCreatePoReady
               ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700 shadow-[0_0_0_2px_rgba(16,185,129,0.35),0_8px_24px_rgba(16,185,129,0.35)]'

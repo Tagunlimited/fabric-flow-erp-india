@@ -603,11 +603,17 @@ export function PurchaseOrderForm() {
       if (!Number.isFinite(qty) || qty <= 0) return;
       const unit = item.unit_of_measure || '';
       const itemType = (item.item_type || '').toLowerCase() || 'item';
-      const identityKey =
-        itemType === 'fabric'
+      const bomItemId =
+        item.bom_item_id != null && String(item.bom_item_id).trim() !== ''
+          ? String(item.bom_item_id)
+          : '';
+      // BOM-backed lines must not merge: same fabric on two BOMs would otherwise sum quantities (wrong).
+      const identityKey = bomItemId
+        ? ['bom_item', bomItemId].join('|')
+        : itemType === 'fabric'
           ? [
               'fabric',
-              // Group fabrics by what is shown to supplier + color + gsm + uom
+              // Group manual fabric lines by what is shown to supplier + color + gsm + uom
               norm(item.fabric_for_supplier || item.fabric_name || item.item_name),
               norm(item.fabric_color),
               norm(item.fabric_gsm),
