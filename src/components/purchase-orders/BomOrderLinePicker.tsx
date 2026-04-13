@@ -127,6 +127,11 @@ export function BomOrderLinePicker({ orderId, onBack }: BomOrderLinePickerProps)
   const selectedHasBom =
     hasLegacyFullOrderBom || (selectedId ? !!bomIdByItemId[selectedId] : false);
 
+  /** Block "Save BOM & Create PO" until every other line on this order has a BOM (no legacy shortcut). */
+  const siblingsMissingBom =
+    !hasLegacyFullOrderBom &&
+    sortedLines.some((l) => l.id !== selectedId && !bomIdByItemId[l.id]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -236,6 +241,7 @@ export function BomOrderLinePicker({ orderId, onBack }: BomOrderLinePickerProps)
                 embeddedOrderId={orderId}
                 embeddedOrderItemId={selected.id}
                 onEmbeddedBomSaved={refreshBomCoverage}
+                blockCreatePoUntilSiblingsReady={siblingsMissingBom}
               />
             </div>
           )}
