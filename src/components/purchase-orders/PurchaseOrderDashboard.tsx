@@ -20,6 +20,7 @@ import {
 interface PurchaseOrderLite {
   id: string;
   po_number: string;
+  bom_id?: string | null;
   supplier: {
     id: string;
     supplier_name: string;
@@ -30,9 +31,125 @@ interface PurchaseOrderLite {
   total_items: number;
   total_quantity: number;
   grns: Array<{ id: string; grn_number: string; status: string | null; grn_date: string | null }>;
+  /** Sales order numbers (human-readable) linked via BOM / bom_po_items */
+  order_numbers: string[];
 }
 
 const PLACEHOLDER_IMAGE = getPendingItemPlaceholder();
+
+/** e.g. Order #TUC/26-27/APR/059 */
+function formatSalesOrderLabel(orderNumber: string | null | undefined): string {
+  const n = orderNumber?.trim();
+  if (!n) return '';
+  return n.toLowerCase().startsWith('order #') ? n : `Order #${n}`;
+}
+
+function formatOrderNumbersCell(orderNumbers: string[]) {
+  const labels = orderNumbers.map((n) => formatSalesOrderLabel(n)).filter(Boolean);
+  if (!labels.length) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  return (
+    <div className="flex max-w-[240px] flex-col gap-0.5">
+      {labels.map((label, i) => (
+        <span key={`${label}-${i}`} className="text-sm font-medium text-foreground">
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+async function attachOrderNumbersToPurchaseOrders<
+  T extends { id: string; bom_id?: string | null }
+>(rows: T[]): Promise<Array<T & { order_numbers: string[] }>> {
+  if (!rows.length) {
+    return rows.map((r) => ({ ...r, order_numbers: [] as string[] }));
+  }
+
+  const bomIds = new Set<string>();
+  for (const po of rows) {
+    if (po.bom_id) bomIds.add(po.bom_id);
+  }
+
+  let bomPoLinks: { po_id: string; bom_id: string }[] = [];
+  try {
+    const { data: bpi } = await supabase
+      .from('bom_po_items' as any)
+      .select('po_id, bom_id')
+      .in(
+        'po_id',
+        rows.map((r) => r.id)
+      );
+    bomPoLinks = (bpi || []).filter((r: any) => r?.po_id && r?.bom_id) as { po_id: string; bom_id: string }[];
+    bomPoLinks.forEach((l) => bomIds.add(l.bom_id));
+  } catch {
+    // bom_po_items may be absent in some environments
+  }
+
+  const orderIdsByPoId = new Map<string, Set<string>>();
+  for (const po of rows) {
+    orderIdsByPoId.set(po.id, new Set());
+  }
+
+  if (bomIds.size === 0) {
+    return rows.map((r) => ({ ...r, order_numbers: [] as string[] }));
+  }
+
+  const { data: boms, error: bomsError } = await supabase
+    .from('bom_records')
+    .select('id, order_id')
+    .in('id', [...bomIds]);
+
+  if (bomsError) {
+    console.warn('Could not resolve orders for purchase orders', bomsError);
+    return rows.map((r) => ({ ...r, order_numbers: [] as string[] }));
+  }
+
+  const bomToOrderId = new Map<string, string>();
+  (boms || []).forEach((b: any) => {
+    if (b?.id && b?.order_id) bomToOrderId.set(b.id, b.order_id);
+  });
+
+  for (const po of rows) {
+    if (po.bom_id) {
+      const oid = bomToOrderId.get(po.bom_id);
+      if (oid) orderIdsByPoId.get(po.id)!.add(oid);
+    }
+  }
+  for (const link of bomPoLinks) {
+    const oid = bomToOrderId.get(link.bom_id);
+    if (oid) orderIdsByPoId.get(link.po_id)?.add(oid);
+  }
+
+  const allOrderIds = new Set<string>();
+  orderIdsByPoId.forEach((set) => set.forEach((id) => allOrderIds.add(id)));
+
+  const orderIdToNumber = new Map<string, string>();
+  if (allOrderIds.size > 0) {
+    const { data: ords, error: ordErr } = await supabase
+      .from('orders')
+      .select('id, order_number')
+      .in('id', [...allOrderIds]);
+    if (ordErr) {
+      console.warn('Could not load order numbers for purchase orders', ordErr);
+    } else {
+      (ords || []).forEach((o: any) => {
+        if (o?.id && o?.order_number != null && String(o.order_number).trim()) {
+          orderIdToNumber.set(o.id, String(o.order_number).trim());
+        }
+      });
+    }
+  }
+
+  return rows.map((r) => {
+    const ids = Array.from(orderIdsByPoId.get(r.id) || []).sort();
+    const numbers = [
+      ...new Set(ids.map((oid) => orderIdToNumber.get(oid)).filter((n): n is string => Boolean(n))),
+    ].sort();
+    return { ...r, order_numbers: numbers };
+  });
+}
 
 export function PurchaseOrderDashboard() {
   const navigate = useNavigate();
@@ -80,6 +197,7 @@ export function PurchaseOrderDashboard() {
           .select(`
             id,
             po_number,
+            bom_id,
             order_date,
             status,
             supplier:supplier_master(id, supplier_name, supplier_code),
@@ -90,22 +208,25 @@ export function PurchaseOrderDashboard() {
 
         if (error) throw error;
 
-        const processed = (data || []).map(po => {
+        const processedBase = (data || []).map((po: any) => {
           const totalQuantity = (po.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
           return {
             id: po.id,
             po_number: po.po_number,
+            bom_id: po.bom_id ?? null,
             supplier: po.supplier || null,
             order_date: po.order_date,
             status: po.status,
             total_items: po.items?.length || 0,
             total_quantity: totalQuantity,
-            grns: po.grns || []
-          } as PurchaseOrderLite;
+            grns: po.grns || [],
+          };
         });
 
-        setInProgressPOs(processed.filter(po => !po.grns || po.grns.length === 0));
-        setCompletedPOs(processed.filter(po => po.grns && po.grns.length > 0));
+        const processed = await attachOrderNumbersToPurchaseOrders(processedBase);
+
+        setInProgressPOs(processed.filter((po) => !po.grns || po.grns.length === 0) as PurchaseOrderLite[]);
+        setCompletedPOs(processed.filter((po) => po.grns && po.grns.length > 0) as PurchaseOrderLite[]);
       } catch (error) {
         console.error('Failed to load purchase orders', error);
         toast.error('Failed to load purchase orders');
@@ -191,12 +312,12 @@ export function PurchaseOrderDashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow className="[&>th]:align-middle">
-                        <TableHead className="w-[20%] text-left">Order Number</TableHead>
-                        <TableHead className="w-[20%] text-left">BOM</TableHead>
-                        <TableHead className="w-[18%] text-right">Required</TableHead>
-                        <TableHead className="w-[18%] text-right">Ordered</TableHead>
-                        <TableHead className="w-[18%] text-right">Remaining</TableHead>
-                        <TableHead className="w-[6%] text-center">Actions</TableHead>
+                        <TableHead className="w-[20%] text-left">Order #</TableHead>
+                        <TableHead className="w-[18%] text-left">BOM</TableHead>
+                        <TableHead className="w-[16%] text-right">Required</TableHead>
+                        <TableHead className="w-[16%] text-right">Ordered</TableHead>
+                        <TableHead className="w-[16%] text-right">Remaining</TableHead>
+                        <TableHead className="w-[14%] text-center">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -205,22 +326,26 @@ export function PurchaseOrderDashboard() {
                         .map(item => (
                           <TableRow key={item.bom_item_id} className="[&>td]:align-middle">
                             <TableCell className="w-[20%]">
-                              <div className="font-medium">{item.order_number || 'N/A'}</div>
+                              {item.order_number ? (
+                                <div className="font-medium">{formatSalesOrderLabel(item.order_number)}</div>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
                             </TableCell>
-                            <TableCell className="w-[20%]">
+                            <TableCell className="w-[18%]">
                               <div className="font-medium">{item.bom_number}</div>
                               <div className="text-xs text-muted-foreground">{item.product_name || 'Unnamed Product'}</div>
                             </TableCell>
-                            <TableCell className="w-[18%] text-right whitespace-nowrap tabular-nums">
+                            <TableCell className="w-[16%] text-right whitespace-nowrap tabular-nums">
                               {formatQuantity(item.qty_total)} {item.unit || ''}
                             </TableCell>
-                            <TableCell className="w-[18%] text-right whitespace-nowrap tabular-nums">
+                            <TableCell className="w-[16%] text-right whitespace-nowrap tabular-nums">
                               {formatQuantity(item.total_ordered)} {item.unit || ''}
                             </TableCell>
-                            <TableCell className="w-[18%] text-right font-semibold text-primary whitespace-nowrap tabular-nums">
+                            <TableCell className="w-[16%] text-right font-semibold text-primary whitespace-nowrap tabular-nums">
                               {formatQuantity(item.remaining_quantity)} {item.unit || ''}
                             </TableCell>
-                            <TableCell className="w-[6%] text-center">
+                            <TableCell className="w-[14%] text-center">
                               <div className="flex justify-center">
                                 <Button
                                   size="sm"
@@ -402,6 +527,7 @@ export function PurchaseOrderDashboard() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>PO Number</TableHead>
+                        <TableHead>Order #</TableHead>
                         <TableHead>Supplier</TableHead>
                         <TableHead>Order Date</TableHead>
                         <TableHead>Total Items</TableHead>
@@ -414,6 +540,7 @@ export function PurchaseOrderDashboard() {
                       {inProgressPOs.map(po => (
                         <TableRow key={po.id}>
                           <TableCell className="font-medium">{po.po_number}</TableCell>
+                          <TableCell>{formatOrderNumbersCell(po.order_numbers)}</TableCell>
                           <TableCell>
                             <div className="text-sm">
                               <div className="font-medium">{po.supplier?.supplier_name || '-'}</div>
@@ -472,6 +599,7 @@ export function PurchaseOrderDashboard() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>PO Number</TableHead>
+                        <TableHead>Order #</TableHead>
                         <TableHead>Supplier</TableHead>
                         <TableHead>Order Date</TableHead>
                         <TableHead>Total Items</TableHead>
@@ -484,6 +612,7 @@ export function PurchaseOrderDashboard() {
                       {completedPOs.map(po => (
                         <TableRow key={po.id}>
                           <TableCell className="font-medium">{po.po_number}</TableCell>
+                          <TableCell>{formatOrderNumbersCell(po.order_numbers)}</TableCell>
                           <TableCell>
                             <div className="text-sm">
                               <div className="font-medium">{po.supplier?.supplier_name || '-'}</div>
