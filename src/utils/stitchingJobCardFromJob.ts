@@ -4,6 +4,7 @@ import {
   type BatchAssignmentDocumentData,
   type RawBatchAssignmentInput,
 } from '@/utils/batchAssignmentDocument';
+import { buildLineRatesMapFromOrderItems } from '@/utils/orderItemCuttingRates';
 
 /** Minimal job shape needed to build the stitching job card (matches CuttingManager batch assignment rows). */
 export interface StitchingJobCardJob {
@@ -65,7 +66,8 @@ function mergeAssignmentsToRawBatches(
   assignments: NonNullable<StitchingJobCardJob['batchAssignments']>,
   snRate: number,
   ofRate: number,
-  validOrderItemIds: Set<string>
+  validOrderItemIds: Set<string>,
+  lineRatesByOrderItemId?: Record<string, { sn: number; of: number }>
 ): RawBatchAssignmentInput[] {
   type Acc = {
     batchName: string;
@@ -179,6 +181,9 @@ function mergeAssignmentsToRawBatches(
       assignedQuantities,
       productSizeBreakdown: productSizeBreakdown.length > 0 ? productSizeBreakdown : undefined,
       combinedSizes: combinedSizes.length > 0 ? combinedSizes : undefined,
+      ...(lineRatesByOrderItemId && Object.keys(lineRatesByOrderItemId).length > 0
+        ? { lineRatesByOrderItemId }
+        : {}),
     });
   }
 
@@ -303,21 +308,29 @@ export async function buildStitchingJobCardDocumentForJob(
       return null;
     }
 
-    const snRate =
+    const orderDefaults =
       priceData && !priceError && !('error' in (priceData as any))
-        ? (priceData as any).cutting_price_single_needle || 0
-        : 0;
-    const ofRate =
-      priceData && !priceError && !('error' in (priceData as any))
-        ? (priceData as any).cutting_price_overlock_flatlock || 0
-        : 0;
+        ? {
+            cutting_price_single_needle: (priceData as any).cutting_price_single_needle,
+            cutting_price_overlock_flatlock: (priceData as any).cutting_price_overlock_flatlock,
+          }
+        : {};
+
+    const snRate = Math.max(0, Number(orderDefaults.cutting_price_single_needle) || 0);
+    const ofRate = Math.max(0, Number(orderDefaults.cutting_price_overlock_flatlock) || 0);
+
+    const lineRatesByOrderItemId = buildLineRatesMapFromOrderItems(
+      enrichedOrderItems as any[],
+      orderDefaults
+    );
 
     const validOrderItemIds = new Set((enrichedOrderItems || []).map((i: any) => String(i.id)));
     const rawBatches = mergeAssignmentsToRawBatches(
       job.batchAssignments || [],
       snRate,
       ofRate,
-      validOrderItemIds
+      validOrderItemIds,
+      lineRatesByOrderItemId
     );
 
     const allCustomizations: any[] = [];
