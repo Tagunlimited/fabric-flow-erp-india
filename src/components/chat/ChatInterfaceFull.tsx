@@ -18,6 +18,7 @@ import { extractUserIds, extractOrderIds } from '@/utils/chatUtils';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { formatTimestamp } from '@/utils/chatUtils';
+import { fetchEmployeeRowsWithSelectFallbacks, workEmailFromEmployeeRow } from '@/lib/employeesSchemaCompat';
 
 interface ChatMessageData {
   id: string;
@@ -88,6 +89,7 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
         const { data: ordersData } = await supabase
           .from('orders')
           .select('id, order_number, order_type')
+          .eq('is_deleted', false)
           .order('created_at', { ascending: false })
           .limit(100);
 
@@ -95,26 +97,27 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
           setOrders(ordersData);
         }
 
-        // Fetch employee mappings
-        const { data: employeesData } = await supabase
-          .from('employees')
-          .select('id, personal_email, user_id')
-          .not('personal_email', 'is', null);
+        const employeesData = await fetchEmployeeRowsWithSelectFallbacks(supabase, 'chat-interface-full');
+        const employeesWithEmail = employeesData.filter((emp) => !!workEmailFromEmployeeRow(emp));
 
-        if (employeesData) {
+        if (employeesWithEmail.length > 0) {
           const userToEmployee = new Map<string, string>();
           const { data: allProfiles } = await supabase
             .from('profiles')
             .select('user_id, email');
 
-          employeesData.forEach((emp: any) => {
-            if (emp.user_id) {
-              userToEmployee.set(emp.user_id, emp.id);
+          employeesWithEmail.forEach((emp: Record<string, unknown>) => {
+            const id = typeof emp.id === 'string' ? emp.id : null;
+            if (!id) return;
+            const uid = emp.user_id;
+            if (typeof uid === 'string' && uid) {
+              userToEmployee.set(uid, id);
             }
-            if (emp.personal_email && allProfiles) {
-              const matchingProfile = allProfiles.find(p => p.email === emp.personal_email);
-              if (matchingProfile) {
-                userToEmployee.set(matchingProfile.user_id, emp.id);
+            const workEmail = workEmailFromEmployeeRow(emp);
+            if (workEmail && allProfiles) {
+              const matchingProfile = allProfiles.find((p) => p.email === workEmail);
+              if (matchingProfile?.user_id) {
+                userToEmployee.set(matchingProfile.user_id, id);
               }
             }
           });

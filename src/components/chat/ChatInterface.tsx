@@ -8,6 +8,7 @@ import { ChatMessage } from './ChatMessage';
 import { MentionInput } from './MentionInput';
 import { extractUserIds, extractOrderIds } from '@/utils/chatUtils';
 import { toast } from 'sonner';
+import { fetchEmployeeRowsWithSelectFallbacks, workEmailFromEmployeeRow } from '@/lib/employeesSchemaCompat';
 
 interface ChatMessageData {
   id: string;
@@ -60,6 +61,7 @@ export function ChatInterface({ onClose, scrollToMessageId }: ChatInterfaceProps
         const { data: ordersData } = await supabase
           .from('orders')
           .select('id, order_number, order_type')
+          .eq('is_deleted', false)
           .order('created_at', { ascending: false })
           .limit(100);
 
@@ -68,31 +70,28 @@ export function ChatInterface({ onClose, scrollToMessageId }: ChatInterfaceProps
         }
 
         // Fetch employee mappings (user_id -> employee_id) for clickable user mentions
-        const { data: employeesData } = await supabase
-          .from('employees')
-          .select('id, personal_email, user_id')
-          .not('personal_email', 'is', null);
+        const employeesData = await fetchEmployeeRowsWithSelectFallbacks(supabase, 'chat-interface');
+        const employeesWithEmail = employeesData.filter((emp) => !!workEmailFromEmployeeRow(emp));
 
-        if (employeesData) {
-          // Create a map of user_id to employee_id
-          // First try to match by user_id if the column exists
+        if (employeesWithEmail.length > 0) {
           const userToEmployee = new Map<string, string>();
-          
-          // Also fetch profiles to match by email
+
           const { data: allProfiles } = await supabase
             .from('profiles')
             .select('user_id, email');
 
-          employeesData.forEach((emp: any) => {
-            // Try direct user_id match first
-            if (emp.user_id) {
-              userToEmployee.set(emp.user_id, emp.id);
+          employeesWithEmail.forEach((emp: Record<string, unknown>) => {
+            const id = typeof emp.id === 'string' ? emp.id : null;
+            if (!id) return;
+            const uid = emp.user_id;
+            if (typeof uid === 'string' && uid) {
+              userToEmployee.set(uid, id);
             }
-            // Also try email match
-            if (emp.personal_email && allProfiles) {
-              const matchingProfile = allProfiles.find(p => p.email === emp.personal_email);
-              if (matchingProfile) {
-                userToEmployee.set(matchingProfile.user_id, emp.id);
+            const workEmail = workEmailFromEmployeeRow(emp);
+            if (workEmail && allProfiles) {
+              const matchingProfile = allProfiles.find((p) => p.email === workEmail);
+              if (matchingProfile?.user_id) {
+                userToEmployee.set(matchingProfile.user_id, id);
               }
             }
           });

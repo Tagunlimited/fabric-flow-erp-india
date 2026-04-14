@@ -155,6 +155,7 @@ export default function ReceiptPage() {
           .from('orders')
           .select('id, order_number, order_date, customer_id, payment_due_date')
           .eq('id', prefill.id)
+          .eq('is_deleted', false)
           .single();
         if (!ord) return;
         const { calculatedTotal, pendingAmount } = await getOrderCalculatedTotals(ord.id, ord.order_number);
@@ -204,6 +205,7 @@ export default function ReceiptPage() {
       let query = supabase
         .from('receipts')
         .select('id, created_at, receipt_number, reference_id, reference_number, reference_type, amount, payment_mode, payment_type, customer_id, customers(company_name, phone)')
+        .eq('is_deleted', false)
         .order('created_at', { ascending: false })
         .limit(50);
       let resp: any = customerId ? await query.eq('customer_id', customerId) : await query;
@@ -213,6 +215,7 @@ export default function ReceiptPage() {
         let fallback = supabase
           .from('receipts')
           .select('id, created_at, receipt_number, reference_id, reference_number, reference_type, amount, payment_mode, payment_type, customer_id')
+          .eq('is_deleted', false)
           .order('created_at', { ascending: false })
           .limit(50);
         resp = customerId ? await fallback.eq('customer_id', customerId) : await fallback;
@@ -259,6 +262,7 @@ export default function ReceiptPage() {
           .from('orders')
           .select('id, order_number, customer_id, order_date, final_amount, balance_amount, gst_rate, payment_due_date')
           .eq('customer_id', customer.id)
+          .eq('is_deleted', false)
           .limit(20);
         if (refSearch) {
           ordersQuery = ordersQuery.ilike('order_number', `%${refSearch}%`);
@@ -344,6 +348,7 @@ export default function ReceiptPage() {
           .from('orders')
           .select('id, final_amount, balance_amount, gst_rate')
           .eq('order_number', selected.number)
+          .eq('is_deleted', false)
           .single();
 
         if (orderError) {
@@ -428,6 +433,7 @@ export default function ReceiptPage() {
           .from('orders')
           .select('id, order_type, status')
           .eq('order_number', selected.number)
+          .eq('is_deleted', false)
           .single();
 
         if (!orderUpdateError && order) {
@@ -717,6 +723,7 @@ export default function ReceiptPage() {
           .from('orders')
           .select('id, final_amount, balance_amount')
           .eq('order_number', editingReceipt.reference_number)
+          .eq('is_deleted', false)
           .single();
 
         if (order) {
@@ -724,6 +731,7 @@ export default function ReceiptPage() {
           const { data: existingReceipts } = await supabase
             .from('receipts')
             .select('amount')
+            .eq('is_deleted', false)
             .eq('reference_number', editingReceipt.reference_number)
             .eq('reference_type', 'order')
             .neq('id', editingReceipt.id);
@@ -760,6 +768,7 @@ export default function ReceiptPage() {
           .from('orders')
           .select('id, final_amount, balance_amount')
           .eq('order_number', editingReceipt.reference_number)
+          .eq('is_deleted', false)
           .single();
 
         if (order) {
@@ -767,6 +776,7 @@ export default function ReceiptPage() {
           const { data: existingReceipts } = await supabase
             .from('receipts')
             .select('amount')
+            .eq('is_deleted', false)
             .eq('reference_number', editingReceipt.reference_number)
             .eq('reference_type', 'order')
             .neq('id', editingReceipt.id);
@@ -812,10 +822,14 @@ export default function ReceiptPage() {
     try {
       const confirmCancel = window.confirm(`Cancel receipt ${r.receipt_number}? This will restore pending amount.`);
       if (!confirmCancel) return;
-      // Mark receipt as cancelled
+      // Soft delete receipt to preserve recovery/audit trail.
       const { error } = await supabase
         .from('receipts')
-        .delete()
+        .update({
+          is_deleted: true,
+          deleted_at: new Date().toISOString(),
+          delete_reason: 'Cancelled from receipt page',
+        } as any)
         .eq('id', r.id);
       if (error) throw error;
 
@@ -825,6 +839,7 @@ export default function ReceiptPage() {
           .from('orders')
           .select('id')
           .eq('order_number', r.reference_number)
+          .eq('is_deleted', false)
           .single();
         if (ord) {
           const { pendingAmount: newBalance } = await getOrderCalculatedTotals(ord.id, r.reference_number);
@@ -861,6 +876,7 @@ export default function ReceiptPage() {
             .from('orders')
             .select('id, customer_id, order_number, order_date, final_amount, balance_amount, payment_due_date')
             .eq('order_number', r.reference_number)
+            .eq('is_deleted', false)
             .single();
           ord = data;
         }
@@ -869,6 +885,7 @@ export default function ReceiptPage() {
             .from('orders')
             .select('id, customer_id, order_number, order_date, final_amount, balance_amount, payment_due_date')
             .eq('id', r.reference_id)
+            .eq('is_deleted', false)
             .single();
           ord = data;
         }
@@ -936,6 +953,7 @@ export default function ReceiptPage() {
         .from('orders')
         .select('id, order_number, customer_id, order_date, payment_due_date')
         .eq('order_number', orderNumber)
+        .eq('is_deleted', false)
         .single();
 
       if (!order) return;

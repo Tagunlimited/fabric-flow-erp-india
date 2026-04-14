@@ -1,6 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 import type { Database } from '@/integrations/supabase/types';
+import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
 
 type Tables = Database['public']['Tables'];
 type Customers = Tables['customers']['Row'];
@@ -112,18 +113,26 @@ export async function updateCustomer(id: string, updates: Database['public']['Ta
 
 // Order Management
 export async function getOrders(): Promise<Orders[]> {
-  const { data, error } = await supabase
-    .from('orders')
-    .select(`
-      *,
-      customers (
-        company_name,
-        contact_person,
-        email,
-        phone
-      )
-    `)
-    .order('created_at', { ascending: false });
+  const buildQuery = () =>
+    supabase
+      .from('orders')
+      .select(`
+        *,
+        customers (
+          company_name,
+          contact_person,
+          email,
+          phone
+        )
+      `)
+      .order('created_at', { ascending: false });
+
+  let { data, error } = await buildQuery().eq('is_deleted', false);
+  if (error && shouldRetryReadWithoutIsDeletedFilter(error)) {
+    const retry = await buildQuery();
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) {
     console.error('Error fetching orders:', error);
@@ -134,10 +143,18 @@ export async function getOrders(): Promise<Orders[]> {
 }
 
 export async function getPendingOrdersCount(): Promise<number> {
-  const { count, error } = await supabase
-    .from('orders')
-    .select('*', { count: 'exact', head: true })
-    .eq('status', 'pending');
+  const buildQuery = () =>
+    supabase
+      .from('orders')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'pending');
+
+  let { count, error } = await buildQuery().eq('is_deleted', false);
+  if (error && shouldRetryReadWithoutIsDeletedFilter(error)) {
+    const retry = await buildQuery();
+    count = retry.count;
+    error = retry.error;
+  }
 
   if (error) {
     console.error('Error fetching pending orders count:', error);
@@ -148,9 +165,10 @@ export async function getPendingOrdersCount(): Promise<number> {
 }
 
 export async function getOrderById(id: string): Promise<Orders | null> {
-  const { data, error } = await supabase
-    .from('orders')
-    .select(`
+  const build = () =>
+    supabase
+      .from('orders')
+      .select(`
       *,
       customers (
         company_name,
@@ -170,8 +188,14 @@ export async function getOrderById(id: string): Promise<Orders | null> {
         )
       )
     `)
-    .eq('id', id)
-    .single();
+      .eq('id', id);
+
+  let { data, error } = await build().eq('is_deleted', false).single();
+  if (error && shouldRetryReadWithoutIsDeletedFilter(error)) {
+    const retry = await build().single();
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) {
     console.error('Error fetching order:', error);
@@ -498,6 +522,7 @@ export async function getQuotations(): Promise<Quotations[]> {
         contact_person
       )
     `)
+    .eq('is_deleted', false)
     .order('quotation_date', { ascending: false });
 
   if (error) {
@@ -519,6 +544,7 @@ export async function getInvoices(): Promise<Invoices[]> {
         contact_person
       )
     `)
+    .eq('is_deleted', false)
     .order('invoice_date', { ascending: false });
 
   if (error) {
@@ -542,6 +568,7 @@ export async function getDispatchOrders(): Promise<DispatchOrders[]> {
         )
       )
     `)
+    .eq('is_deleted', false)
     .order('dispatch_date', { ascending: false });
 
   if (error) {
@@ -642,7 +669,8 @@ export async function getCuttingPendingQuantities(): Promise<number> {
     // Get all assignments and filter out completed ones
     const { data: allCuttingAssignments, error: cuttingError } = await (supabase as any)
       .from('order_cutting_assignments')
-      .select('order_id, assigned_quantity, completed_quantity, status');
+      .select('order_id, assigned_quantity, completed_quantity, status')
+      .eq('is_deleted', false);
 
     if (cuttingError) {
       console.error('Error fetching cutting assignments:', cuttingError);
@@ -665,6 +693,7 @@ export async function getCuttingPendingQuantities(): Promise<number> {
           const { data: orderItems, error: itemsError2 } = await supabase
             .from('order_items')
             .select('order_id, quantity, sizes_quantities, specifications')
+            .eq('is_deleted', false)
             .in('order_id', orderIdsForBom);
           
           if (!itemsError2 && orderItems) {
@@ -692,6 +721,7 @@ export async function getCuttingPendingQuantities(): Promise<number> {
     const { data: orderAssignments, error: orderError } = await supabase
       .from('order_assignments')
       .select('order_id, cut_quantity, cutting_master_id, cut_quantities_by_size')
+      .eq('is_deleted', false)
       .not('cutting_master_id', 'is', null);
 
     if (orderError) {
@@ -707,6 +737,7 @@ export async function getCuttingPendingQuantities(): Promise<number> {
         const { data: orderItems, error: itemsError } = await supabase
           .from('order_items')
           .select('order_id, quantity, sizes_quantities, specifications')
+          .eq('is_deleted', false)
           .in('order_id', orderIds);
 
         if (itemsError) {
@@ -779,7 +810,8 @@ export async function getStitchingAssignedQuantities(): Promise<number> {
     // Fetch from order_batch_assignments - sum quantities from size distributions
     const { data: batchAssignments, error: batchError } = await (supabase as any)
       .from('order_batch_assignments')
-      .select('id, total_quantity, batch_id');
+      .select('id, total_quantity, batch_id')
+      .eq('is_deleted', false);
 
     if (batchError) {
       console.error('Error fetching batch assignments:', batchError);
@@ -939,6 +971,7 @@ export async function getDashboardData(): Promise<DashboardData> {
             status
           )
         `)
+        .eq('is_deleted', false)
         .eq('order_type', 'readymade' as any)
         .in('status', ['confirmed', 'ready_for_dispatch', 'dispatched', 'completed'] as any);
       
@@ -1089,6 +1122,7 @@ export async function searchOrders(query: string): Promise<Orders[]> {
         contact_person
       )
     `)
+    .eq('is_deleted', false)
     .or(`order_number.ilike.%${query}%,customers.company_name.ilike.%${query}%`)
     .order('created_at', { ascending: false });
 
@@ -1108,6 +1142,7 @@ export async function getOrderAnalytics(days: number = 30) {
   const { data, error } = await supabase
     .from('orders')
     .select('order_date, total_amount, status')
+    .eq('is_deleted', false)
     .gte('order_date', startDate.toISOString())
     .order('order_date', { ascending: true });
 
@@ -1126,6 +1161,7 @@ export async function getRevenueAnalytics(days: number = 30) {
   const { data, error } = await supabase
     .from('orders')
     .select('order_date, total_amount')
+    .eq('is_deleted', false)
     .gte('order_date', startDate.toISOString())
     .order('order_date', { ascending: true });
 

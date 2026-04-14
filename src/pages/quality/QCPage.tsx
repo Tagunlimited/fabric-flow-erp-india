@@ -91,6 +91,7 @@ export default function QCPage() {
           const { data: pickedRows } = await (supabase as any)
             .from('order_batch_size_distributions')
             .select('order_batch_assignment_id, picked_quantity')
+            .eq('is_deleted', false)
             .in('order_batch_assignment_id', assignmentIds as any);
           (pickedRows || []).forEach((r: any) => {
             const id = r?.order_batch_assignment_id as string | undefined;
@@ -102,6 +103,7 @@ export default function QCPage() {
           const { data: asn } = await (supabase as any)
             .from('order_batch_assignments')
             .select('id, notes')
+            .eq('is_deleted', false)
             .in('id', assignmentIds as any);
           (asn || []).forEach((a: any) => {
             if (!a?.id || !a?.notes) return;
@@ -127,6 +129,7 @@ export default function QCPage() {
           const { data: qcRows } = await (supabase as any)
             .from('qc_reviews')
             .select('order_batch_assignment_id, approved_quantity, rejected_quantity, picked_quantity')
+            .eq('is_deleted', false)
             .in('order_batch_assignment_id', assignmentIds as any);
           
           (qcRows || []).forEach((q: any) => {
@@ -156,6 +159,7 @@ export default function QCPage() {
         const { data: orderRows } = await (supabase as any)
           .from('orders')
           .select('id, order_number, customer_id, order_type')
+          .eq('is_deleted', false)
           .in('id', orderIds as any)
           .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
         (orderRows || []).forEach((o: any) => {
@@ -177,6 +181,7 @@ export default function QCPage() {
         const { data: boms } = await (supabase as any)
           .from('bom_records')
           .select('order_id, product_image_url')
+          .eq('is_deleted', false)
           .in('order_id', orderIds as any);
         (boms || []).forEach((b: any) => { if (b?.order_id && b?.product_image_url) imageByOrder[b.order_id] = b.product_image_url; });
       } catch {}
@@ -184,6 +189,7 @@ export default function QCPage() {
         const { data: items } = await (supabase as any)
           .from('order_items')
           .select('order_id, category_image_url, mockup_images, specifications, product_category_id, product_category:product_categories(category_name)')
+          .eq('is_deleted', false)
           .in('order_id', orderIds as any);
         (items || []).forEach((it: any) => {
           const oid = it?.order_id; if (!oid) return;

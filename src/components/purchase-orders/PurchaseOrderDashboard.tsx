@@ -130,6 +130,7 @@ async function attachOrderNumbersToPurchaseOrders<
     const { data: ords, error: ordErr } = await supabase
       .from('orders')
       .select('id, order_number')
+      .eq('is_deleted', false)
       .in('id', [...allOrderIds]);
     if (ordErr) {
       console.warn('Could not load order numbers for purchase orders', ordErr);

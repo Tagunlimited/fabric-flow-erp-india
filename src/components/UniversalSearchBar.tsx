@@ -72,6 +72,7 @@ export function UniversalSearchBar({
         const { data: orders } = await supabase
           .from('orders')
           .select('id, order_number, customer_id, status, final_amount, created_at, customers(company_name)')
+          .eq('is_deleted', false)
           .or(`order_number.ilike.%${searchTerm}%,customers.company_name.ilike.%${searchTerm}%`)
           .limit(5);
 

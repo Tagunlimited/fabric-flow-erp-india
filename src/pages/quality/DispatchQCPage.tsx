@@ -57,6 +57,7 @@ export default function DispatchQCPage() {
     const { data, error } = await (supabase as any)
       .from('dispatch_orders')
       .select('dispatch_number')
+      .eq('is_deleted', false)
       .ilike('dispatch_number', `${prefix}%`)
       .order('created_at', { ascending: false })
       .limit(1);
@@ -95,6 +96,7 @@ export default function DispatchQCPage() {
           const { data } = await (supabase as any)
             .from('order_batch_size_distributions')
             .select('order_batch_assignment_id, picked_quantity')
+            .eq('is_deleted', false)
             .in('order_batch_assignment_id', assignmentIds as any);
           (data || []).forEach((r: any) => {
             const id = r?.order_batch_assignment_id as string | undefined; if (!id) return;
@@ -105,6 +107,7 @@ export default function DispatchQCPage() {
           const { data } = await (supabase as any)
             .from('order_batch_assignments')
             .select('id, notes')
+            .eq('is_deleted', false)
             .in('id', assignmentIds as any);
           (data || []).forEach((a: any) => {
             if (!a?.id || !a?.notes) return;
@@ -129,6 +132,7 @@ export default function DispatchQCPage() {
           const { data: qcs } = await (supabase as any)
             .from('qc_reviews')
             .select('order_batch_assignment_id, approved_quantity')
+            .eq('is_deleted', false)
             .in('order_batch_assignment_id', assignmentIds as any);
           (qcs || []).forEach((q: any) => {
             const id = q?.order_batch_assignment_id as string | undefined; if (!id) return;
@@ -144,6 +148,7 @@ export default function DispatchQCPage() {
         const { data: ords } = await (supabase as any)
           .from('orders')
           .select('id, order_number, customer_id, order_type')
+          .eq('is_deleted', false)
           .in('id', orderIds as any)
           .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
         (ords || []).forEach((o: any) => {
@@ -157,6 +162,7 @@ export default function DispatchQCPage() {
       const { data: readymadeOrdersData } = await (supabase as any)
         .from('orders')
         .select('id, order_number, customer_id, status, order_date, expected_delivery_date, customers:customers(company_name)')
+        .eq('is_deleted', false)
         .eq('order_type', 'readymade')
         .in('status', ['confirmed', 'ready_for_dispatch', 'dispatched', 'partial_dispatched'] as any)
         .order('order_date', { ascending: false });
@@ -169,6 +175,7 @@ export default function DispatchQCPage() {
         const { data: pendingDispatchOrders } = await (supabase as any)
           .from('dispatch_orders')
           .select('order_id')
+          .eq('is_deleted', false)
           .in('status', ['pending', 'packed'] as any);
         if (pendingDispatchOrders && pendingDispatchOrders.length > 0) {
           const pendingOrderIds = (pendingDispatchOrders || [])
@@ -178,6 +185,7 @@ export default function DispatchQCPage() {
             const { data: additionalOrders } = await (supabase as any)
               .from('orders')
               .select('id, order_number, customer_id, status, order_date, expected_delivery_date, customers:customers(company_name)')
+              .eq('is_deleted', false)
               .eq('order_type', 'readymade')
               .in('id', pendingOrderIds as any);
             if (additionalOrders && additionalOrders.length > 0) {
@@ -212,6 +220,7 @@ export default function DispatchQCPage() {
         const { data: boms } = await (supabase as any)
           .from('bom_records')
           .select('order_id, product_image_url')
+          .eq('is_deleted', false)
           .in('order_id', orderIds as any);
         (boms || []).forEach((b: any) => { if (b?.order_id && b?.product_image_url) imageByOrder[b.order_id] = b.product_image_url; });
       } catch {}
@@ -219,6 +228,7 @@ export default function DispatchQCPage() {
         const { data: items } = await (supabase as any)
           .from('order_items')
           .select('order_id, category_image_url, mockup_images, specifications')
+          .eq('is_deleted', false)
           .in('order_id', orderIds as any);
         (items || []).forEach((it: any) => {
           const oid = it?.order_id; if (!oid) return;
@@ -237,6 +247,7 @@ export default function DispatchQCPage() {
           const { data: disp } = await (supabase as any)
             .from('dispatch_order_items')
             .select('order_id, quantity')
+            .eq('is_deleted', false)
             .in('order_id', orderIds as any);
           (disp || []).forEach((r: any) => {
             const oid = r.order_id as string;
@@ -279,6 +290,7 @@ export default function DispatchQCPage() {
             const { data: rmItems } = await (supabase as any)
               .from('order_items')
               .select('order_id, category_image_url, mockup_images, specifications')
+              .eq('is_deleted', false)
               .in('order_id', readymadeIds as any);
             (rmItems || []).forEach((it: any) => {
               const oid = it?.order_id as string | undefined;
@@ -294,6 +306,7 @@ export default function DispatchQCPage() {
             const { data: disp } = await (supabase as any)
               .from('dispatch_order_items')
               .select('order_id, quantity')
+              .eq('is_deleted', false)
               .in('order_id', readymadeIds as any);
             (disp || []).forEach((r: any) => {
               const oid = r.order_id as string;
@@ -308,6 +321,7 @@ export default function DispatchQCPage() {
           const { data: items } = await (supabase as any)
             .from('order_items')
             .select('order_id, quantity')
+            .eq('is_deleted', false)
             .in('order_id', readymadeIds as any);
           (items || []).forEach((it: any) => {
             const oid = it.order_id as string;
@@ -323,6 +337,7 @@ export default function DispatchQCPage() {
             const { data: pendingDispatch } = await (supabase as any)
               .from('dispatch_orders')
               .select('order_id')
+              .eq('is_deleted', false)
               .in('order_id', readymadeIds as any)
               .in('status', ['pending', 'packed'] as any);
             (pendingDispatch || []).forEach((d: any) => {
@@ -426,6 +441,7 @@ export default function DispatchQCPage() {
             actual_delivery,
             orders:orders ( order_number, customers:customers ( company_name ) )
           `)
+          .eq('is_deleted', false)
           .in('status', ['shipped','delivered'] as any)
           .order('dispatch_date', { ascending: false });
         if (!error) setCompleted(data || []);
@@ -452,6 +468,7 @@ export default function DispatchQCPage() {
       const { data: existingDispatch } = await (supabase as any)
         .from('dispatch_orders')
         .select('id, courier_name, tracking_number, status')
+        .eq('is_deleted', false)
         .eq('order_id', o.order_id)
         .in('status', ['pending', 'packed'] as any)
         .order('created_at', { ascending: false })
@@ -473,6 +490,7 @@ export default function DispatchQCPage() {
         const { data: orderItems } = await (supabase as any)
           .from('order_items')
           .select('quantity')
+          .eq('is_deleted', false)
           .eq('order_id', o.order_id);
         
         const totalQuantity = (orderItems || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
@@ -481,6 +499,7 @@ export default function DispatchQCPage() {
         const { data: disp } = await (supabase as any)
           .from('dispatch_order_items')
           .select('quantity')
+          .eq('is_deleted', false)
           .eq('order_id', o.order_id);
         const dispatchedTotal = (disp || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
         const toDispatch = Math.max(0, totalQuantity - dispatchedTotal);
@@ -519,10 +538,12 @@ export default function DispatchQCPage() {
         const { data: qc } = await (supabase as any)
           .from('qc_reviews')
           .select('size_name, approved_quantity, order_batch_assignment_id')
+          .eq('is_deleted', false)
           .in('order_batch_assignment_id', (
             await (supabase as any)
               .from('order_batch_assignments')
               .select('id')
+              .eq('is_deleted', false)
               .eq('order_id', o.order_id)
           ).data?.map((r: any) => r.id) || []);
         const approvedMap: Record<string, number> = {};
@@ -535,6 +556,7 @@ export default function DispatchQCPage() {
         const { data: disp } = await (supabase as any)
           .from('dispatch_order_items')
           .select('size_name, quantity')
+          .eq('is_deleted', false)
           .eq('order_id', o.order_id);
         const dispatchedMap: Record<string, number> = {};
         (disp || []).forEach((r: any) => {
@@ -555,6 +577,7 @@ export default function DispatchQCPage() {
           const { data: orderItems } = await (supabase as any)
             .from('order_items')
             .select('size_type_id')
+            .eq('is_deleted', false)
             .eq('order_id', o.order_id)
             .limit(1);
           if (orderItems && orderItems.length > 0 && orderItems[0].size_type_id) {
@@ -590,6 +613,7 @@ export default function DispatchQCPage() {
         const { data: ord } = await (supabase as any)
           .from('orders')
           .select('delivery_address, customers:customers(address, city, state, pincode)')
+          .eq('is_deleted', false)
           .eq('id', dispatchTarget.order_id)
           .maybeSingle();
         const customerAddr = [
@@ -682,6 +706,7 @@ export default function DispatchQCPage() {
           const { data: items } = await (supabase as any)
             .from('order_items')
             .select('quantity')
+            .eq('is_deleted', false)
             .eq('order_id', dispatchTarget.order_id);
           approvedTotal = (items || []).reduce((acc: number, r: any) => acc + Number(r.quantity || 0), 0);
         } else {
@@ -689,8 +714,9 @@ export default function DispatchQCPage() {
           const { data: totals } = await (supabase as any)
             .from('qc_reviews')
             .select('approved_quantity, order_batch_assignment_id')
+            .eq('is_deleted', false)
             .in('order_batch_assignment_id', (
-              await (supabase as any).from('order_batch_assignments').select('id').eq('order_id', dispatchTarget.order_id)
+              await (supabase as any).from('order_batch_assignments').select('id').eq('is_deleted', false).eq('order_id', dispatchTarget.order_id)
             ).data?.map((r: any) => r.id) || []);
           approvedTotal = (totals || []).reduce((acc: number, r: any) => acc + Number(r.approved_quantity || 0), 0);
         }
@@ -698,6 +724,7 @@ export default function DispatchQCPage() {
         const { data: dispAgg } = await (supabase as any)
           .from('dispatch_order_items')
           .select('quantity')
+          .eq('is_deleted', false)
           .eq('order_id', dispatchTarget.order_id);
         dispatchedTotal = (dispAgg || []).reduce((acc: number, r: any) => acc + Number(r.quantity || 0), 0);
         
@@ -720,6 +747,7 @@ export default function DispatchQCPage() {
             const { data: orderItemsData } = await (supabase as any)
               .from('order_items')
               .select('id, quantity, specifications')
+              .eq('is_deleted', false)
               .eq('order_id', dispatchTarget.order_id);
 
             if (orderItemsData && orderItemsData.length > 0) {
@@ -802,6 +830,7 @@ export default function DispatchQCPage() {
         const { data } = await (supabase as any)
           .from('dispatch_orders')
           .select(`id, order_id, dispatch_number, dispatch_date, status, courier_name, tracking_number, actual_delivery, orders:orders ( order_number, customers:customers ( company_name ) )`)
+          .eq('is_deleted', false)
           .in('status', ['shipped','delivered'] as any)
           .order('dispatch_date', { ascending: false });
         setCompleted(data || []);
@@ -841,6 +870,7 @@ export default function DispatchQCPage() {
         const { data, error } = await (supabase as any)
           .from('dispatch_order_items')
           .select('size_name, quantity')
+          .eq('is_deleted', false)
           .eq('dispatch_order_id', order.id);
         
         if (!error && data) {
@@ -856,6 +886,7 @@ export default function DispatchQCPage() {
         const { data: dispatchOrders } = await (supabase as any)
           .from('dispatch_orders')
           .select('id, dispatch_number, dispatch_date, courier_name, tracking_number, status')
+          .eq('is_deleted', false)
           .eq('order_id', order.order_id)
           .order('created_at', { ascending: false })
           .limit(1)
@@ -878,6 +909,7 @@ export default function DispatchQCPage() {
         const { data, error } = await (supabase as any)
           .from('dispatch_order_items')
           .select('size_name, quantity')
+          .eq('is_deleted', false)
           .eq('order_id', order.order_id);
         
         if (!error && data) {

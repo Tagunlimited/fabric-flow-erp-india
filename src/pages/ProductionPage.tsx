@@ -8,6 +8,7 @@ import { useState, useEffect } from "react";
 import { getDashboardData, type DashboardData } from "@/lib/database";
 import { useOrdersWithReceipts } from "@/hooks/useOrdersWithReceipts";
 import { supabase } from "@/integrations/supabase/client";
+import { shouldRetryReadWithoutIsDeletedFilter } from "@/lib/supabaseSoftDeleteCompat";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Eye, Receipt } from "lucide-react";
 import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
@@ -27,10 +28,20 @@ const ProductionPage = () => {
     try {
       setOrdersLoading(true);
       // 1) Fetch receipts that point to orders
-      const { data: receipts, error: receiptsError } = await supabase
+      let { data: receipts, error: receiptsError } = await supabase
         .from("receipts")
         .select("reference_id, reference_number, reference_type")
+        .eq("is_deleted", false)
         .or('reference_type.eq.order,reference_type.eq.ORDER');
+
+      if (receiptsError && shouldRetryReadWithoutIsDeletedFilter(receiptsError)) {
+        const r2 = await supabase
+          .from("receipts")
+          .select("reference_id, reference_number, reference_type")
+          .or('reference_type.eq.order,reference_type.eq.ORDER');
+        receipts = r2.data;
+        receiptsError = r2.error;
+      }
 
       if (receiptsError) {
         console.error('Error fetching receipts:', receiptsError);
@@ -59,26 +70,34 @@ const ProductionPage = () => {
       );
 
       // 2) Fetch orders first (simplified query) - exclude readymade orders
-      let ordersQuery = supabase
-        .from("orders")
-        .select(`
+      const buildOrdersQuery = (withDeletedFilter: boolean) => {
+        let q = supabase
+          .from("orders")
+          .select(`
           *,
           customer:customers(company_name)
         `)
-        .neq('status', 'cancelled' as any) // Exclude cancelled orders
-        .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
+          .neq('status', 'cancelled' as any)
+          .or('order_type.is.null,order_type.eq.custom');
+        if (withDeletedFilter) q = q.eq("is_deleted", false);
+        if (orderIds.length && orderNumbers.length) {
+          const idsList = orderIds.join(",");
+          const numsList = orderNumbers.map(n => `"${String(n).replace(/"/g, '\\"')}"`).join(",");
+          q = q.or(`id.in.(${idsList}),order_number.in.(${numsList})`);
+        } else if (orderIds.length) {
+          q = q.in("id", orderIds as any);
+        } else if (orderNumbers.length) {
+          q = q.in("order_number", orderNumbers as any);
+        }
+        return q;
+      };
 
-      if (orderIds.length && orderNumbers.length) {
-        const idsList = orderIds.join(",");
-        const numsList = orderNumbers.map(n => `"${String(n).replace(/"/g, '\\"')}"`).join(",");
-        ordersQuery = ordersQuery.or(`id.in.(${idsList}),order_number.in.(${numsList})`);
-      } else if (orderIds.length) {
-        ordersQuery = ordersQuery.in("id", orderIds as any);
-      } else if (orderNumbers.length) {
-        ordersQuery = ordersQuery.in("order_number", orderNumbers as any);
+      let { data: ordersData, error: ordersError } = await buildOrdersQuery(true);
+      if (ordersError && shouldRetryReadWithoutIsDeletedFilter(ordersError)) {
+        const r2 = await buildOrdersQuery(false);
+        ordersData = (r2.data || []).filter((o: any) => !o?.is_deleted);
+        ordersError = r2.error;
       }
-
-      const { data: ordersData, error: ordersError } = await ordersQuery;
       if (ordersError) {
         console.error('Error fetching orders:', ordersError);
         throw ordersError;
@@ -101,6 +120,7 @@ const ProductionPage = () => {
               product_description,
               mockup_images
             `)
+            .eq("is_deleted", false)
             .eq("order_id", order.id);
 
           if (itemsError) {

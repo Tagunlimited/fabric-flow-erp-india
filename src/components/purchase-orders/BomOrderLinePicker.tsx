@@ -80,6 +80,7 @@ export function BomOrderLinePicker({ orderId, onBack }: BomOrderLinePickerProps)
             order_items(${BOM_ORDER_ITEMS_SELECT})
           `
           )
+          .eq('is_deleted', false)
           .eq('id', orderId as any)
           .single();
 
@@ -88,7 +89,9 @@ export function BomOrderLinePicker({ orderId, onBack }: BomOrderLinePickerProps)
 
         setOrderNumber((order as any).order_number || '');
         setCustomerName((order as any).customer?.company_name || '');
-        const raw = ((order as any).order_items || []) as OrderLine[];
+        const raw = (((order as any).order_items || []) as OrderLine[]).filter(
+          (it: any) => it?.is_deleted !== true
+        );
         setLines(raw);
 
         const sorted = sortOrderLines(raw);
@@ -97,6 +100,7 @@ export function BomOrderLinePicker({ orderId, onBack }: BomOrderLinePickerProps)
         const { data: boms, error: bErr } = await supabase
           .from('bom_records')
           .select('id, order_item_id')
+          .eq('is_deleted', false)
           .eq('order_id', orderId as any);
 
         if (bErr) throw bErr;

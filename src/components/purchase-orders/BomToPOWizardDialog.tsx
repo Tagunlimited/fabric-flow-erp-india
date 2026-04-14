@@ -100,6 +100,7 @@ export function BomToPOWizardDialog({
                 )
               )
             `)
+            .eq('is_deleted', false)
             .eq('id', bomRecord.order_id)
             .single();
           

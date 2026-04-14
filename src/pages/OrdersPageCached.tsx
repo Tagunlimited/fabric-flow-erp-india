@@ -82,6 +82,7 @@ function OrdersPageContent() {
           *,
           customer:customers(company_name)
         `)
+        .eq('is_deleted', false)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -218,10 +219,10 @@ function OrdersPageContent() {
 
   const handleDeleteOrder = async (orderId: string) => {
     try {
-      const { error } = await supabase
-        .from('orders')
-        .delete()
-        .eq('id', orderId);
+      const { error } = await supabase.rpc('soft_delete_order_cascade', {
+        order_uuid: orderId,
+        reason: 'Deleted from cached orders page',
+      });
 
       if (error) throw error;
 

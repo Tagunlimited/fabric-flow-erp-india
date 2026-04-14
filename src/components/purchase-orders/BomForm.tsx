@@ -130,12 +130,14 @@ async function resolveBomNumberForSave(
   const { data: ord, error: oErr } = await supabase
     .from('orders')
     .select('order_number')
+    .eq('is_deleted', false)
     .eq('id', orderId as any)
     .single();
   if (oErr || !ord?.order_number) return fallbackBomNumberNoOrder();
   const { data: items, error: iErr } = await supabase
     .from('order_items')
     .select('id, created_at')
+    .eq('is_deleted', false)
     .eq('order_id', orderId as any)
     .order('created_at', { ascending: true });
   if (iErr || !items?.length) {
@@ -706,13 +708,14 @@ export function BomForm({
           order_items(${BOM_ORDER_ITEMS_SELECT})
         `
         )
+        .eq('is_deleted', false)
         .eq('id', orderId as any)
         .single();
 
       if (orderError) throw orderError;
 
       setOrderData(order as any);
-      const linesRaw: any[] = (order as any)?.order_items || [];
+      const linesRaw: any[] = ((order as any)?.order_items || []).filter((it: any) => it?.is_deleted !== true);
       const lines = sortOrderLines(linesRaw);
 
       const resolvedLineId =
@@ -848,6 +851,7 @@ export function BomForm({
           order_items(${BOM_ORDER_ITEMS_SELECT})
         `
         )
+        .eq('is_deleted', false)
         .eq('id', orderId as any)
         .single();
       if (!error && order) setOrderData(order as any);

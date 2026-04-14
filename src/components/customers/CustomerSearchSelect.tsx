@@ -116,6 +116,7 @@ export function CustomerSearchSelect({
       const { data: invoices, error: invoiceError } = await supabase
         .from('invoices')
         .select('customer_id, total_amount')
+        .eq('is_deleted', false)
         .in('customer_id', customerIds);
 
       if (invoiceError) {
@@ -126,6 +127,7 @@ export function CustomerSearchSelect({
       const { data: orders, error: orderError } = await supabase
         .from('orders')
         .select('customer_id, final_amount')
+        .eq('is_deleted', false)
         .in('customer_id', customerIds);
 
       if (orderError) {
