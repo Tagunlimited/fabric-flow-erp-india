@@ -46,18 +46,21 @@ export function CustomerDashboard() {
       const { data: orders } = await supabase
         .from('orders')
         .select('*')
+        .eq('is_deleted', false)
         .order('created_at', { ascending: false });
 
       // Fetch customer's invoices
       const { data: invoices } = await supabase
         .from('invoices')
         .select('*')
+        .eq('is_deleted', false)
         .order('created_at', { ascending: false });
 
       // Fetch customer's quotations
       const { data: quotations } = await supabase
         .from('quotations')
         .select('*')
+        .eq('is_deleted', false)
         .order('created_at', { ascending: false });
 
       // Fetch customer profile

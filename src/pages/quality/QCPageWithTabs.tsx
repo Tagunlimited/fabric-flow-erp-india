@@ -129,6 +129,7 @@ export default function QCPageWithTabs() {
         const { data: orderRows } = await (supabase as any)
           .from('orders')
           .select('id, order_number, customer_id, order_type')
+          .eq('is_deleted', false)
           .in('id', orderIds as any)
           .or('order_type.is.null,order_type.eq.custom'); // Exclude readymade orders
         (orderRows || []).forEach((o: any) => {
@@ -149,6 +150,7 @@ export default function QCPageWithTabs() {
         const { data: boms } = await (supabase as any)
           .from('bom_records')
           .select('order_id, product_image_url')
+          .eq('is_deleted', false)
           .in('order_id', orderIds as any);
         (boms || []).forEach((b: any) => { if (b?.order_id && b?.product_image_url) imageByOrder[b.order_id] = b.product_image_url; });
       } catch {}
@@ -156,6 +158,7 @@ export default function QCPageWithTabs() {
         const { data: items } = await (supabase as any)
           .from('order_items')
           .select('order_id, category_image_url, mockup_images, specifications')
+          .eq('is_deleted', false)
           .in('order_id', orderIds as any);
         (items || []).forEach((it: any) => {
           const oid = it?.order_id; if (!oid) return;

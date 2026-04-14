@@ -121,6 +121,7 @@ export default function InvoiceDetailPage() {
     const { data, error } = await supabase
       .from('invoices')
       .select('invoice_number')
+      .eq('is_deleted', false)
       .ilike('invoice_number', `${prefix}%`)
       .order('created_at', { ascending: false })
       .limit(1);
@@ -142,6 +143,7 @@ export default function InvoiceDetailPage() {
       const { data: invoiceData, error: invoiceError } = await supabase
         .from('invoices')
         .select('*, order:orders(*)')
+        .eq('is_deleted', false)
         .eq('id', id as any)
         .single();
 
@@ -158,6 +160,7 @@ export default function InvoiceDetailPage() {
           .from('orders')
           .select('*')
           .eq('id', id as any)
+          .eq('is_deleted', false)
           .single();
 
         if (orderError) throw orderError;
@@ -185,6 +188,7 @@ export default function InvoiceDetailPage() {
       const { data: itemsData, error: itemsError } = await supabase
         .from('order_items')
         .select('*, mockup_images, specifications, category_image_url')
+        .eq('is_deleted', false)
         .eq('order_id', orderId as any);
 
       if (itemsError) throw itemsError;
@@ -247,6 +251,7 @@ export default function InvoiceDetailPage() {
       const { data: items } = await supabase
         .from('dispatch_order_items')
         .select('size_name, quantity')
+        .eq('is_deleted', false)
         .eq('order_id', orderId as any);
       
       if (items) {
@@ -268,6 +273,7 @@ export default function InvoiceDetailPage() {
       const { data: receiptsData } = await supabase
         .from('receipts')
         .select('*')
+        .eq('is_deleted', false)
         .or(`reference_id.eq.${orderId},reference_number.eq.${orderData.order_number}`)
         .order('entry_date', { ascending: false });
       

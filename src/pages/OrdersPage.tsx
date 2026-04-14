@@ -40,6 +40,11 @@ import { fetchOrderIdsWithActiveCreditReceipt, sumActiveReceiptAmountsForOrder }
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 import { Badge } from '@/components/ui/badge';
+import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
+import {
+  fetchEmployeeRowsWithSelectFallbacks,
+  workEmailFromEmployeeRow,
+} from '@/lib/employeesSchemaCompat';
 
 interface Order {
   id: string;
@@ -299,8 +304,8 @@ const OrdersPage = () => {
       const userEmail = authData?.user?.email || null;
       if (!userId) return "";
 
-      const { data: employeeRows } = await (supabase.from('employees') as any).select('id, full_name, personal_email, user_id');
-      const employees = (employeeRows || []) as Array<{ id: string; full_name?: string; personal_email?: string; user_id?: string }>;
+      const employeeRows = await fetchEmployeeRowsWithSelectFallbacks(supabase, 'orders-sales-manager');
+      const employees = employeeRows as Array<{ id: string; user_id?: string | null }>;
 
       let matchedEmployee = employees.find((e) => e.user_id === userId);
 
@@ -311,13 +316,17 @@ const OrdersPage = () => {
         const matchingProfile = (allProfiles || []).find((p: any) => p.user_id === userId || (userEmail && p.email === userEmail));
         if (matchingProfile) {
           matchedEmployee = employees.find(
-            (e) => e.user_id === matchingProfile.user_id || (!!matchingProfile.email && e.personal_email === matchingProfile.email)
+            (e) =>
+              e.user_id === matchingProfile.user_id ||
+              (!!matchingProfile.email && workEmailFromEmployeeRow(e as Record<string, unknown>) === matchingProfile.email)
           );
         }
       }
 
       if (!matchedEmployee && userEmail) {
-        matchedEmployee = employees.find((e) => e.personal_email === userEmail);
+        matchedEmployee = employees.find(
+          (e) => workEmailFromEmployeeRow(e as Record<string, unknown>) === userEmail
+        );
       }
 
       if (matchedEmployee?.id) return matchedEmployee.id;
@@ -371,14 +380,22 @@ const OrdersPage = () => {
       }
       
       // Fetch only custom orders (exclude readymade orders)
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          customer:customers(company_name)
-        `)
-        .or('order_type.is.null,order_type.eq.custom')
-        .order('created_at', { ascending: false });
+      const buildOrdersQuery = () =>
+        supabase
+          .from('orders')
+          .select(`
+            *,
+            customer:customers(company_name)
+          `)
+          .or('order_type.is.null,order_type.eq.custom')
+          .order('created_at', { ascending: false });
+
+      let { data, error } = await buildOrdersQuery().eq('is_deleted', false);
+      if (error && shouldRetryReadWithoutIsDeletedFilter(error)) {
+        const retry = await buildOrdersQuery();
+        data = retry.data;
+        error = retry.error;
+      }
 
       if (error) throw error;
 
@@ -396,20 +413,41 @@ const OrdersPage = () => {
       }> = [];
 
       if (orderIds.length > 0 || orderNumbers.length > 0) {
-        const [{ data: receiptsById }, { data: receiptsByNumber }] = await Promise.all([
-          orderIds.length > 0
-            ? supabase
-                .from('receipts')
-                .select('id, reference_id, reference_number, amount, status, payment_mode, payment_type')
-                .in('reference_id', orderIds as any)
-            : Promise.resolve({ data: [] as any[] }),
-          orderNumbers.length > 0
-            ? supabase
-                .from('receipts')
-                .select('id, reference_id, reference_number, amount, status, payment_mode, payment_type')
-                .in('reference_number', orderNumbers as any)
-            : Promise.resolve({ data: [] as any[] }),
-        ]);
+        const receiptsSelect =
+          'id, reference_id, reference_number, amount, status, payment_mode, payment_type';
+
+        const fetchReceiptsByIds = async () => {
+          if (orderIds.length === 0) return [] as any[];
+          let r = await supabase
+            .from('receipts')
+            .select(receiptsSelect)
+            .eq('is_deleted', false)
+            .in('reference_id', orderIds as any);
+          if (r.error && shouldRetryReadWithoutIsDeletedFilter(r.error)) {
+            const r2 = await supabase.from('receipts').select(receiptsSelect).in('reference_id', orderIds as any);
+            return r2.data || [];
+          }
+          return r.data || [];
+        };
+
+        const fetchReceiptsByNumbers = async () => {
+          if (orderNumbers.length === 0) return [] as any[];
+          let r = await supabase
+            .from('receipts')
+            .select(receiptsSelect)
+            .eq('is_deleted', false)
+            .in('reference_number', orderNumbers as any);
+          if (r.error && shouldRetryReadWithoutIsDeletedFilter(r.error)) {
+            const r2 = await supabase
+              .from('receipts')
+              .select(receiptsSelect)
+              .in('reference_number', orderNumbers as any);
+            return r2.data || [];
+          }
+          return r.data || [];
+        };
+
+        const [receiptsById, receiptsByNumber] = await Promise.all([fetchReceiptsByIds(), fetchReceiptsByNumbers()]);
 
         const receiptMap = new Map<string, {
           id: string;
@@ -418,7 +456,7 @@ const OrdersPage = () => {
           amount: number | null;
         }>();
 
-        [...(receiptsById || []), ...(receiptsByNumber || [])].forEach((receipt: any) => {
+        [...receiptsById, ...receiptsByNumber].forEach((receipt: any) => {
           if (!receipt?.id) return;
           receiptMap.set(receipt.id, receipt);
         });
@@ -453,10 +491,19 @@ const OrdersPage = () => {
         (data || []).map(async (order) => {
           try {
             // Fetch order items with size_prices and sizes_quantities
-            const { data: orderItems, error: itemsError } = await supabase
+            const itemsSelect =
+              'id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate';
+            let { data: orderItems, error: itemsError } = await supabase
               .from('order_items')
-              .select('id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate')
+              .select(itemsSelect)
+              .eq('is_deleted', false)
               .eq('order_id', order.id);
+
+            if (itemsError && shouldRetryReadWithoutIsDeletedFilter(itemsError)) {
+              const r2 = await supabase.from('order_items').select(itemsSelect).eq('order_id', order.id);
+              orderItems = r2.data;
+              itemsError = r2.error;
+            }
 
             if (!itemsError && orderItems && orderItems.length > 0) {
               // Calculate the correct total using size-based pricing
@@ -543,35 +590,15 @@ const OrdersPage = () => {
 
   const handleDeleteOrder = async (orderId: string, orderNumber: string) => {
     try {
-      // Use a safer approach by calling a database function that handles the deletion properly
+      // Cascade soft-delete across all order-linked records.
       const { data, error } = await supabase
-        .rpc('safe_delete_order', { order_uuid: orderId });
+        .rpc('soft_delete_order_cascade', { order_uuid: orderId, reason: 'Deleted from Orders list' });
       
       if (error) {
-        console.error('Error calling safe_delete_order:', error);
-        
-        // Fallback to manual deletion if the function doesn't exist
-        console.log('Falling back to manual deletion...');
-        
-        // Try manual deletion with better error handling
-        const { error: manualError } = await supabase
-          .from('orders')
-          .delete()
-          .eq('id', orderId);
-        
-        if (manualError) {
-          console.error('Manual deletion also failed:', manualError);
-          
-          if (manualError.code === '409') {
-            toast.error('Cannot delete order: It may be referenced by other records. Please contact support.');
-          } else if (manualError.code === '23503') {
-            toast.error('Cannot delete order: Related records still exist. Please try again.');
-          } else {
-            toast.error(`Failed to delete order: ${manualError.message}`);
-          }
-          return;
-        }
-      } else if (data === false) {
+        console.error('Error calling soft_delete_order_cascade:', error);
+        toast.error(`Failed to delete order: ${error.message}`);
+        return;
+      } else if (!(data as any)?.ok) {
         toast.error('Order not found or already deleted');
         await fetchOrders(); // Refresh the list
         return;
@@ -602,6 +629,45 @@ const OrdersPage = () => {
     } catch (error) {
       console.error('Error updating order status:', error);
       toast.error('Failed to update order status');
+    }
+  };
+
+  const handleRestoreByOrderNumber = async () => {
+    const orderNumber = window.prompt('Enter Order Number to restore (example: TUC/26-27/APR/006)');
+    if (!orderNumber?.trim()) return;
+
+    try {
+      const { data: orderRow, error: orderError } = await supabase
+        .from('orders')
+        .select('id, order_number, is_deleted')
+        .eq('order_number', orderNumber.trim())
+        .single();
+
+      if (orderError || !orderRow?.id) {
+        toast.error('Order not found');
+        return;
+      }
+
+      if (!orderRow.is_deleted) {
+        toast('Order is already active');
+        return;
+      }
+
+      const { data, error } = await supabase.rpc('restore_order_cascade', { order_uuid: orderRow.id });
+      if (error) {
+        toast.error(`Failed to restore order: ${error.message}`);
+        return;
+      }
+      if (!(data as any)?.ok) {
+        toast.error('Restore failed');
+        return;
+      }
+
+      toast.success(`Order ${orderRow.order_number} restored successfully`);
+      await fetchOrders(true);
+    } catch (error) {
+      console.error('Error restoring order:', error);
+      toast.error('Unexpected error while restoring order');
     }
   };
 
@@ -781,6 +847,9 @@ const OrdersPage = () => {
                     <Button variant="outline" size="sm" onClick={() => fetchOrders(true)} disabled={loading}>
                       <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                       Force Refresh
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={handleRestoreByOrderNumber}>
+                      Restore Order
                     </Button>
                     <Button onClick={() => setActiveTab("create")}> <Plus className="w-4 h-4 mr-2" /> New Order </Button>
                   </div>

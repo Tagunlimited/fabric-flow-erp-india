@@ -20,6 +20,10 @@ import { cn, formatDateIndian, formatLocaleDateFromApi, parseBusinessDateLocal }
 import { fetchOrderIdsWithActiveCreditReceipt } from "@/utils/orderFinancials";
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
+import {
+  fetchEmployeeRowsWithSelectFallbacks,
+  workEmailFromEmployeeRow,
+} from '@/lib/employeesSchemaCompat';
 
 interface Order {
   id: string;
@@ -80,8 +84,8 @@ const ReadymadeOrdersPage = () => {
       const userEmail = authData?.user?.email || null;
       if (!userId) return "";
 
-      const { data: employeeRows } = await (supabase.from('employees') as any).select('id, personal_email, user_id');
-      const employees = (employeeRows || []) as Array<{ id: string; personal_email?: string; user_id?: string }>;
+      const employeeRows = await fetchEmployeeRowsWithSelectFallbacks(supabase, 'readymade-my-orders');
+      const employees = employeeRows as Array<{ id: string; user_id?: string | null }>;
       let matchedEmployee = employees.find((e) => e.user_id === userId);
 
       if (!matchedEmployee) {
@@ -91,13 +95,17 @@ const ReadymadeOrdersPage = () => {
         const matchingProfile = (allProfiles || []).find((p: any) => p.user_id === userId || (userEmail && p.email === userEmail));
         if (matchingProfile) {
           matchedEmployee = employees.find(
-            (e) => e.user_id === matchingProfile.user_id || (!!matchingProfile.email && e.personal_email === matchingProfile.email)
+            (e) =>
+              e.user_id === matchingProfile.user_id ||
+              (!!matchingProfile.email && workEmailFromEmployeeRow(e as Record<string, unknown>) === matchingProfile.email)
           );
         }
       }
 
       if (!matchedEmployee && userEmail) {
-        matchedEmployee = employees.find((e) => e.personal_email === userEmail);
+        matchedEmployee = employees.find(
+          (e) => workEmailFromEmployeeRow(e as Record<string, unknown>) === userEmail
+        );
       }
 
       if (matchedEmployee?.id) return matchedEmployee.id;
@@ -133,6 +141,7 @@ const ReadymadeOrdersPage = () => {
           *,
           customer:customers(company_name)
         `)
+        .eq('is_deleted', false)
         .eq('order_type', 'readymade' as any)
         .order('created_at', { ascending: false });
 

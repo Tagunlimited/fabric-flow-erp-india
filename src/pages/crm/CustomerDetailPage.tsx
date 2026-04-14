@@ -75,6 +75,7 @@ const CustomerDetailPage = () => {
       const { data, error } = await supabase
         .from('orders')
         .select('*')
+        .eq('is_deleted', false)
         .eq('customer_id', customerId)
         .order('created_at', { ascending: false });
       if (error) throw error;
@@ -94,6 +95,7 @@ const CustomerDetailPage = () => {
       const { data, error } = await supabase
         .from('invoices')
         .select('*')
+        .eq('is_deleted', false)
         .eq('customer_id', customerId)
         .order('created_at', { ascending: false });
       if (error) throw error;

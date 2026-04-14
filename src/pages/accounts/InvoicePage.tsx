@@ -51,6 +51,7 @@ export default function InvoicePage() {
       const { data: ordersData, error: ordersError } = await supabase
         .from('orders')
         .select(`*, customer:customers(company_name, phone)`)
+        .eq('is_deleted', false)
         .in('status', ['dispatched', 'partial_dispatched', 'completed'] as any)
         .order('created_at', { ascending: false });
 
@@ -64,6 +65,7 @@ export default function InvoicePage() {
         const { data: dispatchOrders } = await supabase
           .from('dispatch_orders')
           .select('order_id')
+          .eq('is_deleted', false)
           .in('status', ['pending', 'packed', 'shipped', 'delivered'] as any);
         
         if (dispatchOrders && dispatchOrders.length > 0) {
@@ -80,6 +82,7 @@ export default function InvoicePage() {
             const { data: readyOrders } = await supabase
               .from('orders')
               .select(`*, customer:customers(company_name, phone)`)
+              .eq('is_deleted', false)
               .in('id', missingIds as any)
               .order('created_at', { ascending: false });
             
@@ -97,6 +100,7 @@ export default function InvoicePage() {
       const { data: invoicesData } = await supabase
         .from('invoices')
         .select('id, invoice_number, order_id')
+        .eq('is_deleted', false)
         .in('order_id', orderIds as any);
 
       // Create a map of order_id to invoice
@@ -116,6 +120,7 @@ export default function InvoicePage() {
           const { data: receiptsById } = await supabase
             .from('receipts')
             .select('reference_id, reference_number, amount, payment_type, payment_mode')
+            .eq('is_deleted', false)
             .eq('reference_type', 'order')
             .in('reference_id', orderIds as any);
           
@@ -136,6 +141,7 @@ export default function InvoicePage() {
           const { data: receiptsByNumber } = await supabase
             .from('receipts')
             .select('reference_id, reference_number, amount, payment_type, payment_mode')
+            .eq('is_deleted', false)
             .in('reference_number', orderNumbers as any);
           
           if (receiptsByNumber) {
@@ -162,6 +168,7 @@ export default function InvoicePage() {
             const { data: dispatchItems } = await supabase
               .from('dispatch_order_items')
               .select('quantity')
+              .eq('is_deleted', false)
               .eq('order_id', order.id as any);
             
             const dispatchedQuantity = dispatchItems?.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0) || 0;
@@ -173,16 +180,19 @@ export default function InvoicePage() {
               const { data: orderItems } = await supabase
                 .from('order_items')
                 .select('quantity')
+                .eq('is_deleted', false)
                 .eq('order_id', order.id as any);
               approvedQuantity = orderItems?.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0) || 0;
             } else {
               const { data: qcReviews } = await supabase
                 .from('qc_reviews')
                 .select('approved_quantity, order_batch_assignment_id')
+                .eq('is_deleted', false)
                 .in('order_batch_assignment_id', 
                   (await supabase
                     .from('order_batch_assignments')
                     .select('id')
+                    .eq('is_deleted', false)
                     .eq('order_id', order.id as any)
                   ).data?.map((a: any) => a.id) || []
                 );
@@ -253,6 +263,7 @@ export default function InvoicePage() {
     const { data, error } = await supabase
       .from('invoices')
       .select('invoice_number')
+      .eq('is_deleted', false)
       .ilike('invoice_number', `${prefix}%`)
       .order('created_at', { ascending: false })
       .limit(1);

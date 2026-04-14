@@ -54,7 +54,8 @@ function getBomIdForLine(orderId: string, orderItemId: string, bomRows: BomRowRe
 async function fetchCustomOrdersWithBomRefs(): Promise<{ orders: Order[]; bomRows: BomRowRef[] }> {
   const { data: bomRecords, error: bomError } = await supabase
     .from('bom_records')
-    .select('id, order_id, order_item_id');
+    .select('id, order_id, order_item_id')
+    .eq('is_deleted', false);
 
   if (bomError) throw bomError;
   const bomList = (bomRecords || []) as BomRowRef[];
@@ -75,14 +76,18 @@ async function fetchCustomOrdersWithBomRefs(): Promise<{ orders: Order[]; bomRow
         created_at
       )
     `)
+    .eq('is_deleted', false)
     .not('status', 'eq', 'cancelled')
     .order('order_date', { ascending: false });
 
   if (ordersError) throw ordersError;
 
-  const allOrders = (allOrdersRaw || []).filter(
-    (o: any) => !o.order_type || o.order_type === 'custom'
-  ) as unknown as Order[];
+  const allOrders = (allOrdersRaw || [])
+    .filter((o: any) => !o.order_type || o.order_type === 'custom')
+    .map((o: any) => ({
+      ...o,
+      order_items: (o.order_items || []).filter((it: any) => it?.is_deleted !== true),
+    })) as unknown as Order[];
 
   return { orders: allOrders, bomRows: bomList };
 }

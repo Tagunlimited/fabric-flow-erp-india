@@ -43,7 +43,8 @@ export default function QuotationsPage() {
       setLoading(true);
       let query: any = supabase
         .from('orders')
-        .select(`*, customer:customers(company_name, phone), gst_rate`);
+        .select(`*, customer:customers(company_name, phone), gst_rate`)
+        .eq('is_deleted', false);
 
       if (showCompleted === 'no') {
         query = query.neq('status', 'completed');

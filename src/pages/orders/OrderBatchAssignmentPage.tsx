@@ -121,6 +121,7 @@ const OrderBatchAssignmentPage: React.FC = () => {
           )
         `)
         .eq('id', id)
+        .eq('is_deleted', false)
         .single();
 
       if (orderError) throw orderError;
@@ -138,6 +139,7 @@ const OrderBatchAssignmentPage: React.FC = () => {
             image_url
           )
         `)
+        .eq('is_deleted', false)
         .eq('order_id', id);
 
       if (itemsError) throw itemsError;

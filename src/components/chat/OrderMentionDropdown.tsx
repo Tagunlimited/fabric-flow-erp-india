@@ -39,6 +39,7 @@ export function OrderMentionDropdown({
             customer_id,
             customers!inner(company_name)
           `)
+          .eq('is_deleted', false)
           .order('created_at', { ascending: false });
 
         // If search term exists, filter by it

@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { calculateOrderSummary } from '@/utils/priceCalculation';
+import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
 
 let orderAdditionalChargesAvailable: boolean | null = null;
 
@@ -58,11 +59,18 @@ export function isCreditReceiptRow(r: {
 /** Order IDs that have at least one active credit acknowledgement receipt. */
 export async function fetchOrderIdsWithActiveCreditReceipt(orderIds: string[]): Promise<Set<string>> {
   if (orderIds.length === 0) return new Set();
-  const { data, error } = await supabase
+  const sel = 'reference_id, amount, payment_mode, payment_type, status';
+  let { data, error } = await supabase
     .from('receipts')
-    .select('reference_id, amount, payment_mode, payment_type, status')
+    .select(sel)
+    .eq('is_deleted', false)
     .eq('reference_type', 'order')
     .in('reference_id', orderIds as any);
+  if (error && shouldRetryReadWithoutIsDeletedFilter(error)) {
+    const r2 = await supabase.from('receipts').select(sel).eq('reference_type', 'order').in('reference_id', orderIds as any);
+    data = r2.data;
+    error = r2.error;
+  }
   if (error || !data) return new Set();
   const set = new Set<string>();
   for (const row of data as any[]) {
@@ -124,20 +132,46 @@ export async function getOrderCalculatedTotals(
   orderId: string,
   _orderNumber?: string
 ): Promise<{ calculatedTotal: number; totalReceipts: number; pendingAmount: number }> {
-  const { data: order } = await supabase
-    .from('orders')
-    .select('id, final_amount, gst_rate')
-    .eq('id', orderId)
-    .single();
-  const { data: orderItems } = await supabase
+  const orderBase = () =>
+    supabase.from('orders').select('id, final_amount, gst_rate').eq('id', orderId);
+
+  let { data: order, error: orderError } = await orderBase().eq('is_deleted', false).single();
+  if (orderError && shouldRetryReadWithoutIsDeletedFilter(orderError)) {
+    const retry = await orderBase().single();
+    order = retry.data;
+    orderError = retry.error;
+  }
+
+  let { data: orderItems, error: itemsError } = await supabase
     .from('order_items')
     .select('*, size_prices, sizes_quantities, specifications')
+    .eq('is_deleted', false)
     .eq('order_id', orderId);
-  const { data: existingReceipts } = await supabase
+  if (itemsError && shouldRetryReadWithoutIsDeletedFilter(itemsError)) {
+    const retry = await supabase
+      .from('order_items')
+      .select('*, size_prices, sizes_quantities, specifications')
+      .eq('order_id', orderId);
+    orderItems = retry.data;
+    itemsError = retry.error;
+  }
+
+  let { data: existingReceipts, error: receiptsError } = await supabase
     .from('receipts')
     .select('amount, status')
+    .eq('is_deleted', false)
     .eq('reference_id', orderId)
     .eq('reference_type', 'order');
+  if (receiptsError && shouldRetryReadWithoutIsDeletedFilter(receiptsError)) {
+    const retry = await supabase
+      .from('receipts')
+      .select('amount, status')
+      .eq('reference_id', orderId)
+      .eq('reference_type', 'order');
+    existingReceipts = retry.data;
+    receiptsError = retry.error;
+  }
+
   const additionalCharges = await safeFetchOrderAdditionalCharges(orderId);
 
   let calculatedTotal = order?.final_amount ?? 0;

@@ -544,6 +544,25 @@ export function PurchaseOrderForm() {
     return map;
   }, [items]);
 
+  /**
+   * Create PO without BOM (/procurement/po/new): hide the Fabric/Item "Pending BOM" cards when there is
+   * nothing to pick (empty tables). Manual fabric/item cards below stay visible.
+   * When opened from a BOM, always show the picker (even while loading).
+   */
+  const showPendingBomPickerSection = useMemo(() => {
+    if (isReadOnly) return false;
+    if (bomData?.id) return true;
+    if (pendingLoading || pendingError) return true;
+    return fabricGroups.length > 0 || itemGroups.length > 0;
+  }, [
+    isReadOnly,
+    bomData?.id,
+    pendingLoading,
+    pendingError,
+    fabricGroups.length,
+    itemGroups.length,
+  ]);
+
   const itemColorMap = useMemo(() => {
     const map = new Map<string, string | null>();
     itemOptions.forEach(option => {
@@ -3176,8 +3195,8 @@ export function PurchaseOrderForm() {
         </CardContent>
       </Card>
 
-      {/* Pending BOM Selection */}
-      {!isReadOnly && (
+      {/* Pending BOM selection — hidden on direct "Create PO" when there are no pending lines to pick */}
+      {!isReadOnly && showPendingBomPickerSection && (
       <div className="space-y-4">
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>

@@ -33,6 +33,7 @@ const DispatchPage = () => {
             actual_delivery,
             orders:orders ( order_number, order_type, customers:customers ( company_name ) )
           `)
+          .eq('is_deleted', false)
           .order('dispatch_date', { ascending: false });
         if (error) throw error;
         setOrders(data || []);
@@ -60,6 +61,7 @@ const DispatchPage = () => {
               actual_delivery
             )
           `)
+          .eq('is_deleted', false)
           .eq('order_type', 'readymade')
           .in('status', ['confirmed', 'ready_for_dispatch', 'dispatched', 'completed'] as any)
           .order('order_date', { ascending: false });

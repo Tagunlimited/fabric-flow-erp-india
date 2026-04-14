@@ -114,6 +114,7 @@ export default function QuotationDetailPage() {
         .from('orders')
         .select('*')
         .eq('id', orderId as any)
+        .eq('is_deleted', false)
         .single();
       if (orderError) throw orderError;
       if (!orderData) throw new Error('Order not found');
@@ -144,6 +145,7 @@ export default function QuotationDetailPage() {
       const { data: itemsData, error: itemsError } = await supabase
         .from('order_items')
         .select('*, mockup_images, specifications, category_image_url')
+        .eq('is_deleted', false)
         .eq('order_id', orderId as any);
       if (itemsError) throw itemsError;
       setOrderItems((itemsData || []) as unknown as OrderItem[]);
@@ -223,6 +225,7 @@ export default function QuotationDetailPage() {
         const { data: receiptsData } = await supabase
           .from('receipts')
           .select('amount, status, payment_mode, payment_type, reference_id, reference_number')
+          .eq('is_deleted', false)
           .eq('reference_type', 'order')
           .or(`reference_id.eq.${oid},reference_number.eq.${orderNumber}`);
         const rows = receiptsData || [];
@@ -254,6 +257,7 @@ export default function QuotationDetailPage() {
     const { data } = await supabase
       .from('quotations')
       .select('quotation_number')
+      .eq('is_deleted', false)
       .ilike('quotation_number', `SO/${fyStr}/${month}/%`)
       .order('quotation_number', { ascending: false });
 
@@ -279,6 +283,7 @@ export default function QuotationDetailPage() {
       const { data: monthlyOrders } = await supabase
         .from('orders')
         .select('id, order_date, created_at')
+        .eq('is_deleted', false)
         .gte('order_date', monthStart.toISOString().slice(0, 10))
         .lt('order_date', monthEnd.toISOString().slice(0, 10))
         .order('order_date', { ascending: true })

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode, useCallback } from 'react';
 
 // Cache configuration
 interface CacheConfig {
@@ -58,7 +58,12 @@ const CACHE_KEYS = {
 
 export function AppCacheProvider({ children }: { children: ReactNode }) {
   const [memoryCache, setMemoryCache] = useState<Map<string, CacheEntry>>(new Map());
+  const memoryCacheRef = useRef<Map<string, CacheEntry>>(memoryCache);
   const [isInitialized, setIsInitialized] = useState(false);
+
+  useEffect(() => {
+    memoryCacheRef.current = memoryCache;
+  }, [memoryCache]);
 
   // Initialize cache from storage
   useEffect(() => {
@@ -78,6 +83,7 @@ export function AppCacheProvider({ children }: { children: ReactNode }) {
             }
           });
           
+          memoryCacheRef.current = cacheMap;
           setMemoryCache(cacheMap);
         }
         
@@ -152,12 +158,13 @@ export function AppCacheProvider({ children }: { children: ReactNode }) {
       }
       
       newCache.set(key, entry);
+      memoryCacheRef.current = newCache;
       return newCache;
     });
   }, []);
 
   const getCache = useCallback(<T,>(key: string): T | null => {
-    const entry = memoryCache.get(key);
+    const entry = memoryCacheRef.current.get(key);
     
     if (!entry) return null;
     
@@ -166,24 +173,28 @@ export function AppCacheProvider({ children }: { children: ReactNode }) {
       setMemoryCache(prev => {
         const newCache = new Map(prev);
         newCache.delete(key);
+        memoryCacheRef.current = newCache;
         return newCache;
       });
       return null;
     }
     
     return entry.data as T;
-  }, [memoryCache]);
+  }, []);
 
   const removeCache = useCallback((key: string) => {
     setMemoryCache(prev => {
       const newCache = new Map(prev);
       newCache.delete(key);
+      memoryCacheRef.current = newCache;
       return newCache;
     });
   }, []);
 
   const clearCache = useCallback(() => {
-    setMemoryCache(new Map());
+    const empty = new Map<string, CacheEntry>();
+    memoryCacheRef.current = empty;
+    setMemoryCache(empty);
     try {
       localStorage.removeItem(CACHE_KEYS.DATA_CACHE);
     } catch (error) {
@@ -260,6 +271,7 @@ export function AppCacheProvider({ children }: { children: ReactNode }) {
           newCache.set(key, entry);
         }
       });
+      memoryCacheRef.current = newCache;
       return newCache;
     });
   }, []);

@@ -74,14 +74,17 @@ export function usePersistentTabState(options: UsePersistentTabStateOptions) {
     if (!persist) return;
 
     try {
-      // Save to page state
       const currentPageState = getPageState(pageKey) || {};
+      if (currentPageState.activeTab === activeTab) {
+        localStorage.setItem(tabStateKey, activeTab);
+        return;
+      }
+
       savePageState(pageKey, {
         ...currentPageState,
         activeTab
       });
 
-      // Also save to localStorage as backup
       localStorage.setItem(tabStateKey, activeTab);
     } catch (error) {
       console.error('Error saving tab state:', error);

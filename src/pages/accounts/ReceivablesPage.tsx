@@ -77,6 +77,7 @@ export default function ReceivablesPage() {
           customer:customers(company_name)
         `
         )
+        .eq('is_deleted', false)
         .neq('status', 'cancelled')
         .order('created_at', { ascending: false });
 
@@ -102,12 +103,14 @@ export default function ReceivablesPage() {
             ? supabase
                 .from('receipts')
                 .select('id, reference_id, reference_number, amount, status, payment_mode, payment_type')
+                .eq('is_deleted', false)
                 .in('reference_id', orderIds as any)
             : Promise.resolve({ data: [] as any[] }),
           orderNumbers.length > 0
             ? supabase
                 .from('receipts')
                 .select('id, reference_id, reference_number, amount, status, payment_mode, payment_type')
+                .eq('is_deleted', false)
                 .in('reference_number', orderNumbers as any)
             : Promise.resolve({ data: [] as any[] }),
         ]);

@@ -178,6 +178,7 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
             item_id
           )
         `)
+        .eq('is_deleted', false)
         .order('created_at', { ascending: false });
       
       if (poErr) throw poErr;
@@ -295,7 +296,14 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
 
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm('Delete this purchase order?')) return;
-    await supabase.from('purchase_orders').delete().eq('id', id);
+    await supabase
+      .from('purchase_orders')
+      .update({
+        is_deleted: true,
+        deleted_at: new Date().toISOString(),
+        delete_reason: 'Deleted from purchase order list',
+      } as any)
+      .eq('id', id);
     fetchAll();
   }, [fetchAll]);
 

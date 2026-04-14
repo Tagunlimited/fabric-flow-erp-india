@@ -93,6 +93,7 @@ export default function DispatchChallanPrint() {
             )
           )
         `)
+        .eq('is_deleted', false)
         .eq('id', dispatchId)
         .maybeSingle();
 
@@ -105,6 +106,7 @@ export default function DispatchChallanPrint() {
       const { data: itemsData, error: itemsError } = await (supabase as any)
         .from('dispatch_order_items')
         .select('size_name, quantity')
+        .eq('is_deleted', false)
         .eq('dispatch_order_id', dispatchId);
 
       if (itemsError) throw itemsError;
@@ -120,6 +122,7 @@ export default function DispatchChallanPrint() {
         .select(
           'id, product_category_id, product_description, quantity, color, gsm, mockup_images, category_image_url, fabric_id, specifications, sizes_quantities, size_prices, size_type_id, unit_price, gst_rate'
         )
+        .eq('is_deleted', false)
         .eq('order_id', dispatchData.order_id);
 
       if (orderItemsError) throw orderItemsError;

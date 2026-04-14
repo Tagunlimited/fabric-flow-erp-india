@@ -451,6 +451,7 @@ const AssignOrdersPage = () => {
         const { data: orders, error: ordersErr } = await supabase
           .from('orders')
           .select('id, order_number, status, expected_delivery_date, customer_id')
+          .eq('is_deleted', false)
           .in('id', orderIds as any)
           .or('order_type.is.null,order_type.eq.custom');
         if (ordersErr) throw ordersErr;
@@ -479,6 +480,7 @@ const AssignOrdersPage = () => {
         const { data: posFromBoms } = await supabase
           .from('purchase_orders')
           .select('id, bom_id')
+          .eq('is_deleted', false)
           .in('bom_id', bomIds);
 
         let bomIdToPoIds: Record<string, Set<string>> = {};

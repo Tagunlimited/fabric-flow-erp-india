@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchEmployeeRowsWithSelectFallbacks, workEmailFromEmployeeRow } from '@/lib/employeesSchemaCompat';
 import type { Database } from "@/integrations/supabase/types";
 import { toast } from "sonner";
 import { formatCurrency, formatDateIndian, formatLocalDateYMD, formatLocaleDateFromApi, parseBusinessDateLocal } from "@/lib/utils";
@@ -51,6 +52,7 @@ import {
 import { orderHasActiveCreditInReceiptRows, sumActiveReceiptAmountsForOrder } from '@/utils/orderFinancials';
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
+import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
 import { ProductCustomizationModal } from "@/components/orders/ProductCustomizationModal";
 import { CustomizationColorChips } from "@/components/common/CustomizationColorChips";
 import {
@@ -1276,11 +1278,8 @@ export default function OrderDetailPage() {
       try {
         if (!user?.id) return;
 
-        const { data: employeesData } = await supabase
-          .from('employees')
-          .select('id, personal_email, user_id');
-
-        if (!employeesData) return;
+        const employeesData = await fetchEmployeeRowsWithSelectFallbacks(supabase, 'order-detail-employee-map');
+        if (!employeesData.length) return;
 
         // Fetch profiles once to support email-based mapping if needed
         const { data: allProfiles } = await supabase
@@ -1289,9 +1288,9 @@ export default function OrderDetailPage() {
 
         let matchedEmployeeId: string | null = null;
 
-        for (const emp of employeesData as any[]) {
-          if (emp.user_id && emp.user_id === user.id) {
-            matchedEmployeeId = emp.id;
+        for (const emp of employeesData) {
+          if (emp.user_id === user.id) {
+            matchedEmployeeId = String(emp.id);
             break;
           }
         }
@@ -1300,11 +1299,13 @@ export default function OrderDetailPage() {
         if (!matchedEmployeeId && allProfiles && profile?.email) {
           const matchingProfile = allProfiles.find((p: any) => p.email === profile.email);
           if (matchingProfile) {
-            const emp = (employeesData as any[]).find(
-              (e: any) => e.user_id === matchingProfile.user_id || e.personal_email === matchingProfile.email
+            const emp = employeesData.find(
+              (e) =>
+                e.user_id === matchingProfile.user_id ||
+                workEmailFromEmployeeRow(e) === matchingProfile.email
             );
-            if (emp) {
-              matchedEmployeeId = emp.id;
+            if (emp?.id) {
+              matchedEmployeeId = String(emp.id);
             }
           }
         }
@@ -1327,7 +1328,7 @@ export default function OrderDetailPage() {
     
     // Show confirmation dialog
     const confirmed = window.confirm(
-      `Are you sure you want to delete order ${order.order_number}?\n\nThis action cannot be undone and will delete all related data including:\n- Order items\n- Customizations\n- Activities\n- All associated records`
+      `Are you sure you want to delete order ${order.order_number}?\n\nThis will soft-delete the order and all linked records (receipts, invoices, quotations, dispatch, BOM/PO, production). You can restore later.`
     );
     
     if (!confirmed) {
@@ -1338,40 +1339,17 @@ export default function OrderDetailPage() {
     try {
       console.log('Attempting to delete order:', order.id, order.order_number);
       
-      // Try final delete function first (handles trigger conflicts properly)
       const { data: finalData, error: finalError } = await supabase
-        .rpc('safe_delete_order_final', { order_uuid: order.id });
+        .rpc('soft_delete_order_cascade', { order_uuid: order.id, reason: 'Deleted from Order detail page' });
       
       if (finalError) {
-        console.error('Error calling safe_delete_order_final:', finalError);
-        
-        // Fallback to manual deletion if the function doesn't exist
-        console.log('Falling back to manual deletion...');
-        
-        // Try manual deletion with better error handling
-        const { error: manualError } = await supabase
-          .from('orders')
-          .delete()
-          .eq('id', order.id as any);
-        
-        if (manualError) {
-          console.error('Manual deletion also failed:', manualError);
-          
-          if (manualError.code === '409') {
-            toast.error('Cannot delete order: It may be referenced by other records. Please contact support.');
-          } else if (manualError.code === '23503') {
-            toast.error('Cannot delete order: Related records still exist. Please try again.');
-          } else {
-            toast.error(`Failed to delete order: ${manualError.message}`);
-          }
-          return;
-        }
-      } else if (finalData === 0) {
+        console.error('Error calling soft_delete_order_cascade:', finalError);
+        toast.error(`Failed to delete order: ${finalError.message}`);
+        return;
+      } else if (!(finalData as any)?.ok) {
         toast.error('Order not found or already deleted');
-      } else if (finalData === 1) {
+      } else {
         toast.success('Order deleted successfully');
-      } else if (finalData === -1) {
-        toast.error('Error occurred during deletion');
       }
 
       // Always navigate back to orders list after any deletion attempt
@@ -1512,6 +1490,7 @@ export default function OrderDetailPage() {
           .from('orders')
           .select('*')
           .eq('id', id as string)
+          .eq('is_deleted', false)
           .single();
 
         if (orderError) {
@@ -1579,10 +1558,21 @@ export default function OrderDetailPage() {
         }
 
         // Fetch order items
-        const { data: itemsData, error: itemsError } = await (supabase as any)
+        let { data: itemsData, error: itemsError } = await (supabase as any)
           .from('order_items')
           .select('*, mockup_images, specifications, category_image_url')
+          .eq('is_deleted', false)
           .eq('order_id', id as string);
+
+        if (itemsError && shouldRetryReadWithoutIsDeletedFilter(itemsError)) {
+          const r2 = await (supabase as any)
+            .from('order_items')
+            .select('*, mockup_images, specifications, category_image_url')
+            .eq('order_id', id as string);
+          itemsData = r2.data;
+          itemsError = r2.error;
+          itemsData = (itemsData || []).filter((it: any) => !it?.is_deleted);
+        }
 
         if (itemsError) {
           console.error('Error fetching order items:', itemsError);

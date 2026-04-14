@@ -78,6 +78,7 @@ const DesignPage = () => {
         const { data: orderItems, error: itemsError } = await supabase
           .from('order_items')
           .select('id, order_id, specifications, mockup_images, category_image_url')
+          .eq('is_deleted', false)
           .in('order_id', orderIds);
 
         if (itemsError) throw itemsError;

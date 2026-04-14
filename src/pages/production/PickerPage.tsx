@@ -238,6 +238,7 @@ export default function PickerPage() {
           customer:customers(company_name)
         `)
         .eq('order_type', 'readymade' as any)
+        .eq('is_deleted', false)
         .order('created_at', { ascending: false });
 
       if (ordersError) throw ordersError;
@@ -249,6 +250,7 @@ export default function PickerPage() {
         const { data: itemsData, error: itemsError } = await supabase
           .from('order_items')
           .select('*')
+          .eq('is_deleted', false)
           .in('order_id', orderIds);
 
         if (!itemsError && itemsData) {
@@ -805,6 +807,7 @@ export default function PickerPage() {
                 const { data: orderRows } = await (supabase as any)
                   .from('orders')
                   .select('id, order_type')
+                  .eq('is_deleted', false)
                   .in('id', allOrderIds as any);
                 (orderRows || []).forEach((o: any) => {
                   if (o?.id) orderTypeById[o.id] = o.order_type ?? null;
@@ -816,6 +819,7 @@ export default function PickerPage() {
                 const { data: boms } = await (supabase as any)
                   .from('bom_records')
                   .select('order_id, product_image_url')
+                  .eq('is_deleted', false)
                   .in('order_id', allOrderIds as any);
                 (boms || []).forEach((b: any) => {
                   if (b?.order_id && b?.product_image_url) bomByOrder[b.order_id] = b.product_image_url;
@@ -825,6 +829,7 @@ export default function PickerPage() {
               const { data: orderItems } = await (supabase as any)
                 .from('order_items')
                 .select('order_id, specifications, mockup_images, category_image_url')
+                .eq('is_deleted', false)
                 .in('order_id', allOrderIds as any);
 
               const itemsByOrder: Record<string, any[]> = {};
@@ -961,12 +966,14 @@ export default function PickerPage() {
         const { data: ords } = await (supabase as any)
           .from('orders')
           .select('id, order_number')
+          .eq('is_deleted', false)
           .in('id', orderIds as any);
         (ords || []).forEach((o: any) => { ordersMap[o.id] = o.order_number; });
       }
       const { data: qcRows } = await (supabase as any)
         .from('qc_reviews')
         .select('order_batch_assignment_id, size_name, rejected_quantity, remarks')
+        .eq('is_deleted', false)
         .in('order_batch_assignment_id', aids as any);
       // Need mapping assignment -> order_id
       const aidToOrder: Record<string, string> = {};
@@ -1068,6 +1075,7 @@ export default function PickerPage() {
         const { data: orders } = await (supabase as any)
           .from('orders')
           .select('id, order_number, customer_id, order_type')
+          .eq('is_deleted', false)
           .in('id', orderIds as any);
         (orders || []).forEach((o: any) => {
           ordersMap[o.id] = {
@@ -1081,6 +1089,7 @@ export default function PickerPage() {
           const { data: boms } = await (supabase as any)
             .from('bom_records')
             .select('order_id, product_image_url')
+            .eq('is_deleted', false)
             .in('order_id', orderIds as any);
           (boms || []).forEach((b: any) => {
             if (b?.order_id && b?.product_image_url) bomByOrder[b.order_id] = b.product_image_url;
@@ -1092,6 +1101,7 @@ export default function PickerPage() {
           .select(
             'id, order_id, product_description, specifications, category_image_url, mockup_images, size_type_id'
           )
+          .eq('is_deleted', false)
           .in('order_id', orderIds as any);
 
         (orderItems || []).forEach((item: any) => {

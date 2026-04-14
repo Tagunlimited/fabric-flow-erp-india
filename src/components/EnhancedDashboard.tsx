@@ -33,6 +33,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { shouldRetryReadWithoutIsDeletedFilter } from "@/lib/supabaseSoftDeleteCompat";
 import { calculateOrderSummary } from "@/utils/priceCalculation";
 import { sumActiveReceiptAmountsForOrder } from "@/utils/orderFinancials";
 import { format, parse, parseISO } from "date-fns";
@@ -92,15 +93,22 @@ async function loadSalesDashboard(): Promise<{
   orders: EnrichedOrder[];
   employees: Record<string, { id: string; full_name: string; avatar_url?: string }>;
 }> {
-  const { data: orderRows, error: orderErr } = await supabase
-    .from("orders")
-    .select("id, order_number, order_date, sales_manager, final_amount, total_amount, gst_rate")
-    .or("order_type.is.null,order_type.eq.custom")
-    .order("created_at", { ascending: false });
+  const ordersBase = () =>
+    supabase
+      .from("orders")
+      .select("id, order_number, order_date, sales_manager, final_amount, total_amount, gst_rate")
+      .or("order_type.is.null,order_type.eq.custom")
+      .order("created_at", { ascending: false });
 
+  let { data: orderRows, error: orderErr } = await ordersBase().eq("is_deleted", false);
+  if (orderErr && shouldRetryReadWithoutIsDeletedFilter(orderErr)) {
+    const retry = await ordersBase();
+    orderRows = retry.data;
+    orderErr = retry.error;
+  }
   if (orderErr) throw orderErr;
 
-  const list = orderRows || [];
+  const list = (orderRows || []).filter((o: any) => !o?.is_deleted);
   const orderIds = list.map((o) => o.id).filter(Boolean);
   const orderNumbers = list.map((o) => o.order_number).filter(Boolean);
 
@@ -112,18 +120,21 @@ async function loadSalesDashboard(): Promise<{
             .select(
               "order_id, id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate"
             )
+            .eq("is_deleted", false)
             .in("order_id", orderIds)
         : Promise.resolve({ data: [] as any[] }),
       orderIds.length
         ? supabase
             .from("receipts")
             .select("id, reference_id, reference_number, amount, status")
+            .eq("is_deleted", false)
             .in("reference_id", orderIds)
         : Promise.resolve({ data: [] as any[] }),
       orderNumbers.length
         ? supabase
             .from("receipts")
             .select("id, reference_id, reference_number, amount, status")
+            .eq("is_deleted", false)
             .in("reference_number", orderNumbers)
         : Promise.resolve({ data: [] as any[] }),
     ]);

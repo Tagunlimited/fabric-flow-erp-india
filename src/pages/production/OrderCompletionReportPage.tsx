@@ -126,6 +126,7 @@ export default function OrderCompletionReportPage() {
           )
         `
         )
+        .eq("is_deleted", false)
         .or("order_type.is.null,order_type.eq.custom")
         .order("order_date", { ascending: false });
 
