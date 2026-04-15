@@ -1524,20 +1524,68 @@ export default function QuotationDetailPage() {
                   </div>
                 </div>
 
-                {/* Terms and Conditions */}
+                {/* Terms + bank details + payment QR */}
                 <div className="mt-4 border-t border-gray-400 pt-3">
-                  <h3 className="text-sm font-bold text-gray-800 mb-2">Terms & Conditions:</h3>
-                  <div className="grid grid-cols-3 gap-3 text-sm">
-                    <div className="space-y-0.5">
-                      <div>• Payment: 50% advance, 50% on delivery</div>
-                      <div>• Delivery: {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : '15-20 working days'}</div>
-                      <div>• Prices inclusive of GST</div>
+                  <div className="grid grid-cols-12 gap-4">
+                    <div className="col-span-6">
+                      <h3 className="text-sm font-bold text-gray-800 mb-2">Terms & Conditions:</h3>
+                      <div className="space-y-0.5 text-sm">
+                        <div>• Payment: 50% advance, 50% on delivery</div>
+                        <div>• Delivery: {(order as any).expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : '15-20 working days'}</div>
+                        <div>• Prices inclusive of GST</div>
+                        <div>• Subject to change without notice</div>
+                        <div>• Support: 9am–6pm, Mon–Sat</div>
+                      </div>
                     </div>
-                    <div className="space-y-0.5">
-                      <div>• Subject to change without notice</div>
+                    <div className="col-span-3">
+                      {(company?.bank_details?.bank_name ||
+                        company?.bank_details?.account_number ||
+                        company?.bank_details?.ifsc_code ||
+                        company?.bank_details?.branch) ? (
+                        <div className="rounded border border-gray-300 p-2 min-h-[120px]">
+                          <div className="text-sm font-semibold mb-1">Bank Details:</div>
+                          {company?.bank_details?.bank_name && (
+                            <div className="text-xs leading-5">
+                              <span className="text-gray-700">Bank Name:</span>{' '}
+                              <span>{company.bank_details.bank_name}</span>
+                            </div>
+                          )}
+                          {company?.bank_details?.account_number && (
+                            <div className="text-xs leading-5">
+                              <span className="text-gray-700">A/C Number:</span>{' '}
+                              <span>{company.bank_details.account_number}</span>
+                            </div>
+                          )}
+                          {company?.bank_details?.ifsc_code && (
+                            <div className="text-xs leading-5">
+                              <span className="text-gray-700">IFSC:</span>{' '}
+                              <span>{company.bank_details.ifsc_code}</span>
+                            </div>
+                          )}
+                          {company?.bank_details?.branch && (
+                            <div className="text-xs leading-5">
+                              <span className="text-gray-700">Branch:</span>{' '}
+                              <span>{company.bank_details.branch}</span>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="min-h-[120px]" />
+                      )}
                     </div>
-                    <div className="space-y-0.5">
-                      <div>• Support: 9am–6pm, Mon–Sat</div>
+                    <div className="col-span-3">
+                      {company?.payment_qr_url ? (
+                        <div className="rounded border border-gray-300 p-2 min-h-[120px] text-center">
+                          <img
+                            src={company.payment_qr_url}
+                            alt="Payment QR"
+                            className="w-32 h-32 object-contain border border-gray-300 rounded bg-white p-1 mx-auto"
+                          />
+                          <p className="text-[10px] text-gray-500 mt-1">Scan to Pay</p>
+                        </div>
+                      ) : (
+                        <div className="min-h-[120px]" />
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1963,23 +2011,71 @@ export default function QuotationDetailPage() {
                 </div>
               </div>
 
-              {/* Terms and Conditions */}
+              {/* Terms + bank details + payment QR */}
                 <div className="mt-4 border-t border-gray-400 pt-3">
-                  <h3 className="text-sm font-bold text-gray-800 mb-2">Terms & Conditions:</h3>
-                  <div className="grid grid-cols-3 gap-3 text-sm">
-                  <div className="space-y-0.5">
-                    <div>• Payment: 50% advance, 50% on delivery</div>
-                      <div>• Delivery: {(order as any)?.expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : '15-20 working days'}</div>
-                    <div>• Prices inclusive of GST</div>
-                  </div>
-                  <div className="space-y-0.5">
-                    <div>• Subject to change without notice</div>
-                  </div>
-                  <div className="space-y-0.5">
-                    <div>• Support: 9am–6pm, Mon–Sat</div>
+                  <div className="grid grid-cols-12 gap-4">
+                    <div className="col-span-6">
+                      <h3 className="text-sm font-bold text-gray-800 mb-2">Terms & Conditions:</h3>
+                      <div className="space-y-0.5 text-sm">
+                        <div>• Payment: 50% advance, 50% on delivery</div>
+                        <div>• Delivery: {(order as any)?.expected_delivery_date ? new Date((order as any).expected_delivery_date).toLocaleDateString('en-IN') : '15-20 working days'}</div>
+                        <div>• Prices inclusive of GST</div>
+                        <div>• Subject to change without notice</div>
+                        <div>• Support: 9am–6pm, Mon–Sat</div>
+                      </div>
+                    </div>
+                    <div className="col-span-3">
+                      {(company?.bank_details?.bank_name ||
+                        company?.bank_details?.account_number ||
+                        company?.bank_details?.ifsc_code ||
+                        company?.bank_details?.branch) ? (
+                        <div className="rounded border border-gray-300 p-2 min-h-[120px]">
+                          <div className="text-sm font-semibold mb-1">Bank Details:</div>
+                          {company?.bank_details?.bank_name && (
+                            <div className="text-xs leading-5">
+                              <span className="text-gray-700">Bank Name:</span>{' '}
+                              <span>{company.bank_details.bank_name}</span>
+                            </div>
+                          )}
+                          {company?.bank_details?.account_number && (
+                            <div className="text-xs leading-5">
+                              <span className="text-gray-700">A/C Number:</span>{' '}
+                              <span>{company.bank_details.account_number}</span>
+                            </div>
+                          )}
+                          {company?.bank_details?.ifsc_code && (
+                            <div className="text-xs leading-5">
+                              <span className="text-gray-700">IFSC:</span>{' '}
+                              <span>{company.bank_details.ifsc_code}</span>
+                            </div>
+                          )}
+                          {company?.bank_details?.branch && (
+                            <div className="text-xs leading-5">
+                              <span className="text-gray-700">Branch:</span>{' '}
+                              <span>{company.bank_details.branch}</span>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="min-h-[120px]" />
+                      )}
+                    </div>
+                    <div className="col-span-3">
+                      {company?.payment_qr_url ? (
+                        <div className="rounded border border-gray-300 p-2 min-h-[120px] text-center">
+                          <img
+                            src={company.payment_qr_url}
+                            alt="Payment QR"
+                            className="w-32 h-32 object-contain border border-gray-300 rounded bg-white p-1 mx-auto"
+                          />
+                          <p className="text-[10px] text-gray-500 mt-1">Scan to Pay</p>
+                        </div>
+                      ) : (
+                        <div className="min-h-[120px]" />
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
 
               {/* Authorized Signatory Section */}
                 <div className="mt-4 pt-3 border-t border-gray-400">

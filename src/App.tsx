@@ -19,6 +19,7 @@ import Index from "./pages/Index";
 import CustomersPage from "./pages/crm/CustomersPage";
 import CustomerDetailPage from "./pages/crm/CustomerDetailPage";
 import LeadsPage from "./pages/crm/LeadsPage";
+import LeadDetailPage from "./pages/crm/LeadDetailPage";
 import ProductCategoriesPage from "./pages/inventory/ProductCategoriesPage";
 import SizeTypesPage from "./pages/inventory/SizeTypesPage";
 // import FabricsPage from "./pages/inventory/FabricsPage"; // Removed - using new FabricManagerNew
@@ -92,6 +93,7 @@ import { useCompanySettings } from "@/hooks/CompanySettingsContext";
 import { useEffect } from "react";
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
 import { ErpLayout } from "@/components/ErpLayout";
+import { installGlobalToastSoundEffects } from "@/utils/notificationSounds";
 
 function useDynamicFavicon() {
   const { config, loading } = useCompanySettings();
@@ -242,6 +244,10 @@ const App = () => {
     syncSidebarUrls();
   }, []); // Empty dependency array - run only once
 
+  React.useEffect(() => {
+    installGlobalToastSoundEffects();
+  }, []);
+
   // DISABLE ALL AUTO-REFRESH: Monitor and log visibility changes
   // All auto-refresh mechanisms have been disabled at their source:
   // - QueryClient: refetchOnWindowFocus = false
@@ -306,6 +312,11 @@ const App = () => {
                 <Route path="/crm/leads" element={
                   <ProtectedRouteWithCompanySettings>
                     <LeadsPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/crm/leads/:id" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <LeadDetailPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/orders" element={
