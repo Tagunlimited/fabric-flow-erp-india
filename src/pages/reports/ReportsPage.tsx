@@ -9,7 +9,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { CalendarIcon, Download, FileText, BarChart3, PieChart, TrendingUp, Users, Package, DollarSign, Clock, Filter } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { ErpLayout } from '@/components/ErpLayout';
 import { BackButton } from '@/components/common/BackButton';
 
 const ReportsPage = () => {
@@ -47,33 +46,37 @@ const ReportsPage = () => {
   };
 
   return (
-    <ErpLayout>
-    <div className="w-full space-y-6">
-        <div className="flex items-center">
-          <BackButton to="/dashboard" label="Back to Dashboard" />
-        </div>
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Reports</h1>
-          <p className="text-muted-foreground">
-            Generate and export comprehensive business reports
-          </p>
-        </div>
-        <div className="flex items-center space-x-2">
-          <Button variant="outline" size="sm">
-            <Clock className="h-4 w-4 mr-2" />
-            Schedule Report
-          </Button>
-          <Button size="sm">
-            <Download className="h-4 w-4 mr-2" />
-            Quick Export
-          </Button>
-        </div>
+    <div className="w-full max-w-none p-6 space-y-6">
+      <div className="flex items-center">
+        <BackButton to="/dashboard" label="Back to Dashboard" />
       </div>
 
+      {/* Header */}
+      <Card className="border-primary/20 bg-gradient-to-r from-background to-primary/5">
+        <CardContent className="pt-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">Reports</h1>
+              <p className="text-muted-foreground">
+                Generate and export comprehensive business reports
+              </p>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Button variant="outline" size="sm" className="shadow-sm">
+                <Clock className="h-4 w-4 mr-2" />
+                Schedule Report
+              </Button>
+              <Button size="sm" className="shadow-sm">
+                <Download className="h-4 w-4 mr-2" />
+                Quick Export
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Report Filters */}
-      <Card>
+      <Card className="shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center">
             <Filter className="h-5 w-5 mr-2" />
@@ -190,9 +193,9 @@ const ReportsPage = () => {
       </Card>
 
       {/* Report Types Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         {reportTypes.map((type) => (
-          <Card key={type.value} className="hover:shadow-md transition-shadow cursor-pointer">
+          <Card key={type.value} className="hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer">
             <CardHeader className="pb-3">
               <div className="flex items-center space-x-2">
                 <div className="p-2 bg-primary/10 rounded-lg">
@@ -206,17 +209,17 @@ const ReportsPage = () => {
                 {type.description}
               </CardDescription>
               <div className="flex space-x-2">
-                <Button 
-                  size="sm" 
-                  variant="outline" 
+                <Button
+                  size="sm"
+                  variant="outline"
                   className="flex-1"
                   onClick={() => setReportType(type.value)}
                 >
                   <FileText className="h-4 w-4 mr-1" />
                   Generate
                 </Button>
-                <Button 
-                  size="sm" 
+                <Button
+                  size="sm"
                   variant="outline"
                   onClick={() => handleExportReport('PDF')}
                 >
@@ -228,107 +231,109 @@ const ReportsPage = () => {
         ))}
       </div>
 
-      {/* Quick Reports Section */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Quick Reports</CardTitle>
-          <CardDescription>
-            Pre-configured reports for common business needs
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-4 border rounded-lg hover:bg-muted/50 cursor-pointer">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-green-100 rounded-lg">
-                  <DollarSign className="h-5 w-5 text-green-600" />
-                </div>
-                <div>
-                  <h4 className="font-medium">Monthly Sales</h4>
-                  <p className="text-sm text-muted-foreground">Current month revenue</p>
-                </div>
-              </div>
-            </div>
-            
-            <div className="p-4 border rounded-lg hover:bg-muted/50 cursor-pointer">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-blue-100 rounded-lg">
-                  <Package className="h-5 w-5 text-blue-600" />
-                </div>
-                <div>
-                  <h4 className="font-medium">Pending Orders</h4>
-                  <p className="text-sm text-muted-foreground">Orders awaiting fulfillment</p>
+      {/* Bottom cards */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        {/* Quick Reports Section */}
+        <Card className="shadow-sm">
+          <CardHeader>
+            <CardTitle>Quick Reports</CardTitle>
+            <CardDescription>
+              Pre-configured reports for common business needs
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 border rounded-lg hover:bg-muted/50 cursor-pointer transition-colors">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-green-100 rounded-lg">
+                    <DollarSign className="h-5 w-5 text-green-600" />
+                  </div>
+                  <div>
+                    <h4 className="font-medium">Monthly Sales</h4>
+                    <p className="text-sm text-muted-foreground">Current month revenue</p>
+                  </div>
                 </div>
               </div>
-            </div>
-            
-            <div className="p-4 border rounded-lg hover:bg-muted/50 cursor-pointer">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-orange-100 rounded-lg">
-                  <TrendingUp className="h-5 w-5 text-orange-600" />
-                </div>
-                <div>
-                  <h4 className="font-medium">Production Status</h4>
-                  <p className="text-sm text-muted-foreground">Current production metrics</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
 
-      {/* Recent Reports */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Reports</CardTitle>
-          <CardDescription>
-            Your recently generated reports
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between p-4 border rounded-lg">
-              <div className="flex items-center space-x-3">
-                <FileText className="h-5 w-5 text-muted-foreground" />
-                <div>
-                  <h4 className="font-medium">Sales Report - October 2024</h4>
-                  <p className="text-sm text-muted-foreground">Generated 2 hours ago</p>
+              <div className="p-4 border rounded-lg hover:bg-muted/50 cursor-pointer transition-colors">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-blue-100 rounded-lg">
+                    <Package className="h-5 w-5 text-blue-600" />
+                  </div>
+                  <div>
+                    <h4 className="font-medium">Pending Orders</h4>
+                    <p className="text-sm text-muted-foreground">Orders awaiting fulfillment</p>
+                  </div>
                 </div>
               </div>
-              <div className="flex space-x-2">
-                <Button size="sm" variant="outline">
-                  <Download className="h-4 w-4 mr-1" />
-                  Download
-                </Button>
-                <Button size="sm" variant="outline">
-                  View
-                </Button>
-              </div>
-            </div>
-            
-            <div className="flex items-center justify-between p-4 border rounded-lg">
-              <div className="flex items-center space-x-3">
-                <BarChart3 className="h-5 w-5 text-muted-foreground" />
-                <div>
-                  <h4 className="font-medium">Inventory Report - Q3 2024</h4>
-                  <p className="text-sm text-muted-foreground">Generated 1 day ago</p>
+
+              <div className="p-4 border rounded-lg hover:bg-muted/50 cursor-pointer transition-colors">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-orange-100 rounded-lg">
+                    <TrendingUp className="h-5 w-5 text-orange-600" />
+                  </div>
+                  <div>
+                    <h4 className="font-medium">Production Status</h4>
+                    <p className="text-sm text-muted-foreground">Current production metrics</p>
+                  </div>
                 </div>
               </div>
-              <div className="flex space-x-2">
-                <Button size="sm" variant="outline">
-                  <Download className="h-4 w-4 mr-1" />
-                  Download
-                </Button>
-                <Button size="sm" variant="outline">
-                  View
-                </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Recent Reports */}
+        <Card className="shadow-sm">
+          <CardHeader>
+            <CardTitle>Recent Reports</CardTitle>
+            <CardDescription>
+              Your recently generated reports
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/40 transition-colors">
+                <div className="flex items-center space-x-3">
+                  <FileText className="h-5 w-5 text-muted-foreground" />
+                  <div>
+                    <h4 className="font-medium">Sales Report - October 2024</h4>
+                    <p className="text-sm text-muted-foreground">Generated 2 hours ago</p>
+                  </div>
+                </div>
+                <div className="flex space-x-2">
+                  <Button size="sm" variant="outline">
+                    <Download className="h-4 w-4 mr-1" />
+                    Download
+                  </Button>
+                  <Button size="sm" variant="outline">
+                    View
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/40 transition-colors">
+                <div className="flex items-center space-x-3">
+                  <BarChart3 className="h-5 w-5 text-muted-foreground" />
+                  <div>
+                    <h4 className="font-medium">Inventory Report - Q3 2024</h4>
+                    <p className="text-sm text-muted-foreground">Generated 1 day ago</p>
+                  </div>
+                </div>
+                <div className="flex space-x-2">
+                  <Button size="sm" variant="outline">
+                    <Download className="h-4 w-4 mr-1" />
+                    Download
+                  </Button>
+                  <Button size="sm" variant="outline">
+                    View
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      </div>
     </div>
-    </ErpLayout>
   );
 };
 

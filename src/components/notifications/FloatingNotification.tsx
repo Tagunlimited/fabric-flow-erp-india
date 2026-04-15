@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { X, Bell } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { playSoundForNotificationType } from '@/utils/notificationSounds';
 
 interface FloatingNotificationProps {
   notification: {
@@ -27,9 +28,9 @@ export function FloatingNotification({
     if (notification) {
       setIsVisible(true);
       
-      // Play scissor cut sound effect
+      // Play configured notification sound
       if (sound) {
-        playScissorSound();
+        playSoundForNotificationType(notification.type);
       }
       
       // Auto dismiss after 5 seconds
@@ -40,40 +41,6 @@ export function FloatingNotification({
       return () => clearTimeout(timer);
     }
   }, [notification]);
-
-  const playScissorSound = () => {
-    // Create a simple scissor-like sound using Web Audio API
-    try {
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContext) {
-        console.warn('AudioContext not supported in this environment.');
-        return;
-      }
-      const audioContext = new AudioContext();
-      
-      // Create two quick snip sounds
-      for (let i = 0; i < 2; i++) {
-        setTimeout(() => {
-          const oscillator = audioContext.createOscillator();
-          const gainNode = audioContext.createGain();
-          
-          oscillator.connect(gainNode);
-          gainNode.connect(audioContext.destination);
-          
-          oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
-          oscillator.frequency.exponentialRampToValueAtTime(400, audioContext.currentTime + 0.1);
-          
-          gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-          gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
-          
-          oscillator.start(audioContext.currentTime);
-          oscillator.stop(audioContext.currentTime + 0.1);
-        }, i * 150);
-      }
-    } catch (error) {
-      console.warn('Could not play notification sound:', error);
-    }
-  };
 
   const handleDismiss = () => {
     setIsVisible(false);

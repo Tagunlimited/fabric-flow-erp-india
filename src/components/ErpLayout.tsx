@@ -14,7 +14,7 @@ import { useTheme } from "next-themes";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { cn } from "@/lib/utils";
 import { showInstallPrompt, isAppInstalled, isInstallPromptAvailable, getInstallPromptStatus } from '@/utils/pwaInstall';
@@ -28,6 +28,7 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
   const { user, profile, signOut, refreshProfile, profileLoading } = useAuth();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchQuery, setSearchQuery] = useState("");
   const [floatingNotification, setFloatingNotification] = useState<any>(null);
   const [availableRoles] = useState(['admin', 'sales', 'production', 'quality', 'dispatch', 'manager']);
@@ -89,9 +90,15 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
 
   const headerDepartment = (profile?.department || linkedEmployee?.department || '').trim();
   const headerTitleOrRole = linkedEmployee?.designation?.trim() || displayRole;
+  const disableHeaderAutoHide = location.pathname.startsWith('/reports');
 
   // Handle floating header
   useEffect(() => {
+    if (disableHeaderAutoHide) {
+      setIsHeaderVisible(true);
+      return;
+    }
+
     const handleScroll = () => {
       const currentScrollY = window.scrollY;
       const lastScrollY = lastScrollYRef.current;
@@ -109,7 +116,7 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
 
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+  }, [disableHeaderAutoHide]);
 
   // Check PWA install status
   useEffect(() => {
