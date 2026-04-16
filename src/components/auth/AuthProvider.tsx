@@ -38,6 +38,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const authInitializedRef = useRef(false);
   const profileRef = useRef<UserProfile | null>(null);
   const profileFetchInProgressRef = useRef(false); // Track if profile fetch is in progress
+  const lastSignedInHandledRef = useRef<{ userId: string | null; at: number }>({ userId: null, at: 0 });
 
   // Helper: check if login expired
   const isLoginExpired = () => {
@@ -604,6 +605,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
           fetchInProgress: profileFetchInProgressRef.current 
         });
         
+        // Supabase can emit repeated SIGNED_IN events (token refresh / tab focus).
+        // Avoid expensive duplicate profile reloads in a short window for the same user.
+        const now = Date.now();
+        const wasRecentlyHandled =
+          lastSignedInHandledRef.current.userId === session.user.id &&
+          now - lastSignedInHandledRef.current.at < 8000;
+        if (wasRecentlyHandled) {
+          console.log('⏭️ SIGNED_IN: duplicate event suppressed for same user');
+          lastUserIdRef.current = currentUserId;
+          setUser(session.user);
+          setLoading(false);
+          return;
+        }
+        lastSignedInHandledRef.current = { userId: session.user.id, at: now };
+
         // CRITICAL: Always clear old profile when SIGNED_IN fires to prevent user confusion
         // Even if userId hasn't changed, we want fresh data
         if (userIdChanged) {

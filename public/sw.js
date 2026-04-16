@@ -106,7 +106,8 @@ async function cacheFirst(request, cacheName) {
     }
 
     const networkResponse = await fetch(request);
-    await safeCachePut(request, networkResponse, cacheName);
+    const responseForCache = networkResponse.clone();
+    await safeCachePut(request, responseForCache, cacheName);
     return networkResponse;
   } catch (error) {
     console.error('Cache first strategy failed:', error);
@@ -121,7 +122,8 @@ async function cacheFirst(request, cacheName) {
 async function networkFirst(request, cacheName) {
   try {
     const networkResponse = await fetch(request);
-    await safeCachePut(request, networkResponse, cacheName);
+    const responseForCache = networkResponse.clone();
+    await safeCachePut(request, responseForCache, cacheName);
     return networkResponse;
   } catch (error) {
     // Only log if it's not a typical network error (aborted, failed fetch)
@@ -157,7 +159,8 @@ async function staleWhileRevalidate(request, cacheName) {
   const cachedResponse = await cache.match(request);
 
   const fetchPromise = fetch(request).then((networkResponse) => {
-    safeCachePut(request, networkResponse, cacheName);
+    const responseForCache = networkResponse.clone();
+    safeCachePut(request, responseForCache, cacheName);
     return networkResponse;
   }).catch(() => {
     // Network failed, return cached version if available
@@ -199,11 +202,16 @@ async function safeCachePut(request, response, cacheName) {
     if (response.type === 'opaque') return;
     if (response.status !== 200) return;
     if (request.headers.get('range')) return;
+    if (response.bodyUsed) return;
     const cache = await caches.open(cacheName);
-    await cache.put(request, response.clone());
+    await cache.put(request, response);
   } catch (error) {
     // Cache failures should never break network response path.
-    console.warn('Skipping cache write for request:', request.url, error?.message || error);
+    const message = error?.message || '';
+    if (message.includes('Response body is already used')) {
+      return;
+    }
+    console.warn('Skipping cache write for request:', request.url, message || error);
   }
 }
 

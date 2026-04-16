@@ -5,6 +5,13 @@ import './index.css'
 import { initializeFormPersistence, addFormPersistenceCSS } from './utils/autoFormPersistence'
 import { setupInstallPrompt } from './utils/pwaInstall'
 
+// Production log hygiene: keep warnings/errors, silence noisy debug logs.
+if (import.meta.env.PROD) {
+  console.log = () => {};
+  console.info = () => {};
+  console.debug = () => {};
+}
+
 // Add form persistence CSS
 addFormPersistenceCSS();
 
