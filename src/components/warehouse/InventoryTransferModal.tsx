@@ -128,8 +128,18 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
       if (transferError) throw transferError;
 
       const remainingQty = Number(inventory.quantity) - Number(transferQuantity);
-      const oldQuantity = Number(inventory.quantity);
       const fromBinId = inventory.bin_id;
+      // Unique active-row indexes enforce one row per (item_id, bin_id, status, unit).
+      // If destination already has a matching IN_STORAGE row, merge quantities.
+      const { data: existingStorageRow } = await supabase
+        .from('warehouse_inventory' as any)
+        .select('id, quantity')
+        .eq('item_id', inventory.item_id as any)
+        .eq('bin_id', selectedBinId as any)
+        .eq('status', 'IN_STORAGE' as any)
+        .eq('unit', inventory.unit as any)
+        .neq('id', inventory.id as any)
+        .maybeSingle();
 
       if (remainingQty > 0) {
         // Partial transfer: split into two rows
@@ -144,32 +154,48 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
           .eq('id', inventory.id as any);
         if (reduceError) throw reduceError;
 
-        // 2) Insert a new row for the moved quantity in storage
-        const { data: newInventoryRow, error: insertError } = await supabase
-          .from('warehouse_inventory' as any)
-          .insert({
-            grn_id: inventory.grn_id,
-            grn_item_id: inventory.grn_item_id,
-            item_type: inventory.item_type as any,
-            item_id: inventory.item_id,
-            item_name: inventory.item_name,
-            item_code: inventory.item_code,
-            quantity: transferQuantity,
-            unit: inventory.unit,
-            bin_id: selectedBinId,
-            status: 'IN_STORAGE',
-            moved_to_storage_date: new Date().toISOString(),
-            notes: notes || `Split from ${inventory.bin?.bin_code}`
-          } as any)
-          .select()
-          .single();
-        if (insertError) throw insertError;
+        let targetInventoryId = '';
+        if (existingStorageRow?.id) {
+          const mergedQty = Number(existingStorageRow.quantity || 0) + Number(transferQuantity);
+          const { error: mergeError } = await supabase
+            .from('warehouse_inventory' as any)
+            .update({
+              quantity: mergedQty,
+              moved_to_storage_date: new Date().toISOString(),
+              notes: notes || inventory.notes
+            } as any)
+            .eq('id', existingStorageRow.id as any);
+          if (mergeError) throw mergeError;
+          targetInventoryId = String(existingStorageRow.id);
+        } else {
+          // 2) Insert a new row for the moved quantity in storage
+          const { data: newInventoryRow, error: insertError } = await supabase
+            .from('warehouse_inventory' as any)
+            .insert({
+              grn_id: inventory.grn_id,
+              grn_item_id: inventory.grn_item_id,
+              item_type: inventory.item_type as any,
+              item_id: inventory.item_id,
+              item_name: inventory.item_name,
+              item_code: inventory.item_code,
+              quantity: transferQuantity,
+              unit: inventory.unit,
+              bin_id: selectedBinId,
+              status: 'IN_STORAGE',
+              moved_to_storage_date: new Date().toISOString(),
+              notes: notes || `Split from ${inventory.bin?.bin_code}`
+            } as any)
+            .select()
+            .single();
+          if (insertError) throw insertError;
+          targetInventoryId = String(newInventoryRow.id);
+        }
 
         // Log the transfer for the new row
         try {
           const { logInventoryTransfer } = await import('@/utils/inventoryLogging');
           await logInventoryTransfer(
-            newInventoryRow.id,
+            targetInventoryId,
             {
               item_type: inventory.item_type,
               item_id: inventory.item_id || undefined,
@@ -190,17 +216,36 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
           console.error('Error logging inventory transfer:', logError);
         }
       } else {
-        // Full transfer: move the existing row to storage
-        const { error: updateError } = await supabase
-          .from('warehouse_inventory' as any)
-          .update({
-            bin_id: selectedBinId,
-            status: 'IN_STORAGE',
-            moved_to_storage_date: new Date().toISOString(),
-            notes: notes
-          } as any)
-          .eq('id', inventory.id as any);
-        if (updateError) throw updateError;
+        // Full transfer: move row, or merge if destination already has same identity row
+        if (existingStorageRow?.id) {
+          const mergedQty = Number(existingStorageRow.quantity || 0) + Number(transferQuantity);
+          const { error: mergeError } = await supabase
+            .from('warehouse_inventory' as any)
+            .update({
+              quantity: mergedQty,
+              moved_to_storage_date: new Date().toISOString(),
+              notes: notes || inventory.notes
+            } as any)
+            .eq('id', existingStorageRow.id as any);
+          if (mergeError) throw mergeError;
+
+          const { error: deleteSourceError } = await supabase
+            .from('warehouse_inventory' as any)
+            .delete()
+            .eq('id', inventory.id as any);
+          if (deleteSourceError) throw deleteSourceError;
+        } else {
+          const { error: updateError } = await supabase
+            .from('warehouse_inventory' as any)
+            .update({
+              bin_id: selectedBinId,
+              status: 'IN_STORAGE',
+              moved_to_storage_date: new Date().toISOString(),
+              notes: notes
+            } as any)
+            .eq('id', inventory.id as any);
+          if (updateError) throw updateError;
+        }
 
         // Log the transfer
         try {
@@ -238,7 +283,12 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
 
     } catch (error) {
       console.error('Error transferring inventory:', error);
-      toast.error('Failed to transfer item to storage');
+      const err = error as { code?: string; message?: string; details?: string };
+      if (err?.code === '409' || err?.message?.includes('409')) {
+        toast.error('Transfer conflict detected. Please refresh inventory and try again.');
+      } else {
+        toast.error(err?.message ? `Failed to transfer item: ${err.message}` : 'Failed to transfer item to storage');
+      }
     } finally {
       setLoading(false);
     }
