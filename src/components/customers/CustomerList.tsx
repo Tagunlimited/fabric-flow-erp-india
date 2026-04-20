@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,8 +6,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Search, Plus, Edit, Trash2, Download, Upload, X, FileText, ShoppingCart, Shirt } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Search, Plus, Edit, Trash2, Download, Upload, X, FileText, ShoppingCart, Shirt, Filter } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { supabase } from '@/integrations/supabase/client';
@@ -16,7 +23,7 @@ import { useToast } from '@/hooks/use-toast';
 import { CustomerForm } from './CustomerForm';
 import { OrderForm } from '../orders/OrderForm';
 import { ReadymadeOrderForm } from '../orders/ReadymadeOrderForm';
-import { calculateLifetimeValue, formatCurrency } from '@/lib/utils';
+import { calculateLifetimeValue, cn, formatCurrency } from '@/lib/utils';
 import * as XLSX from 'xlsx';
 import { useFormPersistence } from '@/contexts/FormPersistenceContext';
 
@@ -63,6 +70,74 @@ interface Customer {
   state_name?: string;
 }
 
+type CustomerColumnFilters = {
+  client: string;
+  contact: string;
+  type: string;
+  location: string;
+  loyalty_points: string;
+};
+const EMPTY_COLUMN_FILTERS: CustomerColumnFilters = {
+  client: '',
+  contact: '',
+  type: '',
+  location: '',
+  loyalty_points: '',
+};
+type CustomerFilterColumnKey = keyof CustomerColumnFilters;
+const FILTER_META: Record<CustomerFilterColumnKey, { title: string; description: string; placeholder: string }> = {
+  client: { title: 'Filter by client', description: 'Match client/company or GST text.', placeholder: 'e.g. Rajiv or GST' },
+  contact: { title: 'Filter by contact', description: 'Match phone or email.', placeholder: 'e.g. 98 or @mail.com' },
+  type: { title: 'Filter by type', description: 'Match customer type label.', placeholder: 'e.g. Corporate' },
+  location: { title: 'Filter by location', description: 'Match city/state/pincode.', placeholder: 'e.g. Bengaluru' },
+  loyalty_points: { title: 'Filter by loyalty/LTV', description: 'Match points or LTV amount.', placeholder: 'e.g. 0 or 4252' },
+};
+
+function includesFilter(filterRaw: string, value: string): boolean {
+  const f = filterRaw.trim().toLowerCase();
+  if (!f) return true;
+  return value.toLowerCase().includes(f);
+}
+
+function ColumnFilterTrigger({
+  active,
+  ariaLabel,
+  onOpen,
+}: {
+  active: boolean;
+  ariaLabel: string;
+  onOpen: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={ariaLabel}
+      aria-pressed={active}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      className={cn(
+        'h-7 w-7 shrink-0 rounded-full transition-all duration-200 ease-out',
+        active
+          ? 'bg-primary/20 text-primary shadow-[0_0_0_2px_hsl(var(--primary)/0.45),0_4px_14px_-4px_hsl(var(--primary)/0.45)] ring-2 ring-primary/50 ring-offset-2 ring-offset-background hover:bg-primary/28 hover:ring-primary/65'
+          : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+      )}
+    >
+      <Filter
+        className={cn(
+          'h-3.5 w-3.5 transition-transform duration-200 ease-out',
+          active && 'scale-110 fill-primary text-primary [filter:drop-shadow(0_0_5px_hsl(var(--primary)/0.55))]'
+        )}
+        strokeWidth={active ? 2.5 : 2}
+        aria-hidden
+      />
+    </Button>
+  );
+}
+
 export function CustomerList() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [filteredCustomers, setFilteredCustomers] = useState<Customer[]>([]);
@@ -91,6 +166,10 @@ export function CustomerList() {
   const [showOrderTypeDialog, setShowOrderTypeDialog] = useState(false);
   const [selectedCustomerForOrder, setSelectedCustomerForOrder] = useState<Customer | null>(null);
   const [selectedOrderType, setSelectedOrderType] = useState<'custom' | 'readymade' | null>(null);
+  const [columnFilters, setColumnFilters] = useState<CustomerColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<CustomerFilterColumnKey | null>(null);
+  const filterDialogMeta = filterDialogColumn ? FILTER_META[filterDialogColumn] : null;
+  const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -844,6 +923,23 @@ export function CustomerList() {
     );
   }
 
+  const displayCustomers = useMemo(() => {
+    return filteredCustomers.filter((customer) => {
+      const ltv = customerLifetimeValues[customer.id] || 0;
+      const clientText = `${customer.company_name || ''} ${customer.gstin || ''}`;
+      const contactText = `${customer.phone || ''} ${customer.email || ''}`;
+      const locationText = `${customer.city || ''} ${customer.state_name || ''} ${customer.pincode || ''}`;
+      const loyaltyText = `${customer.loyalty_points || 0} ${formatCurrency(ltv)}`;
+      return (
+        includesFilter(columnFilters.client, clientText) &&
+        includesFilter(columnFilters.contact, contactText) &&
+        includesFilter(columnFilters.type, customer.customer_type_name || 'Unknown') &&
+        includesFilter(columnFilters.location, locationText) &&
+        includesFilter(columnFilters.loyalty_points, loyaltyText)
+      );
+    });
+  }, [filteredCustomers, customerLifetimeValues, columnFilters]);
+
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
@@ -873,7 +969,7 @@ export function CustomerList() {
 
       <Card className="shadow-erp-md">
         <CardHeader>
-          <CardTitle>Customers ({filteredCustomers.length})</CardTitle>
+          <CardTitle>Customers ({displayCustomers.length})</CardTitle>
           <div className="flex flex-col md:flex-row gap-4">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
@@ -909,16 +1005,16 @@ export function CustomerList() {
               <Table className="min-w-[600px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Client</TableHead>
-                    <TableHead>Contact</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Location</TableHead>
-                    <TableHead>Loyalty Points</TableHead>
+                    <TableHead><div className="flex items-center gap-1">Client<ColumnFilterTrigger active={!!columnFilters.client} ariaLabel="Filter client" onOpen={() => setFilterDialogColumn('client')} /></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Contact<ColumnFilterTrigger active={!!columnFilters.contact} ariaLabel="Filter contact" onOpen={() => setFilterDialogColumn('contact')} /></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Type<ColumnFilterTrigger active={!!columnFilters.type} ariaLabel="Filter type" onOpen={() => setFilterDialogColumn('type')} /></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Location<ColumnFilterTrigger active={!!columnFilters.location} ariaLabel="Filter location" onOpen={() => setFilterDialogColumn('location')} /></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Loyalty Points<ColumnFilterTrigger active={!!columnFilters.loyalty_points} ariaLabel="Filter loyalty points" onOpen={() => setFilterDialogColumn('loyalty_points')} /></div></TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredCustomers.map((customer) => (
+                  {displayCustomers.map((customer) => (
                     <TableRow 
                       key={customer.id} 
                       className="cursor-pointer hover:bg-muted/50"
@@ -997,8 +1093,53 @@ export function CustomerList() {
               </Table>
             </div>
           )}
+          {hasActiveColumnFilters && (
+            <div className="flex justify-end mt-3">
+              <Button variant="ghost" size="sm" onClick={() => setColumnFilters({ ...EMPTY_COLUMN_FILTERS })}>
+                Clear column filters
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={filterDialogColumn !== null}
+        onOpenChange={(open) => {
+          if (!open) setFilterDialogColumn(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          {filterDialogColumn && filterDialogMeta && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{filterDialogMeta.title}</DialogTitle>
+                <DialogDescription>{filterDialogMeta.description}</DialogDescription>
+              </DialogHeader>
+              <Input
+                autoFocus
+                placeholder={filterDialogMeta.placeholder}
+                value={columnFilters[filterDialogColumn]}
+                onChange={(e) =>
+                  setColumnFilters((p) => ({ ...p, [filterDialogColumn]: e.target.value }))
+                }
+              />
+              <DialogFooter className="gap-2 sm:gap-0">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setColumnFilters((p) => ({ ...p, [filterDialogColumn]: '' }))}
+                >
+                  Clear this filter
+                </Button>
+                <Button type="button" onClick={() => setFilterDialogColumn(null)}>
+                  Done
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Bulk Upload Modal */}
       <Dialog open={showBulkUpload} onOpenChange={setShowBulkUpload}>

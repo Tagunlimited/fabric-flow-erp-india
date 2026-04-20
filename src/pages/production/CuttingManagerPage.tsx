@@ -134,6 +134,12 @@ const CuttingManagerPage = () => {
   const [sortField, setSortField] = useState<string>('dueDate');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [cuttingTab, setCuttingTab] = useState<'jobs' | 'completed'>('jobs');
+  const [columnFilters, setColumnFilters] = useState({
+    progress: '',
+    cutting_master: '',
+    assigned_batch: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   // Initialize with empty array - data will be loaded from backend
   const [cuttingJobs, setCuttingJobs] = useState<CuttingJob[]>([]);
@@ -679,6 +685,9 @@ const CuttingManagerPage = () => {
   const activeJobs = cuttingJobs.filter(job => !isJobCompleted(job));
   const completedJobs = cuttingJobs.filter(job => isJobCompleted(job));
 
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
+
   const filteredActiveJobs = sortJobs(activeJobs.filter(job => {
     const matchesSearch = job.jobNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          job.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -687,7 +696,16 @@ const CuttingManagerPage = () => {
     const matchesStatus = statusFilter === "all" || job.status === statusFilter;
     const matchesPriority = priorityFilter === "all" || job.priority === priorityFilter;
     
-    return matchesSearch && matchesStatus && matchesPriority;
+    const progressText = `${getCompletionPercentage(job)}% ${job.cutQuantity}/${job.quantity}`;
+    const mastersText = (job.cuttingMasters && job.cuttingMasters.length > 0)
+      ? job.cuttingMasters.map((m) => m.name).join(' ')
+      : (job.assignedTo || '');
+    const assignedBatchText = (job.batchAssignments || []).map((b) => `${b.batch_name || ''} ${b.batch_leader_name || ''} ${b.total_quantity || ''}`).join(' ');
+    const matchesColumns =
+      includesFilter(progressText, columnFilters.progress) &&
+      includesFilter(mastersText, columnFilters.cutting_master) &&
+      includesFilter(assignedBatchText, columnFilters.assigned_batch);
+    return matchesSearch && matchesStatus && matchesPriority && matchesColumns;
   }));
 
   const filteredCompletedJobs = sortJobs(completedJobs.filter(job => {
@@ -698,8 +716,18 @@ const CuttingManagerPage = () => {
     const matchesStatus = statusFilter === "all" || job.status === statusFilter;
     const matchesPriority = priorityFilter === "all" || job.priority === priorityFilter;
     
-    return matchesSearch && matchesStatus && matchesPriority;
+    const progressText = `${job.cutQuantity}/${job.quantity}`;
+    const mastersText = (job.cuttingMasters && job.cuttingMasters.length > 0)
+      ? job.cuttingMasters.map((m) => m.name).join(' ')
+      : (job.assignedTo || '');
+    const assignedBatchText = (job.batchAssignments || []).map((b) => `${b.batch_name || ''} ${b.batch_leader_name || ''} ${b.total_quantity || ''}`).join(' ');
+    const matchesColumns =
+      includesFilter(progressText, columnFilters.progress) &&
+      includesFilter(mastersText, columnFilters.cutting_master) &&
+      includesFilter(assignedBatchText, columnFilters.assigned_batch);
+    return matchesSearch && matchesStatus && matchesPriority && matchesColumns;
   }));
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
   // Calculate stats after activeJobs and completedJobs are defined
   const stats = {
@@ -712,9 +740,10 @@ const CuttingManagerPage = () => {
     reworkJobs: cuttingJobs.filter(j => j.reworkRequired).length
   };
 
-  const getCompletionPercentage = (job: CuttingJob) => {
+  function getCompletionPercentage(job: CuttingJob) {
+    if (!job.quantity) return 0;
     return Math.round((job.cutQuantity / job.quantity) * 100);
-  };
+  }
 
   const getProgressBarColor = (percentage: number) => {
     if (percentage < 30) return 'bg-red-500';
@@ -846,7 +875,7 @@ const CuttingManagerPage = () => {
                 <CardTitle>Filters</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                   <div>
                     <Label htmlFor="search">Search</Label>
                     <div className="relative">
@@ -892,9 +921,23 @@ const CuttingManagerPage = () => {
                     </Select>
                   </div>
                   <div className="flex items-end">
-                    <Button className="w-full">
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setFilterDialogColumn('progress')}
+                    >
                       <Filter className="w-4 h-4 mr-2" />
-                      Apply Filters
+                      Column filter
+                    </Button>
+                  </div>
+                  <div className="flex items-end">
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setColumnFilters({ progress: '', cutting_master: '', assigned_batch: '' })}
+                      disabled={!hasActiveColumnFilters}
+                    >
+                      Clear column filters
                     </Button>
                   </div>
                 </div>
@@ -921,9 +964,9 @@ const CuttingManagerPage = () => {
                         <SortableTableHeader label="Order #" field="orderNumber" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Customer" field="customerName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Product" field="productName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
-                        <TableHead>Progress</TableHead>
-                        <TableHead>Cutting Master</TableHead>
-                        <TableHead>Assigned Batch</TableHead>
+                        <TableHead><div className="flex items-center gap-1">Progress<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.progress ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('progress')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Cutting Master<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.cutting_master ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('cutting_master')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Assigned Batch<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.assigned_batch ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('assigned_batch')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                         <SortableTableHeader label="Status" field="status" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Due Date" field="dueDate" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <TableHead>Actions</TableHead>
@@ -1120,7 +1163,7 @@ const CuttingManagerPage = () => {
                 <CardTitle>Filters</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                   <div>
                     <Label htmlFor="search-completed">Search</Label>
                     <div className="relative">
@@ -1166,9 +1209,23 @@ const CuttingManagerPage = () => {
                     </Select>
           </div>
                   <div className="flex items-end">
-                    <Button className="w-full">
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setFilterDialogColumn('progress')}
+                    >
                       <Filter className="w-4 h-4 mr-2" />
-                      Apply Filters
+                      Column filter
+                    </Button>
+                  </div>
+                  <div className="flex items-end">
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setColumnFilters({ progress: '', cutting_master: '', assigned_batch: '' })}
+                      disabled={!hasActiveColumnFilters}
+                    >
+                      Clear column filters
                     </Button>
                   </div>
                 </div>
@@ -1194,9 +1251,9 @@ const CuttingManagerPage = () => {
                         <SortableTableHeader label="Order #" field="orderNumber" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Customer" field="customerName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Product" field="productName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
-                        <TableHead>Progress</TableHead>
-                        <TableHead>Cutting Master</TableHead>
-                        <TableHead>Assigned Batches</TableHead>
+                        <TableHead><div className="flex items-center gap-1">Progress<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.progress ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('progress')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Cutting Master<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.cutting_master ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('cutting_master')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Assigned Batches<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.assigned_batch ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('assigned_batch')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                         <SortableTableHeader label="Completion Date" field="dueDate" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <TableHead>Actions</TableHead>
                       </TableRow>
@@ -1433,6 +1490,42 @@ const CuttingManagerPage = () => {
         }}
         documentData={stitchJobCardDoc}
       />
+      <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Filter column</DialogTitle>
+          </DialogHeader>
+          {filterDialogColumn && (
+            <div className="space-y-3">
+              <Input
+                autoFocus
+                placeholder="Type to filter..."
+                value={columnFilters[filterDialogColumn]}
+                onChange={(event) =>
+                  setColumnFilters((prev) => ({
+                    ...prev,
+                    [filterDialogColumn]: event.target.value,
+                  }))
+                }
+              />
+              <div className="flex justify-between">
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    setColumnFilters((prev) => ({
+                      ...prev,
+                      [filterDialogColumn]: '',
+                    }))
+                  }
+                >
+                  Clear
+                </Button>
+                <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
       </div>
     </ErpLayout>
   );

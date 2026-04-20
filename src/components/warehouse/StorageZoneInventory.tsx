@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Archive, Package, Search, Eye, History, Trash2, Download, Truck } from 'lucide-react';
+import { Archive, Package, Search, Eye, History, Trash2, Download, Truck, Filter } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS } from '@/types/warehouse-inventory';
 import { toast } from 'sonner';
@@ -50,6 +50,19 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     inventory: WarehouseInventory;
     details: AllocationDetail[];
   } | null>(null);
+  const [columnFilters, setColumnFilters] = useState({
+    name: '',
+    type: '',
+    fabric: '',
+    color: '',
+    material_gsm: '',
+    brand: '',
+    size: '',
+    bin_inventory: '',
+    allocated: '',
+    status: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   const loadInventory = async () => {
     try {
@@ -459,6 +472,78 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     return Array.from(s).sort();
   }, [inventory]);
 
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
+
+  const columnCellValue = (item: WarehouseInventory, key: keyof typeof columnFilters): string => {
+    const fabricMaster = (item as any).fabric_master;
+    const itemMaster = (item as any).item_master;
+    const product = (item as any).product;
+    const lineFabricColor = item.grn_item?.fabric_color;
+    const lineItemColor = item.grn_item?.item_color;
+    const allocatedQuantity = Number((item as any).allocated_quantity || 0);
+    const availableQuantity = Math.max(Number(item.quantity || 0) - allocatedQuantity, 0);
+    const qtyNum = Number(item.quantity || 0);
+
+    switch (key) {
+      case 'name':
+        if (item.item_type === 'FABRIC' && fabricMaster) return fabricMaster.fabric_name || item.item_name || '';
+        if (item.item_type === 'ITEM' && itemMaster) return itemMaster.item_name || item.item_name || '';
+        if (item.item_type === 'PRODUCT' && product) return product.name || item.item_name || '';
+        return item.item_name || '';
+      case 'type':
+        if (item.item_type === 'FABRIC') return 'Fabric';
+        if (item.item_type === 'ITEM' && itemMaster) return itemMaster.item_type || '';
+        if (item.item_type === 'PRODUCT' && product) return product.class || '';
+        return item.item_type || '';
+      case 'fabric':
+        if (item.item_type === 'FABRIC' && fabricMaster) {
+          return (
+            (fabricMaster.fabric_for_supplier && String(fabricMaster.fabric_for_supplier).trim()) ||
+            fabricMaster.fabric_name ||
+            fabricMaster.type ||
+            ''
+          );
+        }
+        return '';
+      case 'color':
+        if (item.item_type === 'FABRIC' && fabricMaster) return lineFabricColor || fabricMaster.color || '';
+        if (item.item_type === 'ITEM' && itemMaster) return lineItemColor || itemMaster.color || '';
+        return lineFabricColor || lineItemColor || '';
+      case 'material_gsm':
+        if (item.item_type === 'FABRIC' && fabricMaster) {
+          const material = fabricMaster.type || '';
+          const gsm = fabricMaster.gsm || '';
+          return material && gsm ? `${material} ${gsm} GSM` : material || gsm || '';
+        }
+        if (item.item_type === 'ITEM' && itemMaster) return itemMaster.material || '';
+        return item.grn_item?.fabric_gsm || '';
+      case 'brand':
+        if (item.item_type === 'ITEM' && itemMaster) return itemMaster.brand || '';
+        if (item.item_type === 'PRODUCT' && product) return product.brand || '';
+        return '';
+      case 'size':
+        if (item.item_type === 'ITEM' && itemMaster) return itemMaster.size || '';
+        if (item.item_type === 'PRODUCT' && product) return product.size || '';
+        return '';
+      case 'bin_inventory':
+        return `${item.bin?.bin_code || ''} total ${item.quantity} ${item.unit} available ${availableQuantity} ${item.unit} allocated ${allocatedQuantity} ${item.unit} ${item.bin?.rack?.floor?.warehouse?.name || ''} floor ${item.bin?.rack?.floor?.floor_number || ''} ${item.bin?.rack?.rack_code || ''}`;
+      case 'allocated':
+        return `${allocatedQuantity} ${item.unit || ''}`;
+      case 'status':
+        if (item.status === 'IN_STORAGE') {
+          if (availableQuantity <= 0 && qtyNum > 0) return 'Allocated';
+          if (availableQuantity > 0 && qtyNum > 0 && availableQuantity / qtyNum < 0.25) return 'Low Stock';
+          return 'Available';
+        }
+        return item.status || '';
+      default:
+        return '';
+    }
+  };
+
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
+
   const filteredInventory = inventory.filter((item) => {
     const t = searchTerm.trim().toLowerCase();
     const matchesSearch =
@@ -487,7 +572,10 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     const matchesItemType = itemTypeFilter === 'all' || item.item_type === itemTypeFilter;
     const wh = item.bin?.rack?.floor?.warehouse?.name || '';
     const matchesZone = zoneFilter === 'all' || wh === zoneFilter;
-    return matchesSearch && matchesStatus && matchesItemType && matchesZone;
+    const matchesColumns = (Object.keys(columnFilters) as Array<keyof typeof columnFilters>).every((columnKey) =>
+      includesFilter(columnCellValue(item, columnKey), columnFilters[columnKey])
+    );
+    return matchesSearch && matchesStatus && matchesItemType && matchesZone && matchesColumns;
   });
 
   const handleExportReport = () => {
@@ -720,6 +808,27 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 ))}
               </SelectContent>
             </Select>
+            {hasActiveColumnFilters && (
+              <Button
+                variant="outline"
+                onClick={() =>
+                  setColumnFilters({
+                    name: '',
+                    type: '',
+                    fabric: '',
+                    color: '',
+                    material_gsm: '',
+                    brand: '',
+                    size: '',
+                    bin_inventory: '',
+                    allocated: '',
+                    status: '',
+                  })
+                }
+              >
+                Clear column filters
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -735,16 +844,16 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
           <Table>
               <TableHeader>
                 <TableRow className="border-b border-black/10 bg-[#f9fafb] hover:bg-[#f9fafb]">
-                  <TableHead className="text-[#0a0a0a] font-medium">Name</TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium">Type</TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium">Fabric</TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium">Color</TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium">Material/GSM</TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium">Brand</TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium">Size</TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium">Bin &amp; Inventory</TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium">Allocated</TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium">Status</TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Name<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.name ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('name')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Type<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.type ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('type')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Fabric<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.fabric ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('fabric')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Color<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.color ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('color')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Material/GSM<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.material_gsm ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('material_gsm')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Brand<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.brand ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('brand')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Size<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.size ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('size')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Bin &amp; Inventory<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.bin_inventory ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('bin_inventory')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Allocated<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.allocated ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('allocated')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                   <TableHead className="text-right text-[#0a0a0a] font-medium">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -1096,6 +1205,42 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 </DialogContent>
               </Dialog>
             )}
+            <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Filter column</DialogTitle>
+                </DialogHeader>
+                {filterDialogColumn && (
+                  <div className="space-y-3">
+                    <Input
+                      autoFocus
+                      placeholder="Type to filter..."
+                      value={columnFilters[filterDialogColumn]}
+                      onChange={(event) =>
+                        setColumnFilters((prev) => ({
+                          ...prev,
+                          [filterDialogColumn]: event.target.value,
+                        }))
+                      }
+                    />
+                    <div className="flex justify-between">
+                      <Button
+                        variant="ghost"
+                        onClick={() =>
+                          setColumnFilters((prev) => ({
+                            ...prev,
+                            [filterDialogColumn]: '',
+                          }))
+                        }
+                      >
+                        Clear
+                      </Button>
+                      <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
       </div>
     </div>
   );

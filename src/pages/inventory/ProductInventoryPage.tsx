@@ -11,7 +11,7 @@ import { InventoryTransferModal } from '@/components/warehouse/InventoryTransfer
 import { InventoryAdjustment } from '@/components/masters/InventoryAdjustment';
 import { WarehouseInventory } from '@/types/warehouse-inventory';
 import { supabase } from '@/integrations/supabase/client';
-import { Package, Search, Image as ImageIcon, X, ChevronLeft, ChevronRight, Settings, Upload, FileSpreadsheet, Download, Loader2 } from 'lucide-react';
+import { Package, Search, Image as ImageIcon, X, ChevronLeft, ChevronRight, Settings, Upload, FileSpreadsheet, Download, Loader2, Filter } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -63,6 +63,17 @@ const ProductInventoryPage: React.FC = () => {
   const [bulkProgress, setBulkProgress] = useState(0);
   const [bulkUploadError, setBulkUploadError] = useState<string | null>(null);
   const [bulkUploadSuccess, setBulkUploadSuccess] = useState<string | null>(null);
+  const [columnFilters, setColumnFilters] = useState({
+    sku: '',
+    class: '',
+    color: '',
+    size: '',
+    name: '',
+    brand: '',
+    category: '',
+    inventory: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   useEffect(() => {
     loadProducts();
@@ -126,6 +137,9 @@ const ProductInventoryPage: React.FC = () => {
     }
   }, [searchTerm, products]);
 
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
+
   const loadProducts = async () => {
     try {
       setLoading(true);
@@ -150,6 +164,18 @@ const ProductInventoryPage: React.FC = () => {
       setLoading(false);
     }
   };
+  
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
+  const visibleProducts = filteredProducts.filter((product) => {
+    return includesFilter(product.sku, columnFilters.sku)
+      && includesFilter(product.class, columnFilters.class)
+      && includesFilter(product.color, columnFilters.color)
+      && includesFilter(product.size, columnFilters.size)
+      && includesFilter(product.name, columnFilters.name)
+      && includesFilter(product.brand, columnFilters.brand)
+      && includesFilter(product.category, columnFilters.category)
+      && includesFilter(`${product.current_stock ?? ''} pcs`, columnFilters.inventory);
+  });
 
   const getProductImage = (product: Product): string | null => {
     return product.main_image || product.image_url || null;
@@ -706,6 +732,28 @@ const ProductInventoryPage: React.FC = () => {
                 </button>
               )}
             </div>
+            {hasActiveColumnFilters && (
+              <div className="mt-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setColumnFilters({
+                      sku: '',
+                      class: '',
+                      color: '',
+                      size: '',
+                      name: '',
+                      brand: '',
+                      category: '',
+                      inventory: '',
+                    })
+                  }
+                >
+                  Clear column filters
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -723,22 +771,34 @@ const ProductInventoryPage: React.FC = () => {
                 <Loader2 className="h-12 w-12 text-primary mx-auto mb-4 animate-spin" />
                 <p className="text-muted-foreground animate-pulse">Loading products...</p>
               </div>
-            ) : filteredProducts.length === 0 ? (
+            ) : visibleProducts.length === 0 ? (
               <div className="text-center py-12">
                 <div className="relative inline-block">
                   <Package className="h-16 w-16 text-muted-foreground mx-auto mb-4 transition-all duration-300 hover:scale-110 hover:rotate-12" />
                   <div className="absolute inset-0 bg-primary/10 rounded-full blur-xl animate-pulse" />
                 </div>
                 <p className="text-muted-foreground text-lg">
-                  {searchTerm ? 'No products found matching your search.' : 'No products found in inventory.'}
+                  {searchTerm || hasActiveColumnFilters ? 'No products found matching your filters.' : 'No products found in inventory.'}
                 </p>
-                {searchTerm && (
+                {(searchTerm || hasActiveColumnFilters) && (
                   <Button
                     variant="ghost"
-                    onClick={() => setSearchTerm('')}
+                    onClick={() => {
+                      setSearchTerm('');
+                      setColumnFilters({
+                        sku: '',
+                        class: '',
+                        color: '',
+                        size: '',
+                        name: '',
+                        brand: '',
+                        category: '',
+                        inventory: '',
+                      });
+                    }}
                     className="mt-4 transition-all duration-200 hover:scale-105"
                   >
-                    Clear search
+                    Clear filters
                   </Button>
                 )}
               </div>
@@ -748,18 +808,18 @@ const ProductInventoryPage: React.FC = () => {
                   <TableHeader>
                     <TableRow className="hover:bg-muted/50 transition-colors">
                       <TableHead className="w-[120px]">Image</TableHead>
-                      <TableHead>SKU</TableHead>
-                      <TableHead>Class</TableHead>
-                      <TableHead>Color</TableHead>
-                      <TableHead>Size</TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Brand</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead className="text-right">Inventory</TableHead>
+                      <TableHead><div className="flex items-center gap-1">SKU<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.sku ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('sku')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Class<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.class ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('class')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Color<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.color ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('color')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Size<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.size ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('size')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Name<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.name ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('name')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Brand<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.brand ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('brand')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Category<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.category ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('category')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead className="text-right"><div className="flex items-center justify-end gap-1">Inventory<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.inventory ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('inventory')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredProducts.map((product, index) => {
+                    {visibleProducts.map((product, index) => {
                       const imageUrl = getProductImage(product);
                       const images = getAllProductImages(product);
                       return (
@@ -1194,6 +1254,42 @@ const ProductInventoryPage: React.FC = () => {
                     })}
                   </TableBody>
                 </Table>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+        <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Filter column</DialogTitle>
+            </DialogHeader>
+            {filterDialogColumn && (
+              <div className="space-y-3">
+                <Input
+                  autoFocus
+                  placeholder="Type to filter..."
+                  value={columnFilters[filterDialogColumn]}
+                  onChange={(event) =>
+                    setColumnFilters((prev) => ({
+                      ...prev,
+                      [filterDialogColumn]: event.target.value,
+                    }))
+                  }
+                />
+                <div className="flex justify-between">
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      setColumnFilters((prev) => ({
+                        ...prev,
+                        [filterDialogColumn]: '',
+                      }))
+                    }
+                  >
+                    Clear
+                  </Button>
+                  <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                </div>
               </div>
             )}
           </DialogContent>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ErpLayout } from '@/components/ErpLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,7 +13,7 @@ import { CustomerSearchSelect } from '@/components/customers/CustomerSearchSelec
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
-import { formatCurrency, formatDateIndian } from '@/lib/utils';
+import { cn, formatCurrency, formatDateIndian } from '@/lib/utils';
 import { getCustomerMobile } from '@/lib/customerContact';
 import { getOrderCalculatedTotals, fetchOrderIdsWithActiveCreditReceipt } from '@/utils/orderFinancials';
 import jsPDF from 'jspdf';
@@ -21,7 +21,7 @@ import html2canvas from 'html2canvas';
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Calendar as CalendarIcon, Download, Printer, Search } from 'lucide-react';
+import { Calendar as CalendarIcon, Download, Printer, Search, Filter } from 'lucide-react';
 import '../OrdersPageViewSwitch.css';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 
@@ -56,6 +56,81 @@ interface Customer {
   gstin: string | null;
 }
 
+type ReceiptColumnFilters = {
+  date: string;
+  receipt_number: string;
+  customer: string;
+  mobile: string;
+  reference: string;
+  type: string;
+  amount: string;
+  mode: string;
+};
+const EMPTY_COLUMN_FILTERS: ReceiptColumnFilters = {
+  date: '',
+  receipt_number: '',
+  customer: '',
+  mobile: '',
+  reference: '',
+  type: '',
+  amount: '',
+  mode: '',
+};
+type ReceiptFilterColumnKey = keyof ReceiptColumnFilters;
+const FILTER_META: Record<ReceiptFilterColumnKey, { title: string; description: string; placeholder: string }> = {
+  date: { title: 'Filter by date', description: 'Match date text.', placeholder: 'e.g. 20 Apr' },
+  receipt_number: { title: 'Filter by receipt #', description: 'Match receipt number.', placeholder: 'e.g. RCP' },
+  customer: { title: 'Filter by customer', description: 'Match customer name.', placeholder: 'e.g. Rajiv' },
+  mobile: { title: 'Filter by mobile', description: 'Match customer phone/mobile.', placeholder: 'e.g. 98' },
+  reference: { title: 'Filter by reference', description: 'Match order/reference number.', placeholder: 'e.g. TUC/' },
+  type: { title: 'Filter by type', description: 'Match reference type.', placeholder: 'e.g. order' },
+  amount: { title: 'Filter by amount', description: 'Match amount text.', placeholder: 'e.g. 12000' },
+  mode: { title: 'Filter by mode', description: 'Match payment mode.', placeholder: 'e.g. UPI' },
+};
+function includesFilter(filterRaw: string, value: string): boolean {
+  const f = filterRaw.trim().toLowerCase();
+  if (!f) return true;
+  return value.toLowerCase().includes(f);
+}
+function ColumnFilterTrigger({
+  active,
+  ariaLabel,
+  onOpen,
+}: {
+  active: boolean;
+  ariaLabel: string;
+  onOpen: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={ariaLabel}
+      aria-pressed={active}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      className={cn(
+        'h-7 w-7 shrink-0 rounded-full transition-all duration-200 ease-out',
+        active
+          ? 'bg-primary/20 text-primary shadow-[0_0_0_2px_hsl(var(--primary)/0.45),0_4px_14px_-4px_hsl(var(--primary)/0.45)] ring-2 ring-primary/50 ring-offset-2 ring-offset-background hover:bg-primary/28 hover:ring-primary/65'
+          : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+      )}
+    >
+      <Filter
+        className={cn(
+          'h-3.5 w-3.5 transition-transform duration-200 ease-out',
+          active && 'scale-110 fill-primary text-primary [filter:drop-shadow(0_0_5px_hsl(var(--primary)/0.55))]'
+        )}
+        strokeWidth={active ? 2.5 : 2}
+        aria-hidden
+      />
+    </Button>
+  );
+}
+
 function defaultCreditDueDate(): Date {
   const d = new Date();
   d.setDate(d.getDate() + 30);
@@ -70,6 +145,11 @@ export default function ReceiptPage() {
   const prefill: any = navState?.prefill;
   const initialTab: 'view' | 'create' = navState?.tab === 'create' ? 'create' : 'view';
   const [activeReceiptTab, setActiveReceiptTab] = useState<'view' | 'create'>(initialTab);
+  const [showCompleted, setShowCompleted] = useState<'no' | 'yes'>('no');
+  const [columnFilters, setColumnFilters] = useState<ReceiptColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<ReceiptFilterColumnKey | null>(null);
+  const filterDialogMeta = filterDialogColumn ? FILTER_META[filterDialogColumn] : null;
+  const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
 
   useEffect(() => {
     const t = (location.state as { tab?: string } | null)?.tab === 'create' ? 'create' : 'view';
@@ -145,7 +225,7 @@ export default function ReceiptPage() {
   // Load receipts on initial page load and handle prefill from navigation
   useEffect(() => {
     fetchReceipts();
-  }, []);
+  }, [showCompleted]);
 
   useEffect(() => {
     const prefillFromQuotation = async () => {
@@ -222,6 +302,44 @@ export default function ReceiptPage() {
       }
       if (resp.error) throw resp.error;
       let rows = resp.data || [];
+      if (showCompleted === 'no' && rows.length > 0) {
+        const orderRefIds = Array.from(
+          new Set(
+            rows
+              .filter((r: any) => r?.reference_type === 'order' && r?.reference_id)
+              .map((r: any) => r.reference_id)
+          )
+        );
+        const orderRefNumbers = Array.from(
+          new Set(
+            rows
+              .filter((r: any) => r?.reference_type === 'order' && r?.reference_number)
+              .map((r: any) => r.reference_number)
+          )
+        );
+        const [ordersByIdResp, ordersByNumberResp] = await Promise.all([
+          orderRefIds.length
+            ? supabase.from('orders').select('id, status').in('id', orderRefIds as any)
+            : Promise.resolve({ data: [] as any[] }),
+          orderRefNumbers.length
+            ? supabase.from('orders').select('order_number, status').in('order_number', orderRefNumbers as any)
+            : Promise.resolve({ data: [] as any[] }),
+        ]);
+        const completedOrderIds = new Set(
+          ((ordersByIdResp.data || []) as any[]).filter((o) => o.status === 'completed').map((o) => o.id)
+        );
+        const completedOrderNumbers = new Set(
+          ((ordersByNumberResp.data || []) as any[])
+            .filter((o) => o.status === 'completed')
+            .map((o) => o.order_number)
+        );
+        rows = rows.filter((r: any) => {
+          if (r?.reference_type !== 'order') return true;
+          const byId = r?.reference_id && completedOrderIds.has(r.reference_id);
+          const byNumber = r?.reference_number && completedOrderNumbers.has(r.reference_number);
+          return !(byId || byNumber);
+        });
+      }
       const custIds = Array.from(new Set(rows.map((r: any) => r.customer_id).filter(Boolean)));
       if (custIds.length > 0) {
         const { data: custs } = await supabase
@@ -264,6 +382,9 @@ export default function ReceiptPage() {
           .eq('customer_id', customer.id)
           .eq('is_deleted', false)
           .limit(20);
+        if (showCompleted === 'no') {
+          ordersQuery = ordersQuery.neq('status', 'completed');
+        }
         if (refSearch) {
           ordersQuery = ordersQuery.ilike('order_number', `%${refSearch}%`);
         }
@@ -317,7 +438,7 @@ export default function ReceiptPage() {
     };
     const t = setTimeout(run, 300);
     return () => clearTimeout(t);
-  }, [customer, refSearch]);
+  }, [customer, refSearch, showCompleted]);
 
   // Update amount field when order is selected
   useEffect(() => {
@@ -987,6 +1108,21 @@ export default function ReceiptPage() {
   };
 
   const receiptOrderContext = previewOrderSnapshot ?? selected;
+  const filteredTxns = useMemo(() => {
+    return txns.filter((r: any) => {
+      const mobile = getCustomerMobile({ phone: r.customers?.phone, mobile: (r.customers as any)?.mobile }) || '—';
+      return (
+        includesFilter(columnFilters.date, formatDateIndian(r.created_at)) &&
+        includesFilter(columnFilters.receipt_number, r.receipt_number || '') &&
+        includesFilter(columnFilters.customer, r.customers?.company_name || r.customer_name || '') &&
+        includesFilter(columnFilters.mobile, mobile) &&
+        includesFilter(columnFilters.reference, r.reference_number || '') &&
+        includesFilter(columnFilters.type, (r.reference_type || '').toString()) &&
+        includesFilter(columnFilters.amount, formatCurrency(Number(r.amount || 0))) &&
+        includesFilter(columnFilters.mode, r.payment_mode || '')
+      );
+    });
+  }, [txns, columnFilters]);
 
   return (
     <ErpLayout>
@@ -1008,6 +1144,18 @@ export default function ReceiptPage() {
             <span>View Txn</span>
             <span>Create Receipt</span>
           </label>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Show completed</span>
+            <Select value={showCompleted} onValueChange={(v: 'no' | 'yes') => setShowCompleted(v)}>
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="No (default)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="no">No (default)</SelectItem>
+                <SelectItem value="yes">Yes</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         {activeReceiptTab === 'view' && (
@@ -1018,26 +1166,26 @@ export default function ReceiptPage() {
               <CardContent>
                 <div className="space-y-3">
                   <div className="flex justify-between items-center">
-                    <div className="text-sm text-muted-foreground">{loadingTxns ? 'Loading...' : `${txns.length} recent receipts`}</div>
+                    <div className="text-sm text-muted-foreground">{loadingTxns ? 'Loading...' : `${filteredTxns.length} recent receipts`}</div>
                     <Button variant="outline" onClick={fetchReceipts}>Refresh</Button>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm border">
                       <thead className="bg-muted/50">
                         <tr>
-                          <th className="p-2 text-left border">Date</th>
-                          <th className="p-2 text-left border">Receipt #</th>
-                          <th className="p-2 text-left border">Customer</th>
-                          <th className="p-2 text-left border">Mobile</th>
-                          <th className="p-2 text-left border">Reference</th>
-                          <th className="p-2 text-left border">Type</th>
-                          <th className="p-2 text-right border">Amount</th>
-                          <th className="p-2 text-left border">Mode</th>
+                          <th className="p-2 text-left border"><div className="flex items-center gap-1">Date<ColumnFilterTrigger active={!!columnFilters.date} ariaLabel="Filter by date" onOpen={() => setFilterDialogColumn('date')} /></div></th>
+                          <th className="p-2 text-left border"><div className="flex items-center gap-1">Receipt #<ColumnFilterTrigger active={!!columnFilters.receipt_number} ariaLabel="Filter by receipt number" onOpen={() => setFilterDialogColumn('receipt_number')} /></div></th>
+                          <th className="p-2 text-left border"><div className="flex items-center gap-1">Customer<ColumnFilterTrigger active={!!columnFilters.customer} ariaLabel="Filter by customer" onOpen={() => setFilterDialogColumn('customer')} /></div></th>
+                          <th className="p-2 text-left border"><div className="flex items-center gap-1">Mobile<ColumnFilterTrigger active={!!columnFilters.mobile} ariaLabel="Filter by mobile" onOpen={() => setFilterDialogColumn('mobile')} /></div></th>
+                          <th className="p-2 text-left border"><div className="flex items-center gap-1">Reference<ColumnFilterTrigger active={!!columnFilters.reference} ariaLabel="Filter by reference" onOpen={() => setFilterDialogColumn('reference')} /></div></th>
+                          <th className="p-2 text-left border"><div className="flex items-center gap-1">Type<ColumnFilterTrigger active={!!columnFilters.type} ariaLabel="Filter by type" onOpen={() => setFilterDialogColumn('type')} /></div></th>
+                          <th className="p-2 text-right border"><div className="flex items-center justify-end gap-1">Amount<ColumnFilterTrigger active={!!columnFilters.amount} ariaLabel="Filter by amount" onOpen={() => setFilterDialogColumn('amount')} /></div></th>
+                          <th className="p-2 text-left border"><div className="flex items-center gap-1">Mode<ColumnFilterTrigger active={!!columnFilters.mode} ariaLabel="Filter by mode" onOpen={() => setFilterDialogColumn('mode')} /></div></th>
                           <th className="p-2 text-left border">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {txns.map((r) => (
+                        {filteredTxns.map((r) => (
                           <tr key={r.id} className="hover:bg-muted/30 cursor-pointer" onClick={async () => { await handleOpenReceipt(r); }}>
                             <td className="p-2 border">{formatDateIndian(r.created_at)}</td>
                             <td className="p-2 border font-medium">
@@ -1068,7 +1216,7 @@ export default function ReceiptPage() {
                             </td>
                           </tr>
                         ))}
-                        {!loadingTxns && txns.length === 0 && (
+                        {!loadingTxns && filteredTxns.length === 0 && (
                           <tr>
                             <td className="p-4 text-center text-muted-foreground" colSpan={9}>No receipts found.</td>
                           </tr>
@@ -1077,6 +1225,13 @@ export default function ReceiptPage() {
                     </table>
                   </div>
                 </div>
+                {hasActiveColumnFilters && (
+                  <div className="flex justify-end">
+                    <Button variant="ghost" size="sm" onClick={() => setColumnFilters({ ...EMPTY_COLUMN_FILTERS })}>
+                      Clear column filters
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
         )}
@@ -1281,6 +1436,44 @@ export default function ReceiptPage() {
               </CardContent>
             </Card>
         )}
+
+        <Dialog
+          open={filterDialogColumn !== null}
+          onOpenChange={(open) => {
+            if (!open) setFilterDialogColumn(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            {filterDialogColumn && filterDialogMeta && (
+              <>
+                <DialogHeader>
+                  <DialogTitle>{filterDialogMeta.title}</DialogTitle>
+                  <DialogDescription>{filterDialogMeta.description}</DialogDescription>
+                </DialogHeader>
+                <Input
+                  autoFocus
+                  placeholder={filterDialogMeta.placeholder}
+                  value={columnFilters[filterDialogColumn]}
+                  onChange={(e) =>
+                    setColumnFilters((p) => ({ ...p, [filterDialogColumn]: e.target.value }))
+                  }
+                />
+                <DialogFooter className="gap-2 sm:gap-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setColumnFilters((p) => ({ ...p, [filterDialogColumn]: '' }))}
+                  >
+                    Clear this filter
+                  </Button>
+                  <Button type="button" onClick={() => setFilterDialogColumn(null)}>
+                    Done
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
 
         {/* Preview Dialog */}
         <Dialog

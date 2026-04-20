@@ -157,6 +157,12 @@ const AssignOrdersPage = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
+  const [columnFilters, setColumnFilters] = useState({
+    cutting_master: '',
+    stitching_price: '',
+    material_status: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
   const [sortField, setSortField] = useState<string>('dueDate');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [assignOrdersTab, setAssignOrdersTab] = useState<'assignments' | 'assigned' | 'workers'>('assignments');
@@ -955,6 +961,9 @@ const AssignOrdersPage = () => {
     });
   };
 
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
+
   const assignmentsNeedingWork = sortAssignments(assignments.filter(assignment => {
     const matchesSearch = assignment.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          assignment.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -963,7 +972,17 @@ const AssignOrdersPage = () => {
     const matchesPriority = priorityFilter === "all" || assignment.priority === priorityFilter;
     const needsAssignment = isOrderNeedsAssignment(assignment);
     
-    return matchesSearch && matchesStatus && matchesPriority && needsAssignment;
+    const mastersText = assignment.cuttingMasters?.length
+      ? assignment.cuttingMasters.map((m) => m.name).join(' ')
+      : (assignment.cuttingMasterName || assignment.assignedTo || '');
+    const stitchingPriceText = formatStitchingRatesTableCell(assignment);
+    const materialStatusText = assignment.materialStatus || '';
+    const matchesColumns =
+      includesFilter(mastersText, columnFilters.cutting_master) &&
+      includesFilter(stitchingPriceText, columnFilters.stitching_price) &&
+      includesFilter(materialStatusText, columnFilters.material_status);
+
+    return matchesSearch && matchesStatus && matchesPriority && needsAssignment && matchesColumns;
   }));
 
   // Filter assignments for "Assigned Orders" tab (fully assigned orders)
@@ -975,8 +994,19 @@ const AssignOrdersPage = () => {
     const matchesPriority = priorityFilter === "all" || assignment.priority === priorityFilter;
     const isFullyAssigned = isOrderFullyAssigned(assignment);
     
-    return matchesSearch && matchesStatus && matchesPriority && isFullyAssigned;
+    const mastersText = assignment.cuttingMasters?.length
+      ? assignment.cuttingMasters.map((m) => m.name).join(' ')
+      : (assignment.cuttingMasterName || assignment.assignedTo || '');
+    const stitchingPriceText = formatStitchingRatesTableCell(assignment);
+    const materialStatusText = assignment.materialStatus || '';
+    const matchesColumns =
+      includesFilter(mastersText, columnFilters.cutting_master) &&
+      includesFilter(stitchingPriceText, columnFilters.stitching_price) &&
+      includesFilter(materialStatusText, columnFilters.material_status);
+
+    return matchesSearch && matchesStatus && matchesPriority && isFullyAssigned && matchesColumns;
   }));
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
   // Legacy filteredAssignments (kept for backward compatibility)
   const filteredAssignments = assignmentsNeedingWork;
@@ -1575,9 +1605,13 @@ const AssignOrdersPage = () => {
                     </Select>
                   </div>
                   <div className="flex items-end">
-                    <Button className="w-full">
-                      <Filter className="w-4 h-4 mr-2" />
-                      Apply Filters
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setColumnFilters({ cutting_master: '', stitching_price: '', material_status: '' })}
+                      disabled={!hasActiveColumnFilters}
+                    >
+                      Clear column filters
                     </Button>
                   </div>
                 </div>
@@ -1598,12 +1632,12 @@ const AssignOrdersPage = () => {
                         <SortableTableHeader label="Customer" field="customerName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Product" field="productName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Quantity" field="quantity" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
-                        <TableHead>Cutting Master</TableHead>
-                        <TableHead>Stitching Price</TableHead>
+                        <TableHead><div className="flex items-center gap-1">Cutting Master<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.cutting_master ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('cutting_master')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Stitching Price<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.stitching_price ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('stitching_price')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                         <SortableTableHeader label="Due Date" field="dueDate" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Status" field="status" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Priority" field="priority" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
-                        <TableHead>Material Status</TableHead>
+                        <TableHead><div className="flex items-center gap-1">Material Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.material_status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('material_status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -1760,9 +1794,13 @@ const AssignOrdersPage = () => {
                     </Select>
                   </div>
                   <div className="flex items-end">
-                    <Button className="w-full">
-                      <Filter className="w-4 h-4 mr-2" />
-                      Apply Filters
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setColumnFilters({ cutting_master: '', stitching_price: '', material_status: '' })}
+                      disabled={!hasActiveColumnFilters}
+                    >
+                      Clear column filters
                     </Button>
                   </div>
                 </div>
@@ -1783,12 +1821,12 @@ const AssignOrdersPage = () => {
                         <SortableTableHeader label="Customer" field="customerName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Product" field="productName" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Quantity" field="quantity" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
-                        <TableHead>Cutting Master</TableHead>
-                        <TableHead>Stitching Price</TableHead>
+                        <TableHead><div className="flex items-center gap-1">Cutting Master<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.cutting_master ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('cutting_master')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Stitching Price<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.stitching_price ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('stitching_price')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                         <SortableTableHeader label="Due Date" field="dueDate" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Status" field="status" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
                         <SortableTableHeader label="Priority" field="priority" currentSortField={sortField} currentSortDirection={sortDirection} onSort={handleSort} />
-                        <TableHead>Material Status</TableHead>
+                        <TableHead><div className="flex items-center gap-1">Material Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.material_status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('material_status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -2264,6 +2302,42 @@ const AssignOrdersPage = () => {
                 {isEditingStitchingRates ? 'Update Rates' : 'Set Rates'}
               </Button>
             </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Filter column</DialogTitle>
+            </DialogHeader>
+            {filterDialogColumn && (
+              <div className="space-y-3">
+                <Input
+                  autoFocus
+                  placeholder="Type to filter..."
+                  value={columnFilters[filterDialogColumn]}
+                  onChange={(event) =>
+                    setColumnFilters((prev) => ({
+                      ...prev,
+                      [filterDialogColumn]: event.target.value,
+                    }))
+                  }
+                />
+                <div className="flex justify-between">
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      setColumnFilters((prev) => ({
+                        ...prev,
+                        [filterDialogColumn]: '',
+                      }))
+                    }
+                  >
+                    Clear
+                  </Button>
+                  <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                </div>
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       </div>

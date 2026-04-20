@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { formatCurrency } from "@/lib/utils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface Order {
   id: string;
@@ -31,6 +32,15 @@ export default function ProcurementPage() {
   const { orders, loading, refetch } = useOrdersWithReceipts<Order>();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
+  const [columnFilters, setColumnFilters] = useState({
+    order_number: '',
+    customer: '',
+    date: '',
+    status: '',
+    total_amount: '',
+    pending_amount: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
 
 
@@ -41,18 +51,33 @@ export default function ProcurementPage() {
 
   const fetchOrders = async () => { await refetch(); };
 
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
   const filteredOrders = useMemo(() => {
     return orders
       .filter(o => !filterStatus || o.status === filterStatus)
       .filter(o => {
         if (!searchTerm) return true;
         const term = searchTerm.toLowerCase();
-        return (
+        const matchesSearch = (
           o.order_number?.toLowerCase().includes(term) ||
           o.customer?.company_name?.toLowerCase().includes(term)
         );
+        const dateText = new Date(o.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+        const statusText = o.status?.replace('_', ' ').toUpperCase() || '';
+        const totalText = `₹${(o.final_amount || 0).toFixed(2)}`;
+        const pendingText = `₹${(o.balance_amount || 0).toFixed(2)}`;
+        const matchesColumns =
+          includesFilter(o.order_number, columnFilters.order_number) &&
+          includesFilter(o.customer?.company_name, columnFilters.customer) &&
+          includesFilter(dateText, columnFilters.date) &&
+          includesFilter(statusText, columnFilters.status) &&
+          includesFilter(totalText, columnFilters.total_amount) &&
+          includesFilter(pendingText, columnFilters.pending_amount);
+        return matchesSearch && matchesColumns;
       });
-  }, [orders, filterStatus, searchTerm]);
+  }, [orders, filterStatus, searchTerm, columnFilters]);
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
   const totals = useMemo(() => {
     return filteredOrders.reduce((acc, order) => {
@@ -160,6 +185,24 @@ export default function ProcurementPage() {
                   </DropdownMenuContent>
                 </DropdownMenu>
                  <Button variant="outline" size="sm" onClick={fetchOrders}>Refresh</Button>
+                {hasActiveColumnFilters && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setColumnFilters({
+                        order_number: '',
+                        customer: '',
+                        date: '',
+                        status: '',
+                        total_amount: '',
+                        pending_amount: '',
+                      })
+                    }
+                  >
+                    Clear column filters
+                  </Button>
+                )}
               </div>
             </div>
             {searchTerm && (
@@ -179,11 +222,11 @@ export default function ProcurementPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Order #</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Total Amount</TableHead>
-                      <TableHead className="text-right">Pending Amount</TableHead>
+                      <TableHead><div className="flex items-center gap-1">Customer<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.customer ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('customer')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Date<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.date ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('date')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead className="text-right"><div className="flex items-center justify-end gap-1">Total Amount<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.total_amount ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('total_amount')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead className="text-right"><div className="flex items-center justify-end gap-1">Pending Amount<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.pending_amount ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('pending_amount')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -234,6 +277,42 @@ export default function ProcurementPage() {
                 </Table>
               </div>
             )}
+            <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Filter column</DialogTitle>
+                </DialogHeader>
+                {filterDialogColumn && (
+                  <div className="space-y-3">
+                    <Input
+                      autoFocus
+                      placeholder="Type to filter..."
+                      value={columnFilters[filterDialogColumn]}
+                      onChange={(event) =>
+                        setColumnFilters((prev) => ({
+                          ...prev,
+                          [filterDialogColumn]: event.target.value,
+                        }))
+                      }
+                    />
+                    <div className="flex justify-between">
+                      <Button
+                        variant="ghost"
+                        onClick={() =>
+                          setColumnFilters((prev) => ({
+                            ...prev,
+                            [filterDialogColumn]: '',
+                          }))
+                        }
+                      >
+                        Clear
+                      </Button>
+                      <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
           </CardContent>
         </Card>
 

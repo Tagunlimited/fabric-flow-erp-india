@@ -5,10 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, RefreshCw, Eye, Edit, Trash2, Package, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Plus, RefreshCw, Eye, Edit, Trash2, Package, CheckCircle, XCircle, AlertCircle, Filter } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { format } from 'date-fns';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 type GRN = {
   id: string;
@@ -158,6 +159,16 @@ const GRNList = memo(function GRNList() {
   const [grns, setGrns] = useState<GRN[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | GRN['status']>('all');
+  const [columnFilters, setColumnFilters] = useState({
+    grn_number: '',
+    po_number: '',
+    supplier: '',
+    grn_date: '',
+    items: '',
+    amount: '',
+    status: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -209,14 +220,33 @@ const GRNList = memo(function GRNList() {
     fetchAll();
   }, [fetchAll]);
 
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
+
   const filteredGRNs = useMemo(() => {
     return grns.filter((grn) => {
       const text = `${grn.grn_number} ${grn.po_number || ''} ${grn.supplier_name || ''} ${grn.supplier_code || ''}`.toLowerCase();
       const matchesSearch = !search || text.includes(search.toLowerCase());
       const matchesStatus = statusFilter === 'all' || grn.status === statusFilter;
-      return matchesSearch && matchesStatus;
+      const grnDateText = grn.grn_date ? format(new Date(grn.grn_date), 'dd MMM yyyy') : '';
+      const itemsText = `${grn.total_items_received} ${grn.total_items_approved} ${grn.total_items_rejected}`;
+      const amountText = `₹${grn.total_amount_received?.toFixed(2) || '0.00'}`;
+      const statusText = grn.status.replace('_', ' ');
+      const supplierText = `${grn.supplier_name || ''} ${grn.supplier_code || ''}`;
+
+      const matchesColumns =
+        includesFilter(grn.grn_number, columnFilters.grn_number) &&
+        includesFilter(grn.po_number, columnFilters.po_number) &&
+        includesFilter(supplierText, columnFilters.supplier) &&
+        includesFilter(grnDateText, columnFilters.grn_date) &&
+        includesFilter(itemsText, columnFilters.items) &&
+        includesFilter(amountText, columnFilters.amount) &&
+        includesFilter(statusText, columnFilters.status);
+
+      return matchesSearch && matchesStatus && matchesColumns;
     });
-  }, [grns, search, statusFilter]);
+  }, [grns, search, statusFilter, columnFilters]);
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm('Delete this GRN? This action cannot be undone.')) return;
@@ -386,6 +416,24 @@ const GRNList = memo(function GRNList() {
                 <SelectItem value="partially_approved">Partially Approved</SelectItem>
               </SelectContent>
             </Select>
+            {hasActiveColumnFilters && (
+              <Button
+                variant="outline"
+                onClick={() =>
+                  setColumnFilters({
+                    grn_number: '',
+                    po_number: '',
+                    supplier: '',
+                    grn_date: '',
+                    items: '',
+                    amount: '',
+                    status: '',
+                  })
+                }
+              >
+                Clear column filters
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -405,13 +453,13 @@ const GRNList = memo(function GRNList() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>GRN Number</TableHead>
-                    <TableHead>PO Number</TableHead>
-                    <TableHead>Supplier</TableHead>
-                    <TableHead>GRN Date</TableHead>
-                    <TableHead>Items</TableHead>
-                    <TableHead>Amount</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead><div className="flex items-center gap-1">GRN Number<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.grn_number ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('grn_number')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">PO Number<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.po_number ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('po_number')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Supplier<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.supplier ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('supplier')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">GRN Date<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.grn_date ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('grn_date')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Items<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.items ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('items')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Amount<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.amount ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('amount')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -429,6 +477,42 @@ const GRNList = memo(function GRNList() {
               </Table>
             </div>
           )}
+          <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Filter column</DialogTitle>
+              </DialogHeader>
+              {filterDialogColumn && (
+                <div className="space-y-3">
+                  <Input
+                    autoFocus
+                    placeholder="Type to filter..."
+                    value={columnFilters[filterDialogColumn]}
+                    onChange={(event) =>
+                      setColumnFilters((prev) => ({
+                        ...prev,
+                        [filterDialogColumn]: event.target.value,
+                      }))
+                    }
+                  />
+                  <div className="flex justify-between">
+                    <Button
+                      variant="ghost"
+                      onClick={() =>
+                        setColumnFilters((prev) => ({
+                          ...prev,
+                          [filterDialogColumn]: '',
+                        }))
+                      }
+                    >
+                      Clear
+                    </Button>
+                    <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
         </CardContent>
       </Card>
     </div>

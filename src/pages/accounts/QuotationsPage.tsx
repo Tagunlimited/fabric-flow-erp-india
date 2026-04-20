@@ -4,13 +4,22 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { formatCurrency } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 import { getCustomerMobile } from '@/lib/customerContact';
-import { Eye } from 'lucide-react';
+import { Eye, Filter } from 'lucide-react';
 import { calculateOrderSummary } from '@/utils/priceCalculation';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 
 interface Order {
   id: string;
@@ -25,6 +34,83 @@ interface Order {
   calculatedAmount?: number; // Store calculated amount with size-based pricing
 }
 
+type QuotationsColumnFilters = {
+  order_number: string;
+  customer: string;
+  mobile: string;
+  date: string;
+  status: string;
+  amount: string;
+  sales_manager: string;
+};
+const EMPTY_COLUMN_FILTERS: QuotationsColumnFilters = {
+  order_number: '',
+  customer: '',
+  mobile: '',
+  date: '',
+  status: '',
+  amount: '',
+  sales_manager: '',
+};
+type QuotationsFilterColumnKey = keyof QuotationsColumnFilters;
+const FILTER_META: Record<
+  QuotationsFilterColumnKey,
+  { title: string; description: string; placeholder: string }
+> = {
+  order_number: { title: 'Filter by order #', description: 'Match order number text.', placeholder: 'e.g. TUC/26-' },
+  customer: { title: 'Filter by customer', description: 'Match customer name.', placeholder: 'e.g. Rajiv' },
+  mobile: { title: 'Filter by mobile', description: 'Match customer phone/mobile.', placeholder: 'e.g. 98' },
+  date: { title: 'Filter by date', description: 'Match visible formatted date.', placeholder: 'e.g. 17 Apr' },
+  status: { title: 'Filter by status', description: 'Match status text.', placeholder: 'e.g. under_procurement' },
+  amount: { title: 'Filter by amount', description: 'Match formatted amount text.', placeholder: 'e.g. 13014' },
+  sales_manager: { title: 'Filter by sales manager', description: 'Match manager name.', placeholder: 'e.g. Yeshwanth' },
+};
+
+function includesFilter(filterRaw: string, value: string): boolean {
+  const f = filterRaw.trim().toLowerCase();
+  if (!f) return true;
+  return value.toLowerCase().includes(f);
+}
+
+function ColumnFilterTrigger({
+  active,
+  ariaLabel,
+  onOpen,
+}: {
+  active: boolean;
+  ariaLabel: string;
+  onOpen: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={ariaLabel}
+      aria-pressed={active}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      className={cn(
+        'h-7 w-7 shrink-0 rounded-full transition-all duration-200 ease-out',
+        active
+          ? 'bg-primary/20 text-primary shadow-[0_0_0_2px_hsl(var(--primary)/0.45),0_4px_14px_-4px_hsl(var(--primary)/0.45)] ring-2 ring-primary/50 ring-offset-2 ring-offset-background hover:bg-primary/28 hover:ring-primary/65'
+          : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+      )}
+    >
+      <Filter
+        className={cn(
+          'h-3.5 w-3.5 transition-transform duration-200 ease-out',
+          active && 'scale-110 fill-primary text-primary [filter:drop-shadow(0_0_5px_hsl(var(--primary)/0.55))]'
+        )}
+        strokeWidth={active ? 2.5 : 2}
+        aria-hidden
+      />
+    </Button>
+  );
+}
+
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 export default function QuotationsPage() {
@@ -33,6 +119,10 @@ export default function QuotationsPage() {
   const [loading, setLoading] = useState(true);
   const [showCompleted, setShowCompleted] = useState<'no' | 'yes'>('no');
   const [employeeMap, setEmployeeMap] = useState<Record<string, { full_name: string; avatar_url?: string }>>({});
+  const [columnFilters, setColumnFilters] = useState<QuotationsColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<QuotationsFilterColumnKey | null>(null);
+  const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
+  const filterDialogMeta = filterDialogColumn ? FILTER_META[filterDialogColumn] : null;
 
   useEffect(() => {
     fetchOrders();
@@ -130,6 +220,28 @@ export default function QuotationsPage() {
     }
   };
 
+  const filteredOrders = useMemo(() => {
+    return orders.filter((order) => {
+      const mobile = getCustomerMobile(order.customer as any) || '';
+      const dateLabel = new Date(order.order_date).toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: '2-digit',
+      });
+      const amountLabel = formatCurrency(order.calculatedAmount ?? order.final_amount ?? 0);
+      const manager = employeeMap[order.sales_manager || '']?.full_name || '-';
+      return (
+        includesFilter(columnFilters.order_number, order.order_number || '') &&
+        includesFilter(columnFilters.customer, order.customer?.company_name || '') &&
+        includesFilter(columnFilters.mobile, mobile) &&
+        includesFilter(columnFilters.date, dateLabel) &&
+        includesFilter(columnFilters.status, order.status || '') &&
+        includesFilter(columnFilters.amount, amountLabel) &&
+        includesFilter(columnFilters.sales_manager, manager)
+      );
+    });
+  }, [orders, columnFilters, employeeMap]);
+
   return (
     <ErpLayout>
       <div className="space-y-6">
@@ -160,23 +272,37 @@ export default function QuotationsPage() {
               <Table className="min-w-[1080px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[140px]">Order #</TableHead>
-                    <TableHead className="min-w-[180px]">Customer</TableHead>
-                    <TableHead className="w-[120px]">Mobile</TableHead>
-                    <TableHead className="w-[120px] whitespace-nowrap">Date</TableHead>
-                    <TableHead className="w-[120px] whitespace-nowrap">Status</TableHead>
-                    <TableHead className="w-[130px] text-right">Amount</TableHead>
-                    <TableHead className="min-w-[170px]">Sales Manager</TableHead>
+                        <TableHead className="w-[140px]">
+                          <div className="flex items-center gap-1">Order #<ColumnFilterTrigger active={!!columnFilters.order_number} ariaLabel="Filter order number" onOpen={() => setFilterDialogColumn('order_number')} /></div>
+                        </TableHead>
+                        <TableHead className="min-w-[180px]">
+                          <div className="flex items-center gap-1">Customer<ColumnFilterTrigger active={!!columnFilters.customer} ariaLabel="Filter customer" onOpen={() => setFilterDialogColumn('customer')} /></div>
+                        </TableHead>
+                        <TableHead className="w-[120px]">
+                          <div className="flex items-center gap-1">Mobile<ColumnFilterTrigger active={!!columnFilters.mobile} ariaLabel="Filter mobile" onOpen={() => setFilterDialogColumn('mobile')} /></div>
+                        </TableHead>
+                        <TableHead className="w-[120px] whitespace-nowrap">
+                          <div className="flex items-center gap-1">Date<ColumnFilterTrigger active={!!columnFilters.date} ariaLabel="Filter date" onOpen={() => setFilterDialogColumn('date')} /></div>
+                        </TableHead>
+                        <TableHead className="w-[120px] whitespace-nowrap">
+                          <div className="flex items-center gap-1">Status<ColumnFilterTrigger active={!!columnFilters.status} ariaLabel="Filter status" onOpen={() => setFilterDialogColumn('status')} /></div>
+                        </TableHead>
+                        <TableHead className="w-[130px] text-right">
+                          <div className="flex items-center justify-end gap-1">Amount<ColumnFilterTrigger active={!!columnFilters.amount} ariaLabel="Filter amount" onOpen={() => setFilterDialogColumn('amount')} /></div>
+                        </TableHead>
+                        <TableHead className="min-w-[170px]">
+                          <div className="flex items-center gap-1">Sales Manager<ColumnFilterTrigger active={!!columnFilters.sales_manager} ariaLabel="Filter sales manager" onOpen={() => setFilterDialogColumn('sales_manager')} /></div>
+                        </TableHead>
                     <TableHead className="w-[220px] whitespace-nowrap">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {loading ? (
                     <TableRow><TableCell colSpan={8}>Loading...</TableCell></TableRow>
-                  ) : orders.length === 0 ? (
+                      ) : filteredOrders.length === 0 ? (
                     <TableRow><TableCell colSpan={8}>No orders found.</TableCell></TableRow>
                   ) : (
-                    orders.map((order) => (
+                        filteredOrders.map((order) => (
                       <TableRow key={order.id}>
                         <TableCell className="font-medium">{order.order_number}</TableCell>
                         <TableCell className="max-w-[220px] truncate">{order.customer?.company_name}</TableCell>
@@ -240,7 +366,7 @@ export default function QuotationsPage() {
                   <CardContent className="p-4 text-sm text-muted-foreground">No orders found.</CardContent>
                 </Card>
               ) : (
-                orders.map((order) => (
+                filteredOrders.map((order) => (
                   <Card key={order.id}>
                     <CardContent className="p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
@@ -296,8 +422,52 @@ export default function QuotationsPage() {
                 ))
               )}
             </div>
+            {hasActiveColumnFilters && (
+              <div className="flex justify-end mt-3">
+                <Button variant="ghost" size="sm" onClick={() => setColumnFilters({ ...EMPTY_COLUMN_FILTERS })}>
+                  Clear column filters
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
+        <Dialog
+          open={filterDialogColumn !== null}
+          onOpenChange={(open) => {
+            if (!open) setFilterDialogColumn(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            {filterDialogColumn && filterDialogMeta && (
+              <>
+                <DialogHeader>
+                  <DialogTitle>{filterDialogMeta.title}</DialogTitle>
+                  <DialogDescription>{filterDialogMeta.description}</DialogDescription>
+                </DialogHeader>
+                <Input
+                  autoFocus
+                  placeholder={filterDialogMeta.placeholder}
+                  value={columnFilters[filterDialogColumn]}
+                  onChange={(e) =>
+                    setColumnFilters((p) => ({ ...p, [filterDialogColumn]: e.target.value }))
+                  }
+                />
+                <DialogFooter className="gap-2 sm:gap-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setColumnFilters((p) => ({ ...p, [filterDialogColumn]: '' }))}
+                  >
+                    Clear this filter
+                  </Button>
+                  <Button type="button" onClick={() => setFilterDialogColumn(null)}>
+                    Done
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </ErpLayout>
   );
