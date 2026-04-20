@@ -10,10 +10,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ArrowLeft, ClipboardList, Loader2 } from "lucide-react";
+import { ArrowLeft, ClipboardList, Loader2, Filter } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 
 /** Challan has left dispatch / been delivered (excludes pending, packed). */
 const TERMINAL_DISPATCH_STATUSES = new Set(["shipped", "delivered", "dispatched"]);
@@ -97,6 +99,20 @@ export default function OrderCompletionReportPage() {
     }>
   >([]);
   const [error, setError] = useState<string | null>(null);
+  const [columnFilters, setColumnFilters] = useState({
+    order_number: '',
+    customer: '',
+    order_date: '',
+    order_status: '',
+    dispatch_number: '',
+    invoice_number: '',
+    dispatch_date: '',
+    challan_status: '',
+    courier: '',
+    tracking: '',
+    delivered: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
@@ -172,6 +188,8 @@ export default function OrderCompletionReportPage() {
   }, [fetchRows]);
 
   const count = rows.length;
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
 
   const dispatchStatusLabel = useMemo(() => {
     return (d: DispatchRow | null) => {
@@ -183,6 +201,21 @@ export default function OrderCompletionReportPage() {
       return s.replace(/_/g, " ");
     };
   }, []);
+  const filteredRows = rows.filter(({ order, dispatch: d, invoiceNumber }) => {
+    const challanStatus = dispatchStatusLabel(d);
+    return includesFilter(order.order_number, columnFilters.order_number)
+      && includesFilter(order.customer?.company_name, columnFilters.customer)
+      && includesFilter(formatDate(order.order_date), columnFilters.order_date)
+      && includesFilter((order.status || "—").replace(/_/g, " "), columnFilters.order_status)
+      && includesFilter(d?.dispatch_number || "—", columnFilters.dispatch_number)
+      && includesFilter(invoiceNumber || "—", columnFilters.invoice_number)
+      && includesFilter(formatDate(d?.dispatch_date), columnFilters.dispatch_date)
+      && includesFilter(challanStatus, columnFilters.challan_status)
+      && includesFilter(d?.courier_name || "—", columnFilters.courier)
+      && includesFilter(d?.tracking_number || "—", columnFilters.tracking)
+      && includesFilter(formatDate(d?.actual_delivery), columnFilters.delivered);
+  });
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
   return (
     <ErpLayout>
@@ -199,7 +232,7 @@ export default function OrderCompletionReportPage() {
             <p className="text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
               <ClipboardList className="h-4 w-4 shrink-0" />
               Custom orders marked dispatched or with a shipped / delivered dispatch challan.
-              <Badge variant="secondary">{count} order{count !== 1 ? "s" : ""}</Badge>
+              <Badge variant="secondary">{filteredRows.length} order{filteredRows.length !== 1 ? "s" : ""}</Badge>
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={() => fetchRows()} disabled={loading}>
@@ -216,7 +249,7 @@ export default function OrderCompletionReportPage() {
               </div>
             ) : error ? (
               <div className="p-6 text-center text-destructive text-sm">{error}</div>
-            ) : rows.length === 0 ? (
+            ) : filteredRows.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground text-sm">
                 No dispatched custom orders yet. Orders appear here when status is{" "}
                 <span className="font-medium text-foreground">Dispatched</span> or{" "}
@@ -225,24 +258,49 @@ export default function OrderCompletionReportPage() {
               </div>
             ) : (
               <div className="overflow-x-auto">
+                {hasActiveColumnFilters && (
+                  <div className="p-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setColumnFilters({
+                          order_number: '',
+                          customer: '',
+                          order_date: '',
+                          order_status: '',
+                          dispatch_number: '',
+                          invoice_number: '',
+                          dispatch_date: '',
+                          challan_status: '',
+                          courier: '',
+                          tracking: '',
+                          delivered: '',
+                        })
+                      }
+                    >
+                      Clear column filters
+                    </Button>
+                  </div>
+                )}
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Order #</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Order date</TableHead>
-                      <TableHead>Order status</TableHead>
-                      <TableHead>Dispatch #</TableHead>
-                      <TableHead>Invoice #</TableHead>
-                      <TableHead>Dispatch date</TableHead>
-                      <TableHead>Challan status</TableHead>
-                      <TableHead>Courier</TableHead>
-                      <TableHead>Tracking</TableHead>
-                      <TableHead>Delivered</TableHead>
+                      <TableHead><div className="flex items-center gap-1">Order #<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.order_number ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('order_number')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Customer<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.customer ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('customer')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Order date<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.order_date ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('order_date')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Order status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.order_status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('order_status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Dispatch #<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.dispatch_number ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('dispatch_number')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Invoice #<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.invoice_number ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('invoice_number')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Dispatch date<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.dispatch_date ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('dispatch_date')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Challan status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.challan_status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('challan_status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Courier<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.courier ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('courier')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Tracking<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.tracking ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('tracking')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Delivered<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.delivered ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('delivered')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {rows.map(({ order, dispatch: d, invoiceNumber }) => (
+                    {filteredRows.map(({ order, dispatch: d, invoiceNumber }) => (
                       <TableRow key={order.id}>
                         <TableCell className="font-medium">
                           <button
@@ -284,6 +342,42 @@ export default function OrderCompletionReportPage() {
                 </Table>
               </div>
             )}
+            <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Filter column</DialogTitle>
+                </DialogHeader>
+                {filterDialogColumn && (
+                  <div className="space-y-3">
+                    <Input
+                      autoFocus
+                      placeholder="Type to filter..."
+                      value={columnFilters[filterDialogColumn]}
+                      onChange={(event) =>
+                        setColumnFilters((prev) => ({
+                          ...prev,
+                          [filterDialogColumn]: event.target.value,
+                        }))
+                      }
+                    />
+                    <div className="flex justify-between">
+                      <Button
+                        variant="ghost"
+                        onClick={() =>
+                          setColumnFilters((prev) => ({
+                            ...prev,
+                            [filterDialogColumn]: '',
+                          }))
+                        }
+                      >
+                        Clear
+                      </Button>
+                      <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
           </CardContent>
         </Card>
       </div>

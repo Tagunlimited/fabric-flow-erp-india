@@ -1,7 +1,7 @@
 import { ErpLayout } from "@/components/ErpLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Factory, Clock, Users, TrendingUp, Scissors, BarChart3, ArrowRight } from "lucide-react";
+import { Factory, Clock, Users, TrendingUp, Scissors, BarChart3, ArrowRight, Filter } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { useState, useEffect } from "react";
@@ -14,6 +14,8 @@ import { Eye, Receipt } from "lucide-react";
 import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
 import { calculateOrderSummary } from "@/utils/priceCalculation";
 import { formatCurrency } from "@/lib/utils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 
 const ProductionPage = () => {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -22,6 +24,16 @@ const ProductionPage = () => {
   // State for orders with receipts (excluding cancelled)
   const [ordersWithReceipts, setOrdersWithReceipts] = useState<any[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(true);
+  const [columnFilters, setColumnFilters] = useState({
+    order_number: "",
+    customer: "",
+    products: "",
+    total_qty: "",
+    order_date: "",
+    total_amount: "",
+    status: "",
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   // Fetch orders with receipts (excluding cancelled orders)
   const fetchOrdersWithReceipts = async () => {
@@ -220,6 +232,26 @@ const ProductionPage = () => {
   // Calculate pending assignments and active cutting jobs
   const pendingAssignments = data.orders.filter(order => order.status === 'pending').length;
   const activeCuttingJobs = data.productionOrders.filter(order => order.stage === 'cutting').length;
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === "" || String(value ?? "").toLowerCase().includes(filterValue.trim().toLowerCase());
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== "");
+  const filteredOrdersWithReceipts = ordersWithReceipts.filter((order: any) => {
+    const totalQuantity = order.order_items?.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0) || 0;
+    const productsLabel = (order.order_items || [])
+      .map((item: any) => item.product_description || "Product")
+      .join(" ");
+    const orderDateLabel = order.order_date ? new Date(order.order_date).toLocaleDateString() : "";
+    const totalAmountLabel = formatCurrency(Number(order.calculatedAmount ?? order.final_amount ?? order.total_amount ?? 0));
+    const statusLabel = order.status?.replace('_', ' ').toUpperCase() || 'PENDING';
+
+    return includesFilter(order.order_number, columnFilters.order_number)
+      && includesFilter(order.customer?.company_name, columnFilters.customer)
+      && includesFilter(productsLabel, columnFilters.products)
+      && includesFilter(totalQuantity, columnFilters.total_qty)
+      && includesFilter(orderDateLabel, columnFilters.order_date)
+      && includesFilter(totalAmountLabel, columnFilters.total_amount)
+      && includesFilter(statusLabel, columnFilters.status);
+  });
 
   return (
     <ErpLayout>
@@ -360,29 +392,52 @@ const ProductionPage = () => {
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
                 <p className="text-muted-foreground mt-2">Loading orders...</p>
               </div>
-            ) : ordersWithReceipts.length === 0 ? (
+            ) : filteredOrdersWithReceipts.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 <Receipt className="w-12 h-12 mx-auto mb-4 opacity-50" />
                 <p>No active orders found</p>
-                <p className="text-sm">Active orders will appear here once they are created</p>
+                <p className="text-sm">
+                  {hasActiveColumnFilters ? "Try clearing column filters" : "Active orders will appear here once they are created"}
+                </p>
               </div>
             ) : (
               <div className="overflow-x-auto">
+                {hasActiveColumnFilters && (
+                  <div className="mb-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setColumnFilters({
+                          order_number: "",
+                          customer: "",
+                          products: "",
+                          total_qty: "",
+                          order_date: "",
+                          total_amount: "",
+                          status: "",
+                        })
+                      }
+                    >
+                      Clear column filters
+                    </Button>
+                  </div>
+                )}
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Order #</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Products</TableHead>
-                      <TableHead>Total Qty</TableHead>
-                      <TableHead>Order Date</TableHead>
-                      <TableHead>Total Amount</TableHead>
-                      <TableHead>Status</TableHead>
+                      <TableHead><div className="flex items-center gap-1">Order #<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.order_number ? "text-primary" : "text-muted-foreground"}`} onClick={() => setFilterDialogColumn("order_number")}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Customer<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.customer ? "text-primary" : "text-muted-foreground"}`} onClick={() => setFilterDialogColumn("customer")}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Products<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.products ? "text-primary" : "text-muted-foreground"}`} onClick={() => setFilterDialogColumn("products")}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Total Qty<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.total_qty ? "text-primary" : "text-muted-foreground"}`} onClick={() => setFilterDialogColumn("total_qty")}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Order Date<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.order_date ? "text-primary" : "text-muted-foreground"}`} onClick={() => setFilterDialogColumn("order_date")}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Total Amount<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.total_amount ? "text-primary" : "text-muted-foreground"}`} onClick={() => setFilterDialogColumn("total_amount")}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.status ? "text-primary" : "text-muted-foreground"}`} onClick={() => setFilterDialogColumn("status")}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {ordersWithReceipts.map((order: any) => {
+                    {filteredOrdersWithReceipts.map((order: any) => {
                       // Calculate total quantity from order items
                       const totalQuantity = order.order_items?.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0) || 0;
                       
@@ -456,6 +511,42 @@ const ProductionPage = () => {
                 </Table>
               </div>
             )}
+            <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Filter column</DialogTitle>
+                </DialogHeader>
+                {filterDialogColumn && (
+                  <div className="space-y-3">
+                    <Input
+                      autoFocus
+                      placeholder="Type to filter..."
+                      value={columnFilters[filterDialogColumn]}
+                      onChange={(event) =>
+                        setColumnFilters((prev) => ({
+                          ...prev,
+                          [filterDialogColumn]: event.target.value,
+                        }))
+                      }
+                    />
+                    <div className="flex justify-between">
+                      <Button
+                        variant="ghost"
+                        onClick={() =>
+                          setColumnFilters((prev) => ({
+                            ...prev,
+                            [filterDialogColumn]: "",
+                          }))
+                        }
+                      >
+                        Clear
+                      </Button>
+                      <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
           </CardContent>
         </Card>
       </div>

@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Shirt, Plus, Eye, Package, Clock, CheckCircle, Search, Filter, RefreshCw, Truck } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -15,6 +15,14 @@ import { ReadymadeOrderForm } from "@/components/orders/ReadymadeOrderForm";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { usePersistentTabState } from "@/hooks/usePersistentTabState";
 import { cn, formatDateIndian, formatLocaleDateFromApi, parseBusinessDateLocal } from "@/lib/utils";
 import { fetchOrderIdsWithActiveCreditReceipt } from "@/utils/orderFinancials";
@@ -48,6 +56,121 @@ interface Order {
   has_credit_receipt?: boolean;
 }
 
+type ReadymadeColumnFilters = {
+  order_number: string;
+  customer: string;
+  sales_manager: string;
+  order_date: string;
+  expected_delivery: string;
+  status: string;
+  amount: string;
+  balance: string;
+};
+
+const EMPTY_COLUMN_FILTERS: ReadymadeColumnFilters = {
+  order_number: '',
+  customer: '',
+  sales_manager: '',
+  order_date: '',
+  expected_delivery: '',
+  status: '',
+  amount: '',
+  balance: '',
+};
+
+type ReadymadeFilterColumnKey = keyof ReadymadeColumnFilters;
+
+const COLUMN_FILTER_DIALOG_META: Record<
+  ReadymadeFilterColumnKey,
+  { title: string; description: string; placeholder: string }
+> = {
+  order_number: {
+    title: 'Filter by order number',
+    description: 'Match order number text.',
+    placeholder: 'e.g. TUC/26-',
+  },
+  customer: {
+    title: 'Filter by customer',
+    description: 'Match customer name.',
+    placeholder: 'e.g. Rajiv',
+  },
+  sales_manager: {
+    title: 'Filter by sales manager',
+    description: 'Match sales manager name.',
+    placeholder: 'e.g. Monika',
+  },
+  order_date: {
+    title: 'Filter by order date',
+    description: 'Match visible order date.',
+    placeholder: 'e.g. 17 Apr',
+  },
+  expected_delivery: {
+    title: 'Filter by expected delivery',
+    description: 'Match visible delivery date.',
+    placeholder: 'e.g. 25 Apr',
+  },
+  status: {
+    title: 'Filter by status',
+    description: 'Match status text.',
+    placeholder: 'e.g. confirmed',
+  },
+  amount: {
+    title: 'Filter by amount',
+    description: 'Match amount text.',
+    placeholder: 'e.g. 13014',
+  },
+  balance: {
+    title: 'Filter by balance',
+    description: 'Match balance text.',
+    placeholder: 'e.g. 5000',
+  },
+};
+
+function colCellIncludes(filterRaw: string, cellHaystack: string): boolean {
+  const f = filterRaw.trim().toLowerCase();
+  if (!f) return true;
+  return cellHaystack.toLowerCase().includes(f);
+}
+
+function ReadymadeColumnFilterTrigger({
+  active,
+  ariaLabel,
+  onOpen,
+}: {
+  active: boolean;
+  ariaLabel: string;
+  onOpen: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={ariaLabel}
+      aria-pressed={active}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      className={cn(
+        'h-7 w-7 shrink-0 rounded-full transition-all duration-200 ease-out',
+        active
+          ? 'bg-primary/20 text-primary shadow-[0_0_0_2px_hsl(var(--primary)/0.45),0_4px_14px_-4px_hsl(var(--primary)/0.45)] ring-2 ring-primary/50 ring-offset-2 ring-offset-background hover:bg-primary/28 hover:ring-primary/65'
+          : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+      )}
+    >
+      <Filter
+        className={cn(
+          'h-3.5 w-3.5 transition-transform duration-200 ease-out',
+          active && 'scale-110 fill-primary text-primary [filter:drop-shadow(0_0_5px_hsl(var(--primary)/0.55))]'
+        )}
+        strokeWidth={active ? 2.5 : 2}
+        aria-hidden
+      />
+    </Button>
+  );
+}
+
 const ReadymadeOrdersPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -62,7 +185,11 @@ const ReadymadeOrdersPage = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [myOrdersFilterValue, setMyOrdersFilterValue] = useState<string>("");
+  const [columnFilters, setColumnFilters] = useState<ReadymadeColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<ReadymadeFilterColumnKey | null>(null);
   const [sortBy, setSortBy] = useState<string>("date_desc");
+  const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
+  const filterDialogMeta = filterDialogColumn ? COLUMN_FILTER_DIALOG_META[filterDialogColumn] : null;
 
   useEffect(() => {
     if (activeTab === "list") {
@@ -236,7 +363,8 @@ const ReadymadeOrdersPage = () => {
     setMyOrdersOnly(true);
   };
 
-  const filteredOrders = orders
+  const filteredOrders = useMemo(() => {
+    return orders
     .filter(order => {
       if (!myOrdersOnly || !myOrdersFilterValue) return true;
       const marker = myOrdersFilterValue.trim().toLowerCase();
@@ -260,6 +388,35 @@ const ReadymadeOrdersPage = () => {
         (order.balance_amount !== undefined && order.balance_amount.toString().toLowerCase().includes(term))
       );
     })
+    .filter((order) => {
+      const manager = salesManagers[order.sales_manager]?.full_name || 'N/A';
+      const orderDateText = order.order_date
+        ? formatLocaleDateFromApi(order.order_date, 'en-GB', {
+            day: '2-digit',
+            month: 'short',
+            year: '2-digit',
+          })
+        : '';
+      const expectedDeliveryText = order.expected_delivery_date
+        ? formatLocaleDateFromApi(order.expected_delivery_date, 'en-GB', {
+            day: '2-digit',
+            month: 'short',
+            year: '2-digit',
+          })
+        : 'N/A';
+      const amountText = `${order.final_amount?.toFixed(2) || '0.00'} ₹${order.final_amount?.toFixed(2) || '0.00'}`;
+      const balanceText = `${order.balance_amount?.toFixed(2) || '0.00'} ${(order.has_credit_receipt ? 'credit' : '')} ${order.payment_due_date ? formatDateIndian(order.payment_due_date) : ''}`;
+      return (
+        colCellIncludes(columnFilters.order_number, order.order_number || '') &&
+        colCellIncludes(columnFilters.customer, order.customer?.company_name || '') &&
+        colCellIncludes(columnFilters.sales_manager, manager) &&
+        colCellIncludes(columnFilters.order_date, orderDateText) &&
+        colCellIncludes(columnFilters.expected_delivery, expectedDeliveryText) &&
+        colCellIncludes(columnFilters.status, order.status || '') &&
+        colCellIncludes(columnFilters.amount, amountText) &&
+        colCellIncludes(columnFilters.balance, balanceText)
+      );
+    })
     .sort((a, b) => {
       if (sortBy === "date_asc") {
         return (
@@ -278,6 +435,7 @@ const ReadymadeOrdersPage = () => {
       }
       return 0;
     });
+  }, [orders, myOrdersOnly, myOrdersFilterValue, filterStatus, searchTerm, sortBy, salesManagers, columnFilters]);
 
   return (
     <ErpLayout>
@@ -433,6 +591,15 @@ const ReadymadeOrdersPage = () => {
                       <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                       Force Refresh
                     </Button>
+                    {hasActiveColumnFilters && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setColumnFilters({ ...EMPTY_COLUMN_FILTERS })}
+                      >
+                        Clear column filters
+                      </Button>
+                    )}
                     <Button onClick={() => setActiveTab("create")}> <Plus className="w-4 h-4 mr-2" /> New Order </Button>
                   </div>
                 </div>
@@ -458,14 +625,86 @@ const ReadymadeOrdersPage = () => {
                     <Table className="min-w-[600px]">
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Order Number</TableHead>
-                          <TableHead>Customer</TableHead>
-                          <TableHead>Sales Manager</TableHead>
-                          <TableHead>Order Date</TableHead>
-                          <TableHead>Expected Delivery</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Amount</TableHead>
-                          <TableHead>Balance</TableHead>
+                          <TableHead>
+                            <div className="flex items-center gap-1">
+                              Order Number
+                              <ReadymadeColumnFilterTrigger
+                                active={!!columnFilters.order_number.trim()}
+                                ariaLabel="Filter by order number"
+                                onOpen={() => setFilterDialogColumn('order_number')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead>
+                            <div className="flex items-center gap-1">
+                              Customer
+                              <ReadymadeColumnFilterTrigger
+                                active={!!columnFilters.customer.trim()}
+                                ariaLabel="Filter by customer"
+                                onOpen={() => setFilterDialogColumn('customer')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead>
+                            <div className="flex items-center gap-1">
+                              Sales Manager
+                              <ReadymadeColumnFilterTrigger
+                                active={!!columnFilters.sales_manager.trim()}
+                                ariaLabel="Filter by sales manager"
+                                onOpen={() => setFilterDialogColumn('sales_manager')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead>
+                            <div className="flex items-center gap-1">
+                              Order Date
+                              <ReadymadeColumnFilterTrigger
+                                active={!!columnFilters.order_date.trim()}
+                                ariaLabel="Filter by order date"
+                                onOpen={() => setFilterDialogColumn('order_date')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead>
+                            <div className="flex items-center gap-1">
+                              Expected Delivery
+                              <ReadymadeColumnFilterTrigger
+                                active={!!columnFilters.expected_delivery.trim()}
+                                ariaLabel="Filter by expected delivery"
+                                onOpen={() => setFilterDialogColumn('expected_delivery')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead>
+                            <div className="flex items-center gap-1">
+                              Status
+                              <ReadymadeColumnFilterTrigger
+                                active={!!columnFilters.status.trim()}
+                                ariaLabel="Filter by status"
+                                onOpen={() => setFilterDialogColumn('status')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead>
+                            <div className="flex items-center gap-1">
+                              Amount
+                              <ReadymadeColumnFilterTrigger
+                                active={!!columnFilters.amount.trim()}
+                                ariaLabel="Filter by amount"
+                                onOpen={() => setFilterDialogColumn('amount')}
+                              />
+                            </div>
+                          </TableHead>
+                          <TableHead>
+                            <div className="flex items-center gap-1">
+                              Balance
+                              <ReadymadeColumnFilterTrigger
+                                active={!!columnFilters.balance.trim()}
+                                ariaLabel="Filter by balance"
+                                onOpen={() => setFilterDialogColumn('balance')}
+                              />
+                            </div>
+                          </TableHead>
                           <TableHead>Actions</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -572,6 +811,46 @@ const ReadymadeOrdersPage = () => {
                 )}
               </CardContent>
             </Card>
+
+            <Dialog
+              open={filterDialogColumn !== null}
+              onOpenChange={(open) => {
+                if (!open) setFilterDialogColumn(null);
+              }}
+            >
+              <DialogContent className="sm:max-w-md">
+                {filterDialogColumn && filterDialogMeta && (
+                  <>
+                    <DialogHeader>
+                      <DialogTitle>{filterDialogMeta.title}</DialogTitle>
+                      <DialogDescription>{filterDialogMeta.description}</DialogDescription>
+                    </DialogHeader>
+                    <Input
+                      autoFocus
+                      placeholder={filterDialogMeta.placeholder}
+                      value={columnFilters[filterDialogColumn]}
+                      onChange={(e) =>
+                        setColumnFilters((p) => ({ ...p, [filterDialogColumn]: e.target.value }))
+                      }
+                    />
+                    <DialogFooter className="gap-2 sm:gap-0">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() =>
+                          setColumnFilters((p) => ({ ...p, [filterDialogColumn]: '' }))
+                        }
+                      >
+                        Clear this filter
+                      </Button>
+                      <Button type="button" onClick={() => setFilterDialogColumn(null)}>
+                        Done
+                      </Button>
+                    </DialogFooter>
+                  </>
+                )}
+              </DialogContent>
+            </Dialog>
           </TabsContent>
 
           <TabsContent value="create" className="space-y-6">

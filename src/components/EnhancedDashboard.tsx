@@ -31,10 +31,15 @@ import {
   RefreshCw,
   AlertTriangle,
   TrendingUp,
+  Layers,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { shouldRetryReadWithoutIsDeletedFilter } from "@/lib/supabaseSoftDeleteCompat";
-import { calculateOrderSummary } from "@/utils/priceCalculation";
+import {
+  calculateOrderItemAmount,
+  calculateOrderSummary,
+  parseOrderItemSpecifications,
+} from "@/utils/priceCalculation";
 import { sumActiveReceiptAmountsForOrder } from "@/utils/orderFinancials";
 import { format, parse, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -76,6 +81,19 @@ const inrCompact = (n: number) => {
   return inr(n);
 };
 
+function lineGrandTotalInclGst(item: unknown, order: { gst_rate?: number | null } | null): number {
+  const it = item as Record<string, unknown>;
+  const amount = calculateOrderItemAmount(it);
+  const specs = parseOrderItemSpecifications(it);
+  const gstRate = Number(
+    (it.gst_rate as number | undefined) ??
+      specs.gst_rate ??
+      order?.gst_rate ??
+      0
+  );
+  return amount + (amount * gstRate) / 100;
+}
+
 function groupItemsByOrderId(
   rows: Array<{ order_id: string } & Record<string, unknown>>
 ): Record<string, typeof rows> {
@@ -89,9 +107,12 @@ function groupItemsByOrderId(
   return map;
 }
 
+type CategoryRevenueRow = { name: string; fullName: string; revenue: number };
+
 async function loadSalesDashboard(): Promise<{
   orders: EnrichedOrder[];
   employees: Record<string, { id: string; full_name: string; avatar_url?: string }>;
+  categoryRevenue: CategoryRevenueRow[];
 }> {
   const ordersBase = () =>
     supabase
@@ -118,7 +139,7 @@ async function loadSalesDashboard(): Promise<{
         ? supabase
             .from("order_items")
             .select(
-              "order_id, id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate"
+              "order_id, id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate, product_category_id, product_category:product_categories(category_name)"
             )
             .eq("is_deleted", false)
             .in("order_id", orderIds)
@@ -176,6 +197,60 @@ async function loadSalesDashboard(): Promise<{
 
   const itemsByOrder = groupItemsByOrderId(itemRows || []);
 
+  const categoryTotals = new Map<string, number>();
+  for (const order of list as Array<Record<string, unknown> & { id: string }>) {
+    const items = (itemsByOrder[order.id] || []) as Array<
+      Record<string, unknown> & {
+        product_category?: { category_name?: string | null } | null;
+      }
+    >;
+    const additionalSum = additionalByOrderId.get(order.id) ?? 0;
+    if (items.length === 0) {
+      const fallbackRev = Number(order.final_amount || order.total_amount || 0);
+      if (fallbackRev > 0) {
+        const label = "No line items";
+        categoryTotals.set(label, (categoryTotals.get(label) ?? 0) + fallbackRev);
+      }
+      continue;
+    }
+    const lineTotals = items.map((it) => lineGrandTotalInclGst(it, order as any));
+    const sumLines = lineTotals.reduce((a, b) => a + b, 0);
+    items.forEach((it, idx) => {
+      const rawName = it.product_category?.category_name?.trim();
+      const catName = rawName && rawName.length > 0 ? rawName : "Uncategorized";
+      const base = lineTotals[idx];
+      let allocated = base;
+      if (additionalSum !== 0) {
+        if (sumLines > 0) {
+          allocated += additionalSum * (base / sumLines);
+        } else {
+          allocated += additionalSum / items.length;
+        }
+      }
+      categoryTotals.set(catName, (categoryTotals.get(catName) ?? 0) + allocated);
+    });
+  }
+
+  const categorySorted = Array.from(categoryTotals.entries()).sort((a, b) => b[1] - a[1]);
+  const topN = 12;
+  const categoryRevenue: CategoryRevenueRow[] = [];
+  const top = categorySorted.slice(0, topN);
+  const restSum = categorySorted.slice(topN).reduce((s, [, v]) => s + v, 0);
+  for (const [fullName, revenue] of top) {
+    categoryRevenue.push({
+      fullName,
+      name: fullName.length > 18 ? `${fullName.slice(0, 16)}…` : fullName,
+      revenue,
+    });
+  }
+  if (restSum > 0) {
+    categoryRevenue.push({
+      fullName: "All other categories",
+      name: "Others",
+      revenue: restSum,
+    });
+  }
+
   const enriched: EnrichedOrder[] = list.map((order: any) => {
     const items = itemsByOrder[order.id] || [];
     const additionalSum = additionalByOrderId.get(order.id) ?? 0;
@@ -223,7 +298,7 @@ async function loadSalesDashboard(): Promise<{
     }
   }
 
-  return { orders: enriched, employees };
+  return { orders: enriched, employees, categoryRevenue };
 }
 
 const ChartTooltip = ({
@@ -254,6 +329,7 @@ export function EnhancedDashboard() {
   const [employees, setEmployees] = useState<
     Record<string, { id: string; full_name: string; avatar_url?: string }>
   >({});
+  const [categoryRevenue, setCategoryRevenue] = useState<CategoryRevenueRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -261,9 +337,10 @@ export function EnhancedDashboard() {
     try {
       setLoading(true);
       setError(null);
-      const { orders: o, employees: e } = await loadSalesDashboard();
+      const { orders: o, employees: e, categoryRevenue: cr } = await loadSalesDashboard();
       setOrders(o);
       setEmployees(e);
+      setCategoryRevenue(cr);
     } catch (e: unknown) {
       console.error(e);
       setError(e instanceof Error ? e.message : "Failed to load dashboard");
@@ -401,7 +478,8 @@ export function EnhancedDashboard() {
             Sales overview
           </h1>
           <p className="mt-1 text-muted-foreground">
-            Revenue, collections, and performance by sales manager (custom orders).
+            Revenue, collections, performance by sales manager, and revenue by product category (custom
+            orders).
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => refresh()} className="shrink-0 gap-2">
@@ -556,6 +634,63 @@ export function EnhancedDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="rounded-2xl border bg-card/80 shadow-sm backdrop-blur-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Layers className="h-5 w-5 text-violet-500" />
+            Revenue by product category
+          </CardTitle>
+          <CardDescription>
+            Line totals including GST, with order-level additional charges split by line share (same basis
+            as total revenue).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="h-[320px] pt-0">
+          {categoryRevenue.length === 0 ? (
+            <p className="flex h-full items-center justify-center text-sm text-muted-foreground">
+              No categorized line items yet.
+            </p>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={categoryRevenue}
+                layout="vertical"
+                margin={{ top: 8, right: 16, left: 8, bottom: 8 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" horizontal className="stroke-border/60" />
+                <XAxis
+                  type="number"
+                  tick={{ fontSize: 10 }}
+                  tickFormatter={(v) => inrCompact(Number(v))}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  width={120}
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <Tooltip
+                  cursor={{ fill: "hsl(var(--muted) / 0.35)" }}
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.[0]) return null;
+                    const row = payload[0].payload as CategoryRevenueRow;
+                    return (
+                      <div className="rounded-lg border bg-background/95 px-3 py-2 text-xs shadow-md">
+                        <p className="font-medium">{row.fullName}</p>
+                        <p className="text-muted-foreground">{inr(row.revenue)}</p>
+                      </div>
+                    );
+                  }}
+                />
+                <Bar dataKey="revenue" name="Revenue" fill="hsl(262 52% 47%)" radius={[0, 6, 6, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="rounded-2xl border bg-card/80 shadow-sm backdrop-blur-sm overflow-hidden">
         <CardHeader>

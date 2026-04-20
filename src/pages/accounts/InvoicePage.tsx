@@ -4,15 +4,26 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErpLayout } from '@/components/ErpLayout';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { formatCurrency } from '@/lib/utils';
 import { getCustomerMobile } from '@/lib/customerContact';
 import { Eye, Plus } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import '../OrdersPageViewSwitch.css';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
+import { cn } from '@/lib/utils';
+import { Filter } from 'lucide-react';
 
 interface Order {
   id: string;
@@ -31,28 +42,113 @@ interface Order {
   is_credit?: boolean; // Flag to indicate if order has credit receipt
 }
 
+type InvoiceColumnFilters = {
+  order_number: string;
+  customer: string;
+  mobile: string;
+  date: string;
+  status: string;
+  amount: string;
+  dispatched: string;
+  sales_manager: string;
+};
+const EMPTY_COLUMN_FILTERS: InvoiceColumnFilters = {
+  order_number: '',
+  customer: '',
+  mobile: '',
+  date: '',
+  status: '',
+  amount: '',
+  dispatched: '',
+  sales_manager: '',
+};
+type InvoiceFilterColumnKey = keyof InvoiceColumnFilters;
+const FILTER_META: Record<InvoiceFilterColumnKey, { title: string; description: string; placeholder: string }> = {
+  order_number: { title: 'Filter by order #', description: 'Match order number.', placeholder: 'e.g. TUC/' },
+  customer: { title: 'Filter by customer', description: 'Match customer name.', placeholder: 'e.g. Rajiv' },
+  mobile: { title: 'Filter by mobile', description: 'Match customer phone/mobile.', placeholder: 'e.g. 98' },
+  date: { title: 'Filter by date', description: 'Match visible date text.', placeholder: 'e.g. 17 Apr' },
+  status: { title: 'Filter by status', description: 'Match order status.', placeholder: 'e.g. dispatched' },
+  amount: { title: 'Filter by amount', description: 'Match amount text.', placeholder: 'e.g. 12000' },
+  dispatched: { title: 'Filter by dispatched qty', description: 'Match dispatched/approved text.', placeholder: 'e.g. 12' },
+  sales_manager: { title: 'Filter by sales manager', description: 'Match manager name.', placeholder: 'e.g. Monika' },
+};
+function includesFilter(filterRaw: string, value: string): boolean {
+  const f = filterRaw.trim().toLowerCase();
+  if (!f) return true;
+  return value.toLowerCase().includes(f);
+}
+function ColumnFilterTrigger({
+  active,
+  ariaLabel,
+  onOpen,
+}: {
+  active: boolean;
+  ariaLabel: string;
+  onOpen: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={ariaLabel}
+      aria-pressed={active}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      className={cn(
+        'h-7 w-7 shrink-0 rounded-full transition-all duration-200 ease-out',
+        active
+          ? 'bg-primary/20 text-primary shadow-[0_0_0_2px_hsl(var(--primary)/0.45),0_4px_14px_-4px_hsl(var(--primary)/0.45)] ring-2 ring-primary/50 ring-offset-2 ring-offset-background hover:bg-primary/28 hover:ring-primary/65'
+          : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+      )}
+    >
+      <Filter
+        className={cn(
+          'h-3.5 w-3.5 transition-transform duration-200 ease-out',
+          active && 'scale-110 fill-primary text-primary [filter:drop-shadow(0_0_5px_hsl(var(--primary)/0.55))]'
+        )}
+        strokeWidth={active ? 2.5 : 2}
+        aria-hidden
+      />
+    </Button>
+  );
+}
+
 export default function InvoicePage() {
   const navigate = useNavigate();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'pending' | 'completed'>('pending');
+  const [showCompleted, setShowCompleted] = useState<'no' | 'yes'>('no');
   const [employeeMap, setEmployeeMap] = useState<Record<string, { full_name: string; avatar_url?: string }>>({});
   const [creatingInvoice, setCreatingInvoice] = useState<string | null>(null);
+  const [columnFilters, setColumnFilters] = useState<InvoiceColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<InvoiceFilterColumnKey | null>(null);
+  const filterDialogMeta = filterDialogColumn ? FILTER_META[filterDialogColumn] : null;
+  const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
 
   useEffect(() => {
     fetchOrders();
-  }, [activeTab]);
+  }, [activeTab, showCompleted]);
 
   const fetchOrders = async () => {
     try {
       setLoading(true);
       
-      // Get all dispatched and completed orders (include readymade orders that have been dispatched)
+      const visibleStatuses =
+        showCompleted === 'yes'
+          ? (['dispatched', 'partial_dispatched', 'completed'] as const)
+          : (['dispatched', 'partial_dispatched'] as const);
+
+      // Get all invoicable orders (completed included only when enabled)
       const { data: ordersData, error: ordersError } = await supabase
         .from('orders')
         .select(`*, customer:customers(company_name, phone)`)
         .eq('is_deleted', false)
-        .in('status', ['dispatched', 'partial_dispatched', 'completed'] as any)
+        .in('status', visibleStatuses as any)
         .order('created_at', { ascending: false });
 
       if (ordersError) throw ordersError;
@@ -83,6 +179,7 @@ export default function InvoicePage() {
               .from('orders')
               .select(`*, customer:customers(company_name, phone)`)
               .eq('is_deleted', false)
+              .in('status', visibleStatuses as any)
               .in('id', missingIds as any)
               .order('created_at', { ascending: false });
             
@@ -348,8 +445,26 @@ export default function InvoicePage() {
   };
 
   // Filter orders based on active tab
-  const pendingOrders = orders.filter(order => !order.has_invoice);
-  const completedOrders = orders.filter(order => order.has_invoice);
+  const filteredOrders = useMemo(() => {
+    return orders.filter((order) => {
+      const mobile = getCustomerMobile(order.customer as any) || '';
+      const dateLabel = new Date(order.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+      const dispatchedLabel = `${order.dispatched_quantity || 0} ${order.approved_quantity || 0}`;
+      const manager = employeeMap[order.sales_manager || '']?.full_name || '';
+      return (
+        includesFilter(columnFilters.order_number, order.order_number || '') &&
+        includesFilter(columnFilters.customer, order.customer?.company_name || '') &&
+        includesFilter(columnFilters.mobile, mobile) &&
+        includesFilter(columnFilters.date, dateLabel) &&
+        includesFilter(columnFilters.status, order.status || '') &&
+        includesFilter(columnFilters.amount, formatCurrency(order.final_amount || 0)) &&
+        includesFilter(columnFilters.dispatched, dispatchedLabel) &&
+        includesFilter(columnFilters.sales_manager, manager)
+      );
+    });
+  }, [orders, columnFilters, employeeMap]);
+  const pendingOrders = filteredOrders.filter(order => !order.has_invoice);
+  const completedOrders = filteredOrders.filter(order => order.has_invoice);
 
   const renderOrderRow = (order: Order) => (
     <TableRow key={order.id}>
@@ -440,7 +555,7 @@ export default function InvoicePage() {
         </div>
         
         <div className="space-y-6">
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center gap-2 flex-wrap">
             <label
               htmlFor="invoice-page-view-switch"
               className="orders-view-switch"
@@ -457,6 +572,18 @@ export default function InvoicePage() {
               <span>Pending ({pendingOrders.length})</span>
               <span>Completed ({completedOrders.length})</span>
             </label>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Show completed</span>
+              <Select value={showCompleted} onValueChange={(v: 'no' | 'yes') => setShowCompleted(v)}>
+                <SelectTrigger className="w-[160px]">
+                  <SelectValue placeholder="No (default)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="no">No (default)</SelectItem>
+                  <SelectItem value="yes">Yes</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           {activeTab === 'pending' && (
@@ -472,14 +599,14 @@ export default function InvoicePage() {
                   <Table className="min-w-[1000px]">
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Order #</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Mobile</TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Amount</TableHead>
-                        <TableHead>Dispatched Qty</TableHead>
-                        <TableHead>Sales Manager</TableHead>
+                        <TableHead><div className="flex items-center gap-1">Order #<ColumnFilterTrigger active={!!columnFilters.order_number} ariaLabel="Filter order number" onOpen={() => setFilterDialogColumn('order_number')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Customer<ColumnFilterTrigger active={!!columnFilters.customer} ariaLabel="Filter customer" onOpen={() => setFilterDialogColumn('customer')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Mobile<ColumnFilterTrigger active={!!columnFilters.mobile} ariaLabel="Filter mobile" onOpen={() => setFilterDialogColumn('mobile')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Date<ColumnFilterTrigger active={!!columnFilters.date} ariaLabel="Filter date" onOpen={() => setFilterDialogColumn('date')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Status<ColumnFilterTrigger active={!!columnFilters.status} ariaLabel="Filter status" onOpen={() => setFilterDialogColumn('status')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Amount<ColumnFilterTrigger active={!!columnFilters.amount} ariaLabel="Filter amount" onOpen={() => setFilterDialogColumn('amount')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Dispatched Qty<ColumnFilterTrigger active={!!columnFilters.dispatched} ariaLabel="Filter dispatched quantity" onOpen={() => setFilterDialogColumn('dispatched')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Sales Manager<ColumnFilterTrigger active={!!columnFilters.sales_manager} ariaLabel="Filter sales manager" onOpen={() => setFilterDialogColumn('sales_manager')} /></div></TableHead>
                         <TableHead>Action</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -511,14 +638,14 @@ export default function InvoicePage() {
                   <Table className="min-w-[1000px]">
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Order #</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Mobile</TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Amount</TableHead>
-                        <TableHead>Dispatched Qty</TableHead>
-                        <TableHead>Sales Manager</TableHead>
+                        <TableHead><div className="flex items-center gap-1">Order #<ColumnFilterTrigger active={!!columnFilters.order_number} ariaLabel="Filter order number" onOpen={() => setFilterDialogColumn('order_number')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Customer<ColumnFilterTrigger active={!!columnFilters.customer} ariaLabel="Filter customer" onOpen={() => setFilterDialogColumn('customer')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Mobile<ColumnFilterTrigger active={!!columnFilters.mobile} ariaLabel="Filter mobile" onOpen={() => setFilterDialogColumn('mobile')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Date<ColumnFilterTrigger active={!!columnFilters.date} ariaLabel="Filter date" onOpen={() => setFilterDialogColumn('date')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Status<ColumnFilterTrigger active={!!columnFilters.status} ariaLabel="Filter status" onOpen={() => setFilterDialogColumn('status')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Amount<ColumnFilterTrigger active={!!columnFilters.amount} ariaLabel="Filter amount" onOpen={() => setFilterDialogColumn('amount')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Dispatched Qty<ColumnFilterTrigger active={!!columnFilters.dispatched} ariaLabel="Filter dispatched quantity" onOpen={() => setFilterDialogColumn('dispatched')} /></div></TableHead>
+                        <TableHead><div className="flex items-center gap-1">Sales Manager<ColumnFilterTrigger active={!!columnFilters.sales_manager} ariaLabel="Filter sales manager" onOpen={() => setFilterDialogColumn('sales_manager')} /></div></TableHead>
                         <TableHead>Action</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -536,6 +663,50 @@ export default function InvoicePage() {
               </CardContent>
             </Card>
           )}
+          {hasActiveColumnFilters && (
+            <div className="flex justify-end">
+              <Button variant="ghost" size="sm" onClick={() => setColumnFilters({ ...EMPTY_COLUMN_FILTERS })}>
+                Clear column filters
+              </Button>
+            </div>
+          )}
+          <Dialog
+            open={filterDialogColumn !== null}
+            onOpenChange={(open) => {
+              if (!open) setFilterDialogColumn(null);
+            }}
+          >
+            <DialogContent className="sm:max-w-md">
+              {filterDialogColumn && filterDialogMeta && (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>{filterDialogMeta.title}</DialogTitle>
+                    <DialogDescription>{filterDialogMeta.description}</DialogDescription>
+                  </DialogHeader>
+                  <Input
+                    autoFocus
+                    placeholder={filterDialogMeta.placeholder}
+                    value={columnFilters[filterDialogColumn]}
+                    onChange={(e) =>
+                      setColumnFilters((p) => ({ ...p, [filterDialogColumn]: e.target.value }))
+                    }
+                  />
+                  <DialogFooter className="gap-2 sm:gap-0">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setColumnFilters((p) => ({ ...p, [filterDialogColumn]: '' }))}
+                    >
+                      Clear this filter
+                    </Button>
+                    <Button type="button" onClick={() => setFilterDialogColumn(null)}>
+                      Done
+                    </Button>
+                  </DialogFooter>
+                </>
+              )}
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
     </ErpLayout>

@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsTrigger } from '@/components/ui/tabs';
 import { ErpSegmentedTabList } from '@/components/ui/ErpSegmentedTabList';
-import { Plus, Pencil, Trash2, X, Grid3X3, List, Upload, Image as ImageIcon, GripVertical } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Grid3X3, List, Upload, Image as ImageIcon, GripVertical, Filter } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { createSizeOrder, getSortedSizes } from '@/utils/sizeSorting';
@@ -36,6 +36,12 @@ export function SizeTypeManager() {
     size_order: {} as Record<string, number>,
     image_url: ''
   });
+  const [columnFilters, setColumnFilters] = useState({
+    image: '',
+    size_type_name: '',
+    available_sizes: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   const fetchSizeTypes = async () => {
     try {
@@ -287,6 +293,16 @@ export function SizeTypeManager() {
     setDraggedIndex(null);
   };
 
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
+  const filteredSizeTypes = sizeTypes.filter((sizeType) => {
+    const imageLabel = sizeType.image_url ? 'has image' : 'no image';
+    return includesFilter(imageLabel, columnFilters.image)
+      && includesFilter(sizeType.size_name, columnFilters.size_type_name)
+      && includesFilter(getSortedSizes(sizeType).join(' '), columnFilters.available_sizes);
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -504,17 +520,32 @@ export function SizeTypeManager() {
           </CardHeader>
           <CardContent>
             <TabsContent value="table" className="space-y-4">
+              {hasActiveColumnFilters && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setColumnFilters({
+                      image: '',
+                      size_type_name: '',
+                      available_sizes: '',
+                    })
+                  }
+                >
+                  Clear column filters
+                </Button>
+              )}
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Image</TableHead>
-                    <TableHead>Size Type Name</TableHead>
-                    <TableHead>Available Sizes</TableHead>
+                    <TableHead><div className="flex items-center gap-1">Image<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.image ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('image')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Size Type Name<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.size_type_name ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('size_type_name')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Available Sizes<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.available_sizes ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('available_sizes')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sizeTypes.map((sizeType) => (
+                  {filteredSizeTypes.map((sizeType) => (
                     <TableRow key={sizeType.id}>
                       <TableCell>
                       {sizeType.image_url ? (
@@ -618,6 +649,42 @@ export function SizeTypeManager() {
           </CardContent>
         </Tabs>
       </Card>
+      <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Filter column</DialogTitle>
+          </DialogHeader>
+          {filterDialogColumn && (
+            <div className="space-y-3">
+              <Input
+                autoFocus
+                placeholder="Type to filter..."
+                value={columnFilters[filterDialogColumn]}
+                onChange={(event) =>
+                  setColumnFilters((prev) => ({
+                    ...prev,
+                    [filterDialogColumn]: event.target.value,
+                  }))
+                }
+              />
+              <div className="flex justify-between">
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    setColumnFilters((prev) => ({
+                      ...prev,
+                      [filterDialogColumn]: '',
+                    }))
+                  }
+                >
+                  Clear
+                </Button>
+                <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

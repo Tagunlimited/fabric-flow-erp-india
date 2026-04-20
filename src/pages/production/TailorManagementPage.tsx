@@ -99,6 +99,16 @@ const TailorManagementPage = () => {
   const [typeFilter, setTypeFilter] = useState("all");
   const [viewMode, setViewMode] = useState<'tailors' | 'batches'>('tailors');
   const [batchFilter, setBatchFilter] = useState("all");
+  const [columnFilters, setColumnFilters] = useState({
+    name: '',
+    code: '',
+    type: '',
+    skill_level: '',
+    batch: '',
+    status: '',
+    orders: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
   const [isTailorDialogOpen, setIsTailorDialogOpen] = useState(false);
   const [isBatchDialogOpen, setIsBatchDialogOpen] = useState(false);
   const [editingTailor, setEditingTailor] = useState<Tailor | null>(null);
@@ -397,6 +407,8 @@ const TailorManagementPage = () => {
     setViewingBatch(batch);
   };
 
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
   const filteredTailors = tailors.filter(tailor => {
     const matchesSearch = tailor.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          tailor.tailor_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -405,8 +417,17 @@ const TailorManagementPage = () => {
     const matchesType = typeFilter === "all" || tailor.tailor_type === typeFilter;
     const matchesBatch = batchFilter === "all" || tailor.batch_id === batchFilter;
     
-    return matchesSearch && matchesType && matchesBatch;
+    const matchesColumns =
+      includesFilter(tailor.full_name, columnFilters.name) &&
+      includesFilter(tailor.tailor_code, columnFilters.code) &&
+      includesFilter(getTailorTypeLabel(tailor.tailor_type), columnFilters.type) &&
+      includesFilter(tailor.skill_level, columnFilters.skill_level) &&
+      includesFilter(`${tailor.batch_name || ''} ${tailor.batch_code || ''}`, columnFilters.batch) &&
+      includesFilter(`${tailor.status} ${tailor.is_batch_leader ? 'batch leader' : ''}`, columnFilters.status) &&
+      includesFilter(`Active: ${tailor.active_orders} Completed: ${tailor.completed_orders} Total: ${tailor.assigned_orders}`, columnFilters.orders);
+    return matchesSearch && matchesType && matchesBatch && matchesColumns;
   });
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
   const getTailorTypeColor = (type: string) => {
     switch (type) {
@@ -950,9 +971,23 @@ const TailorManagementPage = () => {
                     </Select>
                   </div>
                   <div className="flex items-end">
-                    <Button className="w-full">
-                      <Filter className="w-4 h-4 mr-2" />
-                      Apply Filters
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() =>
+                        setColumnFilters({
+                          name: '',
+                          code: '',
+                          type: '',
+                          skill_level: '',
+                          batch: '',
+                          status: '',
+                          orders: '',
+                        })
+                      }
+                      disabled={!hasActiveColumnFilters}
+                    >
+                      Clear column filters
                     </Button>
                   </div>
                 </div>
@@ -969,13 +1004,13 @@ const TailorManagementPage = () => {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Avatar</TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Code</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Skill Level</TableHead>
-                      <TableHead>Batch</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Orders</TableHead>
+                      <TableHead><div className="flex items-center gap-1">Name<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.name ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('name')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Code<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.code ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('code')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Type<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.type ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('type')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Skill Level<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.skill_level ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('skill_level')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Batch<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.batch ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('batch')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Orders<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.orders ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('orders')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1259,6 +1294,42 @@ const TailorManagementPage = () => {
             </div>
           </div>
         )}
+        <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Filter column</DialogTitle>
+            </DialogHeader>
+            {filterDialogColumn && (
+              <div className="space-y-3">
+                <Input
+                  autoFocus
+                  placeholder="Type to filter..."
+                  value={columnFilters[filterDialogColumn]}
+                  onChange={(event) =>
+                    setColumnFilters((prev) => ({
+                      ...prev,
+                      [filterDialogColumn]: event.target.value,
+                    }))
+                  }
+                />
+                <div className="flex justify-between">
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      setColumnFilters((prev) => ({
+                        ...prev,
+                        [filterDialogColumn]: '',
+                      }))
+                    }
+                  >
+                    Clear
+                  </Button>
+                  <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </ErpLayout>
   );

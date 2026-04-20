@@ -7,10 +7,12 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, Package, Users, Calendar, User, MapPin, Shirt } from 'lucide-react';
+import { ArrowLeft, Package, Users, Calendar, User, MapPin, Shirt, Filter } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useToast } from '@/hooks/use-toast';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 
 interface Order {
   id: string;
@@ -92,6 +94,11 @@ const OrderBatchAssignmentPage: React.FC = () => {
   const [sizeDistributions, setSizeDistributions] = useState<SizeDistribution[]>([]);
   const [loading, setLoading] = useState(true);
   const [assigning, setAssigning] = useState(false);
+  const [columnFilters, setColumnFilters] = useState({
+    batch_name: '',
+    active_jobs: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   useEffect(() => {
     if (id) {
@@ -229,6 +236,14 @@ const OrderBatchAssignmentPage: React.FC = () => {
   const getTotalQuantity = () => {
     return sizeDistributions.reduce((total, size) => total + size.quantity, 0);
   };
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
+  const filteredBatches = batches.filter((batch) => {
+    const activeJobsText = '00';
+    return includesFilter(batch.batch_name, columnFilters.batch_name)
+      && includesFilter(activeJobsText, columnFilters.active_jobs);
+  });
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
   const handleDistributeQuantity = async () => {
     if (selectedBatches.size === 0) {
@@ -415,16 +430,27 @@ const OrderBatchAssignmentPage: React.FC = () => {
                 <CardTitle className="text-lg">Tailor Batch List</CardTitle>
               </CardHeader>
               <CardContent className="p-0">
+                {hasActiveColumnFilters && (
+                  <div className="p-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setColumnFilters({ batch_name: '', active_jobs: '' })}
+                    >
+                      Clear column filters
+                    </Button>
+                  </div>
+                )}
                 <Table>
                   <TableHeader>
                     <TableRow className="border-b border-gray-200">
-                      <TableHead className="font-medium text-gray-900">Select Tailor Batch</TableHead>
-                      <TableHead className="font-medium text-gray-900 text-center">Active Jobs</TableHead>
+                      <TableHead className="font-medium text-gray-900"><div className="flex items-center gap-1">Select Tailor Batch<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.batch_name ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('batch_name')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                      <TableHead className="font-medium text-gray-900 text-center"><div className="flex items-center justify-center gap-1">Active Jobs<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.active_jobs ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('active_jobs')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                       <TableHead className="font-medium text-gray-900 text-center">Select</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {batches.map((batch) => (
+                    {filteredBatches.map((batch) => (
                       <TableRow key={batch.id} className="border-b border-gray-100 hover:bg-gray-50">
                         <TableCell className="py-4">
                           <div className="flex items-center space-x-3">
@@ -456,6 +482,42 @@ const OrderBatchAssignmentPage: React.FC = () => {
                 </Table>
               </CardContent>
             </Card>
+            <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Filter column</DialogTitle>
+                </DialogHeader>
+                {filterDialogColumn && (
+                  <div className="space-y-3">
+                    <Input
+                      autoFocus
+                      placeholder="Type to filter..."
+                      value={columnFilters[filterDialogColumn]}
+                      onChange={(event) =>
+                        setColumnFilters((prev) => ({
+                          ...prev,
+                          [filterDialogColumn]: event.target.value,
+                        }))
+                      }
+                    />
+                    <div className="flex justify-between">
+                      <Button
+                        variant="ghost"
+                        onClick={() =>
+                          setColumnFilters((prev) => ({
+                            ...prev,
+                            [filterDialogColumn]: '',
+                          }))
+                        }
+                      >
+                        Clear
+                      </Button>
+                      <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
 
             {/* Action Button */}
             <div className="flex justify-center">

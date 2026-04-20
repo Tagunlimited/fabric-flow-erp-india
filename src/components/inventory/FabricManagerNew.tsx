@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Pencil, Trash2, X, Download, Upload, Settings, GripVertical } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Download, Upload, Settings, GripVertical, Filter } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
@@ -111,6 +111,16 @@ export function FabricManagerNew() {
   });
   
   const [formData, setFormData] = useState<FabricMaster>(DEFAULT_FABRIC);
+  const [columnFilters, setColumnFilters] = useState({
+    fabric_details: '',
+    fabric_for_supplier: '',
+    color: '',
+    gsm: '',
+    rate: '',
+    inventory: '',
+    status: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   // Fetch fabrics from fabric_master table with inventory totals
   const fetchFabrics = async () => {
@@ -538,6 +548,18 @@ export function FabricManagerNew() {
     
     return matchesSearch && matchesType;
   });
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
+  const displayFabrics = filteredFabrics.filter((fabric) => {
+    return includesFilter(`${fabric.fabric_name} ${fabric.fabric_description || ''}`, columnFilters.fabric_details)
+      && includesFilter(fabric.fabric_for_supplier, columnFilters.fabric_for_supplier)
+      && includesFilter(`${fabric.color || ''} ${fabric.hex || ''}`, columnFilters.color)
+      && includesFilter(fabric.gsm, columnFilters.gsm)
+      && includesFilter(`₹${fabric.rate ?? ''}`, columnFilters.rate)
+      && includesFilter(`${fabric.inventory || 0} ${fabric.uom || ''}`, columnFilters.inventory)
+      && includesFilter(fabric.status, columnFilters.status);
+  });
 
   const uniqueTypes = [...new Set(fabrics.map(f => f.type).filter(Boolean))];
 
@@ -860,6 +882,24 @@ export function FabricManagerNew() {
             ))}
           </SelectContent>
         </Select>
+        {hasActiveColumnFilters && (
+          <Button
+            variant="outline"
+            onClick={() =>
+              setColumnFilters({
+                fabric_details: '',
+                fabric_for_supplier: '',
+                color: '',
+                gsm: '',
+                rate: '',
+                inventory: '',
+                status: '',
+              })
+            }
+          >
+            Clear column filters
+          </Button>
+        )}
       </div>
 
       {/* Bulk Upload Dialog */}
@@ -998,14 +1038,14 @@ export function FabricManagerNew() {
       {/* Fabrics Table */}
       <Card className="shadow-sm">
         <CardHeader className="bg-gradient-to-r from-primary/5 to-primary/10">
-          <CardTitle className="text-lg">Fabric Master ({filteredFabrics.length} fabrics)</CardTitle>
+          <CardTitle className="text-lg">Fabric Master ({displayFabrics.length} fabrics)</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {loading && !fabrics.length ? (
             <div className="flex justify-center items-center h-64">
               <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary" />
             </div>
-          ) : filteredFabrics.length === 0 ? (
+          ) : displayFabrics.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-muted-foreground">No fabrics found</p>
               <Button 
@@ -1020,18 +1060,18 @@ export function FabricManagerNew() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead style={{ width: `${columnWidths.fabricDetails}px` }}>Fabric Details</TableHead>
-                    <TableHead style={{ width: `${columnWidths.type}px` }}>Fabric for supplier</TableHead>
-                    <TableHead style={{ width: `${columnWidths.color}px` }}>Color</TableHead>
-                    <TableHead style={{ width: `${columnWidths.gsm}px` }}>GSM</TableHead>
-                    <TableHead style={{ width: `${columnWidths.rate}px` }}>Rate</TableHead>
-                    <TableHead style={{ width: `${columnWidths.inventory}px` }}>Inventory</TableHead>
-                    <TableHead style={{ width: `${columnWidths.status}px` }}>Status</TableHead>
+                    <TableHead style={{ width: `${columnWidths.fabricDetails}px` }}><div className="flex items-center gap-1">Fabric Details<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.fabric_details ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('fabric_details')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead style={{ width: `${columnWidths.type}px` }}><div className="flex items-center gap-1">Fabric for supplier<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.fabric_for_supplier ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('fabric_for_supplier')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead style={{ width: `${columnWidths.color}px` }}><div className="flex items-center gap-1">Color<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.color ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('color')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead style={{ width: `${columnWidths.gsm}px` }}><div className="flex items-center gap-1">GSM<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.gsm ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('gsm')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead style={{ width: `${columnWidths.rate}px` }}><div className="flex items-center gap-1">Rate<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.rate ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('rate')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead style={{ width: `${columnWidths.inventory}px` }}><div className="flex items-center gap-1">Inventory<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.inventory ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('inventory')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead style={{ width: `${columnWidths.status}px` }}><div className="flex items-center gap-1">Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     <TableHead style={{ width: `${columnWidths.actions}px` }}>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredFabrics.map((fabric) => (
+                  {displayFabrics.map((fabric) => (
                     <TableRow key={fabric.id}>
                       <TableCell>
                         <div className="flex items-center gap-2">
@@ -1143,6 +1183,42 @@ export function FabricManagerNew() {
           )}
         </CardContent>
       </Card>
+      <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Filter column</DialogTitle>
+          </DialogHeader>
+          {filterDialogColumn && (
+            <div className="space-y-3">
+              <Input
+                autoFocus
+                placeholder="Type to filter..."
+                value={columnFilters[filterDialogColumn]}
+                onChange={(event) =>
+                  setColumnFilters((prev) => ({
+                    ...prev,
+                    [filterDialogColumn]: event.target.value,
+                  }))
+                }
+              />
+              <div className="flex justify-between">
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    setColumnFilters((prev) => ({
+                      ...prev,
+                      [filterDialogColumn]: '',
+                    }))
+                  }
+                >
+                  Clear
+                </Button>
+                <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

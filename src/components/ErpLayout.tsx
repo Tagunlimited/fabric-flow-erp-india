@@ -297,7 +297,7 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
                 <UniversalSearchBar
                   value={searchQuery}
                   onChange={setSearchQuery}
-                  placeholder="Search orders, customers, products, employees..."
+                  placeholder="Search orders, customers, invoices, quotations, products…"
                   className="h-12 text-lg"
                 />
               </div>

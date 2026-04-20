@@ -5,11 +5,12 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, RefreshCw, Eye, Pencil, Trash2, ClipboardList } from 'lucide-react';
+import { Plus, RefreshCw, Eye, Pencil, Trash2, ClipboardList, Filter } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { format } from 'date-fns';
 import { ItemImage } from '@/components/ui/OptimizedImage';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 type PurchaseOrder = {
   id: string;
@@ -152,6 +153,15 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
   const [itemsByPoId, setItemsByPoId] = useState<Record<string, ItemRowLite[]>>({});
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | PurchaseOrder['status']>('all');
+  const [columnFilters, setColumnFilters] = useState({
+    po_number: '',
+    supplier: '',
+    order_date: '',
+    item_details: '',
+    total_qty: '',
+    status: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -284,15 +294,41 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
     fetchAll();
   }, [fetchAll]);
 
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
+
   const filteredPOs = useMemo(() => {
     return purchaseOrders.filter((po) => {
       const s = suppliers[po.supplier_id];
       const text = `${po.po_number} ${(s?.supplier_name || '')} ${(s?.supplier_code || '')}`.toLowerCase();
       const matchesSearch = !search || text.includes(search.toLowerCase());
       const matchesStatus = statusFilter === 'all' || po.status === statusFilter;
-      return matchesSearch && matchesStatus;
+      const totalQty = totalQuantityByPoId[po.id];
+      const items = itemsByPoId[po.id] || [];
+      const itemDetails = items.map((item) => {
+        const lineName =
+          (item.item_type === 'fabric' && (item as any).fabric_for_supplier)
+            ? (item as any).fabric_for_supplier
+            : (item.item_name || 'N/A');
+        return `${lineName} ${item.fabric_color || ''} ${item.fabric_gsm || ''} ${item.notes || ''}`;
+      }).join(' ');
+      const supplierText = `${s?.supplier_name || ''} ${s?.supplier_code || ''}`;
+      const orderDateText = po.order_date ? format(new Date(po.order_date), 'dd MMM yyyy') : '';
+      const totalQtyText = totalQty ? `${totalQty.total} ${totalQty.uom}` : '';
+      const statusText = po.status.replace('_', ' ');
+
+      const matchesColumns =
+        includesFilter(po.po_number, columnFilters.po_number) &&
+        includesFilter(supplierText, columnFilters.supplier) &&
+        includesFilter(orderDateText, columnFilters.order_date) &&
+        includesFilter(itemDetails, columnFilters.item_details) &&
+        includesFilter(totalQtyText, columnFilters.total_qty) &&
+        includesFilter(statusText, columnFilters.status);
+
+      return matchesSearch && matchesStatus && matchesColumns;
     });
-  }, [purchaseOrders, suppliers, search, statusFilter]);
+  }, [purchaseOrders, suppliers, search, statusFilter, totalQuantityByPoId, itemsByPoId, columnFilters]);
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm('Delete this purchase order?')) return;
@@ -355,6 +391,23 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
                 <SelectItem value="cancelled">Cancelled</SelectItem>
               </SelectContent>
             </Select>
+            {hasActiveColumnFilters && (
+              <Button
+                variant="outline"
+                onClick={() =>
+                  setColumnFilters({
+                    po_number: '',
+                    supplier: '',
+                    order_date: '',
+                    item_details: '',
+                    total_qty: '',
+                    status: '',
+                  })
+                }
+              >
+                Clear column filters
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -373,13 +426,13 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>PO</TableHead>
-                    <TableHead>Supplier</TableHead>
-                    <TableHead>Order Date</TableHead>
+                    <TableHead><div className="flex items-center gap-1">PO<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.po_number ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('po_number')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Supplier<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.supplier ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('supplier')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Order Date<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.order_date ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('order_date')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     <TableHead>Image</TableHead>
-                    <TableHead>Item Details</TableHead>
-                    <TableHead>Total Qty</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead><div className="flex items-center gap-1">Item Details<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.item_details ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('item_details')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Total Qty<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.total_qty ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('total_qty')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                    <TableHead><div className="flex items-center gap-1">Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -407,6 +460,42 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
               </Table>
             </div>
           )}
+          <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Filter column</DialogTitle>
+              </DialogHeader>
+              {filterDialogColumn && (
+                <div className="space-y-3">
+                  <Input
+                    autoFocus
+                    placeholder="Type to filter..."
+                    value={columnFilters[filterDialogColumn]}
+                    onChange={(event) =>
+                      setColumnFilters((prev) => ({
+                        ...prev,
+                        [filterDialogColumn]: event.target.value,
+                      }))
+                    }
+                  />
+                  <div className="flex justify-between">
+                    <Button
+                      variant="ghost"
+                      onClick={() =>
+                        setColumnFilters((prev) => ({
+                          ...prev,
+                          [filterDialogColumn]: '',
+                        }))
+                      }
+                    >
+                      Clear
+                    </Button>
+                    <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
         </CardContent>
       </Card>
     </div>

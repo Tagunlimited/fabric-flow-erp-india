@@ -14,15 +14,17 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { SortableTableHeader } from "@/components/ui/sortable-table-header";
+import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Search, Loader2, Globe } from "lucide-react";
+import { Search, Loader2, Globe, Filter } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 type ContactSubmission = Database["public"]["Tables"]["contact_submissions"]["Row"];
 type LeadStatus = "contacted" | "not_interested" | "negotiation" | "converted";
@@ -106,6 +108,13 @@ const LeadsPage = () => {
   const [activeStatusFilter, setActiveStatusFilter] = useState<"new" | LeadStatus | null>(null);
   const [sortField, setSortField] = useState<keyof ContactSubmission>("created_at");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [columnFilters, setColumnFilters] = useState({
+    contact: '',
+    sales_manager: '',
+    status: '',
+    details: '',
+  });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
 
   const fetchLeads = useCallback(async () => {
     setLoading(true);
@@ -165,6 +174,8 @@ const LeadsPage = () => {
     });
   }, []);
 
+  const includesFilter = (value: unknown, filterValue: string) =>
+    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
   const filteredAndSorted = useMemo(() => {
     const lower = search.trim().toLowerCase();
     let list = leads;
@@ -187,13 +198,26 @@ const LeadsPage = () => {
           (row.project_details && row.project_details.toLowerCase().includes(lower))
       );
     }
-    return [...list].sort((a, b) => {
+    const withColumnFilters = list.filter((row) => {
+      const contactText = `${row.email || ''} ${row.phone || ''}`;
+      const managerText = row.assigned_sales_manager
+        ? (salesManagerMap[row.assigned_sales_manager]?.full_name || '')
+        : '';
+      const statusText = getLeadStatusLabel(row.lead_status);
+      const detailsText = row.project_details || '';
+      return includesFilter(contactText, columnFilters.contact)
+        && includesFilter(managerText, columnFilters.sales_manager)
+        && includesFilter(statusText, columnFilters.status)
+        && includesFilter(detailsText, columnFilters.details);
+    });
+    return [...withColumnFilters].sort((a, b) => {
       const aVal = a[sortField];
       const bVal = b[sortField];
       const cmp = aVal == null && bVal == null ? 0 : (aVal ?? "") < (bVal ?? "") ? -1 : (aVal ?? "") > (bVal ?? "") ? 1 : 0;
       return sortDirection === "asc" ? cmp : -cmp;
     });
-  }, [leads, search, sortField, sortDirection, activeStatusFilter]);
+  }, [leads, search, sortField, sortDirection, activeStatusFilter, salesManagerMap, columnFilters]);
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
   const leadStatusCounts = useMemo(() => {
     const counts: Record<string, number> = {
@@ -299,6 +323,22 @@ const LeadsPage = () => {
                     />
                   </div>
                   <div className="flex items-center gap-3">
+                    {hasActiveColumnFilters && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setColumnFilters({
+                            contact: '',
+                            sales_manager: '',
+                            status: '',
+                            details: '',
+                          })
+                        }
+                      >
+                        Clear column filters
+                      </Button>
+                    )}
                     <span className="text-sm font-medium text-muted-foreground">Show Source</span>
                     <label className="switch" aria-label="Toggle source column visibility">
                       <input
@@ -355,7 +395,7 @@ const LeadsPage = () => {
                             currentSortDirection={sortDirection}
                             onSort={handleSort}
                           />
-                          <TableHead>Contact</TableHead>
+                          <TableHead><div className="flex items-center gap-1">Contact<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.contact ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('contact')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                           {showSource && (
                             <SortableTableHeader
                               label="Source"
@@ -372,8 +412,8 @@ const LeadsPage = () => {
                             currentSortDirection={sortDirection}
                             onSort={handleSort}
                           />
-                          <TableHead>Sales Manager</TableHead>
-                          <TableHead>Status</TableHead>
+                          <TableHead><div className="flex items-center gap-1">Sales Manager<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.sales_manager ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('sales_manager')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
+                          <TableHead><div className="flex items-center gap-1">Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                           <TableHead className="w-[80px]">Details</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -486,6 +526,42 @@ const LeadsPage = () => {
             </Card>
           </div>
         </div>
+        <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Filter column</DialogTitle>
+            </DialogHeader>
+            {filterDialogColumn && (
+              <div className="space-y-3">
+                <Input
+                  autoFocus
+                  placeholder="Type to filter..."
+                  value={columnFilters[filterDialogColumn]}
+                  onChange={(event) =>
+                    setColumnFilters((prev) => ({
+                      ...prev,
+                      [filterDialogColumn]: event.target.value,
+                    }))
+                  }
+                />
+                <div className="flex justify-between">
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      setColumnFilters((prev) => ({
+                        ...prev,
+                        [filterDialogColumn]: '',
+                      }))
+                    }
+                  >
+                    Clear
+                  </Button>
+                  <Button onClick={() => setFilterDialogColumn(null)}>Done</Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
         <style>{`
           /* From Uiverse.io by RaspberryBee */
           .switch {

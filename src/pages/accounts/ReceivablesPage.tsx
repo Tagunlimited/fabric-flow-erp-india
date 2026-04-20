@@ -18,17 +18,27 @@ import { ErpLayout } from '@/components/ErpLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { formatCurrency, formatDateIndian } from '@/lib/utils';
+import { cn, formatCurrency, formatDateIndian } from '@/lib/utils';
 import { calculateOrderSummary } from '@/utils/priceCalculation';
 import {
   fetchOrderIdsWithActiveCreditReceipt,
   sumActiveReceiptAmountsForOrder,
 } from '@/utils/orderFinancials';
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
-import { RefreshCw, Wallet, AlertTriangle, CalendarClock, Receipt } from 'lucide-react';
+import { RefreshCw, Wallet, AlertTriangle, CalendarClock, Receipt, Filter } from 'lucide-react';
 
 type ArRow = {
   id: string;
@@ -44,6 +54,86 @@ type ArRow = {
   hasCreditReceipt: boolean;
   daysOverdue: number | null;
 };
+
+type ReceivablesColumnFilters = {
+  order: string;
+  customer: string;
+  order_total: string;
+  received: string;
+  pending: string;
+  due_date: string;
+  overdue: string;
+  status: string;
+  credit: string;
+};
+const EMPTY_COLUMN_FILTERS: ReceivablesColumnFilters = {
+  order: '',
+  customer: '',
+  order_total: '',
+  received: '',
+  pending: '',
+  due_date: '',
+  overdue: '',
+  status: '',
+  credit: '',
+};
+type ReceivablesFilterColumnKey = keyof ReceivablesColumnFilters;
+const FILTER_META: Record<ReceivablesFilterColumnKey, { title: string; description: string; placeholder: string }> = {
+  order: { title: 'Filter by order', description: 'Match order number.', placeholder: 'e.g. TUC/' },
+  customer: { title: 'Filter by customer', description: 'Match customer name.', placeholder: 'e.g. Rajiv' },
+  order_total: { title: 'Filter by order total', description: 'Match formatted amount.', placeholder: 'e.g. 20000' },
+  received: { title: 'Filter by received', description: 'Match received amount.', placeholder: 'e.g. 15000' },
+  pending: { title: 'Filter by pending', description: 'Match pending amount.', placeholder: 'e.g. 5000' },
+  due_date: { title: 'Filter by payment due', description: 'Match due date text.', placeholder: 'e.g. 20 Apr' },
+  overdue: { title: 'Filter by overdue days', description: 'Match overdue number.', placeholder: 'e.g. 7' },
+  status: { title: 'Filter by status', description: 'Match order status.', placeholder: 'e.g. confirmed' },
+  credit: { title: 'Filter by credit', description: 'Match credit badge text.', placeholder: 'e.g. credit' },
+};
+
+function includesFilter(filterRaw: string, value: string): boolean {
+  const f = filterRaw.trim().toLowerCase();
+  if (!f) return true;
+  return value.toLowerCase().includes(f);
+}
+
+function ColumnFilterTrigger({
+  active,
+  ariaLabel,
+  onOpen,
+}: {
+  active: boolean;
+  ariaLabel: string;
+  onOpen: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={ariaLabel}
+      aria-pressed={active}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      className={cn(
+        'h-7 w-7 shrink-0 rounded-full transition-all duration-200 ease-out',
+        active
+          ? 'bg-primary/20 text-primary shadow-[0_0_0_2px_hsl(var(--primary)/0.45),0_4px_14px_-4px_hsl(var(--primary)/0.45)] ring-2 ring-primary/50 ring-offset-2 ring-offset-background hover:bg-primary/28 hover:ring-primary/65'
+          : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+      )}
+    >
+      <Filter
+        className={cn(
+          'h-3.5 w-3.5 transition-transform duration-200 ease-out',
+          active && 'scale-110 fill-primary text-primary [filter:drop-shadow(0_0_5px_hsl(var(--primary)/0.55))]'
+        )}
+        strokeWidth={active ? 2.5 : 2}
+        aria-hidden
+      />
+    </Button>
+  );
+}
 
 function overdueDays(paymentDue: string | null | undefined, pending: number): number | null {
   if (pending <= 0 || !paymentDue) return null;
@@ -65,11 +155,16 @@ export default function ReceivablesPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ArRow[]>([]);
+  const [showCompleted, setShowCompleted] = useState<'no' | 'yes'>('no');
+  const [columnFilters, setColumnFilters] = useState<ReceivablesColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
+  const [filterDialogColumn, setFilterDialogColumn] = useState<ReceivablesFilterColumnKey | null>(null);
+  const filterDialogMeta = filterDialogColumn ? FILTER_META[filterDialogColumn] : null;
+  const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      let ordersQuery: any = supabase
         .from('orders')
         .select(
           `
@@ -78,8 +173,11 @@ export default function ReceivablesPage() {
         `
         )
         .eq('is_deleted', false)
-        .neq('status', 'cancelled')
-        .order('created_at', { ascending: false });
+        .neq('status', 'cancelled');
+      if (showCompleted === 'no') {
+        ordersQuery = ordersQuery.neq('status', 'completed');
+      }
+      const { data, error } = await ordersQuery.order('created_at', { ascending: false });
 
       if (error) throw error;
 
@@ -210,7 +308,7 @@ export default function ReceivablesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showCompleted]);
 
   useEffect(() => {
     load();
@@ -275,6 +373,23 @@ export default function ReceivablesPage() {
   const inrAxis = (v: number) =>
     new Intl.NumberFormat('en-IN', { notation: 'compact', compactDisplay: 'short' }).format(v);
 
+  const filteredRows = useMemo(() => {
+    return rows.filter((r) => {
+      const credit = r.hasCreditReceipt ? 'credit' : '';
+      return (
+        includesFilter(columnFilters.order, r.order_number || '') &&
+        includesFilter(columnFilters.customer, r.customer_name || '') &&
+        includesFilter(columnFilters.order_total, formatCurrency(r.calculatedTotal)) &&
+        includesFilter(columnFilters.received, formatCurrency(r.received)) &&
+        includesFilter(columnFilters.pending, formatCurrency(r.pending)) &&
+        includesFilter(columnFilters.due_date, r.payment_due_date ? formatDateIndian(r.payment_due_date) : '—') &&
+        includesFilter(columnFilters.overdue, r.daysOverdue != null ? String(r.daysOverdue) : '—') &&
+        includesFilter(columnFilters.status, String(r.status || '').replace(/_/g, ' ')) &&
+        includesFilter(columnFilters.credit, credit)
+      );
+    });
+  }, [rows, columnFilters]);
+
   return (
     <ErpLayout>
       <div className="space-y-6">
@@ -287,10 +402,22 @@ export default function ReceivablesPage() {
               Outstanding order balances (line items + additional charges, net of receipts)
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={() => load()} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Show completed</span>
+            <Select value={showCompleted} onValueChange={(v: 'no' | 'yes') => setShowCompleted(v)}>
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="No (default)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="no">No (default)</SelectItem>
+                <SelectItem value="yes">Yes</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" onClick={() => load()} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -401,27 +528,27 @@ export default function ReceivablesPage() {
           <CardContent>
             {loading ? (
               <p className="text-sm text-muted-foreground py-8 text-center">Loading…</p>
-            ) : rows.length === 0 ? (
+            ) : filteredRows.length === 0 ? (
               <p className="text-sm text-muted-foreground py-8 text-center">No outstanding balances</p>
             ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Order</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead className="text-right">Order total</TableHead>
-                      <TableHead className="text-right">Received</TableHead>
-                      <TableHead className="text-right">Pending</TableHead>
-                      <TableHead>Payment due</TableHead>
-                      <TableHead className="text-right">Days overdue</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Credit</TableHead>
+                      <TableHead><div className="flex items-center gap-1">Order<ColumnFilterTrigger active={!!columnFilters.order} ariaLabel="Filter order" onOpen={() => setFilterDialogColumn('order')} /></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Customer<ColumnFilterTrigger active={!!columnFilters.customer} ariaLabel="Filter customer" onOpen={() => setFilterDialogColumn('customer')} /></div></TableHead>
+                      <TableHead className="text-right"><div className="flex items-center justify-end gap-1">Order total<ColumnFilterTrigger active={!!columnFilters.order_total} ariaLabel="Filter order total" onOpen={() => setFilterDialogColumn('order_total')} /></div></TableHead>
+                      <TableHead className="text-right"><div className="flex items-center justify-end gap-1">Received<ColumnFilterTrigger active={!!columnFilters.received} ariaLabel="Filter received" onOpen={() => setFilterDialogColumn('received')} /></div></TableHead>
+                      <TableHead className="text-right"><div className="flex items-center justify-end gap-1">Pending<ColumnFilterTrigger active={!!columnFilters.pending} ariaLabel="Filter pending" onOpen={() => setFilterDialogColumn('pending')} /></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Payment due<ColumnFilterTrigger active={!!columnFilters.due_date} ariaLabel="Filter due date" onOpen={() => setFilterDialogColumn('due_date')} /></div></TableHead>
+                      <TableHead className="text-right"><div className="flex items-center justify-end gap-1">Days overdue<ColumnFilterTrigger active={!!columnFilters.overdue} ariaLabel="Filter overdue days" onOpen={() => setFilterDialogColumn('overdue')} /></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Status<ColumnFilterTrigger active={!!columnFilters.status} ariaLabel="Filter status" onOpen={() => setFilterDialogColumn('status')} /></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Credit<ColumnFilterTrigger active={!!columnFilters.credit} ariaLabel="Filter credit" onOpen={() => setFilterDialogColumn('credit')} /></div></TableHead>
                       <TableHead className="w-[1%]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {rows.map((r) => (
+                    {filteredRows.map((r) => (
                       <TableRow key={r.id}>
                         <TableCell className="font-medium whitespace-nowrap">{r.order_number}</TableCell>
                         <TableCell>{r.customer_name}</TableCell>
@@ -479,6 +606,50 @@ export default function ReceivablesPage() {
             )}
           </CardContent>
         </Card>
+        {hasActiveColumnFilters && (
+          <div className="flex justify-end">
+            <Button variant="ghost" size="sm" onClick={() => setColumnFilters({ ...EMPTY_COLUMN_FILTERS })}>
+              Clear column filters
+            </Button>
+          </div>
+        )}
+        <Dialog
+          open={filterDialogColumn !== null}
+          onOpenChange={(open) => {
+            if (!open) setFilterDialogColumn(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            {filterDialogColumn && filterDialogMeta && (
+              <>
+                <DialogHeader>
+                  <DialogTitle>{filterDialogMeta.title}</DialogTitle>
+                  <DialogDescription>{filterDialogMeta.description}</DialogDescription>
+                </DialogHeader>
+                <Input
+                  autoFocus
+                  placeholder={filterDialogMeta.placeholder}
+                  value={columnFilters[filterDialogColumn]}
+                  onChange={(e) =>
+                    setColumnFilters((p) => ({ ...p, [filterDialogColumn]: e.target.value }))
+                  }
+                />
+                <DialogFooter className="gap-2 sm:gap-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setColumnFilters((p) => ({ ...p, [filterDialogColumn]: '' }))}
+                  >
+                    Clear this filter
+                  </Button>
+                  <Button type="button" onClick={() => setFilterDialogColumn(null)}>
+                    Done
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </ErpLayout>
   );
