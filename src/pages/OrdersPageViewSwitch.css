@@ -104,3 +104,17 @@
 .orders-view-switch > input:checked ~ span:last-of-type {
   opacity: 1;
 }
+
+/* Tailor management view switch tweaks */
+.tailor-view-switch {
+  --_label-padding: 0.5rem 2rem;
+  min-width: 36rem;
+}
+
+.tailor-view-switch > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}

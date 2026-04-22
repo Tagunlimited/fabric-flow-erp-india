@@ -150,3 +150,41 @@ I will keep appending new completed tasks with timestamped entries.
     - Kept existing attachment download/open behavior intact.
 - Verified edited files are lint-clean.
 
+## 2026-04-22 21:37:46 IST
+
+- Fixed receipt prefill customer display issue when opening `Create Receipt` from order page:
+  - Updated `src/components/customers/CustomerSearchSelect.tsx` to resolve selected customer by `value` (`customer_id`) even when not present in initial limited list fetch.
+  - Ensures customer name is shown correctly in selector (not just mobile info below) for prefilled navigation flows.
+
+## 2026-04-22 21:44:00 IST
+
+- Added scroll support for custom order customization dialog in `src/components/orders/ProductCustomizationModal.tsx`:
+  - Added max-height and internal vertical scrolling for dialog content.
+  - Kept footer action buttons (`Cancel`, `Save Customizations`) consistently reachable with fixed footer section.
+
+## 2026-04-22 21:47:56 IST
+
+- Fixed runtime crash on Tailor Management page (`Cannot access 'getTailorTypeLabel' before initialization`) in `src/pages/production/TailorManagementPage.tsx`:
+  - Changed `getTailorTypeLabel` from `const` function expression to hoisted function declaration so it is safely callable inside earlier filtering logic.
+
+## 2026-04-22 21:50:00 IST
+
+- Updated Tailor Management view toggle styling to improve compactness and readability:
+  - Increased switch width and reduced vertical height.
+  - Enforced icon + text on the same row for both tabs.
+  - Scoped via `tailor-view-switch` in:
+    - `src/pages/production/TailorManagementPage.tsx`
+    - `src/pages/OrdersPageViewSwitch.css`
+
+## 2026-04-22 21:59:42 IST
+
+- Updated order detail attachments UI in `src/pages/orders/OrderDetailPage.tsx`:
+  - Display attachment file name (cleaned) instead of full id/path-like URL fragment.
+  - Replaced large right-side `Download` button with compact download icon button at top-right of each attachment card.
+  - Added Canva link preview support (embedded iframe) when attachment URL host is Canva and embeddable.
+
+## 2026-04-22 22:02:39 IST
+
+- Updated order detail image action placement in `src/pages/orders/OrderDetailPage.tsx`:
+  - Moved `Open` action from below the image to an overlay icon button on the image container (top-right), matching compact card-style interaction.
+

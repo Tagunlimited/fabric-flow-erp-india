@@ -192,6 +192,30 @@ const extractImagesFromSpecifications = (specifications: any) => {
   }
 };
 
+const getAttachmentDisplayName = (attachmentUrl: string, fallbackIndex: number): string => {
+  try {
+    const parsed = new URL(attachmentUrl);
+    const rawName = decodeURIComponent((parsed.pathname.split('/').pop() || '').trim());
+    if (!rawName) return `Attachment ${fallbackIndex + 1}`;
+    return rawName
+      .replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_/i, '')
+      .replace(/^product\d+_/i, '');
+  } catch {
+    return `Attachment ${fallbackIndex + 1}`;
+  }
+};
+
+const getCanvaPreviewUrl = (attachmentUrl: string): string | null => {
+  try {
+    const parsed = new URL(attachmentUrl);
+    if (!parsed.hostname.toLowerCase().includes('canva.com')) return null;
+    parsed.searchParams.set('embed', '1');
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
 const hasMockupInItem = (item: any): boolean => {
   if (Array.isArray(item?.mockup_images) && item.mockup_images.length > 0) return true;
   const specs = typeof item?.specifications === 'string'
@@ -3423,25 +3447,40 @@ export default function OrderDetailPage() {
                                   <p className="text-sm font-medium text-muted-foreground mb-3">Attachments:</p>
                                   <div className="space-y-2">
                                     {attachments.map((attachmentUrl: string, idx: number) => (
-                                      <div key={idx} className="flex items-center justify-between p-3 bg-muted/20 rounded-lg border">
-                                        <div className="flex items-center space-x-3">
+                                      <div key={idx} className="relative p-3 bg-muted/20 rounded-lg border">
+                                        <div className="flex items-start space-x-3 pr-10">
                                           <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
                                             <FileText className="w-4 h-4 text-primary" />
                                           </div>
-                                          <div>
-                                            <p className="text-sm font-medium">Attachment {idx + 1}</p>
-                                            <p className="text-xs text-muted-foreground">
-                                              {attachmentUrl.split('/').pop() || 'File'}
+                                          <div className="min-w-0 flex-1">
+                                            <p className="text-sm font-medium break-words">
+                                              {getAttachmentDisplayName(attachmentUrl, idx)}
                                             </p>
+                                            {(() => {
+                                              const canvaPreviewUrl = getCanvaPreviewUrl(attachmentUrl);
+                                              if (!canvaPreviewUrl) return null;
+                                              return (
+                                                <div className="mt-2 rounded-md border overflow-hidden bg-white">
+                                                  <iframe
+                                                    src={canvaPreviewUrl}
+                                                    title={`Canva preview ${idx + 1}`}
+                                                    className="w-full h-44"
+                                                    loading="lazy"
+                                                  />
+                                                </div>
+                                              );
+                                            })()}
                                           </div>
                                         </div>
                                         <Button
-                                          variant="outline"
-                                          size="sm"
+                                          variant="ghost"
+                                          size="icon"
+                                          className="absolute right-2 top-2 h-8 w-8"
                                           onClick={() => window.open(attachmentUrl, '_blank')}
+                                          aria-label={`Download attachment ${idx + 1}`}
+                                          title="Download"
                                         >
-                                          <Download className="w-4 h-4 mr-1" />
-                                          Download
+                                          <Download className="w-4 h-4" />
                                         </Button>
                                       </div>
                                     ))}
@@ -3691,7 +3730,7 @@ export default function OrderDetailPage() {
                                     <p className="text-sm font-medium text-muted-foreground mb-3 justify-content-center">{block.title}:</p>
                                     <div className="space-y-3">
                                       {/* Main large image */}
-                                      <div className="aspect-square w-full overflow-hidden rounded-lg border shadow-md">
+                                      <div className="aspect-square w-full overflow-hidden rounded-lg border shadow-md relative">
                                         <img
                                           src={block.images[block.selected[index] || 0]}
                                           alt={block.title}
@@ -3716,19 +3755,21 @@ export default function OrderDetailPage() {
                                           }}
                                           onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                         />
-                                      </div>
-                                      <div className="flex justify-end">
                                         <Button
                                           type="button"
                                           variant="outline"
-                                          size="sm"
-                                          onClick={() => {
+                                          size="icon"
+                                          className="absolute right-2 top-2 h-8 w-8 bg-background/90 backdrop-blur-sm"
+                                          onClick={(ev) => {
+                                            ev.preventDefault();
+                                            ev.stopPropagation();
                                             const currentImage = block.images[block.selected[index] || 0];
                                             if (currentImage) window.open(currentImage, '_blank');
                                           }}
+                                          title="Open image"
+                                          aria-label="Open image"
                                         >
-                                          <Download className="w-4 h-4 mr-1" />
-                                          Open
+                                          <Download className="w-4 h-4" />
                                         </Button>
                                       </div>
 
