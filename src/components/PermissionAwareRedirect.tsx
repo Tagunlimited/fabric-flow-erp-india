@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { useLocation, Navigate } from 'react-router-dom';
 import { useSidebarPermissions } from '@/hooks/useSidebarPermissions';
 import { useAuth } from '@/components/auth/AuthProvider';
 import Index from '@/pages/Index';
 
 export function PermissionAwareRedirect() {
-  const navigate = useNavigate();
   const location = useLocation();
   const { items: sidebarItems, loading, permissionsSetup, isAdmin } = useSidebarPermissions();
   const { profile, user } = useAuth();
@@ -150,39 +149,12 @@ export function PermissionAwareRedirect() {
     }
     
     return () => clearTimeout(redirectTimeout);
-  }, [loading, permissionsSetup, sidebarItems, navigate, profile?.role, isAdmin, location.pathname, user?.email]);
+  }, [loading, permissionsSetup, sidebarItems, profile?.role, isAdmin, location.pathname, user?.email]);
 
   // CRITICAL FIX: Check for admin status - used in both useEffect and render
   const isPreConfiguredAdmin = user?.email === 'ecom@tagunlimitedclothing.com';
   const isAdminByProfile = profile?.role === 'admin';
   const isAdminUser = isPreConfiguredAdmin || isAdminByProfile || isAdmin;
-
-  // Separate useEffect for immediate admin redirect (runs whenever user/profile changes)
-  useEffect(() => {
-    // Only redirect if on root path and haven't redirected yet
-    if (location.pathname !== '/' || hasRedirected.current) {
-      return;
-    }
-
-    const hasRedirectedInSession = sessionStorage.getItem('permissionRedirectDone') === 'true';
-    if (hasRedirectedInSession) {
-      return;
-    }
-
-    // If admin user detected, redirect immediately
-    if (isAdminUser) {
-      console.log('👑 Admin user detected - redirecting immediately', {
-        isPreConfiguredAdmin,
-        isAdminByProfile,
-        isAdmin,
-        userEmail: user?.email,
-        profileRole: profile?.role
-      });
-      hasRedirected.current = true;
-      sessionStorage.setItem('permissionRedirectDone', 'true');
-      setRedirectTo('/dashboard');
-    }
-  }, [isAdminUser, user?.email, profile?.role, location.pathname]);
 
   // Show loading while determining where to redirect
   // BUT skip loading screen for admin users (they should redirect immediately)

@@ -42,17 +42,6 @@ export const authService = {
     return data;
   },
 
-  // Sign in user
-  async signIn(email: string, password: string) {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    if (error) throw error;
-    return data;
-  },
-
   // Sign out user
   async signOut() {
     const { error } = await supabase.auth.signOut();
@@ -65,48 +54,13 @@ export const authService = {
     return user as AuthUser;
   },
 
-  // Get user profile with improved error handling and retry logic
+  // AuthProvider owns session validation lifecycle; this function only reads profile data.
   async getUserProfile(userId: string, retryCount = 0, skipSessionCheck = false): Promise<UserProfile | null> {
     const maxRetries = 2;
     const retryDelay = Math.min(1000 * Math.pow(2, retryCount), 3000); // Exponential backoff, max 3s
     
     try {
       console.log(`Fetching profile for user: ${userId} (attempt ${retryCount + 1}/${maxRetries + 1}, skipSessionCheck: ${skipSessionCheck})`);
-      
-      // Skip session check if caller already validated session (e.g., from SIGNED_IN event)
-      if (!skipSessionCheck) {
-        // Validate session before attempting fetch - with timeout
-        console.log('🔍 getUserProfile: Checking session validity...');
-        const sessionCheckPromise = supabase.auth.getSession();
-        const sessionTimeoutPromise = new Promise<{ data: { session: null }, error: { message: string } }>((resolve) => {
-          setTimeout(() => {
-            console.warn('⚠️ getUserProfile: Session check timeout after 5 seconds');
-            resolve({ data: { session: null }, error: { message: 'Session check timeout' } });
-          }, 5000);
-        });
-        
-        const { data: { session }, error: sessionError } = await Promise.race([sessionCheckPromise, sessionTimeoutPromise]);
-        if (sessionError || !session) {
-          console.warn('No valid session, attempting to refresh...');
-          const refreshPromise = supabase.auth.refreshSession();
-          const refreshTimeoutPromise = new Promise<{ data: { session: null }, error: { message: string } }>((resolve) => {
-            setTimeout(() => {
-              console.warn('⚠️ getUserProfile: Session refresh timeout after 5 seconds');
-              resolve({ data: { session: null }, error: { message: 'Session refresh timeout' } });
-            }, 5000);
-          });
-          
-          const { data: refreshed, error: refreshError } = await Promise.race([refreshPromise, refreshTimeoutPromise]);
-          if (refreshError || !refreshed.session) {
-            console.error('Session refresh failed:', refreshError);
-            return null;
-          }
-        } else {
-          console.log('✅ getUserProfile: Session is valid');
-        }
-      } else {
-        console.log('⏭️ getUserProfile: Skipping session check (skipSessionCheck=true)');
-      }
       
       // Fetch profile - explicitly include avatar_url
       // Use maybeSingle() which returns null if no row found (doesn't throw error)
@@ -164,27 +118,11 @@ export const authService = {
         
         console.error('Profile fetch error:', error);
         
-        // Handle JWT expired/unauthorized errors
-        if (error.code === '401' || error.code === 'PGRST301' || 
-            error.message?.includes('JWT') || error.message?.includes('expired') || 
+        // Auth/session failures are handled by AuthProvider.
+        if (error.code === '401' || error.code === 'PGRST301' ||
+            error.message?.includes('JWT') || error.message?.includes('expired') ||
             error.message?.includes('unauthorized') || error.message?.includes('Invalid API key')) {
-          console.log('Authentication error, attempting to refresh session...');
-          try {
-            const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-            if (refreshError || !refreshed.session) {
-              console.error('Session refresh failed:', refreshError);
-              return null;
-            }
-            // Retry after refresh with exponential backoff
-            if (retryCount < maxRetries) {
-              await new Promise(resolve => setTimeout(resolve, retryDelay));
-              return this.getUserProfile(userId, retryCount + 1);
-            }
-            return null;
-          } catch (refreshErr) {
-            console.error('Error during session refresh:', refreshErr);
-            return null;
-          }
+          return null;
         }
         
         // Handle RLS policy recursion errors

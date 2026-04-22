@@ -26,6 +26,11 @@ export interface UsePersistShellOnTabReturnOptions {
   /** Optional draft key (e.g. `customerForm`) — reopen shell if draft exists */
   draftFormKey?: string;
   setShow: (open: boolean) => void;
+  /**
+   * Conservative default: disabled.
+   * Screens must explicitly opt-in to restore shell visibility on tab-return events.
+   */
+  restoreOnTabReturn?: boolean;
 }
 
 /**
@@ -37,8 +42,11 @@ export function usePersistShellOnTabReturn({
   explicitCloseKey,
   draftFormKey,
   setShow,
+  restoreOnTabReturn = false,
 }: UsePersistShellOnTabReturnOptions) {
   useEffect(() => {
+    if (!restoreOnTabReturn) return;
+
     const apply = () => {
       // Always read from localStorage directly to avoid React state timing issues
       const wantOpen = readFormPersistenceDataFromStorage(showOpenKey) === true;
@@ -52,10 +60,10 @@ export function usePersistShellOnTabReturn({
                   (typeof draftData !== 'object' || Object.keys(draftData as object).length > 0);
       }
 
+      // Conservative policy: only restore open state when explicitly enabled.
+      // Never auto-close from visibility/storage events.
       if (!explicitClose && (wantOpen || hasDraft)) {
         setShow(true);
-      } else if (explicitClose) {
-        setShow(false);
       }
     };
 
@@ -82,5 +90,5 @@ export function usePersistShellOnTabReturn({
       document.removeEventListener('pageshow', onPageShow);
       document.removeEventListener('storage', onStorage);
     };
-  }, [draftFormKey, showOpenKey, explicitCloseKey, setShow]);
+  }, [draftFormKey, showOpenKey, explicitCloseKey, setShow, restoreOnTabReturn]);
 }

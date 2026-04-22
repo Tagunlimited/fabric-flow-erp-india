@@ -9,7 +9,7 @@ interface ProtectedRouteProps {
 }
 
 export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
-  const { user, profile, loading, profileLoading } = useAuth();
+  const { user, profile, loading, profileLoading, refreshProfile } = useAuth();
 
   // Show loader ONLY while auth is initializing (not profile loading)
   // Profile loading is non-blocking - app should work even if profile is null
@@ -49,11 +49,7 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
             Your account is waiting for admin approval. You will receive an email once approved.
           </p>
           <button
-            onClick={() => {
-              // Refresh the profile status by reloading the page
-              // This is necessary to check the latest approval status
-              window.location.reload();
-            }}
+            onClick={() => refreshProfile()}
             className="text-primary hover:underline"
           >
             Refresh Status
