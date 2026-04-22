@@ -1240,7 +1240,7 @@ export default function OrderDetailPage() {
   const [totalReceipts, setTotalReceipts] = useState<number>(0);
   const [hasActiveCreditReceipt, setHasActiveCreditReceipt] = useState(false);
   const [hasCuttingMaster, setHasCuttingMaster] = useState<boolean>(false);
-  const [statusDiagnostics, setStatusDiagnostics] = useState<{
+  const [, setStatusDiagnostics] = useState<{
     hasReceipt: boolean;
     hasBom: boolean;
     hasCutting: boolean;
@@ -2882,30 +2882,6 @@ export default function OrderDetailPage() {
            )}
          </div>
 
-        {isAdmin && statusDiagnostics && (
-          <Card className="print:hidden border-dashed">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Status Diagnostics (Admin)</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                <div>Receipt: <span className="font-medium">{statusDiagnostics.hasReceipt ? 'Yes' : 'No'}</span></div>
-                <div>BOM: <span className="font-medium">{statusDiagnostics.hasBom ? 'Yes' : 'No'}</span></div>
-                <div>Cutting: <span className="font-medium">{statusDiagnostics.hasCutting ? 'Yes' : 'No'}</span></div>
-                <div>Batch: <span className="font-medium">{statusDiagnostics.hasBatch ? 'Yes' : 'No'}</span></div>
-                <div>Picked: <span className="font-medium">{statusDiagnostics.totalPicked}</span></div>
-                <div>Approved: <span className="font-medium">{statusDiagnostics.totalApproved}</span></div>
-                <div>Rejected: <span className="font-medium">{statusDiagnostics.totalRejected}</span></div>
-                <div>Dispatched: <span className="font-medium">{statusDiagnostics.totalDispatched}</span></div>
-              </div>
-              <div className="mt-3">
-                Suggested by recalc: <span className="font-semibold uppercase">{statusDiagnostics.suggestedStatus.replace(/_/g, ' ')}</span>
-                {' '}| Current: <span className="font-semibold uppercase">{order.status.replace(/_/g, ' ')}</span>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
         {/* Regular UI Content (not printed) */}
         <div className="print:hidden space-y-6">
           {/* Order Items with Images */}
@@ -3741,6 +3717,20 @@ export default function OrderDetailPage() {
                                           onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                         />
                                       </div>
+                                      <div className="flex justify-end">
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => {
+                                            const currentImage = block.images[block.selected[index] || 0];
+                                            if (currentImage) window.open(currentImage, '_blank');
+                                          }}
+                                        >
+                                          <Download className="w-4 h-4 mr-1" />
+                                          Open
+                                        </Button>
+                                      </div>
 
                                       {/* Thumbnails */}
                                       {block.images.length > 1 && (
@@ -3763,6 +3753,12 @@ export default function OrderDetailPage() {
                                                 onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); handleRemoveImage(item.id, block.title.includes('Mockup') ? 'mockup' : 'reference', url); }}
                                               >
                                                 Remove
+                                              </button>
+                                              <button
+                                                className="absolute bottom-1 right-1 hidden group-hover:block bg-white/90 hover:bg-white rounded px-1 text-[10px]"
+                                                onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); window.open(url, '_blank'); }}
+                                              >
+                                                Open
                                               </button>
                                             </div>
                                           ))}

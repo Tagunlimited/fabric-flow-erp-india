@@ -31,7 +31,8 @@ export const authService = {
       password,
       options: {
         data: { 
-          name, 
+          name,
+          full_name: name,
           status: 'pending_approval' 
         }
       }
@@ -205,33 +206,8 @@ export const authService = {
         throw error;
       }
       
-      // If no profile exists, try to create one
-      if (!data) {
-        console.log('No profile found, attempting to create one...');
-        const currentUser = await this.getCurrentUser();
-        if (currentUser) {
-          try {
-            const newProfile = await this.createUserProfile(
-              userId, 
-              currentUser.email || '', 
-              currentUser.user_metadata?.name || currentUser.email?.split('@')[0] || 'User'
-            );
-            console.log('Profile created successfully:', newProfile);
-            return newProfile;
-          } catch (createError: any) {
-            console.warn('Failed to create profile:', createError);
-            // If profile creation fails due to duplicate, try fetching again
-            if (createError.message?.includes('duplicate') || createError.code === '23505') {
-              if (retryCount < maxRetries) {
-                await new Promise(resolve => setTimeout(resolve, retryDelay));
-                return this.getUserProfile(userId, retryCount + 1);
-              }
-            }
-            return null;
-          }
-        }
-        return null;
-      }
+      // Missing profile is handled by caller; do not auto-create here to avoid role/status drift.
+      if (!data) return null;
       
       console.log('Profile fetched successfully:', data);
       return data;
@@ -256,7 +232,13 @@ export const authService = {
   },
 
   // Create user profile (called by trigger or manually)
-  async createUserProfile(userId: string, email: string, name: string): Promise<UserProfile> {
+  async createUserProfile(
+    userId: string,
+    email: string,
+    name: string,
+    role: string = 'sales manager',
+    status: string = 'pending_approval'
+  ): Promise<UserProfile> {
     console.log('Creating profile for:', { userId, email, name });
     
     // First, try to fetch existing profile by user_id or email
@@ -297,23 +279,20 @@ export const authService = {
       return existingProfile as UserProfile;
     }
     
-    // Profile doesn't exist, create it
-    // Use upsert with onConflict on user_id to handle race conditions
+    // Profile doesn't exist, create it.
+    // Use insert (not upsert) so we never overwrite an existing role/status.
     const { data, error } = await supabase
       .from('profiles')
-      .upsert({
+      .insert({
         user_id: userId,
         email: email,
         full_name: name,
-        role: 'sales manager', // default role
-        status: 'approved', // Set to approved to avoid approval issues
+        role: role as any,
+        status: status as any,
         phone: '', // Add required fields with defaults
         department: '',
         updated_at: new Date().toISOString()
-      }, {
-        onConflict: 'user_id',
-        ignoreDuplicates: false // Update if exists
-      })
+      } as any)
       .select()
       .single();
 

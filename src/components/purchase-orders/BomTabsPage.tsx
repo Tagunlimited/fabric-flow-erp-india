@@ -999,13 +999,14 @@ export function BomTabsPage() {
   /** Legacy URLs: create-bom / view-bom */
   const activeBomTab: 'pending' | 'complete' =
     tabFromUrl === 'view-bom' || tabFromUrl === 'complete' ? 'complete' : 'pending';
+  const isLinePickerOpen = activeBomTab === 'pending' && !!pickOrder;
 
   const setBomTab = (tab: 'pending' | 'complete') => {
     navigate(`/bom?tab=${tab}`, { replace: true });
   };
 
   return (
-    <div className="space-y-6 h-[calc(100vh-11rem)] min-h-0 flex flex-col">
+    <div className={isLinePickerOpen ? 'space-y-6' : 'space-y-6 h-[calc(100vh-11rem)] min-h-0 flex flex-col'}>
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold">Bills of Material</h2>
@@ -1021,8 +1022,14 @@ export function BomTabsPage() {
         </div>
       </div>
 
-      <div className="border rounded-lg p-4 flex-1 min-h-0 flex flex-col overflow-hidden">
-        <div className="mb-4 flex justify-start sticky top-0 z-20 bg-background pb-2">
+      <div
+        className={
+          isLinePickerOpen
+            ? 'border rounded-lg p-4'
+            : 'border rounded-lg p-4 flex-1 min-h-0 flex flex-col overflow-hidden'
+        }
+      >
+        <div className="mb-4 flex justify-start pb-2">
           <label
             htmlFor="bom-page-view-switch"
             className="orders-view-switch"
@@ -1042,7 +1049,7 @@ export function BomTabsPage() {
         </div>
 
         {activeBomTab === 'pending' && (
-          <div className="min-h-0 flex-1">
+          <div className={isLinePickerOpen ? '' : 'min-h-0 flex-1'}>
             {pickOrder ? (
               <BomOrderLinePicker orderId={pickOrder} onBack={closeLinePicker} />
             ) : (

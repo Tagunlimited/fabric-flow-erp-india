@@ -135,9 +135,9 @@ interface Customization {
 interface Product {
   product_category_id: string;
   category_image_url: string;
-  reference_images: File[];
-  mockup_images: File[];
-  attachments: File[];
+  reference_images: Array<File | string>;
+  mockup_images: Array<File | string>;
+  attachments: Array<File | string>;
   product_description: string;
   fabric_id: string;
   fabric_base_id?: string;
@@ -358,6 +358,9 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
     branding: boolean;
     mockup: boolean;
   }>>({});
+  const [mediaLinkInputs, setMediaLinkInputs] = useState<
+    Record<number, { reference: string; mockup: string; attachments: string }>
+  >({});
   const sliderRef = useRef<HTMLDivElement>(null);
   const autoScrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const colorTypeaheadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -685,6 +688,51 @@ const getSelectedFabricVariant = (productIndex: number) => {
     }
   };
 
+  const normalizeHttpUrl = (raw: string): string | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    try {
+      const u = new URL(trimmed);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      return u.toString();
+    } catch {
+      return null;
+    }
+  };
+
+  const addMediaLink = (
+    productIndex: number,
+    mediaType: 'reference_images' | 'mockup_images' | 'attachments'
+  ) => {
+    const draft = mediaLinkInputs[productIndex]?.[mediaType === 'attachments' ? 'attachments' : mediaType === 'reference_images' ? 'reference' : 'mockup'] || '';
+    const url = normalizeHttpUrl(draft);
+    if (!url) {
+      toast.error('Please enter a valid http/https URL');
+      return;
+    }
+
+    setFormData((prev) => ({
+      ...prev,
+      products: prev.products.map((p, i) => {
+        if (i !== productIndex) return p;
+        const existing = p[mediaType] || [];
+        const existingUrls = existing.map((x) => (typeof x === 'string' ? x : '')).filter(Boolean);
+        if (existingUrls.includes(url)) return p;
+        return { ...p, [mediaType]: [...existing, url] };
+      }),
+    }));
+
+    setMediaLinkInputs((prev) => ({
+      ...prev,
+      [productIndex]: {
+        reference: prev[productIndex]?.reference || '',
+        mockup: prev[productIndex]?.mockup || '',
+        attachments: prev[productIndex]?.attachments || '',
+        [mediaType === 'attachments' ? 'attachments' : mediaType === 'reference_images' ? 'reference' : 'mockup']: '',
+      },
+    }));
+  };
+
   // Remove a specific image from the product
   const handleRemoveImage = (productIndex: number, imageType: 'reference' | 'mockup', imageIndex: number) => {
     // Get current product data
@@ -739,6 +787,15 @@ const getSelectedFabricVariant = (productIndex: number) => {
     }
     
     toast.success(`${imageType === 'mockup' ? 'Mockup' : 'Reference'} image removed`);
+  };
+
+  const handleRemoveAttachment = (productIndex: number, attachmentIndex: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      products: prev.products.map((p, i) =>
+        i === productIndex ? { ...p, attachments: p.attachments.filter((_, idx) => idx !== attachmentIndex) } : p
+      ),
+    }));
   };
 
   const scrollLeft = () => {
@@ -1236,9 +1293,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
     try {
       // Upload reference images to order-images bucket
       if (product.reference_images && product.reference_images.length > 0) {
+        const referenceLinks = product.reference_images.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+        const referenceFiles = product.reference_images.filter((x): x is File => x instanceof File);
         const referenceUrls: string[] = [];
-        for (let i = 0; i < product.reference_images.length; i++) {
-          const file = product.reference_images[i];
+        for (let i = 0; i < referenceFiles.length; i++) {
+          const file = referenceFiles[i];
           const fileExt = file.name.split('.').pop();
           const fileName = `${orderId}_product${productIndex}_reference_${i + 1}.${fileExt}`;
           const filePath = `${orderId}/${fileName}`;
@@ -1255,14 +1314,16 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
           referenceUrls.push(data.publicUrl);
         }
-        uploadedImages.reference_images = referenceUrls;
+        uploadedImages.reference_images = [...referenceLinks, ...referenceUrls];
       }
 
       // Upload mockup images to order-images bucket
       if (product.mockup_images && product.mockup_images.length > 0) {
+        const mockupLinks = product.mockup_images.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+        const mockupFiles = product.mockup_images.filter((x): x is File => x instanceof File);
         const mockupUrls: string[] = [];
-        for (let i = 0; i < product.mockup_images.length; i++) {
-          const file = product.mockup_images[i];
+        for (let i = 0; i < mockupFiles.length; i++) {
+          const file = mockupFiles[i];
           const fileExt = file.name.split('.').pop();
           const fileName = `${orderId}_product${productIndex}_mockup_${i + 1}.${fileExt}`;
           const filePath = `${orderId}/${fileName}`;
@@ -1279,14 +1340,16 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
           mockupUrls.push(data.publicUrl);
         }
-        uploadedImages.mockup_images = mockupUrls;
+        uploadedImages.mockup_images = [...mockupLinks, ...mockupUrls];
       }
 
       // Upload attachments to order-attachments bucket
       if (product.attachments && product.attachments.length > 0) {
+        const attachmentLinks = product.attachments.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+        const attachmentFiles = product.attachments.filter((x): x is File => x instanceof File);
         const attachmentUrls: string[] = [];
-        for (let i = 0; i < product.attachments.length; i++) {
-          const file = product.attachments[i];
+        for (let i = 0; i < attachmentFiles.length; i++) {
+          const file = attachmentFiles[i];
           const fileExt = file.name.split('.').pop();
           const fileName = `${orderId}_product${productIndex}_attachment_${i + 1}.${fileExt}`;
           const filePath = `${orderId}/${fileName}`;
@@ -1303,7 +1366,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
           attachmentUrls.push(data.publicUrl);
         }
-        uploadedImages.attachments = attachmentUrls;
+        uploadedImages.attachments = [...attachmentLinks, ...attachmentUrls];
       }
 
       return uploadedImages;
@@ -2631,6 +2694,25 @@ const getSelectedFabricVariant = (productIndex: number) => {
                       {expandedProductSections[productIndex]?.reference && (
                       <div className="space-y-3">
                         <Label className="text-sm font-medium">Reference Images</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            value={mediaLinkInputs[productIndex]?.reference || ''}
+                            onChange={(e) =>
+                              setMediaLinkInputs((prev) => ({
+                                ...prev,
+                                [productIndex]: {
+                                  reference: e.target.value,
+                                  mockup: prev[productIndex]?.mockup || '',
+                                  attachments: prev[productIndex]?.attachments || '',
+                                },
+                              }))
+                            }
+                            placeholder="Paste image/link URL (Canva, Dropbox, etc.)"
+                          />
+                          <Button type="button" variant="outline" onClick={() => addMediaLink(productIndex, 'reference_images')}>
+                            Add Link
+                          </Button>
+                        </div>
                         <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
                           <input
                             type="file"
@@ -2712,6 +2794,20 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                   </div>
                                 ))}
                               </div>
+                              <div className="mt-3 space-y-1">
+                                {product.reference_images.map((file, idx) => {
+                                  const url = getImageUrl(file);
+                                  if (!url) return null;
+                                  return (
+                                    <div key={`ref-link-${idx}`} className="flex items-center justify-between rounded border px-2 py-1 text-xs">
+                                      <span className="truncate mr-2">{url}</span>
+                                      <Button type="button" size="sm" variant="ghost" onClick={() => window.open(url, '_blank')}>
+                                        Open
+                                      </Button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
                           )}
                         </div>
@@ -2722,6 +2818,25 @@ const getSelectedFabricVariant = (productIndex: number) => {
                       {expandedProductSections[productIndex]?.attachments && (
                       <div className="space-y-3">
                         <Label className="text-sm font-medium">Attachments</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            value={mediaLinkInputs[productIndex]?.attachments || ''}
+                            onChange={(e) =>
+                              setMediaLinkInputs((prev) => ({
+                                ...prev,
+                                [productIndex]: {
+                                  reference: prev[productIndex]?.reference || '',
+                                  mockup: prev[productIndex]?.mockup || '',
+                                  attachments: e.target.value,
+                                },
+                              }))
+                            }
+                            placeholder="Paste attachment URL (Canva, Dropbox, etc.)"
+                          />
+                          <Button type="button" variant="outline" onClick={() => addMediaLink(productIndex, 'attachments')}>
+                            Add Link
+                          </Button>
+                        </div>
                         <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
                           <input
                             type="file"
@@ -2731,7 +2846,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                               setFormData(prev => ({
                                 ...prev,
                                 products: prev.products.map((p, i) => 
-                                  i === productIndex ? { ...p, attachments: files } : p
+                                  i === productIndex ? { ...p, attachments: [...(p.attachments || []), ...files] } : p
                                 )
                               }));
                             }}
@@ -2751,8 +2866,33 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                 </Badge>
                               <div className="max-h-32 overflow-y-auto space-y-1">
                                 {product.attachments.map((file, idx) => (
-                                  <div key={idx} className="text-xs text-muted-foreground truncate bg-muted/50 rounded px-2 py-1">
-                                      {file.name}
+                                  <div key={idx} className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1 flex items-center justify-between gap-2">
+                                      <span className="truncate">
+                                        {file instanceof File ? file.name : file}
+                                      </span>
+                                      <div className="flex items-center gap-1">
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="ghost"
+                                          className="h-6 px-2 text-xs"
+                                          onClick={() => {
+                                            const url = getImageUrl(file);
+                                            if (url) window.open(url, '_blank');
+                                          }}
+                                        >
+                                          Open
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="ghost"
+                                          className="h-6 px-2 text-xs"
+                                          onClick={() => handleRemoveAttachment(productIndex, idx)}
+                                        >
+                                          Remove
+                                        </Button>
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
@@ -2907,6 +3047,25 @@ const getSelectedFabricVariant = (productIndex: number) => {
                     {expandedProductSections[productIndex]?.mockup && (
                     <div className="space-y-3 lg:self-center">
                       <Label className="text-sm font-medium">Mockup Images</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          value={mediaLinkInputs[productIndex]?.mockup || ''}
+                          onChange={(e) =>
+                            setMediaLinkInputs((prev) => ({
+                              ...prev,
+                              [productIndex]: {
+                                reference: prev[productIndex]?.reference || '',
+                                mockup: e.target.value,
+                                attachments: prev[productIndex]?.attachments || '',
+                              },
+                            }))
+                          }
+                          placeholder="Paste mockup URL (Canva, Dropbox, etc.)"
+                        />
+                        <Button type="button" variant="outline" onClick={() => addMediaLink(productIndex, 'mockup_images')}>
+                          Add Link
+                        </Button>
+                      </div>
                       <div className="border-2 border-dashed border-primary/30 rounded-lg p-4 hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-primary/10">
                         <input
                           type="file"
