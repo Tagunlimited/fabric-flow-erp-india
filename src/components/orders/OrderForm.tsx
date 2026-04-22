@@ -37,6 +37,19 @@ function formatOrderCreateError(error: unknown): string {
   return 'Failed to create order';
 }
 
+function isManualQuotationSchemaMissing(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { message?: string; details?: string };
+  const msg = `${e.message || ''} ${e.details || ''}`.toLowerCase();
+  return (
+    msg.includes("could not find the table 'public.manual_quotations'") ||
+    msg.includes("relation \"public.manual_quotations\" does not exist") ||
+    msg.includes("could not find the 'order_id' column of 'quotations'") ||
+    msg.includes("could not find the 'manual_quotation_id' column of 'quotations'") ||
+    msg.includes("could not find the 'source' column of 'quotations'")
+  );
+}
+
 interface Customer {
   id: string;
   company_name: string;
@@ -179,9 +192,20 @@ interface OrderFormProps {
     gstin: string;
   } | null;
   onOrderCreated?: () => void;
+  mode?: 'order' | 'manualQuotation';
+  manualQuotationId?: string;
+  prefillFromManualQuotationId?: string;
+  onManualQuotationSaved?: (manualQuotationId: string) => void;
 }
 
-export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProps = {}) {
+export function OrderForm({
+  preSelectedCustomer,
+  onOrderCreated,
+  mode = 'order',
+  manualQuotationId,
+  prefillFromManualQuotationId,
+  onManualQuotationSaved,
+}: OrderFormProps = {}) {
   const navigate = useNavigate();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [productCategories, setProductCategories] = useState<ProductCategory[]>([]);
@@ -206,12 +230,14 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
     additional_charges: []
   }), [preSelectedCustomer?.id]);
 
+  const sourceManualQuotationId = mode === 'manualQuotation' ? manualQuotationId : prefillFromManualQuotationId;
+  const pageStateKey = mode === 'manualQuotation' ? `manualQuotationForm-${manualQuotationId || 'new'}` : 'customOrderForm';
   const {
     state: formData,
     updateState: updateFormState,
     resetState: resetFormState,
     hasSavedState: hasSavedFormState
-  } = usePageState<OrderFormData>('customOrderForm', initialFormData);
+  } = usePageState<OrderFormData>(pageStateKey, initialFormData);
 
   const setFormData = useCallback(
     (value: OrderFormData | ((prev: OrderFormData) => OrderFormData)) => {
@@ -344,6 +370,7 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
   }, [resetFormState]);
 
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [manualStatus, setManualStatus] = useState<'draft' | 'submitted' | 'under_review' | 'approved' | 'rejected'>('draft');
   const [selectedCategoryImage, setSelectedCategoryImage] = useState<string>('');
   const [isCategoryLocked, setIsCategoryLocked] = useState(false);
   const [mainImages, setMainImages] = useState<{ [productIndex: number]: { reference: string | null, mockup: string | null, category: string | null } }>({});
@@ -402,6 +429,83 @@ export function OrderForm({ preSelectedCustomer, onOrderCreated }: OrderFormProp
       });
     }
   }, [preSelectedCustomer?.id, setFormData]);
+
+  useEffect(() => {
+    const loadManualQuotation = async () => {
+      if (!sourceManualQuotationId) return;
+      try {
+        const { data: header, error: headerError } = await supabase
+          .from('manual_quotations' as any)
+          .select('*')
+          .eq('id', sourceManualQuotationId)
+          .single();
+        if (headerError || !header) throw headerError || new Error('Manual quotation not found');
+
+        const { data: itemRows, error: itemError } = await supabase
+          .from('manual_quotation_items' as any)
+          .select('*')
+          .eq('manual_quotation_id', sourceManualQuotationId)
+          .order('item_order', { ascending: true });
+        if (itemError) throw itemError;
+
+        const { data: chargeRows, error: chargeError } = await supabase
+          .from('manual_quotation_additional_charges' as any)
+          .select('*')
+          .eq('manual_quotation_id', sourceManualQuotationId)
+          .order('created_at', { ascending: true });
+        if (chargeError) throw chargeError;
+
+        const normalizedProducts: Product[] = ((itemRows || []) as any[]).map((row) => {
+          const specs = row.specifications && typeof row.specifications === 'object' ? row.specifications : {};
+          return {
+            ...createEmptyProduct(),
+            product_category_id: row.product_category_id || '',
+            category_image_url: row.category_image_url || '',
+            product_description: row.product_description || '',
+            fabric_id: row.fabric_id || '',
+            gsm: row.gsm || '',
+            color: row.color || '',
+            remarks: row.remarks || '',
+            price: Number(row.unit_price || 0),
+            size_type_id: row.size_type_id || '',
+            sizes_quantities: (row.sizes_quantities as Record<string, number>) || {},
+            size_prices: (row.size_prices as Record<string, number>) || {},
+            gst_rate: Number(row.gst_rate || 0),
+            branding_items: Array.isArray(specs.branding_items) ? specs.branding_items : [],
+            reference_images: Array.isArray(specs.reference_images) ? specs.reference_images : [],
+            mockup_images: Array.isArray(specs.mockup_images) ? specs.mockup_images : [],
+            attachments: Array.isArray(specs.attachments) ? specs.attachments : [],
+            customizations: Array.isArray(specs.customizations) ? specs.customizations : [],
+          };
+        });
+
+        if (mode === 'manualQuotation') {
+          setManualStatus(((header.status as string) || 'draft') as any);
+        }
+        setFormData({
+          order_date: header.order_date ? new Date(header.order_date) : new Date(),
+          expected_delivery_date: header.expected_delivery_date ? new Date(header.expected_delivery_date) : new Date(),
+          customer_id: header.customer_id || '',
+          sales_manager: header.sales_manager || '',
+          products: normalizedProducts.length > 0 ? normalizedProducts : [createEmptyProduct()],
+          gst_rate: Number(header.gst_rate || 0),
+          payment_channel: header.payment_channel || '',
+          reference_id: header.reference_id || '',
+          advance_amount: Number(header.advance_amount || 0),
+          additional_charges: ((chargeRows || []) as any[]).map((charge) => ({
+            particular: String(charge.particular || ''),
+            rate: Number(charge.rate || 0),
+            gst_percentage: Number(charge.gst_percentage || 0),
+            amount_incl_gst: Number(charge.amount_incl_gst || 0),
+          })),
+        });
+      } catch (error) {
+        console.error('Failed to load manual quotation', error);
+        toast.error('Failed to load manual quotation');
+      }
+    };
+    void loadManualQuotation();
+  }, [mode, sourceManualQuotationId, setFormData]);
 
   // Auto-scroll functionality - DISABLED as per user request
   // useEffect(() => {
@@ -964,6 +1068,32 @@ const getSelectedFabricVariant = (productIndex: number) => {
     }
   };
 
+  const generateManualQuotationNumber = async (sourceDate: Date) => {
+    const fyStart = sourceDate.getMonth() < 3 ? sourceDate.getFullYear() - 1 : sourceDate.getFullYear();
+    const fyEnd = fyStart + 1;
+    const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
+    const month = sourceDate.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+    const prefix = `MQ/${fyStr}/${month}/`;
+
+    const { data } = await supabase
+      .from('manual_quotations' as any)
+      .select('quotation_number')
+      .eq('is_deleted', false)
+      .ilike('quotation_number', `${prefix}%`)
+      .order('quotation_number', { ascending: false });
+
+    let maxSeq = 0;
+    (data || []).forEach((row: any) => {
+      const qn = row?.quotation_number;
+      const m = typeof qn === 'string' ? qn.match(/(\d+)$/) : null;
+      if (!m) return;
+      const seq = Number.parseInt(m[1], 10);
+      if (Number.isFinite(seq) && seq > maxSeq) maxSeq = seq;
+    });
+
+    return `${prefix}${String(maxSeq + 1).padStart(3, '0')}`;
+  };
+
   const handleCustomerSelect = (customerId: string) => {
     const customer = customers.find(c => c.id === customerId);
     setSelectedCustomer(customer as any || null);
@@ -1410,6 +1540,212 @@ const getSelectedFabricVariant = (productIndex: number) => {
         return;
       }
 
+      const saveManualQuotation = async () => {
+        let manualId = manualQuotationId || '';
+        let quotationNumber = '';
+
+        if (!manualId) {
+          quotationNumber = await generateManualQuotationNumber(
+            formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)
+          );
+          const { data: createdManual, error: createManualError } = await supabase
+            .from('manual_quotations' as any)
+            .insert({
+              quotation_number: quotationNumber,
+              quotation_date: formatLocalDateYMD(
+                formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)
+              ),
+              customer_id: formData.customer_id,
+              sales_manager: formData.sales_manager,
+              order_date: formatLocalDateYMD(
+                formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)
+              ),
+              expected_delivery_date: formatLocalDateYMD(
+                formData.expected_delivery_date instanceof Date
+                  ? formData.expected_delivery_date
+                  : new Date(formData.expected_delivery_date)
+              ),
+              gst_rate: Number(formData.gst_rate),
+              subtotal: Number(subtotal),
+              tax_amount: Number(gstAmount),
+              total_amount: Number(grandTotal),
+              advance_amount: Number(formData.advance_amount),
+              balance_amount: Number(balance),
+              payment_channel: formData.payment_channel || null,
+              reference_id: formData.reference_id || null,
+              status: manualStatus,
+              notes: '',
+            } as any)
+            .select('id, quotation_number')
+            .single();
+          if (createManualError) throw createManualError;
+          manualId = createdManual.id as string;
+          quotationNumber = createdManual.quotation_number as string;
+        } else {
+          const { error: updateManualError } = await supabase
+            .from('manual_quotations' as any)
+            .update({
+              quotation_date: formatLocalDateYMD(
+                formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)
+              ),
+              customer_id: formData.customer_id,
+              sales_manager: formData.sales_manager,
+              order_date: formatLocalDateYMD(
+                formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)
+              ),
+              expected_delivery_date: formatLocalDateYMD(
+                formData.expected_delivery_date instanceof Date
+                  ? formData.expected_delivery_date
+                  : new Date(formData.expected_delivery_date)
+              ),
+              gst_rate: Number(formData.gst_rate),
+              subtotal: Number(subtotal),
+              tax_amount: Number(gstAmount),
+              total_amount: Number(grandTotal),
+              advance_amount: Number(formData.advance_amount),
+              balance_amount: Number(balance),
+              payment_channel: formData.payment_channel || null,
+              reference_id: formData.reference_id || null,
+              status: manualStatus,
+            } as any)
+            .eq('id', manualId);
+          if (updateManualError) throw updateManualError;
+          const { data: existingManual } = await supabase
+            .from('manual_quotations' as any)
+            .select('quotation_number')
+            .eq('id', manualId)
+            .single();
+          quotationNumber = (existingManual?.quotation_number as string) || '';
+        }
+
+        const { error: clearItemsError } = await supabase
+          .from('manual_quotation_items' as any)
+          .delete()
+          .eq('manual_quotation_id', manualId);
+        if (clearItemsError) throw clearItemsError;
+
+        const { error: clearChargesError } = await supabase
+          .from('manual_quotation_additional_charges' as any)
+          .delete()
+          .eq('manual_quotation_id', manualId);
+        if (clearChargesError) throw clearChargesError;
+
+        for (let productIndex = 0; productIndex < formData.products.length; productIndex++) {
+          const product = formData.products[productIndex];
+          if (!product.product_category_id) throw new Error(`Product ${productIndex + 1}: Please select a product category`);
+          if (!product.fabric_id) throw new Error(`Product ${productIndex + 1}: Please select a fabric`);
+          if (!product.size_type_id) throw new Error(`Product ${productIndex + 1}: Please select a size type`);
+
+          const totalQuantity = Object.values(product.sizes_quantities || {}).reduce((total, qty) => total + qty, 0);
+          if (totalQuantity === 0) throw new Error(`Product ${productIndex + 1}: Please enter quantities for at least one size`);
+
+          const itemTotal = calculateSizeBasedTotal(
+            product.sizes_quantities || {},
+            product.size_prices,
+            product.price
+          );
+          const avgUnitPrice = calculateAverageUnitPrice(
+            product.sizes_quantities || {},
+            product.size_prices,
+            product.price
+          );
+          const uploadedImages = await uploadOrderImages(manualId, productIndex, product);
+
+          const manualItemData = {
+            manual_quotation_id: manualId,
+            quantity: totalQuantity,
+            unit_price: Number(avgUnitPrice),
+            total_price: Number(itemTotal),
+            product_category_id: product.product_category_id,
+            category_image_url: product.category_image_url || null,
+            product_description: product.product_description || '',
+            fabric_id: product.fabric_id || null,
+            gsm: product.gsm || '',
+            color: product.color || '',
+            remarks: product.remarks || '',
+            size_type_id: product.size_type_id,
+            sizes_quantities: product.sizes_quantities || {},
+            size_prices: product.size_prices || {},
+            gst_rate: product.gst_rate,
+            item_order: productIndex,
+            specifications: {
+              branding_items: product.branding_items || [],
+              reference_images: uploadedImages.reference_images || [],
+              mockup_images: uploadedImages.mockup_images || [],
+              attachments: uploadedImages.attachments || [],
+              customizations: product.customizations || [],
+              size_prices: product.size_prices || {},
+            },
+          };
+          const { error: manualItemError } = await supabase
+            .from('manual_quotation_items' as any)
+            .insert(manualItemData as any);
+          if (manualItemError) throw manualItemError;
+        }
+
+        const chargesToInsert = formData.additional_charges
+          .filter((c) => c.particular?.trim() && Number(c.rate) > 0)
+          .map((charge) => ({
+            manual_quotation_id: manualId,
+            particular: charge.particular.trim(),
+            rate: Number(charge.rate),
+            gst_percentage: Number(charge.gst_percentage ?? 0),
+            amount_incl_gst: Number(charge.amount_incl_gst ?? 0),
+          }));
+        if (chargesToInsert.length > 0) {
+          const { error: manualChargesError } = await supabase
+            .from('manual_quotation_additional_charges' as any)
+            .insert(chargesToInsert as any);
+          if (manualChargesError) throw manualChargesError;
+        }
+
+        const quotationPayload = {
+          quotation_number: quotationNumber,
+          quotation_date: formatLocalDateYMD(
+            formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)
+          ),
+          customer_id: formData.customer_id,
+          total_amount: Number(grandTotal),
+          tax_amount: Number(gstAmount),
+          subtotal: Number(subtotal),
+          status: manualStatus,
+          source: 'manual',
+          order_id: null,
+          manual_quotation_id: manualId,
+          order_number: null,
+        };
+
+        const { data: existingLink } = await supabase
+          .from('quotations')
+          .select('id')
+          .eq('manual_quotation_id', manualId)
+          .maybeSingle();
+        if (existingLink?.id) {
+          const { error: updateQuotationLinkError } = await supabase
+            .from('quotations')
+            .update(quotationPayload as any)
+            .eq('id', existingLink.id);
+          if (updateQuotationLinkError) throw updateQuotationLinkError;
+        } else {
+          const { error: createQuotationLinkError } = await supabase
+            .from('quotations')
+            .insert(quotationPayload as any);
+          if (createQuotationLinkError) throw createQuotationLinkError;
+        }
+
+        toast.success('Manual quotation saved successfully!');
+        if (onManualQuotationSaved) {
+          onManualQuotationSaved(manualId);
+        } else {
+          navigate(`/accounts/manual-quotations/${manualId}`);
+        }
+      };
+
+      if (mode === 'manualQuotation') {
+        await saveManualQuotation();
+        return;
+      }
+
       // Retry mechanism for order number generation and insertion
       let orderResult: any = null;
       let maxRetries = 3;
@@ -1585,6 +1921,30 @@ const getSelectedFabricVariant = (productIndex: number) => {
         }
       }
 
+      if (mode === 'order' && prefillFromManualQuotationId) {
+        const { data: authData } = await supabase.auth.getUser();
+        await supabase
+          .from('manual_quotations' as any)
+          .update({
+            converted_order_id: orderId,
+            converted_at: new Date().toISOString(),
+            converted_by: authData.user?.id || null,
+            status: 'converted',
+          } as any)
+          .eq('id', prefillFromManualQuotationId);
+
+        await supabase
+          .from('quotations')
+          .update({
+            source: 'manual',
+            manual_quotation_id: prefillFromManualQuotationId,
+            order_id: orderId,
+            order_number: (orderResult as any).order_number,
+            status: 'accepted',
+          } as any)
+          .eq('manual_quotation_id', prefillFromManualQuotationId);
+      }
+
       toast.success('Order created successfully!');
 
       // Clear saved form data after successful order creation (no extra "form reset" toast)
@@ -1597,7 +1957,10 @@ const getSelectedFabricVariant = (productIndex: number) => {
         navigate('/orders');
       }
     } catch (error) {
-      const msg = formatOrderCreateError(error);
+      const msg =
+        mode === 'manualQuotation' && isManualQuotationSchemaMissing(error)
+          ? 'Manual quotation schema is outdated. Please run latest Supabase migrations and retry.'
+          : formatOrderCreateError(error);
       console.error('Order create failed:', msg, error);
       toast.error(msg);
     } finally {
@@ -1612,7 +1975,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
       <Card>
         <CardHeader>
           <div className="flex justify-between items-center">
-            <CardTitle>Create New Order</CardTitle>
+            <CardTitle>{mode === 'manualQuotation' ? 'Quotation' : 'Create New Order'}</CardTitle>
               <div className="flex items-center gap-2">
               {hasSavedFormState && (
                 <Badge variant="secondary" className="bg-green-100 text-green-800">
@@ -1645,7 +2008,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                       onValueChange={handleCustomerSelect}
                       onCustomerSelect={(customer) => setSelectedCustomer(customer as any)}
                       placeholder="Search by name, phone, contact person..."
-                      cacheKey="customerSearchSelect-customOrder"
+                      cacheKey={mode === 'manualQuotation' ? 'customerSearchSelect-manualQuotation' : 'customerSearchSelect-customOrder'}
                     />
                   ) : (
                     <Input
@@ -1697,6 +2060,23 @@ const getSelectedFabricVariant = (productIndex: number) => {
                     </SelectContent>
                   </Select>
                 </div>
+                {mode === 'manualQuotation' && (
+                  <div className="space-y-2 min-w-0 w-full sm:w-fit sm:max-w-[min(100%,18rem)] sm:min-w-[10rem] sm:shrink-0">
+                    <Label className="block">Quotation Status</Label>
+                    <Select value={manualStatus} onValueChange={(value: any) => setManualStatus(value)}>
+                      <SelectTrigger className="w-full min-w-[10rem]">
+                        <SelectValue placeholder="Select status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="draft">Draft</SelectItem>
+                        <SelectItem value="submitted">Submitted</SelectItem>
+                        <SelectItem value="under_review">Under Review</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2 min-w-0">
@@ -3545,7 +3925,9 @@ const getSelectedFabricVariant = (productIndex: number) => {
                 disabled={loading}
                 className="bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50"
               >
-                {loading ? 'Creating Order...' : 'Create Order'}
+                {loading
+                  ? (mode === 'manualQuotation' ? 'Saving Quotation...' : 'Creating Order...')
+                  : (mode === 'manualQuotation' ? 'Save Quotation' : 'Create Order')}
               </Button>
             </div>
           </form>

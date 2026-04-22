@@ -276,6 +276,7 @@ const OrdersPage = () => {
   const [filterDialogColumn, setFilterDialogColumn] = useState<OrdersFilterColumnKey | null>(null);
   const [sortBy, setSortBy] = useState<string>("date_desc");
   const [loggedInSalesManagerFilterValue, setLoggedInSalesManagerFilterValue] = useState<string>("");
+  const [prefillFromManualQuotationId, setPrefillFromManualQuotationId] = useState<string | null>(null);
 
   const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
 
@@ -296,6 +297,15 @@ const OrdersPage = () => {
       navigate(location.pathname, { replace: true, state: {} });
     }
   }, [location.state, activeTab, navigate, location.pathname]);
+
+  useEffect(() => {
+    const manualQuotationId = (location.state as any)?.openCreateFromManualQuotationId;
+    if (typeof manualQuotationId === 'string' && manualQuotationId.trim()) {
+      setPrefillFromManualQuotationId(manualQuotationId);
+      setActiveTab('create');
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, navigate, location.pathname, setActiveTab]);
 
   const resolveLoggedInSalesManagerFilterValue = async (): Promise<string> => {
     try {
@@ -1167,7 +1177,9 @@ const OrdersPage = () => {
           {activeTab === "create" && (
           <div className="space-y-6">
             <OrderForm
+              prefillFromManualQuotationId={prefillFromManualQuotationId || undefined}
               onOrderCreated={async () => {
+                setPrefillFromManualQuotationId(null);
                 setActiveTab("list");
                 setTimeout(async () => {
                   await fetchOrders();

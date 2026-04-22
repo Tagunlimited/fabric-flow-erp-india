@@ -33,6 +33,31 @@ interface AllocationDetail {
   allocatedAt: string;
 }
 
+const resolveInventoryDisplayName = (item: WarehouseInventory): string => {
+  const fabricMaster = (item as any).fabric_master;
+  const itemMaster = (item as any).item_master;
+  const product = (item as any).product;
+  const grnFabricName = item.grn_item?.fabric_name;
+  const grnItemName = item.grn_item?.item_name;
+
+  if (item.item_type === 'FABRIC') {
+    return (
+      fabricMaster?.fabric_name ||
+      item.item_name ||
+      grnFabricName ||
+      grnItemName ||
+      '—'
+    );
+  }
+  if (item.item_type === 'ITEM') {
+    return itemMaster?.item_name || item.item_name || grnItemName || grnFabricName || '—';
+  }
+  if (item.item_type === 'PRODUCT') {
+    return product?.name || item.item_name || grnItemName || '—';
+  }
+  return item.item_name || grnItemName || grnFabricName || '—';
+};
+
 export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onViewDetails, itemType }) => {
   const [inventory, setInventory] = useState<WarehouseInventory[]>([]);
   const [binSummaries, setBinSummaries] = useState<BinInventorySummary[]>([]);
@@ -487,10 +512,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
 
     switch (key) {
       case 'name':
-        if (item.item_type === 'FABRIC' && fabricMaster) return fabricMaster.fabric_name || item.item_name || '';
-        if (item.item_type === 'ITEM' && itemMaster) return itemMaster.item_name || item.item_name || '';
-        if (item.item_type === 'PRODUCT' && product) return product.name || item.item_name || '';
-        return item.item_name || '';
+        return resolveInventoryDisplayName(item);
       case 'type':
         if (item.item_type === 'FABRIC') return 'Fabric';
         if (item.item_type === 'ITEM' && itemMaster) return itemMaster.item_type || '';
@@ -546,9 +568,11 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
 
   const filteredInventory = inventory.filter((item) => {
     const t = searchTerm.trim().toLowerCase();
+    const resolvedName = resolveInventoryDisplayName(item).toLowerCase();
     const matchesSearch =
       t === '' ||
-      item.item_name.toLowerCase().includes(t) ||
+      resolvedName.includes(t) ||
+      (item.item_name || '').toLowerCase().includes(t) ||
       (item.item_code || '').toLowerCase().includes(t) ||
       (item.bin?.bin_code || '').toLowerCase().includes(t) ||
       (() => {
@@ -882,7 +906,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
 
                   if (item.item_type === 'FABRIC' && fabricMaster) {
                     displayImage = fabricMaster.image || null;
-                    displayName = fabricMaster.fabric_name || item.item_name;
+                    displayName = resolveInventoryDisplayName(item);
                     displayType = 'Fabric';
                     displayFabric =
                       (fabricMaster.fabric_for_supplier && String(fabricMaster.fabric_for_supplier).trim()) ||
@@ -902,7 +926,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                     displaySize = '-';
                   } else if (item.item_type === 'ITEM' && itemMaster) {
                     displayImage = itemMaster.image || item.grn_item?.item_image_url;
-                    displayName = itemMaster.item_name || item.item_name;
+                    displayName = resolveInventoryDisplayName(item);
                     displayType = itemMaster.item_type || '-';
                     displayFabric = '-';
                     displayColor = lineItemColor || itemMaster.color || '-';
@@ -914,7 +938,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                     displaySize = itemMaster.size || '-';
                   } else if (item.item_type === 'PRODUCT' && product) {
                     displayImage = product.main_image || product.image_url || product.image1 || item.grn_item?.item_image_url;
-                    displayName = product.name || item.item_name;
+                    displayName = resolveInventoryDisplayName(item);
                     displayType = product.class || '-';
                     displayFabric = '-';
                     displayColor = '-';
@@ -930,7 +954,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                     } else {
                     displayImage = item.grn_item?.item_image_url;
                     }
-                    displayName = item.item_name;
+                    displayName = resolveInventoryDisplayName(item);
                     displayType = item.item_type === 'FABRIC' ? 'Fabric' : item.item_type || '-';
                     displayFabric = item.item_type === 'FABRIC' ? '-' : '-';
                     displayColor = lineFabricColor || lineItemColor || '-';

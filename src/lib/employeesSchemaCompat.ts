@@ -6,13 +6,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * optional user_id). Try progressively smaller / alternate column sets.
  */
 export const EMPLOYEE_ROW_SELECT_FALLBACKS = [
-  'id, full_name, personal_email, user_id',
-  'id, full_name, user_id',
+  // Start with wildcard to avoid hard failures on schema drift.
+  '*',
   'id, full_name, personal_email',
   'id, full_name, email',
   'id, full_name',
   'id',
-  '*',
 ] as const;
 
 export function logPostgrestEmployeesError(context: string, selectUsed: string, error: unknown): void {

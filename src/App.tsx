@@ -83,6 +83,8 @@ import { CustomerAccessManagement } from "./pages/admin/CustomerAccessManagement
 import ProfileSettingsPage from "./pages/profile/ProfileSettingsPage";
 import QuotationsPage from './pages/accounts/QuotationsPage';
 import QuotationDetailPage from './pages/accounts/QuotationDetailPage';
+import ManualQuotationFormPage from './pages/accounts/ManualQuotationFormPage';
+import ManualQuotationDetailPage from './pages/accounts/ManualQuotationDetailPage';
 import ReceiptPage from './pages/accounts/ReceiptPage';
 import ReceivablesPage from './pages/accounts/ReceivablesPage';
 import InvoicePage from './pages/accounts/InvoicePage';
@@ -642,6 +644,21 @@ const App = () => {
                 <Route path="/accounts/quotations/:id" element={
                   <ProtectedRouteWithCompanySettings>
                     <QuotationDetailPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/accounts/manual-quotations/new" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ManualQuotationFormPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/accounts/manual-quotations/:id/edit" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ManualQuotationFormPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/accounts/manual-quotations/:id" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ManualQuotationDetailPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
 
