@@ -248,24 +248,7 @@ const App = () => {
     installGlobalToastSoundEffects();
   }, []);
 
-  // DISABLE ALL AUTO-REFRESH: Monitor and log visibility changes
-  // All auto-refresh mechanisms have been disabled at their source:
-  // - QueryClient: refetchOnWindowFocus = false
-  // - EnhancedDashboardCached: Only refreshes when hasFocus
-  // - usePageVisibility: preventAutoRefresh = true
-  React.useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        console.log('👀 Tab became visible - auto-refresh mechanisms disabled');
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, []);
+  // DISABLE ALL AUTO-REFRESH at source (no visibility logging).
 
   return (
     <QueryClientProvider client={queryClient}>

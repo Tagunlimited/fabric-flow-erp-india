@@ -563,11 +563,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const currentUserId = session?.user?.id || null;
       const userIdChanged = lastUserIdRef.current !== currentUserId;
       
-      console.log('Auth state change:', event, currentUserId, {
-        userIdChanged,
-        previousUserId: lastUserIdRef.current
-      });
-      
       if (event === 'SIGNED_OUT') {
         lastUserIdRef.current = null;
         clearAuthState();
@@ -577,14 +572,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
         lastKnownGoodSessionAtRef.current = Date.now();
         transientSessionFailureCountRef.current = 0;
         // SIGNED_IN means login succeeded - trust this event and proceed
-        console.log('🔐 SIGNED_IN handler:', { 
-          userIdChanged, 
-          currentUserId, 
-          userEmail: session.user.email,
-          lastUserId: lastUserIdRef.current, 
-          fetchInProgress: profileFetchInProgressRef.current 
-        });
-        
         // Supabase can emit repeated SIGNED_IN events (token refresh / tab focus).
         // Avoid expensive duplicate profile reloads in a short window for the same user.
         const now = Date.now();
@@ -592,13 +579,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
           lastSignedInHandledRef.current.userId === session.user.id &&
           now - lastSignedInHandledRef.current.at < 8000;
         if (wasRecentlyHandled) {
-          console.log('⏭️ SIGNED_IN: duplicate event suppressed for same user');
-          lastUserIdRef.current = currentUserId;
-          setUser(session.user);
+          if (userIdChanged) {
+            lastUserIdRef.current = currentUserId;
+            setUser(session.user);
+          }
           setLoading(false);
           return;
         }
         lastSignedInHandledRef.current = { userId: session.user.id, at: now };
+
+        // On tab-return Supabase may emit SIGNED_IN repeatedly for the same user.
+        // If we already have a profile for this user, avoid re-fetch churn and UI loading flicker.
+        const hasFreshProfileForSameUser =
+          !userIdChanged &&
+          !!profileRef.current &&
+          profileRef.current.user_id === session.user.id;
+        if (hasFreshProfileForSameUser) {
+          if (userIdChanged) {
+            lastUserIdRef.current = currentUserId;
+            setUser(session.user);
+          }
+          setLoading(false);
+          return;
+        }
 
         // CRITICAL: Always clear old profile when SIGNED_IN fires to prevent user confusion
         // Even if userId hasn't changed, we want fresh data
@@ -629,7 +632,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setUser(session.user);
         localStorage.setItem('login_timestamp', Date.now().toString());
         
-        // Always fetch fresh profile on SIGNED_IN to ensure correct user data
+        // Fetch profile on SIGNED_IN when user changed or no profile is available.
         console.log('📞 Calling refreshProfile from SIGNED_IN with userId:', session.user.id);
         // Don't await - let it run in background, clear loading immediately
         refreshProfile(0, session.user.id, true).catch(err => {

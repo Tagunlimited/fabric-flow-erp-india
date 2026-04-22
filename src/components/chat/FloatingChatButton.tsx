@@ -27,7 +27,7 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
 
   // Fetch unread mentions count
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id) return;
 
     const fetchUnreadCount = async () => {
       try {
@@ -132,7 +132,9 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
         }
       )
       .subscribe((status) => {
-        console.log('🔔 FloatingChatButton subscription status:', status);
+        if (status === 'CHANNEL_ERROR') {
+          console.warn('⚠️ FloatingChatButton subscription error');
+        }
       });
 
     // Polling fallback: Refresh unread count every 3 seconds
@@ -144,7 +146,7 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
       clearInterval(pollingInterval);
       supabase.removeChannel(channel);
     };
-  }, [user]);
+  }, [user?.id]);
 
   // Update scrollToMessageId when openToMessageId changes
   useEffect(() => {

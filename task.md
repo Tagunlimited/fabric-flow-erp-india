@@ -188,3 +188,50 @@ I will keep appending new completed tasks with timestamped entries.
 - Updated order detail image action placement in `src/pages/orders/OrderDetailPage.tsx`:
   - Moved `Open` action from below the image to an overlay icon button on the image container (top-right), matching compact card-style interaction.
 
+## 2026-04-22 22:28:00 IST
+
+- Implemented Tab Return Stability + Cleanup plan core phases (auth lifecycle, visibility policy, cleanup, verification):
+  - Hardened auth/session handling in `src/components/auth/AuthProvider.tsx` so transient tab-return/session races do not immediately clear auth state.
+  - Consolidated session validation ownership in `src/lib/auth.ts` (profile fetch no longer duplicates `getSession/refreshSession` loops).
+  - Normalized login navigation in `src/components/auth/LoginForm.tsx` to router navigation (removed hard reload behavior).
+  - Added conservative tab-return shell persistence policy in `src/hooks/usePersistShellOnTabReturn.ts` with explicit opt-in (`restoreOnTabReturn`).
+  - Removed customer form auto-open/auto-close visibility/storage listeners from `src/components/customers/CustomerList.tsx` to stop tab-return form churn.
+  - Removed unused navigation-state persistence API from `src/contexts/FormPersistenceContext.tsx`.
+  - Removed duplicate admin redirect effect in `src/components/PermissionAwareRedirect.tsx`.
+  - Replaced pending-approval hard reload with profile refresh in `src/components/auth/ProtectedRoute.tsx`.
+  - Verification run completed:
+    - `npm run test:roles` passed.
+    - `npm run build` passed.
+  - Committed as: `d7fe7b5`.
+
+## 2026-04-22 22:41:00 IST
+
+- Added follow-up tab-return stabilization after live log review (remaining repeated event churn):
+  - In `src/components/auth/AuthProvider.tsx`:
+    - suppressed same-user `SIGNED_IN` profile refresh when a valid in-memory profile already exists,
+    - avoided unnecessary `setUser` on duplicate same-user `SIGNED_IN` events to reduce rerenders.
+  - In `src/hooks/useSidebarPermissions.ts`:
+    - added shared in-memory cache and inflight dedupe across hook instances,
+    - ensured all return paths (including admin bypass/error paths) finalize and write cache consistently,
+    - added shared-cache reads in mount effect before fetch branch.
+
+## 2026-04-22 22:49:00 IST
+
+- Added final anti-remount caching and subscription-noise reductions based on additional tab-switch logs:
+  - In `src/hooks/useSidebarPermissions.ts`:
+    - added session-scoped cache persistence (`sessionStorage`) with TTL (`sidebar_permissions_cache_v1`),
+    - hydrate from session cache before fetch attempts so remounted instances avoid fresh permission fetch churn.
+  - In `src/components/chat/FloatingChatButton.tsx`:
+    - changed effect dependency from `[user]` to `[user?.id]` to avoid same-user object-identity resubscriptions,
+    - reduced chat subscription status log noise; only warn on channel errors.
+  - Re-verified with `npm run build` and targeted lint checks on modified files.
+
+## 2026-04-22 22:56:00 IST
+
+- Per final tab-return verification, cleaned non-actionable debug log noise while keeping warnings/errors:
+  - Removed repetitive tab visibility info logging from `src/App.tsx`.
+  - Removed repetitive auth state info logging in duplicate/same-user `SIGNED_IN` paths from `src/components/auth/AuthProvider.tsx`.
+  - Removed verbose permissions lifecycle info logging from `src/hooks/useSidebarPermissions.ts`.
+  - Kept functional behavior unchanged (no-op handling for same-user `SIGNED_IN`, cache-first permission resolution, and tab-return stabilization).
+  - Re-verified with lint diagnostics and `npm run build`.
+
