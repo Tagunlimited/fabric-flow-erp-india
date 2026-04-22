@@ -189,6 +189,7 @@ export default function PickerPage() {
   const [imageGalleryOpen, setImageGalleryOpen] = useState(false);
   const [galleryImages, setGalleryImages] = useState<string[]>([]);
   const [galleryBatchName, setGalleryBatchName] = useState('');
+  const [galleryBatchId, setGalleryBatchId] = useState<string | null>(null);
   
   // Readymade Orders state
   const [readymadeOrders, setReadymadeOrders] = useState<ReadymadeOrder[]>([]);
@@ -767,22 +768,30 @@ export default function PickerPage() {
       let qtyByBatch: Record<string, number> = {};
       let pickedByBatch: Record<string, number> = {};
       let rejectedByBatch: Record<string, number> = {};
+      let pickedByAssignment: Record<string, number> = {};
+      let rejectedByAssignment: Record<string, number> = {};
       let assignmentToBatch: Record<string, string> = {};
+      let assignmentToOrder: Record<string, string> = {};
+      let assignmentQtyById: Record<string, number> = {};
       let assignmentIds: string[] = [];
       let orderSet: Record<string, Set<string>> = {}; // Declare outside try-catch
       let orderImagesByBatch: Record<string, string[]> = {}; // Declare outside try-catch
+      let assignmentRows: any[] = [];
       if (batchIds.length > 0) {
         try {
           const { data: oba } = await (supabase as any)
             .from('order_batch_assignments_with_details')
             .select('assignment_id, batch_id, order_id, total_quantity')
             .in('batch_id', batchIds as any);
+          assignmentRows = oba || [];
           orderSet = {}; // Initialize
-          (oba || []).forEach((row: any) => {
+          assignmentRows.forEach((row: any) => {
             const b = row?.batch_id as string | undefined;
             if (!b) return;
             qtyByBatch[b] = (qtyByBatch[b] || 0) + Number(row.total_quantity || 0);
             assignmentToBatch[row.assignment_id] = b;
+            assignmentToOrder[row.assignment_id] = row.order_id;
+            assignmentQtyById[row.assignment_id] = Number(row.total_quantity || 0);
             assignmentIds.push(row.assignment_id);
             const oid = row?.order_id as string | undefined;
             if (oid) {
@@ -793,22 +802,91 @@ export default function PickerPage() {
           Object.keys(orderSet).forEach(b => { ordersCountByBatch[b] = orderSet[b].size; });
         } catch {}
 
-        // Product thumbnails per order: BOM image first, then mockup column/specs, then category (same as QC page)
+        // Compute picked totals per batch from size distributions
+        if (assignmentIds.length > 0) {
+          try {
+            const { data: pickedRows } = await (supabase as any)
+              .from('order_batch_size_distributions')
+              .select('order_batch_assignment_id, picked_quantity')
+              .in('order_batch_assignment_id', assignmentIds as any);
+            (pickedRows || []).forEach((r: any) => {
+              const aid = r?.order_batch_assignment_id as string | undefined; if (!aid) return;
+              const b = assignmentToBatch[aid]; if (!b) return;
+              const pickedQty = Number(r.picked_quantity || 0);
+              pickedByBatch[b] = (pickedByBatch[b] || 0) + pickedQty;
+              pickedByAssignment[aid] = (pickedByAssignment[aid] || 0) + pickedQty;
+            });
+          } catch {}
+          // Fallback: add picked from notes JSON if column not present/populated
+          try {
+            const { data: asn } = await (supabase as any)
+              .from('order_batch_assignments')
+              .select('id, notes')
+              .in('id', assignmentIds as any);
+            (asn || []).forEach((a: any) => {
+              if (!a?.id || !a?.notes) return;
+              try {
+                const parsed = JSON.parse(a.notes);
+                if (parsed && parsed.picked_by_size && typeof parsed.picked_by_size === 'object') {
+                  let sum = 0; for (const v of Object.values(parsed.picked_by_size as Record<string, any>)) sum += Number(v) || 0;
+                  const b = assignmentToBatch[a.id]; if (!b) return;
+                  pickedByBatch[b] = (pickedByBatch[b] || 0) + sum;
+                  pickedByAssignment[a.id] = (pickedByAssignment[a.id] || 0) + sum;
+                }
+              } catch {}
+            });
+          } catch {}
+
+          // QC rejections per batch
+          try {
+            const { data: qcRows } = await (supabase as any)
+              .from('qc_reviews')
+              .select('order_batch_assignment_id, rejected_quantity')
+              .in('order_batch_assignment_id', assignmentIds as any);
+            (qcRows || []).forEach((q: any) => {
+              const aid = q?.order_batch_assignment_id as string | undefined; if (!aid) return;
+              const b = assignmentToBatch[aid]; if (!b) return;
+              const rejectedQty = Number(q.rejected_quantity || 0);
+              rejectedByBatch[b] = (rejectedByBatch[b] || 0) + rejectedQty;
+              rejectedByAssignment[aid] = (rejectedByAssignment[aid] || 0) + rejectedQty;
+            });
+          } catch {}
+        }
+
+        // Product thumbnails per order: include only orders with pending qty in this batch.
         if (batchIds.length > 0 && Object.keys(orderSet).length > 0) {
           try {
-            const allOrderIds = Array.from(
+            const pendingOrderIdsByBatch: Record<string, Set<string>> = {};
+            assignmentRows.forEach((row: any) => {
+              const aid = row?.assignment_id as string | undefined;
+              const batchId = row?.batch_id as string | undefined;
+              const orderId = row?.order_id as string | undefined;
+              if (!aid || !batchId || !orderId) return;
+              const totalQty = assignmentQtyById[aid] || 0;
+              const pickedQty = pickedByAssignment[aid] || 0;
+              const rejectedQty = rejectedByAssignment[aid] || 0;
+              const pendingItems = Math.max(0, totalQty - pickedQty);
+              const rejectedNeedingReplacement = pickedQty < totalQty ? rejectedQty : 0;
+              const leftToPick = pendingItems + rejectedNeedingReplacement;
+              if (leftToPick <= 0) return;
+              if (!pendingOrderIdsByBatch[batchId]) pendingOrderIdsByBatch[batchId] = new Set<string>();
+              pendingOrderIdsByBatch[batchId].add(orderId);
+            });
+
+            const allPendingOrderIds = Array.from(
               new Set(
-                Object.values(orderSet).flatMap((s) => Array.from(s as Set<string>))
+                Object.values(pendingOrderIdsByBatch).flatMap((s) => Array.from(s as Set<string>))
               )
             ).filter(Boolean);
-            if (allOrderIds.length > 0) {
+
+            if (allPendingOrderIds.length > 0) {
               const orderTypeById: Record<string, string | null | undefined> = {};
               try {
                 const { data: orderRows } = await (supabase as any)
                   .from('orders')
                   .select('id, order_type')
                   .eq('is_deleted', false)
-                  .in('id', allOrderIds as any);
+                  .in('id', allPendingOrderIds as any);
                 (orderRows || []).forEach((o: any) => {
                   if (o?.id) orderTypeById[o.id] = o.order_type ?? null;
                 });
@@ -820,7 +898,7 @@ export default function PickerPage() {
                   .from('bom_records')
                   .select('order_id, product_image_url')
                   .eq('is_deleted', false)
-                  .in('order_id', allOrderIds as any);
+                  .in('order_id', allPendingOrderIds as any);
                 (boms || []).forEach((b: any) => {
                   if (b?.order_id && b?.product_image_url) bomByOrder[b.order_id] = b.product_image_url;
                 });
@@ -830,7 +908,7 @@ export default function PickerPage() {
                 .from('order_items')
                 .select('order_id, specifications, mockup_images, category_image_url')
                 .eq('is_deleted', false)
-                .in('order_id', allOrderIds as any);
+                .in('order_id', allPendingOrderIds as any);
 
               const itemsByOrder: Record<string, any[]> = {};
               (orderItems || []).forEach((item: any) => {
@@ -860,63 +938,22 @@ export default function PickerPage() {
                 return out;
               };
 
-              for (const [batchId, orderIdSet] of Object.entries(orderSet)) {
+              for (const batchId of Object.keys(orderSet)) {
+                const pendingOrderIds = pendingOrderIdsByBatch[batchId] || new Set<string>();
                 const images: string[] = [];
-                for (const oid of Array.from(orderIdSet as Set<string>)) {
+                for (const oid of Array.from(pendingOrderIds)) {
                   images.push(...thumbsForOrder(oid));
                 }
                 orderImagesByBatch[batchId] = images;
               }
+            } else {
+              Object.keys(orderSet).forEach((batchId) => {
+                orderImagesByBatch[batchId] = [];
+              });
             }
           } catch (error) {
             console.error('Error fetching order images:', error);
           }
-        }
-
-        // Compute picked totals per batch from size distributions
-        if (assignmentIds.length > 0) {
-          try {
-            const { data: pickedRows } = await (supabase as any)
-              .from('order_batch_size_distributions')
-              .select('order_batch_assignment_id, picked_quantity')
-              .in('order_batch_assignment_id', assignmentIds as any);
-            (pickedRows || []).forEach((r: any) => {
-              const aid = r?.order_batch_assignment_id as string | undefined; if (!aid) return;
-              const b = assignmentToBatch[aid]; if (!b) return;
-              pickedByBatch[b] = (pickedByBatch[b] || 0) + Number(r.picked_quantity || 0);
-            });
-          } catch {}
-          // Fallback: add picked from notes JSON if column not present/populated
-          try {
-            const { data: asn } = await (supabase as any)
-              .from('order_batch_assignments')
-              .select('id, notes')
-              .in('id', assignmentIds as any);
-            (asn || []).forEach((a: any) => {
-              if (!a?.id || !a?.notes) return;
-              try {
-                const parsed = JSON.parse(a.notes);
-                if (parsed && parsed.picked_by_size && typeof parsed.picked_by_size === 'object') {
-                  let sum = 0; for (const v of Object.values(parsed.picked_by_size as Record<string, any>)) sum += Number(v) || 0;
-                  const b = assignmentToBatch[a.id]; if (!b) return;
-                  pickedByBatch[b] = (pickedByBatch[b] || 0) + sum;
-                }
-              } catch {}
-            });
-          } catch {}
-
-          // QC rejections per batch
-          try {
-            const { data: qcRows } = await (supabase as any)
-              .from('qc_reviews')
-              .select('order_batch_assignment_id, rejected_quantity')
-              .in('order_batch_assignment_id', assignmentIds as any);
-            (qcRows || []).forEach((q: any) => {
-              const aid = q?.order_batch_assignment_id as string | undefined; if (!aid) return;
-              const b = assignmentToBatch[aid]; if (!b) return;
-              rejectedByBatch[b] = (rejectedByBatch[b] || 0) + Number(q.rejected_quantity || 0);
-            });
-          } catch {}
         }
       }
 
@@ -949,6 +986,7 @@ export default function PickerPage() {
   const openImageGallery = (batchId: string, images: string[]) => {
     const batch = tailors.find(t => t.id === batchId);
     setGalleryBatchName(batch?.full_name || 'Batch');
+    setGalleryBatchId(batchId);
     setGalleryImages(images);
     setImageGalleryOpen(true);
   };
@@ -993,7 +1031,8 @@ export default function PickerPage() {
     } catch {}
   };
 
-  const openBatchOrders = async (batchId: string) => {
+  const openBatchOrders = async (batchId: string, options?: { openDialog?: boolean }) => {
+    const shouldOpenDialog = options?.openDialog ?? true;
     if (lastBatchOpenedForDrillRef.current !== batchId) {
       lastBatchOpenedForDrillRef.current = batchId;
       setBatchDrillStep("orders");
@@ -1294,13 +1333,34 @@ export default function PickerPage() {
           setDrillOrderNumber("");
         }
       }
-      setOrdersDialogOpen(true);
+      if (shouldOpenDialog) {
+        setOrdersDialogOpen(true);
+      }
+      return pending;
     } catch (e) {
       setBatchOrders([]);
-      setOrdersDialogOpen(true);
+      if (shouldOpenDialog) {
+        setOrdersDialogOpen(true);
+      }
+      return [];
     } finally {
       setLoadingBatchOrders(false);
     }
+  };
+
+  const openPickerFromBatchImage = async (batchId: string, imageUrl: string) => {
+    const pendingAssignments = await openBatchOrders(batchId, { openDialog: false });
+    const assignmentMatch = pendingAssignments.find(
+      (assignment: any) => (assignment.product_thumbnail_url || "") === imageUrl
+    );
+
+    if (!assignmentMatch) {
+      toast.error("Unable to find pending assignment for this product image.");
+      return;
+    }
+
+    setImageGalleryOpen(false);
+    openPickerForAssignment(assignmentMatch);
   };
 
   const openPickerForAssignment = (assignment: any) => {
@@ -1652,7 +1712,9 @@ export default function PickerPage() {
                 ) : (
                   <>
                   <div className="picker-tailor-grid">
-                    {filteredTailors.map((t) => {
+                    {filteredTailors
+                      .filter((t) => Math.max(0, (t.assigned_quantity || 0) - (t.picked_quantity || 0)) > 0)
+                      .map((t) => {
                       const pendingQty = Math.max(0, (t.assigned_quantity || 0) - (t.picked_quantity || 0));
                       const imgs = t.order_images || [];
                       return (
@@ -1671,18 +1733,6 @@ export default function PickerPage() {
                         >
                           <div className="picker-tailor-card-top">
                             <div className="picker-tailor-glass" aria-hidden />
-                            {t.rejected_quantity > 0 && (
-                              <button
-                                type="button"
-                                className="picker-tailor-rejected"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openBatchRejectedDetails(t.id, t.full_name);
-                                }}
-                              >
-                                Rejected · {t.rejected_quantity}
-                              </button>
-                            )}
                             <div className="picker-tailor-meta">
                               <span>{t.assigned_orders} orders assigned</span>
                               <span>Qty {t.assigned_quantity ?? 0}</span>
@@ -1704,7 +1754,7 @@ export default function PickerPage() {
                                 </div>
                               </div>
                             </div>
-                            {imgs.length > 0 ? (
+                            {imgs.length > 0 || t.rejected_quantity > 0 ? (
                               <div
                                 className="picker-tailor-products"
                                 onClick={(e) => e.stopPropagation()}
@@ -1716,7 +1766,8 @@ export default function PickerPage() {
                                       key={`${t.id}-${idx}-${img.slice(-32)}`}
                                       src={img}
                                       alt=""
-                                      className="picker-tailor-product-img"
+                                      className="picker-tailor-product-img cursor-pointer transition-all hover:ring-2 hover:ring-primary/60 hover:opacity-90"
+                                      title="Click to open picking dialog"
                                       style={{ marginLeft: idx > 0 ? -14 : 0, zIndex: 10 - idx }}
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -1731,6 +1782,7 @@ export default function PickerPage() {
                                     <div
                                       className="picker-tailor-product-more"
                                       style={{ marginLeft: -14, zIndex: 0 }}
+                                      title="Click to select product for picking"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         openImageGallery(t.id, imgs);
@@ -1747,6 +1799,18 @@ export default function PickerPage() {
                                     </div>
                                   )}
                                 </div>
+                                {t.rejected_quantity > 0 && (
+                                  <button
+                                    type="button"
+                                    className="picker-tailor-rejected"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openBatchRejectedDetails(t.id, t.full_name);
+                                    }}
+                                  >
+                                    Rejected · {t.rejected_quantity}
+                                  </button>
+                                )}
                               </div>
                             ) : null}
                             <div className="picker-tailor-actions">
@@ -2041,7 +2105,16 @@ export default function PickerPage() {
             </DialogHeader>
             <div className="grid grid-cols-3 sm:grid-cols-4 gap-4 mt-4">
               {galleryImages.map((img, idx) => (
-                <div key={idx} className="relative aspect-square">
+                <button
+                  key={idx}
+                  type="button"
+                  className="relative aspect-square text-left cursor-pointer rounded transition-all hover:ring-2 hover:ring-primary/60 hover:opacity-90"
+                  title="Click to open picking dialog"
+                  onClick={() => {
+                    if (!galleryBatchId) return;
+                    void openPickerFromBatchImage(galleryBatchId, img);
+                  }}
+                >
                   <img 
                     src={img} 
                     alt={`Product ${idx + 1}`}
@@ -2050,7 +2123,7 @@ export default function PickerPage() {
                       (e.target as HTMLImageElement).style.display = 'none';
                     }}
                   />
-                </div>
+                </button>
               ))}
             </div>
           </DialogContent>

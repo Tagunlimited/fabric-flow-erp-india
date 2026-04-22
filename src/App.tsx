@@ -83,6 +83,8 @@ import { CustomerAccessManagement } from "./pages/admin/CustomerAccessManagement
 import ProfileSettingsPage from "./pages/profile/ProfileSettingsPage";
 import QuotationsPage from './pages/accounts/QuotationsPage';
 import QuotationDetailPage from './pages/accounts/QuotationDetailPage';
+import ManualQuotationFormPage from './pages/accounts/ManualQuotationFormPage';
+import ManualQuotationDetailPage from './pages/accounts/ManualQuotationDetailPage';
 import ReceiptPage from './pages/accounts/ReceiptPage';
 import ReceivablesPage from './pages/accounts/ReceivablesPage';
 import InvoicePage from './pages/accounts/InvoicePage';
@@ -248,24 +250,7 @@ const App = () => {
     installGlobalToastSoundEffects();
   }, []);
 
-  // DISABLE ALL AUTO-REFRESH: Monitor and log visibility changes
-  // All auto-refresh mechanisms have been disabled at their source:
-  // - QueryClient: refetchOnWindowFocus = false
-  // - EnhancedDashboardCached: Only refreshes when hasFocus
-  // - usePageVisibility: preventAutoRefresh = true
-  React.useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        console.log('👀 Tab became visible - auto-refresh mechanisms disabled');
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, []);
+  // DISABLE ALL AUTO-REFRESH at source (no visibility logging).
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -659,6 +644,21 @@ const App = () => {
                 <Route path="/accounts/quotations/:id" element={
                   <ProtectedRouteWithCompanySettings>
                     <QuotationDetailPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/accounts/manual-quotations/new" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ManualQuotationFormPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/accounts/manual-quotations/:id/edit" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ManualQuotationFormPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/accounts/manual-quotations/:id" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ManualQuotationDetailPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
 

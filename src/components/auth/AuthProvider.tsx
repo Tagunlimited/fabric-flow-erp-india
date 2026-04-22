@@ -39,6 +39,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const profileRef = useRef<UserProfile | null>(null);
   const profileFetchInProgressRef = useRef(false); // Track if profile fetch is in progress
   const lastSignedInHandledRef = useRef<{ userId: string | null; at: number }>({ userId: null, at: 0 });
+  const lastKnownGoodSessionAtRef = useRef<number>(0);
+  const transientSessionFailureCountRef = useRef(0);
 
   // Helper: check if login expired
   const isLoginExpired = () => {
@@ -48,22 +50,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return now - parseInt(loginTime, 10) > 1 * 24 * 60 * 60 * 1000; // 7 days
   };
 
-  // Helper function to wait for profile fetch to complete (including retries)
-  const waitForProfileFetch = async (maxWaitSeconds = 8): Promise<void> => {
-    let waitCount = 0;
-    const maxWait = maxWaitSeconds * 2; // Check every 500ms
-    while (profileFetchInProgressRef.current && waitCount < maxWait) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      waitCount++;
-      if (waitCount % 4 === 0) {
-        console.log(`⏳ Still waiting for profile fetch... (${waitCount * 500}ms)`);
-      }
-    }
-    if (profileFetchInProgressRef.current) {
-      console.warn('⚠️ Profile fetch still in progress after timeout, forcing reset');
-      profileFetchInProgressRef.current = false;
-      setProfileLoading(false);
-    }
+  const clearAuthState = () => {
+    setUser(null);
+    setProfile(null);
+    profileRef.current = null;
+    profileFetchInProgressRef.current = false;
+    setProfileLoading(false);
+    lastKnownGoodSessionAtRef.current = 0;
+    transientSessionFailureCountRef.current = 0;
   };
 
   const refreshProfile = async (retryCount = 0, userId?: string, skipSessionCheck = false): Promise<void> => {
@@ -154,26 +148,42 @@ export function AuthProvider({ children }: AuthProviderProps) {
           const { data: refreshed, error: refreshError } = await Promise.race([refreshPromise, refreshTimeoutPromise]);
           
           if (refreshError || !refreshed.session) {
-            console.error('Session refresh failed:', refreshError);
-            setUser(null);
-            setProfile(null);
-            profileRef.current = null; // Update ref
-            profileFetchInProgressRef.current = false; // Reset flag
-            setProfileLoading(false);
+            const now = Date.now();
+            transientSessionFailureCountRef.current += 1;
+            const isTransient =
+              retryCount < 2 &&
+              lastKnownGoodSessionAtRef.current > 0 &&
+              now - lastKnownGoodSessionAtRef.current < 30000;
+            console.error('Session refresh failed:', refreshError, {
+              isTransient,
+              retryCount,
+              transientFailures: transientSessionFailureCountRef.current,
+            });
+            if (isTransient) {
+              return;
+            }
+            clearAuthState();
             return;
           }
           setUser(refreshed.session.user);
+          lastKnownGoodSessionAtRef.current = Date.now();
+          transientSessionFailureCountRef.current = 0;
           console.log('✅ Session refreshed successfully');
         } catch (refreshErr) {
-          console.error('Error refreshing session:', refreshErr);
-          setUser(null);
-          setProfile(null);
-          profileRef.current = null; // Update ref
-          profileFetchInProgressRef.current = false; // Reset flag
-          setProfileLoading(false);
+          const now = Date.now();
+          transientSessionFailureCountRef.current += 1;
+          const isTransient =
+            retryCount < 2 &&
+            lastKnownGoodSessionAtRef.current > 0 &&
+            now - lastKnownGoodSessionAtRef.current < 30000;
+          console.error('Error refreshing session:', refreshErr, { isTransient, retryCount });
+          if (isTransient) return;
+          clearAuthState();
           return;
         }
       } else {
+        lastKnownGoodSessionAtRef.current = Date.now();
+        transientSessionFailureCountRef.current = 0;
         console.log('✅ Session is valid');
       }
       } else {
@@ -364,14 +374,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
           const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
           if (refreshError || !refreshed.session) {
             console.error('Session refresh failed after JWT expiry:', refreshError);
-            setUser(null);
-            setProfile(null);
-            profileRef.current = null; // Update ref
-            profileFetchInProgressRef.current = false; // Reset flag
-            setProfileLoading(false);
+            const now = Date.now();
+            const isTransient =
+              retryCount < 2 &&
+              lastKnownGoodSessionAtRef.current > 0 &&
+              now - lastKnownGoodSessionAtRef.current < 30000;
+            if (!isTransient) clearAuthState();
             return;
           }
           setUser(refreshed.session.user);
+          lastKnownGoodSessionAtRef.current = Date.now();
+          transientSessionFailureCountRef.current = 0;
           // Retry profile fetch once after refresh
           if (retryCount === 0) {
             willRetry = true;
@@ -380,11 +393,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
           }
         } catch (refreshErr) {
           console.error('Error refreshing session after JWT expiry:', refreshErr);
-          setUser(null);
-          setProfile(null);
-          profileRef.current = null; // Update ref
-          profileFetchInProgressRef.current = false; // Reset flag
-          setProfileLoading(false);
+          const now = Date.now();
+          const isTransient =
+            retryCount < 2 &&
+            lastKnownGoodSessionAtRef.current > 0 &&
+            now - lastKnownGoodSessionAtRef.current < 30000;
+          if (!isTransient) clearAuthState();
           return;
         }
       }
@@ -471,22 +485,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const signOut = async () => {
     try {
       await authService.signOut();
-      setUser(null);
-      setProfile(null);
-      profileRef.current = null; // Clear ref
-      profileFetchInProgressRef.current = false; // Reset flag
-      setProfileLoading(false);
+      clearAuthState();
       setLoading(false); // Ensure loading is cleared
       localStorage.removeItem('login_timestamp');
       toast.success('Signed out successfully');
     } catch (error) {
       console.error('Error signing out:', error);
       // Even on error, clear state
-      setUser(null);
-      setProfile(null);
-      profileRef.current = null;
-      profileFetchInProgressRef.current = false;
-      setProfileLoading(false);
+      clearAuthState();
       setLoading(false);
       toast.error('Error signing out');
     }
@@ -513,6 +519,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
         const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]);
 
         if (session?.user) {
+          lastKnownGoodSessionAtRef.current = Date.now();
+          transientSessionFailureCountRef.current = 0;
           const currentUserId = session.user.id;
           if (lastUserIdRef.current !== currentUserId) {
             lastUserIdRef.current = currentUserId;
@@ -555,28 +563,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const currentUserId = session?.user?.id || null;
       const userIdChanged = lastUserIdRef.current !== currentUserId;
       
-      console.log('Auth state change:', event, currentUserId, {
-        userIdChanged,
-        previousUserId: lastUserIdRef.current
-      });
-      
       if (event === 'SIGNED_OUT') {
         lastUserIdRef.current = null;
-        setUser(null);
-        setProfile(null);
-        profileRef.current = null; // Clear ref
+        clearAuthState();
         setLoading(false);
         localStorage.removeItem('login_timestamp');
       } else if (event === 'SIGNED_IN' && session?.user) {
+        lastKnownGoodSessionAtRef.current = Date.now();
+        transientSessionFailureCountRef.current = 0;
         // SIGNED_IN means login succeeded - trust this event and proceed
-        console.log('🔐 SIGNED_IN handler:', { 
-          userIdChanged, 
-          currentUserId, 
-          userEmail: session.user.email,
-          lastUserId: lastUserIdRef.current, 
-          fetchInProgress: profileFetchInProgressRef.current 
-        });
-        
         // Supabase can emit repeated SIGNED_IN events (token refresh / tab focus).
         // Avoid expensive duplicate profile reloads in a short window for the same user.
         const now = Date.now();
@@ -584,13 +579,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
           lastSignedInHandledRef.current.userId === session.user.id &&
           now - lastSignedInHandledRef.current.at < 8000;
         if (wasRecentlyHandled) {
-          console.log('⏭️ SIGNED_IN: duplicate event suppressed for same user');
-          lastUserIdRef.current = currentUserId;
-          setUser(session.user);
+          if (userIdChanged) {
+            lastUserIdRef.current = currentUserId;
+            setUser(session.user);
+          }
           setLoading(false);
           return;
         }
         lastSignedInHandledRef.current = { userId: session.user.id, at: now };
+
+        // On tab-return Supabase may emit SIGNED_IN repeatedly for the same user.
+        // If we already have a profile for this user, avoid re-fetch churn and UI loading flicker.
+        const hasFreshProfileForSameUser =
+          !userIdChanged &&
+          !!profileRef.current &&
+          profileRef.current.user_id === session.user.id;
+        if (hasFreshProfileForSameUser) {
+          if (userIdChanged) {
+            lastUserIdRef.current = currentUserId;
+            setUser(session.user);
+          }
+          setLoading(false);
+          return;
+        }
 
         // CRITICAL: Always clear old profile when SIGNED_IN fires to prevent user confusion
         // Even if userId hasn't changed, we want fresh data
@@ -621,7 +632,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setUser(session.user);
         localStorage.setItem('login_timestamp', Date.now().toString());
         
-        // Always fetch fresh profile on SIGNED_IN to ensure correct user data
+        // Fetch profile on SIGNED_IN when user changed or no profile is available.
         console.log('📞 Calling refreshProfile from SIGNED_IN with userId:', session.user.id);
         // Don't await - let it run in background, clear loading immediately
         refreshProfile(0, session.user.id, true).catch(err => {
@@ -633,6 +644,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setLoading(false);
         console.log('✅ SIGNED_IN: User set, loading cleared (profile loading in background)');
       } else if (event === 'INITIAL_SESSION' && session?.user) {
+        lastKnownGoodSessionAtRef.current = Date.now();
+        transientSessionFailureCountRef.current = 0;
         // OPTIMIZATION: Skip if profile fetch is already in progress from SIGNED_IN
         if (profileFetchInProgressRef.current) {
           console.log('⏭️ Skipping INITIAL_SESSION profile fetch (already in progress from SIGNED_IN)');
@@ -683,6 +696,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
           setLoading(false);
         }
       } else if (event === 'TOKEN_REFRESHED' && session?.user) {
+        lastKnownGoodSessionAtRef.current = Date.now();
+        transientSessionFailureCountRef.current = 0;
         // DISABLED: Don't auto-refresh profile on token refresh
         // Only update user if ID changed (shouldn't happen, but guard anyway)
         if (userIdChanged) {

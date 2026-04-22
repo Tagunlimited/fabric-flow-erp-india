@@ -22,6 +22,36 @@ export interface SidebarPermissions {
   isAdmin: boolean; // Whether the current user is an admin
 }
 
+const SIDEBAR_CACHE_TTL_MS = 5 * 60 * 1000;
+const sharedPermissionsCache = new Map<string, { timestamp: number; data: SidebarPermissions }>();
+const sharedPermissionsInflight = new Map<string, Promise<SidebarPermissions>>();
+const SIDEBAR_PERMISSIONS_SESSION_KEY = 'sidebar_permissions_cache_v1';
+
+function readSessionPermissionsCache(userId: string): { timestamp: number; data: SidebarPermissions } | null {
+  try {
+    const raw = sessionStorage.getItem(SIDEBAR_PERMISSIONS_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, { timestamp: number; data: SidebarPermissions }>;
+    const entry = parsed[userId];
+    if (!entry) return null;
+    if (Date.now() - entry.timestamp > SIDEBAR_CACHE_TTL_MS) return null;
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionPermissionsCache(userId: string, entry: { timestamp: number; data: SidebarPermissions }) {
+  try {
+    const raw = sessionStorage.getItem(SIDEBAR_PERMISSIONS_SESSION_KEY);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, { timestamp: number; data: SidebarPermissions }>) : {};
+    parsed[userId] = entry;
+    sessionStorage.setItem(SIDEBAR_PERMISSIONS_SESSION_KEY, JSON.stringify(parsed));
+  } catch {
+    // non-blocking cache write
+  }
+}
+
 export function useSidebarPermissions() {
   const [permissions, setPermissions] = useState<SidebarPermissions>({
     items: [],
@@ -54,17 +84,79 @@ export function useSidebarPermissions() {
     
     // Prevent duplicate fetches for the same user (unless forced)
     if (!forceRefresh && lastUserIdRef.current === user.id && initialLoadRef.current) {
-      console.log('⏭️ Skipping permissions fetch - already loaded for user:', user.id);
       return;
+    }
+
+    if (!forceRefresh) {
+      const sharedCached = sharedPermissionsCache.get(user.id);
+      if (sharedCached && Date.now() - sharedCached.timestamp < SIDEBAR_CACHE_TTL_MS) {
+        setPermissions(sharedCached.data);
+        initialLoadRef.current = true;
+        lastUserIdRef.current = user.id;
+        permissionsCacheRef.current = {
+          userId: user.id,
+          timestamp: sharedCached.timestamp,
+          data: sharedCached.data
+        };
+        return;
+      }
+      const sessionCached = readSessionPermissionsCache(user.id);
+      if (sessionCached) {
+        sharedPermissionsCache.set(user.id, sessionCached);
+        setPermissions(sessionCached.data);
+        initialLoadRef.current = true;
+        lastUserIdRef.current = user.id;
+        permissionsCacheRef.current = {
+          userId: user.id,
+          timestamp: sessionCached.timestamp,
+          data: sessionCached.data
+        };
+        return;
+      }
     }
     
     // Prevent concurrent fetches
     if (isFetchingRef.current) {
-      console.log('⏭️ Skipping permissions fetch - already in progress');
       return;
     }
     
+    if (!forceRefresh) {
+      const inflight = sharedPermissionsInflight.get(user.id);
+      if (inflight) {
+        const data = await inflight;
+        setPermissions(data);
+        initialLoadRef.current = true;
+        lastUserIdRef.current = user.id;
+        permissionsCacheRef.current = {
+          userId: user.id,
+          timestamp: Date.now(),
+          data
+        };
+        return;
+      }
+    }
+
     isFetchingRef.current = true;
+
+    const finalizePermissions = (data: SidebarPermissions): SidebarPermissions => {
+      setPermissions(data);
+      if (user?.id) {
+        const now = Date.now();
+        initialLoadRef.current = true;
+        lastUserIdRef.current = user.id;
+        permissionsCacheRef.current = {
+          userId: user.id,
+          timestamp: now,
+          data
+        };
+        const entry = { timestamp: now, data };
+        sharedPermissionsCache.set(user.id, entry);
+        writeSessionPermissionsCache(user.id, entry);
+      }
+      return data;
+    };
+
+    const runFetch = async (): Promise<SidebarPermissions> => {
 
     try {
       setPermissions(prev => ({ ...prev, loading: true, error: null }));
@@ -97,27 +189,27 @@ export function useSidebarPermissions() {
           permissionsSetup: false,
           isAdmin: false
         }));
-        return;
+        return {
+          items: [],
+          loading: false,
+          error: 'Failed to fetch user profile',
+          permissionsSetup: false,
+          isAdmin: false
+        };
       }
 
       // If user is admin (pre-configured or by profile), bypass all permission checks
       // The sidebar will use static items for admin users
       // IMPORTANT: Set permissionsSetup to false so PermissionAwareRedirect bypasses the check
       if (isAdminUser) {
-        console.log('👑 Admin user - bypassing permission system', { 
-          isPreConfiguredAdmin, 
-          isAdminByProfile, 
-          userEmail: user?.email,
-          profileRole: (profile as any)?.role
-        });
-        setPermissions({
+        const adminPermissions: SidebarPermissions = {
           items: [],
           loading: false,
           error: null,
           permissionsSetup: false, // Set to false so redirect logic bypasses permission check
           isAdmin: true
-        });
-        return;
+        };
+        return finalizePermissions(adminPermissions);
       }
 
       // Get user-specific sidebar permissions (overrides)
@@ -139,7 +231,13 @@ export function useSidebarPermissions() {
           permissionsSetup: false,
           isAdmin: false
         }));
-        return;
+        return finalizePermissions({
+          items: [],
+          loading: false,
+          error: 'Failed to fetch user permissions',
+          permissionsSetup: false,
+          isAdmin: false
+        });
       }
 
       // Check if user has any explicit user-specific permissions (overrides)
@@ -151,11 +249,8 @@ export function useSidebarPermissions() {
       
       if (hasUserOverrides) {
         // User has explicit permissions - ONLY show those, ignore role permissions
-        console.log('User has explicit permissions - using only user-specific permissions');
-        console.log('User permissions count:', userPermissions?.length);
         (userPermissions as any)?.forEach((perm: any) => {
           if (perm.sidebar_item && perm.can_view) {
-            console.log('Adding permission:', perm.sidebar_item.title, perm.sidebar_item.url, 'Parent:', perm.sidebar_item.parent_id);
             effectivePermissions.set(perm.sidebar_item.id, {
               ...perm.sidebar_item,
               can_view: perm.can_view,
@@ -164,7 +259,6 @@ export function useSidebarPermissions() {
             });
           }
         });
-        console.log('Effective permissions after user overrides:', effectivePermissions.size);
       } else {
         // No user overrides - use role-based permissions
       // Get role-based sidebar permissions
@@ -191,7 +285,6 @@ export function useSidebarPermissions() {
           rolePermissions = rolePerms;
           rolePermsError = rolePermsErr;
         } else {
-          console.log('No role found for:', (profile as any).role);
           // If no role found, just continue without role permissions
           rolePermissions = [];
           rolePermsError = null;
@@ -210,7 +303,13 @@ export function useSidebarPermissions() {
           permissionsSetup: false,
           isAdmin: false
         }));
-        return;
+        return finalizePermissions({
+          items: [],
+          loading: false,
+          error: 'Failed to fetch role permissions',
+          permissionsSetup: false,
+          isAdmin: false
+        });
       }
 
         // Use only role permissions
@@ -245,7 +344,13 @@ export function useSidebarPermissions() {
             permissionsSetup: false,
             isAdmin: false
           }));
-          return;
+          return finalizePermissions({
+            items: [],
+            loading: false,
+            error: 'Failed to check sidebar items',
+            permissionsSetup: false,
+            isAdmin: false
+          });
         }
         
         // If there are sidebar items but no permissions, this means the user has no access
@@ -254,8 +359,6 @@ export function useSidebarPermissions() {
           const isPreConfiguredAdmin = user?.email === 'ecom@tagunlimitedclothing.com';
           const isAdminByProfile = (profile as any)?.role === 'admin';
           if (isPreConfiguredAdmin || isAdminByProfile) {
-            console.log('Admin user with no specific permissions - granting access to all items');
-            
             // Get all sidebar items for admin
             const { data: allItems, error: allItemsErr } = await supabase
               .from('sidebar_items')
@@ -265,14 +368,14 @@ export function useSidebarPermissions() {
               
             if (allItemsErr) {
               console.error('Error fetching all sidebar items for admin:', allItemsErr);
-              setPermissions({
+              const fallbackAdminPerms: SidebarPermissions = {
                 items: [],
                 loading: false,
                 error: 'Failed to fetch sidebar items',
                 permissionsSetup: false, // Admin should bypass permission check
                 isAdmin: true
-              });
-              return;
+              };
+              return finalizePermissions(fallbackAdminPerms);
             }
             
             // Organize items into hierarchy for admin
@@ -309,36 +412,34 @@ export function useSidebarPermissions() {
                 }));
             };
             
-            setPermissions({
+            const fullAdminPerms: SidebarPermissions = {
               items: sortItems(rootItems),
               loading: false,
               error: null,
               permissionsSetup: true,
               isAdmin: true
-            });
-            return;
+            };
+            return finalizePermissions(fullAdminPerms);
           } else {
-            console.log('Non-admin user has no sidebar permissions - showing empty sidebar');
-            setPermissions({
+            const emptyPerms: SidebarPermissions = {
               items: [],
               loading: false,
               error: null,
               permissionsSetup: true,
               isAdmin: false
-            });
-            return;
+            };
+            return finalizePermissions(emptyPerms);
           }
         } else {
           // No sidebar items exist at all, fall back to static sidebar
-          console.log('No sidebar items in database, falling back to static sidebar');
-          setPermissions({
+          const staticFallbackPerms: SidebarPermissions = {
             items: [],
             loading: false,
             error: null,
             permissionsSetup: false,
             isAdmin: false
-          });
-          return;
+          };
+          return finalizePermissions(staticFallbackPerms);
         }
       }
 
@@ -432,17 +533,6 @@ export function useSidebarPermissions() {
 
       const finalItems = sortItems(rootItems);
       
-      // Debug logging
-      console.log('🔍 Sidebar permissions final result:', {
-          userRole: (profile as any)?.role,
-          userPermissionsCount: userPermissions?.length || 0,
-        effectivePermissionsCount: effectivePermissions.size,
-        itemsMapSize: itemsMap.size,
-        rootItemsCount: rootItems.length,
-        finalItemsCount: finalItems.length,
-        finalItems: finalItems.map(item => ({ title: item.title, url: item.url, childrenCount: item.children?.length || 0 }))
-      });
-
       const permissionsData: SidebarPermissions = {
         items: finalItems,
         loading: false,
@@ -451,28 +541,29 @@ export function useSidebarPermissions() {
         isAdmin: false
       };
       
-      setPermissions(permissionsData);
-      
-      // Mark as fetched for this user - complete cache with timestamp
-      initialLoadRef.current = true;
-      lastUserIdRef.current = user.id;
-      permissionsCacheRef.current = {
-        userId: user.id,
-        timestamp: Date.now(),
-        data: permissionsData
-      };
+      return finalizePermissions(permissionsData);
 
     } catch (error) {
       console.error('Error in useSidebarPermissions:', error);
-      setPermissions(prev => ({ 
-        ...prev, 
-        loading: false, 
+      const failedPermissions: SidebarPermissions = {
+        items: [],
+        loading: false,
         error: 'An unexpected error occurred',
         permissionsSetup: false,
         isAdmin: false
-      }));
+      };
+      return finalizePermissions(failedPermissions);
     } finally {
       isFetchingRef.current = false;
+    }
+    };
+
+    const fetchPromise = runFetch();
+    sharedPermissionsInflight.set(user.id, fetchPromise);
+    try {
+      await fetchPromise;
+    } finally {
+      sharedPermissionsInflight.delete(user.id);
     }
   };
 
@@ -493,27 +584,41 @@ export function useSidebarPermissions() {
     const isSameUser = lastUserIdRef.current === user.id;
     const alreadyLoaded = initialLoadRef.current;
     const cache = permissionsCacheRef.current;
+    const sharedCache = sharedPermissionsCache.get(user.id);
+    const sessionCache = readSessionPermissionsCache(user.id);
+    if (sessionCache && !sharedCache) {
+      sharedPermissionsCache.set(user.id, sessionCache);
+    }
+    const effectiveSharedCache = sharedPermissionsCache.get(user.id);
     
     // Check if we have valid cached data (within 5 minutes)
     const cacheValid = cache.userId === user.id && 
                       cache.data && 
                       Date.now() - cache.timestamp < 5 * 60 * 1000; // 5 min cache
+    const sharedCacheValid = !!effectiveSharedCache && Date.now() - effectiveSharedCache.timestamp < SIDEBAR_CACHE_TTL_MS;
     
     // If we have valid cache, use it instead of fetching
     if (cacheValid) {
-      console.log('💾 Using cached permissions for user:', user.id, {
-        cacheAge: Math.round((Date.now() - cache.timestamp) / 1000) + 's'
-      });
       setPermissions(cache.data!);
       initialLoadRef.current = true;
       lastUserIdRef.current = user.id;
+      return;
+    }
+    if (sharedCacheValid) {
+      setPermissions(effectiveSharedCache!.data);
+      initialLoadRef.current = true;
+      lastUserIdRef.current = user.id;
+      permissionsCacheRef.current = {
+        userId: user.id,
+        timestamp: effectiveSharedCache!.timestamp,
+        data: effectiveSharedCache!.data
+      };
       return;
     }
     
     // If we already loaded permissions for this same user, skip completely
     // This prevents ANY re-fetching when switching tabs
     if (alreadyLoaded && isSameUser) {
-      console.log('⏭️ Skipping permissions fetch - already loaded for user:', user.id);
       return;
     }
     
@@ -524,12 +629,6 @@ export function useSidebarPermissions() {
     const userChanged = !isSameUser;
     
     if (isFirstLoad || userChanged) {
-      console.log('🔄 Fetching permissions for user:', user.id, {
-        firstLoad: isFirstLoad,
-        userChanged: userChanged,
-        previousUser: lastUserIdRef.current
-      });
-      
       // Update last user ID to prevent duplicate calls for same user
       // But don't mark as loaded until fetch succeeds
       lastUserIdRef.current = user.id;

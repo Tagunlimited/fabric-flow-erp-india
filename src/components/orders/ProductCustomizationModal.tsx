@@ -486,7 +486,7 @@ export function ProductCustomizationModal({
   if (loading) {
     return (
       <Dialog open={isOpen} onOpenChange={handleClose}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Product Customization</DialogTitle>
           </DialogHeader>
@@ -500,12 +500,12 @@ export function ProductCustomizationModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>Product Customization</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-6">
+        <div className="space-y-6 overflow-y-auto pr-1 flex-1 min-h-0">
           {/* Available Parts */}
           {parts.length === 0 ? (
             <div className="space-y-4">
@@ -1052,7 +1052,7 @@ export function ProductCustomizationModal({
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="pt-3 border-t bg-background">
           <Button variant="outline" onClick={handleClose}>
             Cancel
           </Button>

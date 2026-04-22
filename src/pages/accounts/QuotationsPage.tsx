@@ -34,6 +34,17 @@ interface Order {
   calculatedAmount?: number; // Store calculated amount with size-based pricing
 }
 
+interface ManualQuotation {
+  id: string;
+  quotation_number: string | null;
+  quotation_date: string | null;
+  total_amount: number | null;
+  status: string | null;
+  converted_order_id?: string | null;
+  customer_id: string | null;
+  customer?: { company_name?: string | null; phone?: string | null } | null;
+}
+
 type QuotationsColumnFilters = {
   order_number: string;
   customer: string;
@@ -70,6 +81,17 @@ function includesFilter(filterRaw: string, value: string): boolean {
   const f = filterRaw.trim().toLowerCase();
   if (!f) return true;
   return value.toLowerCase().includes(f);
+}
+
+function isManualQuotationSchemaMissing(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { message?: string; details?: string };
+  const msg = `${e.message || ''} ${e.details || ''}`.toLowerCase();
+  return (
+    msg.includes("could not find the table 'public.manual_quotations'") ||
+    msg.includes("relation \"public.manual_quotations\" does not exist") ||
+    msg.includes('manual_quotations')
+  );
 }
 
 function ColumnFilterTrigger({
@@ -121,11 +143,14 @@ export default function QuotationsPage() {
   const [employeeMap, setEmployeeMap] = useState<Record<string, { full_name: string; avatar_url?: string }>>({});
   const [columnFilters, setColumnFilters] = useState<QuotationsColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
   const [filterDialogColumn, setFilterDialogColumn] = useState<QuotationsFilterColumnKey | null>(null);
+  const [manualQuotations, setManualQuotations] = useState<ManualQuotation[]>([]);
+  const [manualSchemaUnavailable, setManualSchemaUnavailable] = useState(false);
   const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
   const filterDialogMeta = filterDialogColumn ? FILTER_META[filterDialogColumn] : null;
 
   useEffect(() => {
     fetchOrders();
+    fetchManualQuotations();
   }, [showCompleted]);
 
   const fetchOrders = async () => {
@@ -220,6 +245,46 @@ export default function QuotationsPage() {
     }
   };
 
+  const fetchManualQuotations = async () => {
+    if (manualSchemaUnavailable) return;
+    try {
+      const { data, error } = await supabase
+        .from('manual_quotations' as any)
+        .select('id, quotation_number, quotation_date, total_amount, status, converted_order_id, customer_id')
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (error) throw error;
+
+      const rows = (data as any[]) || [];
+      const customerIds = Array.from(new Set(rows.map((row) => row.customer_id).filter(Boolean)));
+      let customerMap: Record<string, { company_name?: string | null; phone?: string | null }> = {};
+      if (customerIds.length > 0) {
+        const { data: customerRows } = await supabase
+          .from('customers')
+          .select('id, company_name, phone')
+          .in('id', customerIds as any);
+        (customerRows || []).forEach((c: any) => {
+          customerMap[c.id] = { company_name: c.company_name, phone: c.phone };
+        });
+      }
+
+      setManualQuotations(rows.map((row) => ({
+        ...row,
+        customer: row.customer_id ? customerMap[row.customer_id] || null : null,
+      })));
+    } catch (error) {
+      if (isManualQuotationSchemaMissing(error)) {
+        setManualSchemaUnavailable(true);
+        setManualQuotations([]);
+        toast.error('Manual quotation tables are not migrated yet. Please run latest Supabase migrations.');
+        return;
+      }
+      console.error('Failed to load manual quotations', error);
+      setManualQuotations([]);
+    }
+  };
+
   const filteredOrders = useMemo(() => {
     return orders.filter((order) => {
       const mobile = getCustomerMobile(order.customer as any) || '';
@@ -263,6 +328,13 @@ export default function QuotationsPage() {
                   </SelectContent>
                 </Select>
                 <Button variant="outline" size="sm" onClick={fetchOrders}>Refresh</Button>
+                <Button
+                  size="sm"
+                  disabled={manualSchemaUnavailable}
+                  onClick={() => navigate('/accounts/manual-quotations/new')}
+                >
+                  Manual Quotation
+                </Button>
               </div>
             </div>
           </CardHeader>
@@ -428,6 +500,82 @@ export default function QuotationsPage() {
                   Clear column filters
                 </Button>
               </div>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Manual Quotations</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {manualSchemaUnavailable ? (
+              <p className="text-sm text-muted-foreground">
+                Manual quotation schema is not available yet. Run latest Supabase migrations and refresh.
+              </p>
+            ) : (
+            <div className="overflow-x-auto">
+              <Table className="min-w-[760px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[180px]">Quotation #</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead className="w-[140px]">Mobile</TableHead>
+                    <TableHead className="w-[130px]">Date</TableHead>
+                    <TableHead className="w-[140px] text-right">Amount</TableHead>
+                    <TableHead className="w-[120px]">Status</TableHead>
+                    <TableHead className="w-[110px]">Source</TableHead>
+                    <TableHead className="w-[200px]">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {manualQuotations.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8}>No manual quotations yet.</TableCell>
+                    </TableRow>
+                  ) : (
+                    manualQuotations.map((q) => (
+                      <TableRow key={q.id}>
+                        <TableCell className="font-medium">{q.quotation_number || '-'}</TableCell>
+                        <TableCell>{q.customer?.company_name || '-'}</TableCell>
+                        <TableCell className="font-mono text-xs">{q.customer?.phone || '—'}</TableCell>
+                        <TableCell>
+                          {q.quotation_date
+                            ? new Date(q.quotation_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })
+                            : '-'}
+                        </TableCell>
+                        <TableCell className="text-right">{formatCurrency(Number(q.total_amount || 0))}</TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">{q.status || 'draft'}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">manual</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => navigate(`/accounts/manual-quotations/${q.id}`)}
+                            >
+                              <Eye className="w-4 h-4 mr-1" /> View
+                            </Button>
+                            {!q.converted_order_id && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => navigate(`/accounts/manual-quotations/${q.id}/edit`)}
+                              >
+                                Edit
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
             )}
           </CardContent>
         </Card>

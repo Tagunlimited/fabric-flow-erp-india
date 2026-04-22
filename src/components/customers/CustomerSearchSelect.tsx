@@ -53,6 +53,7 @@ export function CustomerSearchSelect({
   const open = dialogState?.open ?? false;
   const showCreateCustomer = dialogState?.showCreateCustomer ?? false;
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [resolvedSelectedCustomer, setResolvedSelectedCustomer] = useState<Customer | null>(null);
   const [customerLifetimeValues, setCustomerLifetimeValues] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -180,7 +181,31 @@ export function CustomerSearchSelect({
     }
   };
 
-  const selectedCustomer = customers.find(customer => customer.id === value);
+  const selectedCustomer = customers.find(customer => customer.id === value) || resolvedSelectedCustomer;
+
+  useEffect(() => {
+    const resolveSelectedCustomer = async () => {
+      if (!value) {
+        setResolvedSelectedCustomer(null);
+        return;
+      }
+      const fromList = customers.find((customer) => customer.id === value);
+      if (fromList) {
+        setResolvedSelectedCustomer(fromList);
+        return;
+      }
+      const { data, error } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('id', value)
+        .single();
+      if (!error && data) {
+        setResolvedSelectedCustomer(data as unknown as Customer);
+        onCustomerSelect?.((data as unknown as Customer) || null);
+      }
+    };
+    void resolveSelectedCustomer();
+  }, [value, customers]);
 
   const handleSelect = (customerId: string) => {
     const customer = customers.find(c => c.id === customerId);

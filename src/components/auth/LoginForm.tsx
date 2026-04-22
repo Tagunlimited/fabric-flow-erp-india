@@ -112,11 +112,9 @@ export function LoginForm() {
         // Clear redirect flag to allow fresh redirect on login
         sessionStorage.removeItem('permissionRedirectDone');
         
-        // Use window.location.href for reliable navigation after login
-        // This ensures a full page reload which properly initializes auth state
-        // and avoids race conditions with React Router navigation
+        // Use router navigation to avoid full app remount on login.
         setTimeout(() => {
-          window.location.href = '/';
+          navigate('/', { replace: true });
         }, 500); // Small delay to ensure toast is visible
       }
     } catch (err: any) {

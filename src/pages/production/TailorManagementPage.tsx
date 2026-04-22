@@ -437,13 +437,13 @@ const TailorManagementPage = () => {
     }
   };
 
-  const getTailorTypeLabel = (type: string) => {
+  function getTailorTypeLabel(type: string) {
     switch (type) {
       case 'single_needle': return 'Single Needle';
       case 'overlock_flatlock': return 'Overlock/Flatlock';
       default: return type;
     }
-  };
+  }
 
   const getBatchStatusColor = (status: string) => {
     switch (status) {
@@ -537,7 +537,7 @@ const TailorManagementPage = () => {
         {/* View Toggle */}
         <label
           htmlFor="tailor-management-view-switch"
-          className="orders-view-switch"
+          className="orders-view-switch tailor-view-switch"
           aria-label="Switch between tailor list and batch list"
         >
           <input

@@ -22,8 +22,6 @@ type GRN = {
   total_items_received: number;
   total_items_approved: number;
   total_items_rejected: number;
-  total_amount_received: number;
-  total_amount_approved: number;
   created_at: string;
   // Joined data
   po_number?: string;
@@ -85,11 +83,6 @@ const GRNRow = memo(function GRNRow({
     );
   };
 
-  const getApprovalRate = () => {
-    if (grn.total_items_received === 0) return 0;
-    return Math.round((grn.total_items_approved / grn.total_items_received) * 100);
-  };
-
   return (
     <TableRow className="hover:bg-muted/50 transition-colors">
       <TableCell className="font-medium">
@@ -127,14 +120,6 @@ const GRNRow = memo(function GRNRow({
           </div>
         </div>
       </TableCell>
-      <TableCell>
-        <div className="text-sm">
-          <div className="font-medium">₹{grn.total_amount_received?.toFixed(2) || '0.00'}</div>
-          <div className="text-xs text-muted-foreground">
-            <span className="text-green-600">{getApprovalRate()}% approved</span>
-          </div>
-        </div>
-      </TableCell>
       <TableCell>{statusBadge(grn.status)}</TableCell>
       <TableCell>
         <div className="flex gap-1">
@@ -165,7 +150,6 @@ const GRNList = memo(function GRNList() {
     supplier: '',
     grn_date: '',
     items: '',
-    amount: '',
     status: '',
   });
   const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
@@ -199,8 +183,6 @@ const GRNList = memo(function GRNList() {
           total_items_received: grn.total_items_received || 0,
           total_items_approved: grn.total_items_approved || 0,
           total_items_rejected: grn.total_items_rejected || 0,
-          total_amount_received: grn.total_amount_received || 0,
-          total_amount_approved: grn.total_amount_approved || 0,
           created_at: grn.created_at,
           po_number: grn.purchase_orders?.po_number,
           supplier_name: grn.supplier_master?.supplier_name,
@@ -230,7 +212,6 @@ const GRNList = memo(function GRNList() {
       const matchesStatus = statusFilter === 'all' || grn.status === statusFilter;
       const grnDateText = grn.grn_date ? format(new Date(grn.grn_date), 'dd MMM yyyy') : '';
       const itemsText = `${grn.total_items_received} ${grn.total_items_approved} ${grn.total_items_rejected}`;
-      const amountText = `₹${grn.total_amount_received?.toFixed(2) || '0.00'}`;
       const statusText = grn.status.replace('_', ' ');
       const supplierText = `${grn.supplier_name || ''} ${grn.supplier_code || ''}`;
 
@@ -240,7 +221,6 @@ const GRNList = memo(function GRNList() {
         includesFilter(supplierText, columnFilters.supplier) &&
         includesFilter(grnDateText, columnFilters.grn_date) &&
         includesFilter(itemsText, columnFilters.items) &&
-        includesFilter(amountText, columnFilters.amount) &&
         includesFilter(statusText, columnFilters.status);
 
       return matchesSearch && matchesStatus && matchesColumns;
@@ -426,7 +406,6 @@ const GRNList = memo(function GRNList() {
                     supplier: '',
                     grn_date: '',
                     items: '',
-                    amount: '',
                     status: '',
                   })
                 }
@@ -458,7 +437,6 @@ const GRNList = memo(function GRNList() {
                     <TableHead><div className="flex items-center gap-1">Supplier<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.supplier ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('supplier')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     <TableHead><div className="flex items-center gap-1">GRN Date<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.grn_date ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('grn_date')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     <TableHead><div className="flex items-center gap-1">Items<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.items ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('items')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                    <TableHead><div className="flex items-center gap-1">Amount<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.amount ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('amount')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     <TableHead><div className="flex items-center gap-1">Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>

@@ -10,7 +10,6 @@ interface FormPersistenceContextType {
   clearFormData: (formKey: string) => void;
   clearAllFormData: () => void;
   hasFormData: (formKey: string) => boolean;
-  setIsNavigating: (navigating: boolean) => void;
 }
 
 const FormPersistenceContext = createContext<FormPersistenceContextType | undefined>(undefined);
@@ -21,7 +20,6 @@ interface FormPersistenceProviderProps {
 
 export function FormPersistenceProvider({ children }: FormPersistenceProviderProps) {
   const [formData, setFormData] = useState<FormData>({});
-  const [isNavigating, setIsNavigating] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
 
   // Load saved form data from localStorage on mount - run ONLY once
@@ -59,7 +57,7 @@ export function FormPersistenceProvider({ children }: FormPersistenceProviderPro
   // Save form data to localStorage whenever it changes (debounced)
   // Update the save effect to respect initialization
   useEffect(() => {
-    if (!isInitialized || isNavigating) return; // Don't save during navigation or before initialization
+    if (!isInitialized) return;
     
     const timeoutId = setTimeout(() => {
       try {
@@ -70,7 +68,7 @@ export function FormPersistenceProvider({ children }: FormPersistenceProviderPro
     }, 500); // Debounce saves by 500ms
 
     return () => clearTimeout(timeoutId);
-  }, [formData, isInitialized, isNavigating]);
+  }, [formData, isInitialized]);
 
   const saveFormData = useCallback((formKey: string, data: any) => {
     setFormData(prev => ({
@@ -124,8 +122,7 @@ export function FormPersistenceProvider({ children }: FormPersistenceProviderPro
     getFormData,
     clearFormData,
     clearAllFormData,
-    hasFormData,
-    setIsNavigating
+    hasFormData
   };
 
   return (
