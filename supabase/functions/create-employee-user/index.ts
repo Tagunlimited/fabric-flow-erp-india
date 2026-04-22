@@ -91,8 +91,13 @@ serve(async (req) => {
       'cutting master': 'cutting master',
       'customer': 'customer',
     }
-    // Default to a safe role
-    const roleEnum = roleMap[requestedRole] || 'sales manager'
+    const roleEnum = roleMap[requestedRole]
+    if (!roleEnum) {
+      return new Response(
+        JSON.stringify({ success: false, error: `Invalid role: ${role}` }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
     // Check for duplicate email to provide a clearer error
     try {
@@ -109,35 +114,17 @@ serve(async (req) => {
             user_id: existing.id,
             full_name: fullName,
             email: email,
-            role: (requestedRole === 'admin') ? 'admin' : 'sales manager',
+            role: roleEnum,
             phone: phone || null,
             department: department || null,
             status: 'approved'
           }, { onConflict: 'user_id' })
 
         if (profileErr) {
-          // Try again with safe role if enum mismatch
-          const msg = (profileErr.message || '').toLowerCase();
-          if (msg.includes('enum')) {
-            const retry = await supabase
-              .from('profiles')
-              .upsert({
-                user_id: existing.id,
-                full_name: fullName,
-                email: email,
-                role: 'admin',
-                phone: phone || null,
-                department: department || null,
-                status: 'approved'
-              }, { onConflict: 'user_id' })
-            profileErr = retry.error as any;
-          }
-          if (profileErr) {
-            return new Response(
-              JSON.stringify({ success: false, error: `Failed to update user profile: ${profileErr.message}` }),
-              { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-            )
-          }
+          return new Response(
+            JSON.stringify({ success: false, error: `Failed to update user profile: ${profileErr.message}` }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          )
         }
 
         // Link role via roles table
@@ -189,38 +176,19 @@ serve(async (req) => {
         full_name: fullName,
         email: email,
         // Keep profile.role only for coarse routing (admin vs non-admin)
-        role: (requestedRole === 'admin') ? 'admin' : 'sales manager',
+        role: roleEnum,
         phone: phone || null,
         department: department || null,
         status: 'approved'
       }, { onConflict: 'user_id' })
 
     if (profileCreateError) {
-      // If enum mismatch, retry with admin role
-      const msg = (profileCreateError.message || '').toLowerCase()
-      if (msg.includes('invalid input value for enum') || msg.includes('enum') || msg.includes('user_role')) {
-        const retry = await supabase
-          .from('profiles')
-          .upsert({
-            user_id: newUser.user.id,
-            full_name: fullName,
-            email: email,
-            role: 'admin',
-            phone: phone || null,
-            department: department || null,
-            status: 'approved'
-          }, { onConflict: 'user_id' })
-        profileCreateError = retry.error as any
-      }
-
-      if (profileCreateError) {
-        // Clean up the created user to avoid orphans
-        await supabase.auth.admin.deleteUser(newUser.user.id)
-        return new Response(
-          JSON.stringify({ success: false, error: `Failed to create user profile: ${profileCreateError.message}` }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        )
-      }
+      // Clean up the created user to avoid orphans
+      await supabase.auth.admin.deleteUser(newUser.user.id)
+      return new Response(
+        JSON.stringify({ success: false, error: `Failed to create user profile: ${profileCreateError.message}` }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
     // Link role from roles table to the user via user_roles

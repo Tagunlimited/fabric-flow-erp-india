@@ -45,6 +45,7 @@ type ArRow = {
   order_number: string;
   order_date: string;
   status: string;
+  sales_manager: string | null;
   customer_id: string;
   customer_name: string;
   calculatedTotal: number;
@@ -58,6 +59,7 @@ type ArRow = {
 type ReceivablesColumnFilters = {
   order: string;
   customer: string;
+  sales_manager: string;
   order_total: string;
   received: string;
   pending: string;
@@ -69,6 +71,7 @@ type ReceivablesColumnFilters = {
 const EMPTY_COLUMN_FILTERS: ReceivablesColumnFilters = {
   order: '',
   customer: '',
+  sales_manager: '',
   order_total: '',
   received: '',
   pending: '',
@@ -81,6 +84,7 @@ type ReceivablesFilterColumnKey = keyof ReceivablesColumnFilters;
 const FILTER_META: Record<ReceivablesFilterColumnKey, { title: string; description: string; placeholder: string }> = {
   order: { title: 'Filter by order', description: 'Match order number.', placeholder: 'e.g. TUC/' },
   customer: { title: 'Filter by customer', description: 'Match customer name.', placeholder: 'e.g. Rajiv' },
+  sales_manager: { title: 'Filter by sales manager', description: 'Match manager name.', placeholder: 'e.g. Monika' },
   order_total: { title: 'Filter by order total', description: 'Match formatted amount.', placeholder: 'e.g. 20000' },
   received: { title: 'Filter by received', description: 'Match received amount.', placeholder: 'e.g. 15000' },
   pending: { title: 'Filter by pending', description: 'Match pending amount.', placeholder: 'e.g. 5000' },
@@ -155,6 +159,8 @@ export default function ReceivablesPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ArRow[]>([]);
+  const [employeeMap, setEmployeeMap] = useState<Record<string, { full_name: string; avatar_url?: string }>>({});
+  const [selectedSalesManagerId, setSelectedSalesManagerId] = useState<string | null>(null);
   const [showCompleted, setShowCompleted] = useState<'no' | 'yes'>('no');
   const [columnFilters, setColumnFilters] = useState<ReceivablesColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
   const [filterDialogColumn, setFilterDialogColumn] = useState<ReceivablesFilterColumnKey | null>(null);
@@ -182,6 +188,7 @@ export default function ReceivablesPage() {
       if (error) throw error;
 
       const list = (data || []) as any[];
+      const salesManagerIds = Array.from(new Set(list.map((o) => o.sales_manager).filter(Boolean)));
       const orderIds = list.map((o) => o.id).filter(Boolean);
       const orderNumbers = list.map((o) => o.order_number).filter(Boolean);
 
@@ -267,6 +274,7 @@ export default function ReceivablesPage() {
               order_number: order.order_number,
               order_date: order.order_date,
               status: order.status,
+              sales_manager: order.sales_manager ?? null,
               customer_id: order.customer_id,
               customer_name: order.customer?.company_name || '—',
               calculatedTotal,
@@ -287,6 +295,7 @@ export default function ReceivablesPage() {
               order_number: order.order_number,
               order_date: order.order_date,
               status: order.status,
+              sales_manager: order.sales_manager ?? null,
               customer_id: order.customer_id,
               customer_name: order.customer?.company_name || '—',
               calculatedTotal: fallbackAmount,
@@ -299,6 +308,24 @@ export default function ReceivablesPage() {
           }
         })
       );
+
+      if (salesManagerIds.length > 0) {
+        const { data: emps, error: empErr } = await supabase
+          .from('employees')
+          .select('id, full_name, avatar_url')
+          .in('id', salesManagerIds as any);
+        if (!empErr && emps) {
+          const map: Record<string, { full_name: string; avatar_url?: string }> = {};
+          (emps as any[]).forEach((e) => {
+            map[e.id] = { full_name: e.full_name, avatar_url: e.avatar_url };
+          });
+          setEmployeeMap(map);
+        } else {
+          setEmployeeMap({});
+        }
+      } else {
+        setEmployeeMap({});
+      }
 
       setRows(enriched.filter((r) => r.pending > 0));
     } catch (e) {
@@ -350,6 +377,28 @@ export default function ReceivablesPage() {
       }));
   }, [rows]);
 
+  const bySalesManager = useMemo(() => {
+    const m = new Map<string, { id: string; name: string; pending: number }>();
+    for (const r of rows) {
+      const managerId = r.sales_manager || '__unassigned__';
+      const managerName =
+        r.sales_manager && employeeMap[r.sales_manager]?.full_name
+          ? employeeMap[r.sales_manager]!.full_name
+          : 'Unassigned';
+      const cur = m.get(managerId) || { id: managerId, name: managerName, pending: 0 };
+      cur.pending += r.pending;
+      m.set(managerId, cur);
+    }
+    return [...m.values()]
+      .sort((a, b) => b.pending - a.pending)
+      .slice(0, 12)
+      .map((x) => ({
+        id: x.id,
+        name: x.name.length > 22 ? `${x.name.slice(0, 20)}…` : x.name,
+        pending: x.pending,
+      }));
+  }, [rows, employeeMap]);
+
   const aging = useMemo(() => {
     const b: Record<string, number> = {
       'No due date': 0,
@@ -375,10 +424,16 @@ export default function ReceivablesPage() {
 
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
+      if (selectedSalesManagerId) {
+        const managerId = r.sales_manager || '__unassigned__';
+        if (managerId !== selectedSalesManagerId) return false;
+      }
       const credit = r.hasCreditReceipt ? 'credit' : '';
+      const managerName = r.sales_manager ? employeeMap[r.sales_manager]?.full_name || '' : '';
       return (
         includesFilter(columnFilters.order, r.order_number || '') &&
         includesFilter(columnFilters.customer, r.customer_name || '') &&
+        includesFilter(columnFilters.sales_manager, managerName) &&
         includesFilter(columnFilters.order_total, formatCurrency(r.calculatedTotal)) &&
         includesFilter(columnFilters.received, formatCurrency(r.received)) &&
         includesFilter(columnFilters.pending, formatCurrency(r.pending)) &&
@@ -388,7 +443,7 @@ export default function ReceivablesPage() {
         includesFilter(columnFilters.credit, credit)
       );
     });
-  }, [rows, columnFilters]);
+  }, [rows, columnFilters, employeeMap, selectedSalesManagerId]);
 
   return (
     <ErpLayout>
@@ -467,7 +522,7 @@ export default function ReceivablesPage() {
           </Card>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Top customers by outstanding</CardTitle>
@@ -486,6 +541,56 @@ export default function ReceivablesPage() {
                       contentStyle={{ borderRadius: 8 }}
                     />
                     <Bar dataKey="pending" fill="hsl(214 88% 42%)" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+              <CardTitle className="text-base">Pending by sales manager</CardTitle>
+              {selectedSalesManagerId && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedSalesManagerId(null)}
+                  className="h-8 px-2"
+                >
+                  Clear
+                </Button>
+              )}
+            </CardHeader>
+            <CardContent className="h-[320px]">
+              {bySalesManager.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No data</p>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={bySalesManager} layout="vertical" margin={{ left: 8, right: 16 }}>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                    <XAxis type="number" tickFormatter={inrAxis} className="text-xs" />
+                    <YAxis type="category" dataKey="name" width={120} className="text-xs" />
+                    <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={{ borderRadius: 8 }} />
+                    <Bar
+                      dataKey="pending"
+                      radius={[0, 4, 4, 0]}
+                      onClick={(d: any) => {
+                        const id = d?.id as string | undefined;
+                        if (!id) return;
+                        setSelectedSalesManagerId((prev) => (prev === id ? null : id));
+                      }}
+                    >
+                      {bySalesManager.map((entry) => {
+                        const active = selectedSalesManagerId === entry.id;
+                        return (
+                          <Cell
+                            key={entry.id}
+                            fill={active ? 'hsl(214 88% 34%)' : 'hsl(214 88% 42%)'}
+                            cursor="pointer"
+                          />
+                        );
+                      })}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -537,6 +642,7 @@ export default function ReceivablesPage() {
                     <TableRow>
                       <TableHead><div className="flex items-center gap-1">Order<ColumnFilterTrigger active={!!columnFilters.order} ariaLabel="Filter order" onOpen={() => setFilterDialogColumn('order')} /></div></TableHead>
                       <TableHead><div className="flex items-center gap-1">Customer<ColumnFilterTrigger active={!!columnFilters.customer} ariaLabel="Filter customer" onOpen={() => setFilterDialogColumn('customer')} /></div></TableHead>
+                      <TableHead><div className="flex items-center gap-1">Sales Manager<ColumnFilterTrigger active={!!columnFilters.sales_manager} ariaLabel="Filter sales manager" onOpen={() => setFilterDialogColumn('sales_manager')} /></div></TableHead>
                       <TableHead className="text-right"><div className="flex items-center justify-end gap-1">Order total<ColumnFilterTrigger active={!!columnFilters.order_total} ariaLabel="Filter order total" onOpen={() => setFilterDialogColumn('order_total')} /></div></TableHead>
                       <TableHead className="text-right"><div className="flex items-center justify-end gap-1">Received<ColumnFilterTrigger active={!!columnFilters.received} ariaLabel="Filter received" onOpen={() => setFilterDialogColumn('received')} /></div></TableHead>
                       <TableHead className="text-right"><div className="flex items-center justify-end gap-1">Pending<ColumnFilterTrigger active={!!columnFilters.pending} ariaLabel="Filter pending" onOpen={() => setFilterDialogColumn('pending')} /></div></TableHead>
@@ -552,6 +658,22 @@ export default function ReceivablesPage() {
                       <TableRow key={r.id}>
                         <TableCell className="font-medium whitespace-nowrap">{r.order_number}</TableCell>
                         <TableCell>{r.customer_name}</TableCell>
+                        <TableCell>
+                          {r.sales_manager && employeeMap[r.sales_manager] ? (
+                            <div className="flex items-center gap-2">
+                              {employeeMap[r.sales_manager].avatar_url && (
+                                <img
+                                  src={employeeMap[r.sales_manager].avatar_url as string}
+                                  alt={employeeMap[r.sales_manager].full_name}
+                                  className="w-6 h-6 rounded-full object-cover"
+                                />
+                              )}
+                              <span>{employeeMap[r.sales_manager].full_name}</span>
+                            </div>
+                          ) : (
+                            '—'
+                          )}
+                        </TableCell>
                         <TableCell className="text-right">{formatCurrency(r.calculatedTotal)}</TableCell>
                         <TableCell className="text-right text-green-700">{formatCurrency(r.received)}</TableCell>
                         <TableCell className="text-right font-medium text-amber-700">

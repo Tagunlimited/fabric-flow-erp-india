@@ -696,7 +696,7 @@ export function EmployeeAccessManagement() {
         p_email: newUserData.email,
         p_password: newUserData.password,
         p_full_name: selectedEmployee.full_name,
-        p_role: 'employee', // Default role for employees
+        p_role: 'sales manager', // Default non-admin operational role
         p_phone: selectedEmployee.personal_phone || null,
         p_department: selectedEmployee.department || null
       });
@@ -719,7 +719,7 @@ export function EmployeeAccessManagement() {
                 full_name: selectedEmployee.full_name,
                 phone: selectedEmployee.personal_phone,
                 department: selectedEmployee.department,
-                role: 'employee',
+                role: 'sales manager',
                 status: 'approved',
                 email: newUserData.email
               } as any)
