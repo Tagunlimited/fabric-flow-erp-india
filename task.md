@@ -3,6 +3,41 @@
 This file tracks requested tasks completed in this workspace.
 I will keep appending new completed tasks with timestamped entries.
 
+## 2026-04-23 10:00:00 IST
+
+- Implemented Partial Cut/Assign rollout (Phase 1 + Phase 2) from approved feasibility plan:
+  - `src/components/production/DistributeQuantityDialog.tsx`
+    - Relaxed save validation to allow partial distribution saves.
+    - Kept strict oversubscription guard (`assigned <= available`) and added "at least one qty" guard.
+    - Added compatibility-safe insert for size distributions:
+      - primary path uses `assigned_quantity`,
+      - fallback path uses legacy `quantity` when needed.
+  - `src/components/production/MultipleBatchAssignmentDialog.tsx`
+    - Switched assignable baseline from raw order sizes to:
+      - `assignable_by_size = cut_by_size - already_assigned_by_size`.
+    - Added line-aware retrieval of already-assigned size quantities from existing batch assignments.
+    - Added compatibility handling for both `assigned_quantity` and legacy `quantity` columns.
+  - `src/pages/production/AssignOrdersPage.tsx`
+    - Multi-cutting-master assignment now persists explicit `assigned_quantity` per master at creation time.
+    - Removed null-as-full interpretation in assignment calculations by treating missing assigned quantity as zero.
+    - Added deterministic quantity split across selected cutting masters (base + remainder distribution).
+  - `src/components/production/ReassignCuttingMasterDialog.tsx`
+    - Aligned reassignment calculations to explicit assigned quantities (no bom-total fallback).
+
+- Added schema hardening + SQL consistency migration:
+  - `supabase/migrations/20260423100000_harden_partial_cut_assign_quantities.sql`
+  - Includes:
+    - additive canonical column guard (`order_batch_size_distributions.assigned_quantity`),
+    - data backfill from legacy `quantity` where present,
+    - non-negative and `completed <= assigned`/`completed <= total` constraints,
+    - unique index on `(order_batch_assignment_id, size_name)`,
+    - recalc function update to use canonical assigned quantity expression with compatibility fallback,
+    - refreshed `order_batch_assignments_with_details` view to expose canonical assigned quantities.
+
+- Regression checks run after implementation:
+  - `npm run build` passed.
+  - Edited-file lint diagnostics reported no new lint issues.
+
 ## 2026-04-21 00:25:48 IST
 
 - Fixed universal search reliability in `src/components/UniversalSearchBar.tsx` (customers/orders/invoices/products), removed invalid schema assumptions, and added safer query fallbacks.

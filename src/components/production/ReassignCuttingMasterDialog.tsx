@@ -82,10 +82,9 @@ export const ReassignCuttingMasterDialog: React.FC<ReassignCuttingMasterDialogPr
   }
 
   const selectedOldMaster = assignment.cuttingMasters.find(m => m.id === selectedOldMasterId);
-  const bomTotalQty = selectedOldMaster?.bomTotalQuantity ?? assignment.quantity;
-  const assignedQty = selectedOldMaster?.assignedQuantity ?? null;
+  const assignedQty = Number(selectedOldMaster?.assignedQuantity ?? 0) || 0;
   const completedQty = selectedOldMaster?.completedQuantity ?? 0;
-  const effectiveAssignedQty = assignedQty ?? bomTotalQty;
+  const effectiveAssignedQty = assignedQty;
   
   // Calculate left quantity - allow reassignment if there's any assigned quantity not fully cut
   // Always calculate left quantity from assigned - completed to ensure accuracy
@@ -283,9 +282,8 @@ export const ReassignCuttingMasterDialog: React.FC<ReassignCuttingMasterDialogPr
                   // Show cutting master name, how much they've cut, and left quantities
                   const masterLeftQty = master.leftQuantity ?? 0;
                   const masterCutQty = master.completedQuantity ?? 0;
-                  const masterAssignedQty = master.assignedQuantity ?? null;
-                  const masterBomQty = master.bomTotalQuantity ?? assignment.quantity;
-                  const masterEffectiveAssignedQty = masterAssignedQty ?? masterBomQty;
+                  const masterAssignedQty = Number(master.assignedQuantity ?? 0) || 0;
+                  const masterEffectiveAssignedQty = masterAssignedQty;
                   const masterLeftQuantitiesBySize = master.leftQuantitiesBySize || {};
                   const masterCutQuantitiesBySize = master.cutQuantitiesBySize || {};
                   const isSelected = master.id === selectedOldMasterId;

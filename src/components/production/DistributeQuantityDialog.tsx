@@ -199,16 +199,29 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
 
 
   const validateDistribution = () => {
+    let hasAssignedAny = false;
     for (const size of filteredOrderSizes) {
-      const remaining = getRemainingQuantity(size.size_name);
-      if (remaining > 0) {
+      const totalAssigned = Object.values(batchQuantities).reduce((sum, perBatch) => {
+        return sum + (Number(perBatch?.[size.size_name]) || 0);
+      }, 0);
+      const available = Number(size.total_quantity) || 0;
+      if (totalAssigned > available) {
         toast({
           title: "Validation Error",
-          description: `Size ${size.size_name} has ${remaining} remaining quantity to be assigned`,
+          description: `Size ${size.size_name} exceeds available quantity (${totalAssigned}/${available})`,
           variant: "destructive",
         });
         return false;
       }
+      if (totalAssigned > 0) hasAssignedAny = true;
+    }
+    if (!hasAssignedAny) {
+      toast({
+        title: "Validation Error",
+        description: "Assign at least one piece before saving",
+        variant: "destructive",
+      });
+      return false;
     }
     return true;
   };
@@ -518,14 +531,24 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
           .map(([size_name, quantity]) => ({
             order_batch_assignment_id: (assignmentResult as any)?.id,
             size_name,
-            quantity
+            assigned_quantity: quantity
           }));
 
         if (sizeDistributions.length > 0) {
           console.log('Inserting size distributions:', sizeDistributions);
-          const { error: sizeError } = await supabase
+          let sizeError: any = null;
+          ({ error: sizeError } = await supabase
             .from('order_batch_size_distributions')
-            .insert(sizeDistributions as any);
+            .insert(sizeDistributions as any));
+          if (sizeError && /assigned_quantity/i.test(String(sizeError.message || ''))) {
+            const quantityCompatRows = sizeDistributions.map(({ assigned_quantity, ...rest }) => ({
+              ...rest,
+              quantity: assigned_quantity,
+            }));
+            ({ error: sizeError } = await supabase
+              .from('order_batch_size_distributions')
+              .insert(quantityCompatRows as any));
+          }
 
           if (sizeError) {
             console.error('Size distribution error:', sizeError);
@@ -535,7 +558,7 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
         }
 
         // Update the batch assignment with calculated total from size distributions
-        const calculatedTotal = sizeDistributions.reduce((sum, dist) => sum + dist.quantity, 0);
+        const calculatedTotal = sizeDistributions.reduce((sum, dist) => sum + dist.assigned_quantity, 0);
         if (calculatedTotal > 0) {
           await supabase
             .from('order_batch_assignments')

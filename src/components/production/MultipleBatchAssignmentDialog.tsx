@@ -30,6 +30,7 @@ import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { sizesFromOrderItem } from '@/utils/sizesFromOrderItem';
 import { getOrderItemLineQuantity } from '@/utils/orderItemLineQuantity';
+import { normalizeToByOrderItem } from '@/utils/cutQuantitiesStorage';
 import { resolveSwatchHex } from '@/lib/grnColorSwatch';
 import '@/components/purchase-orders/BomLinePicker.css';
 
@@ -241,6 +242,58 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
     return orderSizes.reduce((total, size) => total + size.total_quantity, 0);
   };
 
+  const loadAlreadyAssignedBySize = useCallback(
+    async (lineId: string): Promise<Record<string, number>> => {
+      if (!orderId || !lineId) return {};
+      const lineTag = `[line:${lineId}]`;
+
+      const { data: lineAssignments, error: lineAssignmentsError } = await supabase
+        .from('order_batch_assignments' as any)
+        .select('id')
+        .eq('order_id', orderId as any)
+        .like('notes', `%${lineTag}%`);
+      if (lineAssignmentsError) throw lineAssignmentsError;
+
+      let assignmentIds = (lineAssignments || []).map((r: any) => r.id).filter(Boolean);
+      if (assignmentIds.length === 0 && orderItems.length === 1) {
+        const { data: allAssignments, error: allAssignmentsError } = await supabase
+          .from('order_batch_assignments' as any)
+          .select('id')
+          .eq('order_id', orderId as any);
+        if (allAssignmentsError) throw allAssignmentsError;
+        assignmentIds = (allAssignments || []).map((r: any) => r.id).filter(Boolean);
+      }
+
+      if (assignmentIds.length === 0) return {};
+      let distRows: any[] | null = null;
+
+      const primary = await supabase
+        .from('order_batch_size_distributions' as any)
+        .select('size_name, assigned_quantity')
+        .in('order_batch_assignment_id', assignmentIds as any);
+      if (!primary.error) {
+        distRows = primary.data as any[];
+      } else {
+        const fallback = await supabase
+          .from('order_batch_size_distributions' as any)
+          .select('size_name, quantity')
+          .in('order_batch_assignment_id', assignmentIds as any);
+        if (fallback.error) throw fallback.error;
+        distRows = fallback.data as any[];
+      }
+
+      const assignedBySize: Record<string, number> = {};
+      (distRows || []).forEach((row: any) => {
+        const sizeName = String(row?.size_name || '').trim();
+        if (!sizeName) return;
+        const qty = Number(row?.assigned_quantity ?? row?.quantity ?? 0) || 0;
+        assignedBySize[sizeName] = (assignedBySize[sizeName] || 0) + qty;
+      });
+      return assignedBySize;
+    },
+    [orderId, orderItems.length]
+  );
+
   const sortSizes = (sizes: OrderSize[], sizeTypeId?: string | null) => {
     if (!sizes || sizes.length === 0) return sizes;
 
@@ -284,9 +337,9 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
             return;
           }
 
-          sizesData = sizesFromOrderItem(item).map((s) => ({
+          const lineOrderSizes = sizesFromOrderItem(item).map((s) => ({
             size_name: s.size_name,
-            total_quantity: s.total_quantity,
+            total_quantity: Number(s.total_quantity) || 0,
           }));
 
           let specs = item.specifications;
@@ -300,6 +353,30 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
           const sizeTypeId =
             item.size_type_id ||
             (specs && typeof specs === 'object' ? (specs as { size_type_id?: string }).size_type_id : null);
+
+          const normalizedCutsByItem = normalizeToByOrderItem(cutQuantitiesBySize, orderItemIds);
+          const lineCutBySize = normalizedCutsByItem[lineId] || {};
+          const cutBySize: Record<string, number> = {};
+          Object.entries(lineCutBySize).forEach(([sizeName, qty]) => {
+            cutBySize[String(sizeName)] = Number(qty) || 0;
+          });
+          if (Object.keys(cutBySize).length === 0) {
+            lineOrderSizes.forEach((row) => {
+              cutBySize[row.size_name] = Number(row.total_quantity) || 0;
+            });
+          }
+
+          let alreadyAssignedBySize: Record<string, number> = {};
+          try {
+            alreadyAssignedBySize = await loadAlreadyAssignedBySize(lineId);
+          } catch (assignedLoadError) {
+            console.error('Failed loading already-assigned quantities by size:', assignedLoadError);
+          }
+
+          sizesData = Object.entries(cutBySize).map(([size_name, cutQty]) => ({
+            size_name,
+            total_quantity: Math.max(0, (Number(cutQty) || 0) - (Number(alreadyAssignedBySize[size_name]) || 0)),
+          }));
 
           if (sizesData.length === 0 && orderItems.length === 1) {
             const { data: rpcData, error: rpcError } = await supabase.rpc('get_order_sizes', {
@@ -378,7 +455,7 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
     return () => {
       cancelled = true;
     };
-  }, [isOpen, orderId, orderItems, selectedOrderItemId, sizeTypes]);
+  }, [isOpen, orderId, orderItems, selectedOrderItemId, sizeTypes, cutQuantitiesBySize, orderItemIds, loadAlreadyAssignedBySize]);
 
   const openDistributeDialog = (mode: 'continue_wizard' | 'this_line_only') => {
     if (selectedBatches.size === 0) {
