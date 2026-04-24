@@ -756,8 +756,8 @@ const AssignOrdersPage = () => {
             });
             
             base.cuttingMasters = cuttingMasters.map((cm: any) => {
-              const assignedQty = cm.assigned_quantity ?? null;
-              const effectiveAssignedQty = assignedQty ?? bomTotalQty;
+              const assignedQty = Number(cm.assigned_quantity ?? 0) || 0;
+              const effectiveAssignedQty = assignedQty;
               
               // Get this cutting master's cut quantities by size (per-cutting-master tracking)
               const masterCutQuantitiesBySize = cm.cut_quantities_by_size || {};
@@ -916,7 +916,7 @@ const AssignOrdersPage = () => {
     // This works even if cutting hasn't started yet (leftQty will equal assignedQty)
     return assignment.cuttingMasters.some(master => {
       const leftQty = master.leftQuantity ?? 0;
-      const assignedQty = master.assignedQuantity ?? master.bomTotalQuantity ?? 0;
+      const assignedQty = Number(master.assignedQuantity ?? 0) || 0;
       const completedQty = master.completedQuantity ?? 0;
       
       // Allow reassignment if:
@@ -1357,15 +1357,22 @@ const AssignOrdersPage = () => {
         // Continue anyway - we'll try to insert new ones
       }
 
+      const totalOrderQty = Number(assignment.quantity) || 0;
+      const baseQty = Math.floor(totalOrderQty / selectedCuttingMasters.length);
+      const remainderQty = totalOrderQty % selectedCuttingMasters.length;
+
       // Create multiple cutting master assignments
-      const cuttingMastersData = selectedCuttingMasters.map(masterId => {
+      const cuttingMastersData = selectedCuttingMasters.map((masterId, idx) => {
         const worker = (workers as any[]).find(w => w.id === masterId);
+        const assignedQty = baseQty + (idx < remainderQty ? 1 : 0);
         return {
           order_id: multiAssignmentOrderId,
           cutting_master_id: masterId,
           cutting_master_name: (worker as any)?.name || '',
           cutting_master_avatar_url: (worker as any)?.avatar_url || null,
           assigned_date: new Date().toISOString().split('T')[0],
+          assigned_quantity: assignedQty,
+          completed_quantity: 0,
           assigned_by_name: currentUser?.name || 'System User',
           notes: `Assigned via multi-assignment dialog`
         };
@@ -1398,14 +1405,19 @@ const AssignOrdersPage = () => {
         assignment.id === multiAssignmentOrderId 
           ? { 
               ...assignment, 
-              cuttingMasters: selectedCuttingMasters.map(masterId => {
+              cuttingMasters: selectedCuttingMasters.map((masterId, idx) => {
                 const worker = (workers as any[]).find(w => w.id === masterId);
+                const assignedQty = baseQty + (idx < remainderQty ? 1 : 0);
                 return {
                   id: masterId,
+                  cuttingMasterId: masterId,
                   name: (worker as any)?.name || '',
                   avatarUrl: (worker as any)?.avatar_url || undefined,
                   assignedDate: new Date().toISOString().split('T')[0],
-                  assignedBy: 'Current User'
+                  assignedBy: 'Current User',
+                  assignedQuantity: assignedQty,
+                  completedQuantity: 0,
+                  leftQuantity: assignedQty
                 };
               }),
               // Keep legacy single cutting master for backward compatibility
