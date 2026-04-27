@@ -32,6 +32,11 @@ import {
   deriveBaseFabricIdFromVariantId,
   baseFabricIdForFabricName,
 } from '@/utils/fabricMasterPicker';
+import {
+  normalizeSelectedColors,
+  selectedColorsDisplayText,
+  type BomSelectedColor,
+} from '@/utils/bomSelectedColors';
 import './BomLinePicker.css';
 
 type Customer = { 
@@ -84,6 +89,7 @@ type BomLineItem = {
   fabric_for_supplier?: string | null;
   fabric_color?: string;
   fabric_gsm?: string;
+  selected_colors?: BomSelectedColor[];
   // Mark if fabric is pre-filled from order
   is_prefilled?: boolean;
   /** Order-form “Product” row id (one base variant per fabric_name); in-memory only */
@@ -262,6 +268,10 @@ export function BomForm({
   >([]);
   const [itemOptions, setItemOptions] = useState<{ id: string; label: string; image_url?: string | null; type?: string; gst_rate?: number; uom?: string }[]>([]);
   const [productOptions, setProductOptions] = useState<{ id: string; label: string; image_url?: string | null }[]>([]);
+  const [colorsMasterOptions, setColorsMasterOptions] = useState<
+    { id: string; color: string; hex?: string | null }[]
+  >([]);
+  const [pendingItemColorByRowId, setPendingItemColorByRowId] = useState<Record<string, string>>({});
   
   // Fabric selection state for new fabrics
   const [fabricSelectionState, setFabricSelectionState] = useState<{
@@ -415,6 +425,7 @@ export function BomForm({
     fetchCustomers();
     fetchCompanySettings();
     fetchFabrics();
+    fetchColorsMaster();
     fetchItems();
     fetchProducts();
     
@@ -606,6 +617,21 @@ export function BomForm({
       console.error('fetchFabrics failed:', e);
       setFabricOptions([]);
     }
+  };
+
+  const fetchColorsMaster = async () => {
+    const { data, error } = await supabase
+      .from('colors')
+      .select('id, color, hex')
+      .order('color', { ascending: true });
+
+    if (error) {
+      console.error('Error fetching colors master:', error);
+      setColorsMasterOptions([]);
+      return;
+    }
+
+    setColorsMasterOptions((data as any[]) || []);
   };
 
   const fetchItems = async () => {
@@ -991,10 +1017,13 @@ export function BomForm({
           try {
             const { data: itemData } = await supabase
               .from('item_master')
-              .select('image_url, image')
+              .select('image_url, image, color')
               .eq('id', item.item_id)
               .single();
             itemImageUrl = itemData?.image_url || itemData?.image || null;
+            if (!item.color && itemData?.color) {
+              item.color = itemData.color;
+            }
           } catch (error) {
             console.warn('Failed to fetch item image:', error);
           }
@@ -1018,6 +1047,7 @@ export function BomForm({
            fabric_for_supplier: fabricForSupplier,
            fabric_color: fabricColor,
            fabric_gsm: fabricGsm,
+           selected_colors: normalizeSelectedColors(item.selected_colors),
            // Mark as prefilled in edit mode
            is_prefilled: isEditMode && isFabric,
            item_image_url: itemImageUrl // Use fresh image from master tables, not stored value
@@ -1245,6 +1275,7 @@ export function BomForm({
       to_order: 0,
       unit_of_measure: type === 'fabric' ? 'Kgs' : 'pcs',
       fabricSelections: type === 'fabric' ? [{ color: '', gsm: '', quantity: 0 }] : undefined,
+      selected_colors: type === 'item' ? [] : undefined,
       selected_item_type: ''
     };
     
@@ -1329,6 +1360,8 @@ export function BomForm({
         updateData.unit_of_measure = found.uom || 'PCS';
         updateData.item_category = found.type;
         updateData.selected_item_type = found.type || 'item';
+        // Keep scalar fallback for display when multi-color not selected yet.
+        updateData.color = found.color || '';
       }
 
       updateItem(index, updateData);
@@ -1418,6 +1451,41 @@ export function BomForm({
     },
     [fabricPickerRows]
   );
+
+  const handleAddSelectedColorFromDraft = useCallback((itemRowId: string) => {
+    const colorId = pendingItemColorByRowId[itemRowId];
+    if (!colorId) return;
+    const colorOpt = colorsMasterOptions.find((c) => c.id === colorId);
+    if (!colorOpt) return;
+
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== itemRowId || it.item_type !== 'item') return it;
+        const existing = normalizeSelectedColors(it.selected_colors);
+        if (existing.some((entry) => entry.colorId === colorOpt.id)) return it;
+        return {
+          ...it,
+          selected_colors: [
+            ...existing,
+            { colorId: colorOpt.id, colorName: colorOpt.color, hex: colorOpt.hex || null },
+          ],
+        };
+      })
+    );
+
+    setPendingItemColorByRowId((prev) => ({ ...prev, [itemRowId]: '' }));
+  }, [colorsMasterOptions, pendingItemColorByRowId]);
+
+  const handleRemoveSelectedColor = useCallback((itemRowId: string, colorId?: string | null) => {
+    if (!colorId) return;
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== itemRowId || it.item_type !== 'item') return it;
+        const next = normalizeSelectedColors(it.selected_colors).filter((entry) => entry.colorId !== colorId);
+        return { ...it, selected_colors: next };
+      })
+    );
+  }, []);
 
   // Helper function to calculate qty_total based on item type
   const calculateQtyTotal = (item: BomLineItem, totalOrderQty: number): number => {
@@ -1528,6 +1596,14 @@ export function BomForm({
       return;
     }
 
+    const hasVisibleBomLines = items.some(
+      (item) => item.item_type === 'fabric' || item.item_type === 'item'
+    );
+    if (!hasVisibleBomLines) {
+      toast.error('Please add at least one Fabric or Item line before saving BOM');
+      return;
+    }
+
     // Validate fabric items have qty_per_product > 0
     const invalidFabricItems = items.filter(
       item => item.item_type === 'fabric' && (!item.qty_per_product || item.qty_per_product <= 0)
@@ -1630,6 +1706,7 @@ export function BomForm({
       };
 
       let bomId = bom.id;
+      let reusedExistingBomFromDuplicate = false;
 
       // Ensure we're not accidentally updating when we should be creating
       if (bomId && !isEditMode) {
@@ -1667,7 +1744,7 @@ export function BomForm({
             .delete()
             .eq('bom_id', bomId as any);
           
-          if (deleteResult.error) {
+          if (deleteResult.error && !isMissingBomItemsTable(deleteResult.error)) {
             console.error('Failed to delete existing BOM items from both tables:', deleteResult.error);
             throw new Error(`Failed to delete existing BOM items: ${deleteResult.error.message}`);
           } else {
@@ -1689,8 +1766,30 @@ export function BomForm({
           .single();
 
         if (result.error) {
-          console.error('Failed to create BOM record:', result.error);
-          throw new Error(`Failed to create BOM record: ${result.error.message}`);
+          const duplicateOrderLineBom =
+            String((result.error as any)?.code || '') === '23505' &&
+            String((result.error as any)?.message || '').includes('bom_records_order_id_order_item_id_key');
+          if (duplicateOrderLineBom && bomData.order_id && bomData.order_item_id) {
+            const existing = await supabase
+              .from('bom_records')
+              .select('id')
+              .eq('order_id', bomData.order_id as any)
+              .eq('order_item_id', bomData.order_item_id as any)
+              .maybeSingle();
+
+            if (existing.error || !existing.data?.id) {
+              console.error('Failed to resolve existing BOM record after duplicate key:', existing.error);
+              throw new Error(`Failed to create BOM record: ${result.error.message}`);
+            }
+
+            bomId = String(existing.data.id);
+            setBom(prev => ({ ...prev, id: bomId }));
+            reusedExistingBomFromDuplicate = true;
+            console.log('Using existing BOM after duplicate key conflict:', bomId);
+          } else {
+            console.error('Failed to create BOM record:', result.error);
+            throw new Error(`Failed to create BOM record: ${result.error.message}`);
+          }
         } else {
           bomId = (result.data as any).id;
           console.log('Successfully created BOM record with ID:', bomId);
@@ -1705,6 +1804,25 @@ export function BomForm({
         throw new Error('Failed to get BOM ID after creation/update');
       }
 
+      if (reusedExistingBomFromDuplicate) {
+        let deleteResult = await supabase
+          .from('bom_record_items')
+          .delete()
+          .eq('bom_id', bomId as any);
+        if (deleteResult.error) {
+          deleteResult = await supabase
+            .from('bom_items')
+            .delete()
+            .eq('bom_id', bomId as any);
+          const fallbackMissingBomItems = String(deleteResult.error?.message || '').toLowerCase().includes(
+            "could not find the table 'public.bom_items'"
+          );
+          if (deleteResult.error && !fallbackMissingBomItems) {
+            throw new Error(`Failed to delete existing BOM items: ${deleteResult.error.message}`);
+          }
+        }
+      }
+
       const sanitizePayload = (payload: Record<string, any>, allowedKeys: string[]) => {
         return allowedKeys.reduce((acc, key) => {
           const value = payload[key];
@@ -1714,6 +1832,14 @@ export function BomForm({
           return acc;
         }, {} as Record<string, any>);
       };
+
+      const errorMessage = (err: unknown) =>
+        String((err as { message?: string } | null)?.message || '').toLowerCase();
+      const isMissingSelectedColorsColumn = (err: unknown) =>
+        errorMessage(err).includes('selected_colors') &&
+        (errorMessage(err).includes('column') || errorMessage(err).includes('schema cache'));
+      const isMissingBomItemsTable = (err: unknown) =>
+        errorMessage(err).includes("could not find the table 'public.bom_items'");
 
       const bomRecordItemKeys = [
         'bom_id',
@@ -1729,7 +1855,8 @@ export function BomForm({
         'item_image_url',
         'fabric_name',
         'fabric_color',
-        'fabric_gsm'
+        'fabric_gsm',
+        'selected_colors'
       ];
 
       const legacyBomItemKeys = [
@@ -1745,10 +1872,27 @@ export function BomForm({
       ];
 
       // Prepare BOM items data
+      const itemsWithDraftColorsApplied = items.map((row) => {
+        if (row.item_type !== 'item') return row;
+        const rowId = row.id || '';
+        const draftColorId = pendingItemColorByRowId[rowId];
+        if (!draftColorId) return row;
+        const colorOpt = colorsMasterOptions.find((c) => c.id === draftColorId);
+        if (!colorOpt) return row;
+        const existing = normalizeSelectedColors(row.selected_colors);
+        if (existing.some((entry) => entry.colorId === draftColorId)) return row;
+        return {
+          ...row,
+          selected_colors: [
+            ...existing,
+            { colorId: colorOpt.id, colorName: colorOpt.color, hex: colorOpt.hex || null },
+          ],
+        };
+      });
       const bomItems: Record<string, any>[] = [];
       const legacyBomItems: Record<string, any>[] = [];
        
-       for (const item of items) {
+       for (const item of itemsWithDraftColorsApplied) {
          console.log('Processing item for BOM save:', {
            item_id: item.item_id,
            item_name: item.item_name,
@@ -1807,7 +1951,7 @@ export function BomForm({
                 qty_total: item.qty_total || 0,
                 to_order: item.to_order || 0,
                 fabric_name: fabricName || null,
-                fabric_color: fabricColor || null,
+                fabric_color: (fabricColor || '').trim() || null,
                 fabric_gsm: fabricGsm || null
               },
               bomRecordItemKeys
@@ -1831,11 +1975,20 @@ export function BomForm({
               )
             );
           } else {
+            const selectedColors = normalizeSelectedColors(item.selected_colors);
+            const fallbackColorName = (item.color || '').trim();
+            const normalizedForSave =
+              selectedColors.length > 0
+                ? selectedColors
+                : fallbackColorName
+                  ? [{ colorId: null, colorName: fallbackColorName, hex: null }]
+                  : [];
             const itemPayload = sanitizePayload(
               {
                 ...base,
                 qty_total: item.qty_total || 0,
-                to_order: item.to_order || 0
+                to_order: item.to_order || 0,
+                selected_colors: normalizedForSave
               },
               bomRecordItemKeys
             );
@@ -1861,14 +2014,15 @@ export function BomForm({
        }
 
        // Insert BOM items
-       console.log('Items array before processing:', items);
-       console.log('Items length:', items.length);
+       console.log('Items array before processing:', itemsWithDraftColorsApplied);
+       console.log('Items length:', itemsWithDraftColorsApplied.length);
        console.log('BOM items prepared for save:', bomItems);
        console.log('BOM items length:', bomItems.length);
        
-       if (items.length === 0) {
-         console.warn('WARNING: Items array is empty! This will result in no BOM items being saved.');
-         toast.warning('No items to save. Please add at least one item to the BOM.');
+       if (itemsWithDraftColorsApplied.length === 0 || bomItems.length === 0) {
+         console.warn('WARNING: No valid BOM rows to save');
+         toast.error('No valid BOM rows to save. Please add at least one Fabric or Item line.');
+         return;
        }
        
        /** Rows merged with DB `id` after insert — required so PO hydration gets `bom_item_id`. */
@@ -1881,7 +2035,7 @@ export function BomForm({
         console.log('First BOM item sample:', bomItems[0]);
 
         const bomRecordItemSelect =
-          'id, bom_id, item_id, item_code, item_name, category, unit_of_measure, qty_per_product, qty_total, stock, to_order, item_image_url, fabric_name, fabric_color, fabric_gsm';
+          'id, bom_id, item_id, item_code, item_name, category, unit_of_measure, qty_per_product, qty_total, stock, to_order, item_image_url, fabric_name, fabric_color, fabric_gsm, selected_colors';
 
         const primaryRes = await supabase
           .from('bom_record_items')
@@ -1889,25 +2043,58 @@ export function BomForm({
           .select(bomRecordItemSelect);
 
         if (primaryRes.error) {
-          console.log('bom_record_items failed, trying bom_items...');
-          const legacyRes = await supabase.from('bom_items').insert(legacyBomItems).select('id');
+          let handledViaSelectedColorsCompat = false;
 
-          if (legacyRes.error) {
-            console.error('Both table attempts failed:', legacyRes.error);
-            console.error('Error details:', JSON.stringify(legacyRes.error, null, 2));
-            console.error('BOM items data:', JSON.stringify(bomItems, null, 2));
-            throw new Error(`Failed to save BOM items: ${legacyRes.error.message}`);
+          if (isMissingSelectedColorsColumn(primaryRes.error)) {
+            const compatItems = bomItems.map((row) => {
+              const clone = { ...row };
+              delete (clone as any).selected_colors;
+              return clone;
+            });
+            const compatSelect =
+              'id, bom_id, item_id, item_code, item_name, category, unit_of_measure, qty_per_product, qty_total, stock, to_order, item_image_url, fabric_name, fabric_color, fabric_gsm';
+            const compatRes = await supabase
+              .from('bom_record_items')
+              .insert(compatItems)
+              .select(compatSelect);
+            if (!compatRes.error) {
+              const data = compatRes.data || [];
+              rowsForNav = bomItems.map((row, i) => ({
+                ...row,
+                id: (data[i] as { id?: string } | undefined)?.id,
+              }));
+              handledViaSelectedColorsCompat = true;
+              console.log('Saved BOM items via compatibility path (without selected_colors)');
+              toast.warning(
+                'BOM colors migration is missing in database. Selected item colors are not persisted yet.'
+              );
+            }
           }
 
-          const legacyData = legacyRes.data || [];
-          if (legacyData.length !== bomItems.length) {
-            console.warn('Legacy BOM items insert count mismatch', legacyData.length, bomItems.length);
+          if (!handledViaSelectedColorsCompat) {
+            console.log('bom_record_items failed, trying bom_items...');
+            const legacyRes = await supabase.from('bom_items').insert(legacyBomItems).select('id');
+
+            if (legacyRes.error) {
+              console.error('Both table attempts failed:', legacyRes.error);
+              console.error('Error details:', JSON.stringify(legacyRes.error, null, 2));
+              console.error('BOM items data:', JSON.stringify(bomItems, null, 2));
+              if (isMissingBomItemsTable(legacyRes.error)) {
+                throw new Error(`Failed to save BOM items: ${primaryRes.error.message}`);
+              }
+              throw new Error(`Failed to save BOM items: ${legacyRes.error.message}`);
+            }
+
+            const legacyData = legacyRes.data || [];
+            if (legacyData.length !== bomItems.length) {
+              console.warn('Legacy BOM items insert count mismatch', legacyData.length, bomItems.length);
+            }
+            rowsForNav = bomItems.map((row, i) => ({
+              ...row,
+              id: (legacyData[i] as { id?: string } | undefined)?.id,
+            }));
+            console.log('Successfully saved BOM items to bom_items (fallback)');
           }
-          rowsForNav = bomItems.map((row, i) => ({
-            ...row,
-            id: (legacyData[i] as { id?: string } | undefined)?.id,
-          }));
-          console.log('Successfully saved BOM items to bom_items (fallback)');
         } else {
           const data = primaryRes.data || [];
           if (data.length !== bomItems.length) {
@@ -2473,7 +2660,7 @@ export function BomForm({
                       ) : null}
 
                       {/* Item Details */}
-                      <div className="flex-1 grid grid-cols-6 gap-4 items-center">
+                      <div className="flex-1 grid grid-cols-7 gap-4 items-center">
                         {/* Item Types */}
                         <div>
                           <Label className="text-sm font-medium">Item Types</Label>
@@ -2483,7 +2670,8 @@ export function BomForm({
                               updateItem(index, { 
                                 selected_item_type: value,
                                 item_id: '',
-                                item_name: ''
+                                item_name: '',
+                                selected_colors: []
                               });
                                    }}
                                    disabled={isReadOnly}
@@ -2521,6 +2709,76 @@ export function BomForm({
                                     </SelectContent>
                                  </Select>
                                </div>
+
+                        {/* Colors */}
+                        <div>
+                          <Label className="text-sm font-medium">Colors</Label>
+                          {isReadOnly ? (
+                            <div className="text-sm truncate">
+                              {selectedColorsDisplayText(item.selected_colors, item.color || '')}
+                            </div>
+                          ) : (
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <Select
+                                  value={pendingItemColorByRowId[item.id || ''] || ''}
+                                  onValueChange={(value) =>
+                                    setPendingItemColorByRowId((prev) => ({ ...prev, [item.id || '']: value }))
+                                  }
+                                >
+                                  <SelectTrigger className="w-full">
+                                    <SelectValue placeholder="Select color" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {colorsMasterOptions
+                                      .filter(
+                                        (colorOpt) =>
+                                          !normalizeSelectedColors(item.selected_colors).some(
+                                            (entry) => entry.colorId === colorOpt.id
+                                          )
+                                      )
+                                      .map((colorOpt) => (
+                                        <SelectItem key={colorOpt.id} value={colorOpt.id}>
+                                          {colorOpt.color}
+                                        </SelectItem>
+                                      ))}
+                                  </SelectContent>
+                                </Select>
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="outline"
+                                  disabled={!pendingItemColorByRowId[item.id || '']}
+                                  onClick={() => handleAddSelectedColorFromDraft(item.id)}
+                                  title="Add another color"
+                                >
+                                  <Plus className="h-4 w-4" />
+                                </Button>
+                              </div>
+                              {normalizeSelectedColors(item.selected_colors).length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {normalizeSelectedColors(item.selected_colors).map((entry) => (
+                                    <Badge
+                                      key={entry.colorId || entry.colorName}
+                                      variant="secondary"
+                                      className="gap-1"
+                                    >
+                                      {entry.colorName || 'Color'}
+                                      <button
+                                        type="button"
+                                        className="ml-1 text-xs"
+                                        onClick={() => handleRemoveSelectedColor(item.id, entry.colorId)}
+                                        aria-label={`Remove ${entry.colorName || 'color'}`}
+                                      >
+                                        x
+                                      </button>
+                                    </Badge>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
 
                         {/* Qty/Pc or Pcs in 1 {uom} */}
                           <div>
@@ -2560,8 +2818,6 @@ export function BomForm({
                           </div>
                         </div>
 
-                        {/* Empty column for alignment */}
-                        <div></div>
                     </div>
 
                     {/* Remove Button */}

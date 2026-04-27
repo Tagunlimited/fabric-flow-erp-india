@@ -32,6 +32,7 @@ import { sizesFromOrderItem } from '@/utils/sizesFromOrderItem';
 import { getOrderItemLineQuantity } from '@/utils/orderItemLineQuantity';
 import { normalizeToByOrderItem } from '@/utils/cutQuantitiesStorage';
 import { resolveSwatchHex } from '@/lib/grnColorSwatch';
+import { selectedColorsDisplayText } from '@/utils/bomSelectedColors';
 import '@/components/purchase-orders/BomLinePicker.css';
 
 function fabricSwatchCss(fabric: { color?: string | null; hex?: string | null } | null | undefined): string {
@@ -612,7 +613,10 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
                           />
                           <span className="text-sm">
                             {selectedLine.fabric.fabric_name} - {selectedLine.fabric.gsm} GSM,{' '}
-                            {selectedLine.fabric.color}
+                            {selectedColorsDisplayText(
+                              selectedLine.selected_colors || selectedLine.fabric?.selected_colors,
+                              selectedLine.fabric.color
+                            )}
                           </span>
                         </div>
                       </div>

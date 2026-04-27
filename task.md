@@ -3,6 +3,59 @@
 This file tracks requested tasks completed in this workspace.
 I will keep appending new completed tasks with timestamped entries.
 
+## 2026-04-26 18:40:00 IST
+
+- Fixed receipt-gating root cause so orders cannot progress into design/procurement flows without at least one active order receipt:
+  - `src/hooks/useOrdersWithReceipts.ts`
+    - tightened receipt filtering to keep only `reference_type=order` rows with non-cancelled status and valid order linkage.
+    - retained schema-compat fallback while removing permissive inclusion behavior.
+  - `supabase/migrations/20260423100000_harden_partial_cut_assign_quantities.sql`
+    - hardened `recalc_order_status` receipt check to only consider active order receipts.
+    - enforced lifecycle progression gate: status remains `pending` until receipt exists; all forward stages run only after receipt.
+  - `src/pages/orders/OrderDetailPage.tsx`
+    - removed auto-advance bypass by gating mockup-driven `designing_done` updates behind active-receipt checks.
+  - `src/pages/OrdersPage.tsx`
+  - `src/pages/OrdersPageCached.tsx`
+    - added UI-level guard in manual status change handler to block forward statuses when no active receipt exists.
+
+- Validation:
+  - build passed: `npm run build`
+  - edited-file lint diagnostics: no new lint errors
+
+## 2026-04-26 18:50:00 IST
+
+- Fixed BOM page (`/bom`) receipt gate mismatch:
+  - `src/components/purchase-orders/BomTabsPage.tsx`
+  - Root cause: `Bills of Material` pending list was using direct `orders` query and BOM coverage checks, but did not apply receipt gating.
+  - Added active-receipt gate in `fetchCustomOrdersWithBomRefs()`:
+    - fetch receipts for `reference_type=order`,
+    - keep only `status='active'`,
+    - build allow-lists by `reference_id` and `reference_number`,
+    - include only matching custom orders before BOM pending/complete filtering.
+  - Preserved existing BOM behavior:
+    - pending list still based on `orderHasLineMissingBom`,
+    - complete list still based on `orderFullyCoveredByBom` or closed statuses.
+- Validation:
+  - build passed: `npm run build`
+  - edited-file lint diagnostics: no new lint errors
+
+## 2026-04-26 18:55:00 IST
+
+- Tightened receipt gate semantics from “not cancelled” to strict “active only” for consistency:
+  - `src/hooks/useOrdersWithReceipts.ts`
+    - receipt qualification now requires `status='active'` (plus `reference_type='order'` and valid linkage).
+  - `src/pages/orders/OrderDetailPage.tsx`
+    - receipt check helper for status advance now requires active receipts only.
+  - `src/pages/OrdersPage.tsx`
+  - `src/pages/OrdersPageCached.tsx`
+    - manual status-change guard now checks for active receipts only.
+  - `supabase/migrations/20260423100000_harden_partial_cut_assign_quantities.sql`
+    - `recalc_order_status` receipt existence gate now requires `status='active'`.
+
+- Validation:
+  - build passed: `npm run build`
+  - edited-file lint diagnostics: no new lint errors
+
 ## 2026-04-23 10:00:00 IST
 
 - Implemented Partial Cut/Assign rollout (Phase 1 + Phase 2) from approved feasibility plan:
@@ -524,4 +577,103 @@ I will keep appending new completed tasks with timestamped entries.
 - Result:
   - User can edit everything before conversion,
   - Order is created in normal `orders` / `order_items` / `order_additional_charges` tables only after explicit save.
+
+## 2026-04-26 18:50:00 IST
+
+- Implemented BOM multi-color rollout with additive, backward-compatible storage and UI:
+  - `supabase/migrations/20260426190500_add_selected_colors_to_bom_record_items.sql`
+    - Added `bom_record_items.selected_colors jsonb not null default '[]'::jsonb`.
+    - Added JSON shape check constraint to enforce array payloads.
+  - `src/utils/bomSelectedColors.ts` (new)
+    - Added shared utilities to normalize color JSON, build display text, and create grouping keys with legacy fallback.
+- Updated BOM authoring flow to write and read multi-color values while preserving existing logic:
+  - `src/components/purchase-orders/BomForm.tsx`
+    - Added Colors Master fetch (`colors` table) and per-fabric multi-select chip UI.
+    - Added `selected_colors` to line-item model and edit-mode hydration.
+    - Save path now writes both:
+      - `selected_colors` (new JSON source),
+      - `fabric_color` (legacy scalar fallback from first selected color).
+    - BOM insert/select payload now includes `selected_colors`.
+- Updated procurement/BOM read paths for compatibility:
+  - `src/hooks/usePendingPoItems.ts`
+    - Added `selected_colors` handling in fallback query mapping.
+    - Grouping key now prefers normalized `selected_colors`, falls back to `fabric_color`.
+    - Fabric group display now shows multi-color text with GSM.
+  - `src/services/bomPOTracking.ts`
+    - Added `selected_colors` field to BOM item status interface for typed downstream consumption.
+- Rolled multi-color display fallback into production fabric contexts where available:
+  - `src/components/production/MultipleBatchAssignmentDialog.tsx`
+  - `src/components/production/DistributeQuantityDialog.tsx`
+  - `src/pages/production/CuttingManagerPage.tsx`
+  - These views now use shared color formatter and display multi-color text when `selected_colors` is present, otherwise preserve existing single-color behavior.
+- Regression checks:
+  - Build verification passed: `npm run build`.
+  - Touched-file lint check passed via IDE lints.
+
+## 2026-04-26 19:06:00 IST
+
+- Adjusted BOM multi-color UI scope per feedback: keep Fabric flow unchanged and move color selection to Items only.
+  - `src/components/purchase-orders/BomForm.tsx`
+    - Reverted Fabric color rendering/edit flow to legacy behavior (order-driven fabric path preserved).
+    - Removed Colors Master chip controls from Fabric block.
+    - Added a proper multi-select dropdown in **Items** section using `DropdownMenuCheckboxItem`.
+    - Item rows now store selected colors in `selected_colors` JSON while fabric rows remain unchanged.
+
+## 2026-04-26 19:48:00 IST
+
+- Refined Items color UI per UX feedback:
+  - `src/components/purchase-orders/BomForm.tsx`
+    - Moved `Colors` field to appear immediately after `Item Name`.
+    - Replaced checkbox menu with “select one color + plus button” interaction.
+    - After selecting a color, user can click `+` to append another color.
+    - Added removable selected-color badges for each item row.
+
+## 2026-04-26 19:56:00 IST
+
+- Added BOM save compatibility/recovery hardening for mixed DB states:
+  - `src/components/purchase-orders/BomForm.tsx`
+    - If `bom_record_items.selected_colors` is missing in schema, retry item insert without `selected_colors` instead of failing.
+    - If legacy fallback table `bom_items` is absent, surface primary `bom_record_items` error cleanly (no misleading fallback failure).
+    - On duplicate BOM header conflict (`bom_records_order_id_order_item_id_key`), resolve and reuse existing BOM id, then replace items (prevents repeated 409 loop after partial saves).
+
+## 2026-04-26 20:02:00 IST
+
+- Fixed BOM false-success path where header could be created/navigated without visible lines:
+  - `src/components/purchase-orders/BomForm.tsx`
+    - Added hard guard: save is blocked unless at least one visible `fabric` or `item` line exists.
+    - Added second hard guard: if built payload has zero valid rows (`bomItems.length === 0`), abort save and show error.
+    - Prevents accidental move to completed list when no usable BOM rows exist.
+
+## 2026-04-26 20:15:00 IST
+
+- Implemented BOM color propagation across PO and GRN with compatibility-safe fallbacks:
+  - Added additive schema migrations:
+    - `supabase/migrations/20260426201000_add_selected_colors_to_po_and_grn_items.sql`
+      - Added `selected_colors jsonb not null default '[]'::jsonb` on:
+        - `purchase_order_items`
+        - `grn_items`
+      - Added JSON array shape constraints for both tables.
+    - `supabase/migrations/20260426202000_update_pending_po_items_view_add_selected_colors.sql`
+      - Updated `pending_po_items_view` projection to include `selected_colors`.
+- PO flow updates:
+  - `src/components/purchase-orders/PurchaseOrderForm.tsx`
+    - Extended PO line model and BOM/pending mappers to carry `selected_colors`.
+    - Preserved and loaded `selected_colors` in PO edit/read path (with BOM tracking fallback).
+    - Persisted `selected_colors` in `purchase_order_items` save payload.
+    - Updated PO form displays and print/export templates to show color via `selectedColorsDisplayText(...)`.
+    - Added save compatibility retry: if `selected_colors` column is missing in DB schema, retries PO line insert without `selected_colors`.
+  - `src/components/purchase-orders/BomToPOWizard.tsx`
+    - Added `selected_colors` propagation into wizard-created PO item payloads.
+- GRN flow updates:
+  - `src/components/goods-receipt-notes/GRNForm.tsx`
+    - Added `selected_colors` to PO item fetch mapping into GRN lines.
+    - Persisted `selected_colors` in `grn_items` insert/update payloads.
+    - Added compatibility retries for GRN insert/update paths when `selected_colors` column is missing.
+  - `src/components/goods-receipt-notes/GRNPrintExport.tsx`
+    - Updated color rendering to use `selectedColorsDisplayText(...)` with fallback.
+  - `src/lib/grnColorSwatch.ts`
+    - Extended GRN color helper to accept `selected_colors`, generate display label from selected colors first, and still preserve swatch fallback behavior.
+- Validation:
+  - Touched-file lint diagnostics: clean.
+  - Production build: passed (`npm run build`).
 

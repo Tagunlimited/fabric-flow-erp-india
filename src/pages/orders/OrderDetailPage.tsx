@@ -1622,16 +1622,24 @@ export default function OrderDetailPage() {
           setPersistedAdditionalCharges([]);
         }
 
-        // Safety rule: if order is confirmed but mockups already exist, auto-move to Designing Done.
+        // Safety rule: if order is confirmed and mockups exist, auto-move only when receipt is present.
         const hasAnyMockup = ((itemsData as any[]) || []).some((it) => hasMockupInItem(it));
         if ((orderData as any).status === 'confirmed' && hasAnyMockup) {
-          const { error: statusErr } = await (supabase as any)
-            .from('orders')
-            .update({ status: 'designing_done' })
-            .eq('id', id as string);
-          if (!statusErr) {
-            playOrderStatusChangeSound();
-            setOrder({ ...(orderData as any), status: 'designing_done' } as unknown as Order);
+          const canAdvance = await hasActiveOrderReceipt(
+            String((orderData as any).id || id || ''),
+            (orderData as any).order_number || null
+          );
+          if (canAdvance) {
+            const { error: statusErr } = await (supabase as any)
+              .from('orders')
+              .update({ status: 'designing_done' })
+              .eq('id', id as string);
+            if (!statusErr) {
+              playOrderStatusChangeSound();
+              setOrder({ ...(orderData as any), status: 'designing_done' } as unknown as Order);
+            } else {
+              setOrder(orderData as unknown as Order);
+            }
           } else {
             setOrder(orderData as unknown as Order);
           }
@@ -1735,6 +1743,29 @@ export default function OrderDetailPage() {
     } finally {
       setLoadingActivities(false);
     }
+  };
+
+  const hasActiveOrderReceipt = async (orderId: string, orderNumber?: string | null): Promise<boolean> => {
+    if (!orderId) return false;
+    const normalizedNumber = String(orderNumber || '').trim();
+    const byId = await (supabase as any)
+      .from('receipts')
+      .select('id')
+      .eq('reference_type', 'order')
+      .eq('status', 'active')
+      .eq('reference_id', orderId)
+      .limit(1);
+    if (!byId.error && Array.isArray(byId.data) && byId.data.length > 0) return true;
+
+    if (!normalizedNumber) return false;
+    const byNumber = await (supabase as any)
+      .from('receipts')
+      .select('id')
+      .eq('reference_type', 'order')
+      .eq('status', 'active')
+      .eq('reference_number', normalizedNumber)
+      .limit(1);
+    return !byNumber.error && Array.isArray(byNumber.data) && byNumber.data.length > 0;
   };
 
   const fetchTotalReceipts = async () => {
@@ -2164,7 +2195,7 @@ export default function OrderDetailPage() {
       const { error: updErr } = await (supabase as any).from('order_items').update({ specifications: updatedSpecs }).eq('id', orderItemId);
       if (updErr) throw updErr;
 
-      // Business rule: once mockup is uploaded after confirmation, move order to Designing Done.
+      // Business rule: once mockup is uploaded after confirmation, move to Designing Done only after receipt exists.
       if (type === 'mockup' && order?.id) {
         const { data: latestOrder } = await (supabase as any)
           .from('orders')
@@ -2172,15 +2203,18 @@ export default function OrderDetailPage() {
           .eq('id', order.id)
           .single();
         if (latestOrder?.status === 'confirmed') {
-          const { error: statusErr } = await (supabase as any)
-            .from('orders')
-            .update({ status: 'designing_done' })
-            .eq('id', order.id);
-          if (!statusErr) {
-            playOrderStatusChangeSound();
-            setOrder({ ...order, status: 'designing_done' });
-          } else {
-            console.error('Failed to auto-update status to designing_done:', statusErr);
+          const canAdvance = await hasActiveOrderReceipt(order.id, order.order_number);
+          if (canAdvance) {
+            const { error: statusErr } = await (supabase as any)
+              .from('orders')
+              .update({ status: 'designing_done' })
+              .eq('id', order.id);
+            if (!statusErr) {
+              playOrderStatusChangeSound();
+              setOrder({ ...order, status: 'designing_done' });
+            } else {
+              console.error('Failed to auto-update status to designing_done:', statusErr);
+            }
           }
         }
       }

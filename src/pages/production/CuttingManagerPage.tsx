@@ -45,6 +45,7 @@ import { type BatchAssignmentDocumentData } from '@/utils/batchAssignmentDocumen
 import { buildStitchingJobCardDocumentForJob } from '@/utils/stitchingJobCardFromJob';
 import { BatchAssignmentPreviewDialog } from '@/components/production/BatchAssignmentPreviewDialog';
 import { getOrderTotalQuantityFromItems } from '@/utils/orderItemLineQuantity';
+import { selectedColorsDisplayText } from '@/utils/bomSelectedColors';
 
 interface CuttingJob {
   id: string;
@@ -479,7 +480,10 @@ const CuttingManagerPage = () => {
             customerName: customersMap[o.customer_id]?.company_name || '',
             productName: productCategoryName,
             fabricType: firstOrderItem?.fabric ? 
-              `${firstOrderItem.fabric.fabric_name} - ${firstOrderItem.fabric.gsm} GSM` : 
+              `${firstOrderItem.fabric.fabric_name} - ${firstOrderItem.fabric.gsm} GSM, ${selectedColorsDisplayText(
+                firstOrderItem.selected_colors || firstOrderItem.fabric?.selected_colors,
+                firstOrderItem.color || firstOrderItem.fabric?.color
+              )}` : 
               '-',
             quantity: getOrderTotalQuantityFromItems(orderItems),
             cutQuantity: Number(p.cut_quantity || 0),

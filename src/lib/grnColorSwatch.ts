@@ -2,6 +2,7 @@
  * GRN item color label + swatch: fabric uses fabric_color + fabric_hex from master;
  * non-fabric uses item_color only (never fabric_hex). No swatch when we cannot resolve a real color.
  */
+import { selectedColorNames, selectedColorsDisplayText } from '@/utils/bomSelectedColors';
 
 const PLACEHOLDER_LABELS = new Set([
   '-',
@@ -295,21 +296,29 @@ export function getGrnItemColorDisplay(item: {
   fabric_color?: string | null;
   item_color?: string | null;
   fabric_hex?: string | null;
+  selected_colors?: unknown;
 }): { label: string; swatchHex: string | null } {
   const isFabric = String(item.item_type || '').toLowerCase() === 'fabric';
 
-  const rawLabel = isFabric
+  const rawSingleColor = isFabric
     ? item.fabric_color || item.item_color || ''
     : item.item_color || '';
+  const rawLabel = selectedColorsDisplayText(item.selected_colors, rawSingleColor);
 
   if (!hasMeaningfulColorLabel(rawLabel)) {
     return { label: '-', swatchHex: null };
   }
 
   const label = String(rawLabel).trim();
+  const firstSelected = selectedColorNames(item.selected_colors)[0] || '';
+  const swatchBaseColor = firstSelected || rawSingleColor || label;
   const swatchHex = isFabric
-    ? resolveWarehouseFabricSwatch(label, item.fabric_hex, item.fabric_color || item.item_color || null)
-    : resolveSwatchHex(label, null);
+    ? resolveWarehouseFabricSwatch(
+        swatchBaseColor,
+        item.fabric_hex,
+        item.fabric_color || item.item_color || null
+      )
+    : resolveSwatchHex(swatchBaseColor, null);
 
   return { label, swatchHex };
 }

@@ -626,6 +626,34 @@ const OrdersPage = () => {
 
   const handleStatusChange = async (orderId: string, newStatus: string) => {
     try {
+      const statusRequiresReceipt = !['pending', 'cancelled'].includes(String(newStatus).toLowerCase());
+      if (statusRequiresReceipt) {
+        const order = orders.find((o) => o.id === orderId);
+        const orderNumber = String(order?.order_number || '').trim();
+        const byId = await supabase
+          .from('receipts')
+          .select('id')
+          .eq('reference_type', 'order')
+          .eq('status', 'active')
+          .eq('reference_id', orderId)
+          .limit(1);
+        const byNumber = !orderNumber
+          ? { data: [] as any[], error: null as any }
+          : await supabase
+              .from('receipts')
+              .select('id')
+              .eq('reference_type', 'order')
+              .eq('status', 'active')
+              .eq('reference_number', orderNumber)
+              .limit(1);
+        const hasActiveReceipt =
+          (!byId.error && (byId.data || []).length > 0) || (!byNumber.error && (byNumber.data || []).length > 0);
+        if (!hasActiveReceipt) {
+          toast.error('Create at least one active receipt before moving this order to the selected status.');
+          return;
+        }
+      }
+
       const { error } = await supabase
         .from('orders')
         .update({ status: newStatus as any })
