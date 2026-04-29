@@ -149,6 +149,15 @@ const queryClient = new QueryClient({
 const syncSidebarUrls = async () => {
   try {
     console.log('🔄 Global sidebar URL sync starting...');
+    const { data: authData, error: authError } = await supabase.auth.getSession();
+    if (authError) {
+      console.warn('⚠️ Skipping sidebar sync: unable to verify auth session', authError);
+      return;
+    }
+    if (!authData?.session?.user) {
+      console.log('⏭️ Skipping sidebar sync: no authenticated session');
+      return;
+    }
     
     const currentSidebarItems = [
       { title: 'Dashboard', url: '/dashboard', icon: 'Home', sort_order: 1, is_active: true },
@@ -182,6 +191,10 @@ const syncSidebarUrls = async () => {
 
     if (!existingItems) {
       console.log('⚠️ No existing items found');
+      return;
+    }
+    if (existingItems.length === 0) {
+      console.log('⏭️ Sidebar sync skipped: sidebar_items is empty for this user context');
       return;
     }
 

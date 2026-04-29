@@ -18,6 +18,7 @@ import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
+import { cn } from '@/lib/utils';
 
 interface Order {
   id: string;
@@ -377,22 +378,30 @@ const DesignPage = () => {
 
         <div className="space-y-6">
           <div className="flex justify-between items-center">
-            <label
-              htmlFor="design-page-view-switch"
+            <div
               className="orders-view-switch"
               aria-label="Switch between pending and completed design orders"
+              role="tablist"
             >
-              <input
-                id="design-page-view-switch"
-                type="checkbox"
-                role="switch"
-                aria-checked={activeTab === "completed"}
-                checked={activeTab === "completed"}
-                onChange={(e) => setActiveTab(e.target.checked ? "completed" : "pending")}
-              />
-              <span>Pending ({pendingOrders.length})</span>
-              <span>Completed ({completedOrders.length})</span>
-            </label>
+              <button
+                type="button"
+                className={cn("orders-view-switch-tab", activeTab === "pending" && "is-active")}
+                role="tab"
+                aria-selected={activeTab === "pending"}
+                onClick={() => setActiveTab("pending")}
+              >
+                Pending ({pendingOrders.length})
+              </button>
+              <button
+                type="button"
+                className={cn("orders-view-switch-tab", activeTab === "completed" && "is-active")}
+                role="tab"
+                aria-selected={activeTab === "completed"}
+                onClick={() => setActiveTab("completed")}
+              >
+                Completed ({completedOrders.length})
+              </button>
+            </div>
           </div>
 
           {activeTab === "pending" && (
@@ -466,7 +475,6 @@ const DesignPage = () => {
                           </Button>
                         </div>
                       </TableHead>
-                      <TableHead>Mockup/Branding</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -494,45 +502,6 @@ const DesignPage = () => {
                           <Badge className={getStatusColor(order.status)}>
                             {order.status.replace('_', ' ').toUpperCase()}
                           </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {(() => {
-                            const mockupUrls = getOrderMockupPreviewUrls(order);
-                            if (mockupUrls.length > 0) {
-                              const visible = mockupUrls.slice(0, 4);
-                              const remaining = mockupUrls.length - visible.length;
-                              return (
-                                <div className="flex items-center gap-1 flex-wrap">
-                                  {visible.map((url, imgIdx) => (
-                                    <img
-                                      key={`${order.id}-mockup-${imgIdx}`}
-                                      src={url}
-                                      alt={`Mockup ${imgIdx + 1}`}
-                                      className="w-8 h-8 object-cover rounded border border-gray-200"
-                                    />
-                                  ))}
-                                  {remaining > 0 && (
-                                    <span className="text-[10px] font-medium text-gray-600">+{remaining}</span>
-                                  )}
-                                </div>
-                              );
-                            }
-
-                            const hasBrandingOnly = order.order_type === 'readymade' && hasBranding(order);
-                            if (hasBrandingOnly) {
-                              return (
-                                <div className="w-6 h-6 bg-green-100 rounded flex items-center justify-center">
-                                  <FileImage className="w-4 h-4 text-green-600" />
-                                </div>
-                              );
-                            }
-
-                            return (
-                              <div className="w-6 h-6 bg-gray-100 rounded flex items-center justify-center">
-                                <FileImage className="w-4 h-4 text-gray-400" />
-                              </div>
-                            );
-                          })()}
                         </TableCell>
                         <TableCell>
                           <div className="flex space-x-2">

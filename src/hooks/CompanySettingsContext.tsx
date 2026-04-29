@@ -70,6 +70,37 @@ const defaultConfig: CompanyConfig = {
   }
 };
 
+const COMPANY_ASSET_FIELDS: Array<keyof CompanyConfig> = [
+  'logo_url',
+  'sidebar_logo_url',
+  'header_logo_url',
+  'favicon_url',
+  'authorized_signatory_url',
+  'payment_qr_url',
+];
+
+function toCompanyAssetPublicUrl(raw: string | undefined): string | undefined {
+  const value = String(raw || '').trim();
+  if (!value) return undefined;
+  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('/')) {
+    return value;
+  }
+  const normalizedPath = value.replace(/^company-assets\//, '');
+  const { data } = supabase.storage.from('company-assets').getPublicUrl(normalizedPath);
+  return data?.publicUrl || value;
+}
+
+function normalizeCompanyAssetUrls(cfg: CompanyConfig): CompanyConfig {
+  const out: CompanyConfig = { ...cfg };
+  for (const key of COMPANY_ASSET_FIELDS) {
+    const maybe = out[key];
+    if (typeof maybe === 'string') {
+      (out as any)[key] = toCompanyAssetPublicUrl(maybe);
+    }
+  }
+  return out;
+}
+
 interface CompanySettingsContextType {
   config: CompanyConfig;
   setConfig: React.Dispatch<React.SetStateAction<CompanyConfig>>;
@@ -133,7 +164,7 @@ export const CompanySettingsProvider: React.FC<{ children: React.ReactNode }> = 
       }
 
       if (data && !('error' in data)) {
-        setConfig(data as CompanyConfig);
+        setConfig(normalizeCompanyAssetUrls(data as CompanyConfig));
       } else {
         // If no config exists, create a default one only if user is authenticated
         if (user) {
@@ -154,7 +185,7 @@ export const CompanySettingsProvider: React.FC<{ children: React.ReactNode }> = 
           }
 
           if (newConfig && !('error' in newConfig)) {
-            setConfig(newConfig as CompanyConfig);
+            setConfig(normalizeCompanyAssetUrls(newConfig as CompanyConfig));
           }
         } else {
           setConfig(defaultConfig);
@@ -170,9 +201,10 @@ export const CompanySettingsProvider: React.FC<{ children: React.ReactNode }> = 
 
   const saveConfig = async (newConfig: CompanyConfig) => {
     try {
+      const normalizedConfig = normalizeCompanyAssetUrls(newConfig);
       const { error } = await supabase
         .from('company_settings')
-        .upsert([newConfig] as any, { onConflict: 'id' });
+        .upsert([normalizedConfig] as any, { onConflict: 'id' });
 
       if (error) {
         console.error('Error saving company config:', error);
@@ -180,7 +212,7 @@ export const CompanySettingsProvider: React.FC<{ children: React.ReactNode }> = 
         throw error;
       }
 
-      setConfig(newConfig);
+      setConfig(normalizedConfig);
       toast.success('Company configuration saved successfully');
     } catch (error) {
       console.error('Error in saveConfig:', error);

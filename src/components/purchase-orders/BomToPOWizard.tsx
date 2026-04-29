@@ -11,6 +11,7 @@ import { POReviewStep } from './POReviewStep';
 import { trackBomPOItems, validateOrderQuantities } from '@/services/bomPOTracking';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { normalizeSelectedColors } from '@/utils/bomSelectedColors';
 
 interface BomToPOWizardProps {
   bomId: string;
@@ -163,6 +164,7 @@ export function BomToPOWizard({
               item_image_url: bomItem?.image_url || null,
               quantity: item.quantity,
               unit_of_measure: bomItem?.unit_of_measure || 'pcs',
+              selected_colors: normalizeSelectedColors((bomItem as any)?.selected_colors),
               notes: item.remarks || null
             };
             

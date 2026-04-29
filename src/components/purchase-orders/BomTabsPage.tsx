@@ -8,6 +8,8 @@ import { Eye, Search, Package, FileText, Filter } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BomOrderLinePicker } from './BomOrderLinePicker';
+import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
+import { cn } from '@/lib/utils';
 import '../../pages/OrdersPageViewSwitch.css';
 import {
   Dialog,
@@ -95,8 +97,45 @@ async function fetchCustomOrdersWithBomRefs(): Promise<{ orders: Order[]; bomRow
 
   if (ordersError) throw ordersError;
 
+  const receiptSelect = 'reference_id, reference_number, reference_type, status';
+  let { data: receiptsRaw, error: receiptsError } = await supabase
+    .from('receipts')
+    .select(receiptSelect)
+    .eq('is_deleted', false)
+    .or('reference_type.eq.order,reference_type.eq.ORDER');
+  if (receiptsError && shouldRetryReadWithoutIsDeletedFilter(receiptsError)) {
+    const r2 = await supabase
+      .from('receipts')
+      .select(receiptSelect)
+      .or('reference_type.eq.order,reference_type.eq.ORDER');
+    receiptsRaw = r2.data;
+    receiptsError = r2.error;
+  }
+  if (receiptsError) throw receiptsError;
+
+  const activeOrderReceipts = (receiptsRaw || []).filter((r: any) => {
+    const refType = String(r?.reference_type || '').trim().toLowerCase();
+    const status = String(r?.status || '').trim().toLowerCase();
+    return refType === 'order' && status === 'active';
+  });
+  const receiptOrderIds = new Set(
+    activeOrderReceipts
+      .map((r: any) => (r?.reference_id ? String(r.reference_id) : ''))
+      .filter(Boolean)
+  );
+  const receiptOrderNumbers = new Set(
+    activeOrderReceipts
+      .map((r: any) => String(r?.reference_number || '').trim())
+      .filter(Boolean)
+  );
+
   const allOrders = (allOrdersRaw || [])
     .filter((o: any) => !o.order_type || o.order_type === 'custom')
+    .filter((o: any) => {
+      const byId = receiptOrderIds.has(String(o.id || ''));
+      const byNumber = receiptOrderNumbers.has(String(o.order_number || '').trim());
+      return byId || byNumber;
+    })
     .map((o: any) => ({
       ...o,
       order_items: (o.order_items || []).filter((it: any) => it?.is_deleted !== true),
@@ -1030,22 +1069,30 @@ export function BomTabsPage() {
         }
       >
         <div className="mb-4 flex justify-start pb-2">
-          <label
-            htmlFor="bom-page-view-switch"
+          <div
             className="orders-view-switch"
             aria-label="Switch between pending BOM work and complete BOMs"
+            role="tablist"
           >
-            <input
-              id="bom-page-view-switch"
-              type="checkbox"
-              role="switch"
-              aria-checked={activeBomTab === 'complete'}
-              checked={activeBomTab === 'complete'}
-              onChange={(e) => setBomTab(e.target.checked ? 'complete' : 'pending')}
-            />
-            <span>Pending</span>
-            <span>Complete</span>
-          </label>
+            <button
+              type="button"
+              className={cn('orders-view-switch-tab', activeBomTab === 'pending' && 'is-active')}
+              role="tab"
+              aria-selected={activeBomTab === 'pending'}
+              onClick={() => setBomTab('pending')}
+            >
+              Pending
+            </button>
+            <button
+              type="button"
+              className={cn('orders-view-switch-tab', activeBomTab === 'complete' && 'is-active')}
+              role="tab"
+              aria-selected={activeBomTab === 'complete'}
+              onClick={() => setBomTab('complete')}
+            >
+              Completed
+            </button>
+          </div>
         </div>
 
         {activeBomTab === 'pending' && (

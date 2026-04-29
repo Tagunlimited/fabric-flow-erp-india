@@ -35,6 +35,7 @@ import { ProductImage } from '@/components/ui/OptimizedImage';
 import { GRNPrintExport } from './GRNPrintExport';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { getGrnItemColorDisplay } from '@/lib/grnColorSwatch';
+import { normalizeSelectedColors, type BomSelectedColor } from '@/utils/bomSelectedColors';
 
 type GRN = {
   id?: string;
@@ -90,6 +91,7 @@ type GRNItem = {
   fabric_for_supplier?: string | null;
   fabric_hex?: string | null;
   item_color?: string;
+  selected_colors?: BomSelectedColor[];
 };
 
 type PurchaseOrder = {
@@ -197,6 +199,7 @@ const GRNForm = () => {
               unit_of_measure,
               fabric_name,
               fabric_color,
+              selected_colors,
               fabric_gsm,
               fabric_id
             `
@@ -792,7 +795,8 @@ const GRNForm = () => {
           fabric_name: fabricName,
           fabric_for_supplier: fabricForSupplier,
           fabric_hex: fabricHex,
-          item_color: itemColor
+          item_color: itemColor,
+          selected_colors: normalizeSelectedColors((item as any).selected_colors)
         };
       }));
 
@@ -1332,6 +1336,10 @@ const GRNForm = () => {
         rejected_quantity: 0,
         quality_status: 'approved' as const
       }));
+      const isMissingSelectedColorsColumn = (err: unknown) => {
+        const msg = String((err as any)?.message || '').toLowerCase();
+        return msg.includes('selected_colors') && (msg.includes('column') || msg.includes('schema cache'));
+      };
 
       if (isNew) {
         // Create new GRN
@@ -1386,16 +1394,31 @@ const GRNForm = () => {
           inspection_notes: item.inspection_notes,
           // Fabric details
           fabric_color: item.fabric_color,
+          selected_colors: normalizeSelectedColors(item.selected_colors),
           fabric_gsm: item.fabric_gsm,
           fabric_name: item.fabric_name,
           item_color: item.item_color
         }));
 
         console.log('Items to insert:', itemsToInsert);
-        const { data: insertedItems, error: itemsError } = await supabase
+        let { data: insertedItems, error: itemsError } = await supabase
           .from('grn_items')
           .insert(itemsToInsert as any)
           .select('*');
+
+        if (itemsError && isMissingSelectedColorsColumn(itemsError)) {
+          const compatItemsToInsert = itemsToInsert.map((row: any) => {
+            const next = { ...row };
+            delete next.selected_colors;
+            return next;
+          });
+          const retryRes = await supabase
+            .from('grn_items')
+            .insert(compatItemsToInsert as any)
+            .select('*');
+          insertedItems = retryRes.data;
+          itemsError = retryRes.error;
+        }
 
         if (itemsError) {
           console.error('Error inserting GRN items:', itemsError);
@@ -1465,15 +1488,33 @@ const GRNForm = () => {
                 quality_status: 'approved',
                 // Ensure fabric details are included in update
                 fabric_color: item.fabric_color,
+                selected_colors: normalizeSelectedColors(item.selected_colors),
                 fabric_gsm: item.fabric_gsm,
                 fabric_name: item.fabric_name,
                 item_color: item.item_color
               } as any)
               .eq('id', item.id as any);
-            if (error) throw error;
+            if (error && isMissingSelectedColorsColumn(error)) {
+              const { selected_colors, ...compatUpdate }: any = {
+                ...item,
+                approved_quantity: Number(item.received_quantity || 0),
+                rejected_quantity: 0,
+                quality_status: 'approved',
+                fabric_color: item.fabric_color,
+                selected_colors: normalizeSelectedColors(item.selected_colors),
+                fabric_gsm: item.fabric_gsm,
+                fabric_name: item.fabric_name,
+                item_color: item.item_color
+              };
+              const retry = await supabase
+                .from('grn_items')
+                .update(compatUpdate as any)
+                .eq('id', item.id as any);
+              if (retry.error) throw retry.error;
+            } else if (error) throw error;
           } else {
             // Insert new item
-            const { error } = await supabase
+            let { error } = await supabase
               .from('grn_items')
               .insert({ 
                 grn_id: id,
@@ -1499,10 +1540,42 @@ const GRNForm = () => {
                 inspection_notes: item.inspection_notes,
                 // Ensure fabric details are included in insert
                 fabric_color: item.fabric_color,
+                selected_colors: normalizeSelectedColors(item.selected_colors),
                 fabric_gsm: item.fabric_gsm,
                 fabric_name: item.fabric_name,
                 item_color: item.item_color
               } as any);
+            if (error && isMissingSelectedColorsColumn(error)) {
+              const compatInsert: any = {
+                grn_id: id,
+                po_item_id: item.po_item_id,
+                item_type: item.item_type,
+                item_id: item.item_id || null,
+                item_name: item.item_name,
+                item_image_url: item.item_image_url,
+                ordered_quantity: item.ordered_quantity,
+                received_quantity: item.received_quantity,
+                approved_quantity: Number(item.received_quantity || 0),
+                rejected_quantity: 0,
+                unit_of_measure: item.unit_of_measure,
+                unit_price: item.unit_price,
+                total_price: item.total_price,
+                gst_rate: item.gst_rate,
+                gst_amount: item.gst_amount,
+                line_total: item.line_total,
+                quality_status: 'approved',
+                batch_number: item.batch_number,
+                expiry_date: item.expiry_date,
+                condition_notes: item.condition_notes,
+                inspection_notes: item.inspection_notes,
+                fabric_color: item.fabric_color,
+                fabric_gsm: item.fabric_gsm,
+                fabric_name: item.fabric_name,
+                item_color: item.item_color
+              };
+              const retry = await supabase.from('grn_items').insert(compatInsert as any);
+              error = retry.error;
+            }
             if (error) throw error;
           }
         }

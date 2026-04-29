@@ -18,6 +18,7 @@ import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
 import { useSizeTypes } from '@/hooks/useSizeTypes';
 import { sortSizeDistributionsByMasterOrder } from '@/utils/sizeSorting';
 import { resolveSwatchHex } from '@/lib/grnColorSwatch';
+import { selectedColorsDisplayText } from '@/utils/bomSelectedColors';
 
 function fabricSwatchCss(fabric: { color?: string | null; hex?: string | null } | null | undefined): string {
   if (!fabric) return '#e5e7eb';
@@ -726,7 +727,13 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
                       }}
                       title={selectedLine.fabric.color || 'Fabric color'}
                     />
-                    <span className="text-sm">{selectedLine.fabric.fabric_name || 'N/A'} - {selectedLine.fabric.gsm || 'N/A'} GSM, {selectedLine.fabric.color || 'N/A'}</span>
+                    <span className="text-sm">
+                      {selectedLine.fabric.fabric_name || 'N/A'} - {selectedLine.fabric.gsm || 'N/A'} GSM,{' '}
+                      {selectedColorsDisplayText(
+                        selectedLine.selected_colors || selectedLine.fabric?.selected_colors,
+                        selectedLine.fabric.color
+                      )}
+                    </span>
                   </div>
                 </div>
                 )}

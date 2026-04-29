@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { convertImageToBase64WithCache, createFallbackLogo } from '@/utils/imageUtils';
+import { selectedColorsDisplayText, type BomSelectedColor } from '@/utils/bomSelectedColors';
 
 type GRN = {
   id: string;
@@ -33,6 +34,7 @@ type GRNItem = {
   fabric_gsm?: string;
   fabric_name?: string;
   item_color?: string;
+  selected_colors?: BomSelectedColor[];
   ordered_quantity: number;
   received_quantity: number;
   approved_quantity: number;
@@ -522,7 +524,9 @@ export const GRNPrintExport: React.FC<GRNPrintExportProps> = ({
                   </div>
                 </td>
                 <td style={{ border: '1px solid #d1d5db', padding: '4px', textAlign: 'left', fontSize: '10px' }}>{item.item_type === 'fabric' ? 'Fabric' : item.item_type}</td>
-                <td style={{ border: '1px solid #d1d5db', padding: '4px', textAlign: 'left', fontSize: '10px' }}>{item.item_color || item.fabric_color || '-'}</td>
+                <td style={{ border: '1px solid #d1d5db', padding: '4px', textAlign: 'left', fontSize: '10px' }}>
+                  {selectedColorsDisplayText(item.selected_colors, item.item_color || item.fabric_color || '-')}
+                </td>
                 <td style={{ border: '1px solid #d1d5db', padding: '4px', textAlign: 'left', fontSize: '10px' }}>{item.item_type === 'fabric' ? (item.fabric_gsm || '-') : '-'}</td>
                 <td style={{ border: '1px solid #d1d5db', padding: '4px', textAlign: 'right', fontSize: '10px' }}>{item.ordered_quantity}</td>
                 <td style={{ border: '1px solid #d1d5db', padding: '4px', textAlign: 'right', fontSize: '10px' }}>{item.received_quantity}</td>

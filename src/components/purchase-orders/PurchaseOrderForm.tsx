@@ -21,6 +21,7 @@ import { ProductImage } from '@/components/ui/OptimizedImage';
 import { convertImageToBase64WithCache, createFallbackLogo } from '@/utils/imageUtils';
 import { Checkbox } from '@/components/ui/checkbox';
 import { PendingItem, PendingItemGroup, getPendingItemPlaceholder, usePendingPoItems } from '@/hooks/usePendingPoItems';
+import { normalizeSelectedColors, selectedColorsDisplayText, type BomSelectedColor } from '@/utils/bomSelectedColors';
 import {
   getBomLinePoQuantity,
   remainingQtyForNewPurchaseOrderLine,
@@ -66,6 +67,7 @@ type LineItem = {
   fabric_for_supplier?: string | null;
   fabric_color?: string;
   fabric_gsm?: string;
+  selected_colors?: BomSelectedColor[];
   /** fabric_master.id when present on the BOM line */
   fabric_id?: string | null;
   // Pending BOM linkage
@@ -85,6 +87,7 @@ function buildPoLineBomRecordStub(line: LineItem, bomId: string): Record<string,
     category,
     fabric_name: line.fabric_name,
     fabric_color: line.fabric_color,
+    selected_colors: normalizeSelectedColors(line.selected_colors),
     fabric_gsm: line.fabric_gsm,
     fabric_id: line.fabric_id ?? null,
     item_name: line.item_name,
@@ -107,6 +110,7 @@ function buildPoStubFromPending(p: PendingItem, bomId: string): Record<string, u
     category: isFabric ? 'Fabric' : 'Item',
     fabric_name: p.fabric_name,
     fabric_color: p.fabric_color,
+    selected_colors: normalizeSelectedColors((p as any).selected_colors),
     fabric_gsm: p.fabric_gsm,
     fabric_id: p.fabric_id ?? null,
     item_name: p.item_name,
@@ -611,6 +615,7 @@ export function PurchaseOrderForm() {
         fabric_name?: string;
         fabric_for_supplier?: string | null;
         fabric_color?: string;
+        selected_colors?: BomSelectedColor[];
         fabric_gsm?: string;
         item_color?: string | null;
         remarks: Set<string>;
@@ -660,6 +665,9 @@ export function PurchaseOrderForm() {
         if (!existing.fabric_color && item.fabric_color) {
           existing.fabric_color = item.fabric_color;
         }
+        if ((!existing.selected_colors || existing.selected_colors.length === 0) && item.selected_colors) {
+          existing.selected_colors = normalizeSelectedColors(item.selected_colors);
+        }
         if (!existing.fabric_for_supplier && item.fabric_for_supplier) {
           existing.fabric_for_supplier = item.fabric_for_supplier;
         }
@@ -686,6 +694,7 @@ export function PurchaseOrderForm() {
           fabric_name: item.fabric_name,
           fabric_for_supplier: item.fabric_for_supplier || null,
           fabric_color: item.fabric_color,
+          selected_colors: normalizeSelectedColors(item.selected_colors),
           fabric_gsm: item.fabric_gsm,
           item_color: resolvedColor,
           remarks: remarksSet
@@ -721,6 +730,7 @@ export function PurchaseOrderForm() {
       fabric_name: isFabric ? pending.fabric_name || pending.item_name : undefined,
       fabric_for_supplier: isFabric ? (pending as any).fabric_for_supplier || null : undefined,
       fabric_color: isFabric ? pending.fabric_color || undefined : undefined,
+      selected_colors: normalizeSelectedColors((pending as any).selected_colors),
       fabric_gsm: isFabric ? pending.fabric_gsm || undefined : undefined,
       fabric_id: isFabric ? pending.fabric_id ?? undefined : undefined,
       bom_item_id: pending.bom_item_id,
@@ -935,6 +945,7 @@ export function PurchaseOrderForm() {
                         ) : (
                           <>
                             <TableHead className="w-[20%] text-left">BOM</TableHead>
+                            <TableHead className="w-[10%] text-left">Color</TableHead>
                             <TableHead className="w-[8%] text-right">Required</TableHead>
                             <TableHead className="w-[8%] text-right">Ordered</TableHead>
                             <TableHead className="w-[8%] text-right">Remaining</TableHead>
@@ -992,7 +1003,9 @@ export function PurchaseOrderForm() {
                                 <TableCell className="font-medium">
                                   {item.fabric_for_supplier || item.fabric_name || item.item_name || 'N/A'}
                                 </TableCell>
-                                <TableCell>{item.fabric_color ?? 'N/A'}</TableCell>
+                                <TableCell>
+                                  {selectedColorsDisplayText((item as any).selected_colors, item.fabric_color ?? 'N/A')}
+                                </TableCell>
                                 <TableCell>{item.fabric_gsm ? `${item.fabric_gsm} GSM` : 'N/A'}</TableCell>
                                 <TableCell className="text-right text-sm">
                                   {renderPendingInventoryCell(item.bom_item_id)}
@@ -1100,6 +1113,12 @@ export function PurchaseOrderForm() {
                                 <div className="text-xs text-muted-foreground">
                                   {item.product_name || 'Unnamed Product'}
                                 </div>
+                              </TableCell>
+                              <TableCell className="w-[10%]">
+                                {selectedColorsDisplayText(
+                                  (item as any).selected_colors,
+                                  item.fabric_color || item.item_color || '-'
+                                )}
                               </TableCell>
                               <TableCell className="w-[8%] text-right whitespace-nowrap tabular-nums">
                                 {formatQuantity(item.qty_total)} {item.unit || ''}
@@ -1355,6 +1374,7 @@ export function PurchaseOrderForm() {
               fabricOption?.fabric_for_supplier ??
               null,
             fabric_color: fabricColor || 'N/A',
+            selected_colors: normalizeSelectedColors((item as any).selected_colors),
             fabric_gsm: fabricGsm || 'N/A',
             fabricSelections: fabricSelections,
             attributes: {
@@ -1401,6 +1421,7 @@ export function PurchaseOrderForm() {
             bom_qty_total: Number(item.qty_total ?? item.quantity ?? 0) || undefined,
             unit_of_measure: item.unit_of_measure || 'pcs',
             item_category: itemOption?.item_type || item.item_category || null,
+            selected_colors: normalizeSelectedColors((item as any).selected_colors),
             itemSelections: item.itemSelections || []
           };
         }
@@ -1624,6 +1645,7 @@ export function PurchaseOrderForm() {
         item_id: item.item_id || null,
         item_category: item.item_category,
         fabric_color: item.fabric_color,
+        selected_colors: normalizeSelectedColors(item.selected_colors),
         fabric_gsm: item.fabric_gsm,
         fabric_for_supplier: item.fabric_for_supplier || null,
         item_color: item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null),
@@ -1645,7 +1667,7 @@ export function PurchaseOrderForm() {
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
           <td>${displayName}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
-          <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A')}</td>
+          <td>${selectedColorsDisplayText(item.selected_colors, item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A'))}</td>
           <td style="text-align: right;">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
           <td>${item.remarks || '-'}</td>
@@ -1823,6 +1845,7 @@ export function PurchaseOrderForm() {
         item_id: item.item_id || null,
         item_category: item.item_category,
         fabric_color: item.fabric_color,
+        selected_colors: normalizeSelectedColors(item.selected_colors),
         fabric_gsm: item.fabric_gsm,
         fabric_for_supplier: item.fabric_for_supplier || null,
         item_color: item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null),
@@ -1844,7 +1867,7 @@ export function PurchaseOrderForm() {
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
           <td>${displayName}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
-          <td>${item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A')}</td>
+          <td>${selectedColorsDisplayText(item.selected_colors, item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A'))}</td>
           <td class="number-cell">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
           <td>${item.remarks || '-'}</td>
@@ -2337,6 +2360,7 @@ export function PurchaseOrderForm() {
               item_image_url,
               fabric_name,
               fabric_color,
+              selected_colors,
               fabric_gsm,
               category
             )
@@ -2445,6 +2469,7 @@ export function PurchaseOrderForm() {
           fabric_name: item.fabric_name || bomRecord?.fabric_name || null,
           fabric_for_supplier: fabricForSupplier || null,
           fabric_color: item.fabric_color || bomRecord?.fabric_color || null,
+          selected_colors: normalizeSelectedColors((item as any).selected_colors || (bomRecord as any)?.selected_colors),
           fabric_gsm: item.fabric_gsm || bomRecord?.fabric_gsm || null,
           item_color: item.item_color || null,
           item_image_url: item.item_image_url || bomRecord?.item_image_url || null,
@@ -2688,6 +2713,7 @@ export function PurchaseOrderForm() {
         quantity: item.quantity,
         unit_of_measure: item.unit_of_measure,
         remarks: item.remarks,
+        selected_colors: normalizeSelectedColors(item.selected_colors),
         // Add fabric-specific fields for fabric items
         ...(item.item_type === 'fabric' && {
           fabric_name: item.fabric_name || null,
@@ -2702,10 +2728,29 @@ export function PurchaseOrderForm() {
       console.log('First item type:', lineItemsData[0]?.item_type);
       console.log('First item type type:', typeof lineItemsData[0]?.item_type);
 
-      const { data: insertedItems, error: itemsError } = await supabase
+      let { data: insertedItems, error: itemsError } = await supabase
         .from('purchase_order_items')
         .insert(lineItemsData)
         .select('id');
+
+      if (itemsError) {
+        const msg = String((itemsError as any)?.message || '').toLowerCase();
+        const missingSelectedColors =
+          msg.includes('selected_colors') && (msg.includes('column') || msg.includes('schema cache'));
+        if (missingSelectedColors) {
+          const compatRows = lineItemsData.map((row: any) => {
+            const next = { ...row };
+            delete next.selected_colors;
+            return next;
+          });
+          const retryRes = await supabase
+            .from('purchase_order_items')
+            .insert(compatRows)
+            .select('id');
+          insertedItems = retryRes.data;
+          itemsError = retryRes.error;
+        }
+      }
 
       if (itemsError) throw itemsError;
 
@@ -3314,13 +3359,19 @@ export function PurchaseOrderForm() {
                           </div>
                           {item.item_type?.toLowerCase() === 'fabric' ? (
                             <div className="text-xs text-muted-foreground">
-                              {[item.fabric_color, item.fabric_gsm ? `${item.fabric_gsm} GSM` : null]
+                              {[
+                                selectedColorsDisplayText(item.selected_colors, item.fabric_color),
+                                item.fabric_gsm ? `${item.fabric_gsm} GSM` : null,
+                              ]
                                 .filter(Boolean)
                                 .join(' • ')}
                             </div>
-                          ) : (item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null)) ? (
+                          ) : (selectedColorsDisplayText(item.selected_colors, item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null) || '').trim() !== 'N/A') ? (
                             <div className="text-xs text-muted-foreground">
-                              {item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null)}
+                              {selectedColorsDisplayText(
+                                item.selected_colors,
+                                item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null) || ''
+                              )}
                             </div>
                           ) : null}
                         </div>

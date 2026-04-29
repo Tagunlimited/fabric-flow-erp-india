@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import {
+  normalizeSelectedColors,
+  selectedColorsDisplayText,
+  selectedColorsGroupingKey,
+  type BomSelectedColor,
+} from '@/utils/bomSelectedColors';
 
 export interface PendingItem {
   bom_item_id: string;
@@ -21,6 +27,7 @@ export interface PendingItem {
   fabric_name: string | null;
   fabric_for_supplier: string | null;
   fabric_color: string | null;
+  selected_colors?: BomSelectedColor[] | null;
   fabric_gsm: string | null;
   image_url: string | null;
   notes: string | null;
@@ -52,7 +59,7 @@ const cacheKeyForItem = (item: PendingItem) => {
     item.item_code || '',
     item.fabric_id || '',
     item.fabric_name || '',
-    item.fabric_color || '',
+    selectedColorsGroupingKey(item.selected_colors, item.fabric_color || ''),
     item.fabric_gsm || ''
   ].join('|');
 };
@@ -159,6 +166,70 @@ const resolveImageForPendingItem = async (
   return resolvedImage;
 };
 
+const resolveScalarItemColorForPendingItem = async (
+  item: PendingItem,
+  cache: Map<string, string | null>
+): Promise<string | null> => {
+  const existingColor = (item.item_color || '').trim();
+  if (existingColor) return existingColor;
+
+  const typeKey = (item.item_type || item.category || '').toLowerCase();
+  if (typeKey === 'fabric') {
+    return (item.fabric_color || '').trim() || null;
+  }
+
+  const cacheKey = `item-color|${item.item_id || ''}|${item.item_code || ''}|${item.item_name || ''}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey) || null;
+
+  let resolvedColor: string | null = null;
+  try {
+    if (item.item_id) {
+      const { data, error } = await supabase
+        .from('item_master')
+        .select('color')
+        .eq('id', item.item_id)
+        .limit(1)
+        .maybeSingle();
+      if (!error && data) {
+        resolvedColor = ((data as any).color || '').trim() || null;
+      }
+    }
+
+    if (!resolvedColor && item.item_code) {
+      const { data, error } = await supabase
+        .from('item_master')
+        .select('color')
+        .eq('item_code', item.item_code)
+        .limit(1)
+        .maybeSingle();
+      if (!error && data) {
+        resolvedColor = ((data as any).color || '').trim() || null;
+      }
+    }
+
+    if (!resolvedColor && item.item_name) {
+      const { data, error } = await supabase
+        .from('item_master')
+        .select('color')
+        .ilike('item_name', `%${item.item_name}%`)
+        .limit(1)
+        .maybeSingle();
+      if (!error && data) {
+        resolvedColor = ((data as any).color || '').trim() || null;
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to resolve scalar item color for pending item', {
+      bom_item_id: item.bom_item_id,
+      bom_id: item.bom_id,
+      err,
+    });
+  }
+
+  cache.set(cacheKey, resolvedColor);
+  return resolvedColor;
+};
+
 export const buildPendingItemGroups = (rows: PendingItem[]): PendingItemGroup[] => {
   const groupsMap = new Map<string, PendingItemGroup>();
 
@@ -166,7 +237,11 @@ export const buildPendingItemGroups = (rows: PendingItem[]): PendingItemGroup[] 
     const typeKey = (item.item_type || item.category || '-').toLowerCase();
     const isFabric = typeKey === 'fabric';
     const identity = isFabric
-      ? [item.fabric_name?.toLowerCase() || '', item.fabric_color?.toLowerCase() || '', item.fabric_gsm || ''].join('|')
+      ? [
+          item.fabric_name?.toLowerCase() || '',
+          selectedColorsGroupingKey(item.selected_colors, item.fabric_color || ''),
+          item.fabric_gsm || '',
+        ].join('|')
       : (item.item_id || item.item_code || item.item_name || '').toLowerCase();
     const key = `${typeKey}|${identity}`;
 
@@ -181,10 +256,13 @@ export const buildPendingItemGroups = (rows: PendingItem[]): PendingItemGroup[] 
       existing.totalRemaining += totalRemaining;
       existing.bomBreakdowns.push(item);
     } else {
-      // For fabric items, use fabric_for_supplier if available, otherwise use item_name
-      const displayName = isFabric && item.fabric_for_supplier 
-        ? item.fabric_for_supplier 
-        : item.item_name;
+      // For fabric items, include multi-color display when present.
+      const displayName = isFabric
+        ? `${item.fabric_for_supplier || item.fabric_name || item.item_name} - ${selectedColorsDisplayText(
+            item.selected_colors,
+            item.fabric_color
+          )}${item.fabric_gsm ? ` - ${item.fabric_gsm} GSM` : ''}`
+        : `${item.item_name} - ${selectedColorsDisplayText(item.selected_colors, item.item_color || '')}`;
       
       groupsMap.set(key, {
         key,
@@ -238,6 +316,7 @@ export const usePendingPoItems = () => {
               stock,
               fabric_name,
               fabric_color,
+              selected_colors,
               fabric_gsm,
               fabric_id,
               item_id,
@@ -290,6 +369,7 @@ export const usePendingPoItems = () => {
               fabric_name: row.fabric_name,
               fabric_for_supplier: null, // Will be fetched separately
               fabric_color: row.fabric_color,
+              selected_colors: row.selected_colors || [],
               fabric_gsm: row.fabric_gsm,
               fabric_id: row.fabric_id,
               item_id: row.item_id,
@@ -338,10 +418,47 @@ export const usePendingPoItems = () => {
         pendingData = (data || []) as PendingItem[];
       }
 
+      // Compatibility backfill: if the view does not project selected_colors yet,
+      // recover it directly from bom_record_items so PO color display still works.
+      const missingSelectedColors = pendingData.filter((row) => {
+        return normalizeSelectedColors((row as any).selected_colors).length === 0;
+      });
+      if (missingSelectedColors.length > 0) {
+        const bomItemIds = Array.from(new Set(missingSelectedColors.map((row) => row.bom_item_id))).filter(Boolean);
+        if (bomItemIds.length > 0) {
+          const { data: colorRows, error: colorRowsError } = await supabase
+            .from('bom_record_items')
+            .select('id, selected_colors, fabric_color')
+            .in('id', bomItemIds as any);
+          if (colorRowsError) {
+            console.warn('Failed to backfill selected_colors for pending items', colorRowsError);
+          } else {
+            const colorMap = new Map<string, { selected_colors: unknown; fabric_color: string | null }>();
+            for (const row of colorRows || []) {
+              colorMap.set(String((row as any).id), {
+                selected_colors: (row as any).selected_colors,
+                fabric_color: ((row as any).fabric_color ?? null) as string | null,
+              });
+            }
+            pendingData = pendingData.map((row) => {
+              if (normalizeSelectedColors((row as any).selected_colors).length > 0) return row;
+              const source = colorMap.get(String(row.bom_item_id));
+              if (!source) return row;
+              return {
+                ...row,
+                selected_colors: normalizeSelectedColors(source.selected_colors),
+                fabric_color: row.fabric_color || source.fabric_color || null,
+              };
+            });
+          }
+        }
+      }
+
       const pendingWithImages: PendingItem[] = [];
       for (const item of pendingData) {
         const imageUrl = await resolveImageForPendingItem(item, imageCache);
-        pendingWithImages.push({ ...item, image_url: imageUrl });
+        const scalarItemColor = await resolveScalarItemColorForPendingItem(item, imageCache);
+        pendingWithImages.push({ ...item, image_url: imageUrl, item_color: scalarItemColor || item.item_color || null });
       }
 
       pendingWithImages.sort((a, b) => {

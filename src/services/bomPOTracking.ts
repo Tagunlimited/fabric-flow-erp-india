@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { remainingQtyForNewPurchaseOrderLine } from '@/components/purchase-orders/bomOrderLineUtils';
+import type { BomSelectedColor } from '@/utils/bomSelectedColors';
 
 export interface BomItemOrderStatus {
   bom_id: string;
@@ -13,6 +14,7 @@ export interface BomItemOrderStatus {
   // Fabric attributes
   fabric_name?: string;
   fabric_color?: string;
+  selected_colors?: BomSelectedColor[] | null;
   fabric_gsm?: string;
   // Item attributes
   item_attributes?: {

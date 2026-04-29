@@ -23,17 +23,17 @@ export function useOrdersWithReceipts<T = any>(): OrdersWithReceiptsResult<T> {
     try {
       setLoading(true);
 
-      // 1) Fetch receipts that point to orders (case-insensitive), ignore cancelled
+      // 1) Fetch receipts that point to orders (case-insensitive), then keep only active rows.
       let { data: receipts, error: receiptsError } = await supabase
         .from("receipts")
-        .select("reference_id, reference_number, reference_type")
+        .select("reference_id, reference_number, reference_type, status")
         .eq("is_deleted", false)
         .or('reference_type.eq.order,reference_type.eq.ORDER');
 
       if (receiptsError && shouldRetryReadWithoutIsDeletedFilter(receiptsError)) {
         const r2 = await supabase
           .from("receipts")
-          .select("reference_id, reference_number, reference_type")
+          .select("reference_id, reference_number, reference_type, status")
           .or('reference_type.eq.order,reference_type.eq.ORDER');
         receipts = r2.data;
         receiptsError = r2.error;
@@ -41,7 +41,12 @@ export function useOrdersWithReceipts<T = any>(): OrdersWithReceiptsResult<T> {
 
       if (receiptsError) throw receiptsError;
 
-      const validReceipts: ReceiptLink[] = (receipts || []) as any;
+      const validReceipts: ReceiptLink[] = ((receipts || []) as ReceiptLink[]).filter((row) => {
+        const referenceType = String(row.reference_type || '').trim().toLowerCase();
+        const status = String(row.status || '').trim().toLowerCase();
+        const hasLink = !!(row.reference_id || String(row.reference_number || '').trim());
+        return referenceType === 'order' && status === 'active' && hasLink;
+      });
 
       if (validReceipts.length === 0) {
         setOrders([]);

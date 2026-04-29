@@ -556,22 +556,30 @@ export default function InvoicePage() {
         
         <div className="space-y-6">
           <div className="flex justify-between items-center gap-2 flex-wrap">
-            <label
-              htmlFor="invoice-page-view-switch"
+            <div
               className="orders-view-switch"
               aria-label="Switch between pending orders and completed invoices"
+              role="tablist"
             >
-              <input
-                id="invoice-page-view-switch"
-                type="checkbox"
-                role="switch"
-                aria-checked={activeTab === 'completed'}
-                checked={activeTab === 'completed'}
-                onChange={(e) => setActiveTab(e.target.checked ? 'completed' : 'pending')}
-              />
-              <span>Pending ({pendingOrders.length})</span>
-              <span>Completed ({completedOrders.length})</span>
-            </label>
+              <button
+                type="button"
+                className={cn('orders-view-switch-tab', activeTab === 'pending' && 'is-active')}
+                role="tab"
+                aria-selected={activeTab === 'pending'}
+                onClick={() => setActiveTab('pending')}
+              >
+                Pending ({pendingOrders.length})
+              </button>
+              <button
+                type="button"
+                className={cn('orders-view-switch-tab', activeTab === 'completed' && 'is-active')}
+                role="tab"
+                aria-selected={activeTab === 'completed'}
+                onClick={() => setActiveTab('completed')}
+              >
+                Completed ({completedOrders.length})
+              </button>
+            </div>
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">Show completed</span>
               <Select value={showCompleted} onValueChange={(v: 'no' | 'yes') => setShowCompleted(v)}>

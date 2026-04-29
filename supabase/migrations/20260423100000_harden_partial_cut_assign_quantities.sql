@@ -173,8 +173,12 @@ BEGIN
 
       select exists(
                select 1 from public.receipts r
-               where (lower(coalesce(r.reference_type,''))='order' and r.reference_id = p_order_id)
-                  or (r.reference_number is not null and r.reference_number = v_order_number)
+               where lower(coalesce(r.reference_type,''))='order'
+                 and lower(coalesce(r.status,'')) = 'active'
+                 and (
+                   r.reference_id = p_order_id
+                   or (r.reference_number is not null and r.reference_number = v_order_number)
+                 )
              ) into v_has_receipt;
 
       select count(*) into v_item_count from public.order_items oi where oi.order_id = p_order_id;
@@ -222,44 +226,45 @@ BEGIN
 
       v_target := 'pending';
 
-      if v_item_count > 0 and v_done_count = v_item_count then
-        v_target := 'designing_done';
-      end if;
-
+      -- Hard business gate: no lifecycle progression until at least one active order receipt exists.
       if v_has_receipt then
         v_target := 'confirmed';
-      end if;
 
-      if v_has_bom then
-        v_target := 'under_procurement';
-      end if;
+        if v_item_count > 0 and v_done_count = v_item_count then
+          v_target := 'designing_done';
+        end if;
 
-      if v_has_cutting then
-        v_target := 'under_cutting';
-      end if;
+        if v_has_bom then
+          v_target := 'under_procurement';
+        end if;
 
-      if v_has_batch then
-        v_target := 'under_stitching';
-      end if;
+        if v_has_cutting then
+          v_target := 'under_cutting';
+        end if;
 
-      if v_total_picked > 0 then
-        v_target := 'under_qc';
-      end if;
+        if v_has_batch then
+          v_target := 'under_stitching';
+        end if;
 
-      if v_total_approved > 0 and v_total_approved >= greatest(v_total_picked - v_total_rejected, 1) then
-        v_target := 'ready_for_dispatch';
-      end if;
+        if v_total_picked > 0 then
+          v_target := 'under_qc';
+        end if;
 
-      if v_total_rejected > 0 then
-        v_target := 'rework';
-      end if;
+        if v_total_approved > 0 and v_total_approved >= greatest(v_total_picked - v_total_rejected, 1) then
+          v_target := 'ready_for_dispatch';
+        end if;
 
-      if v_total_dispatched > 0 and v_total_dispatched < greatest(v_total_approved - v_total_rejected, 1) then
-        v_target := 'partial_dispatched';
-      end if;
+        if v_total_rejected > 0 then
+          v_target := 'rework';
+        end if;
 
-      if v_total_dispatched >= greatest(v_total_approved - v_total_rejected, 1) and v_total_approved > 0 then
-        v_target := 'dispatched';
+        if v_total_dispatched > 0 and v_total_dispatched < greatest(v_total_approved - v_total_rejected, 1) then
+          v_target := 'partial_dispatched';
+        end if;
+
+        if v_total_dispatched >= greatest(v_total_approved - v_total_rejected, 1) and v_total_approved > 0 then
+          v_target := 'dispatched';
+        end if;
       end if;
 
       if v_current in ('completed') then return; end if;

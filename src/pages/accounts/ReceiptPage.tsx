@@ -143,7 +143,7 @@ export default function ReceiptPage() {
   const location = useLocation();
   const navState: any = location.state as any;
   const prefill: any = navState?.prefill;
-  const initialTab: 'view' | 'create' = navState?.tab === 'create' ? 'create' : 'view';
+  const initialTab: 'view' | 'create' = navState?.tab === 'view' ? 'view' : 'create';
   const [activeReceiptTab, setActiveReceiptTab] = useState<'view' | 'create'>(initialTab);
   const [showCompleted, setShowCompleted] = useState<'no' | 'yes'>('no');
   const [columnFilters, setColumnFilters] = useState<ReceiptColumnFilters>({ ...EMPTY_COLUMN_FILTERS });
@@ -152,7 +152,7 @@ export default function ReceiptPage() {
   const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
 
   useEffect(() => {
-    const t = (location.state as { tab?: string } | null)?.tab === 'create' ? 'create' : 'view';
+    const t = (location.state as { tab?: string } | null)?.tab === 'view' ? 'view' : 'create';
     setActiveReceiptTab(t);
   }, [location.key]);
 
@@ -1128,22 +1128,30 @@ export default function ReceiptPage() {
     <ErpLayout>
       <div className="space-y-6">
         <div className="flex justify-between items-center">
-          <label
-            htmlFor="receipt-page-view-switch"
+          <div
             className="orders-view-switch"
             aria-label="Switch between viewing transactions and creating a receipt"
+            role="tablist"
           >
-            <input
-              id="receipt-page-view-switch"
-              type="checkbox"
-              role="switch"
-              aria-checked={activeReceiptTab === 'create'}
-              checked={activeReceiptTab === 'create'}
-              onChange={(e) => setActiveReceiptTab(e.target.checked ? 'create' : 'view')}
-            />
-            <span>View Txn</span>
-            <span>Create Receipt</span>
-          </label>
+            <button
+              type="button"
+              className={cn('orders-view-switch-tab', activeReceiptTab === 'view' && 'is-active')}
+              role="tab"
+              aria-selected={activeReceiptTab === 'view'}
+              onClick={() => setActiveReceiptTab('view')}
+            >
+              View Txn
+            </button>
+            <button
+              type="button"
+              className={cn('orders-view-switch-tab', activeReceiptTab === 'create' && 'is-active')}
+              role="tab"
+              aria-selected={activeReceiptTab === 'create'}
+              onClick={() => setActiveReceiptTab('create')}
+            >
+              Create Receipt
+            </button>
+          </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">Show completed</span>
             <Select value={showCompleted} onValueChange={(v: 'no' | 'yes') => setShowCompleted(v)}>
