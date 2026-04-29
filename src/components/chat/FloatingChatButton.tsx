@@ -16,6 +16,7 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
   const [isOpen, setIsOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [scrollToMessageId, setScrollToMessageId] = useState<string | undefined>(openToMessageId);
+  const [pollingPausedUntil, setPollingPausedUntil] = useState<number>(0);
 
   // Load saved state from localStorage
   useEffect(() => {
@@ -64,6 +65,13 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
         const unreadMessages = messages.filter((m) => !readMessageIds.has(m.id));
         setUnreadCount(unreadMessages.length);
       } catch (error) {
+        const errText = String((error as any)?.message || (error as any)?.details || '');
+        const isNetworkIssue = /failed to fetch|timed_out|network|timeout/i.test(errText);
+        if (isNetworkIssue) {
+          // Back off polling for 30s on network issues to avoid console spam.
+          setPollingPausedUntil(Date.now() + 30000);
+          return;
+        }
         console.error('Error fetching unread count:', error);
       }
     };
@@ -139,14 +147,16 @@ export function FloatingChatButton({ openToMessageId }: FloatingChatButtonProps)
 
     // Polling fallback: Refresh unread count every 3 seconds
     const pollingInterval = setInterval(() => {
+      if (!navigator.onLine) return;
+      if (Date.now() < pollingPausedUntil) return;
       fetchUnreadCount();
-    }, 3000);
+    }, 15000);
 
     return () => {
       clearInterval(pollingInterval);
       supabase.removeChannel(channel);
     };
-  }, [user?.id]);
+  }, [user?.id, pollingPausedUntil]);
 
   // Update scrollToMessageId when openToMessageId changes
   useEffect(() => {

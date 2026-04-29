@@ -265,6 +265,7 @@ const OrdersPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [orders, setOrders] = useState<Order[]>([]);
+  const [ordersWithCuttingMaster, setOrdersWithCuttingMaster] = useState<Set<string>>(new Set());
   const [salesManagers, setSalesManagers] = useState<{ [key: string]: { id: string; full_name: string; avatar_url?: string } }>({});
   const [loading, setLoading] = useState(true);
   // Use persistent tab state to prevent resetting to first tab on refresh
@@ -284,14 +285,14 @@ const OrdersPage = () => {
 
   // Only refresh on tab change, not on visibility changes or focus
   useEffect(() => {
-    if (activeTab === "list") {
+    if (activeTab === "list" || activeTab === "completed") {
       fetchOrders();
     }
   }, [activeTab]);
 
   // Handle navigation state to refresh orders when returning from order detail
   useEffect(() => {
-    if (location.state?.refreshOrders && activeTab === "list") {
+    if (location.state?.refreshOrders && activeTab !== "create") {
       fetchOrders(true); // Force refresh when returning from order detail
       // Clear the state to prevent unnecessary refreshes
       navigate(location.pathname, { replace: true, state: {} });
@@ -386,6 +387,7 @@ const OrdersPage = () => {
       // Clear orders state first if force refresh
       if (forceRefresh) {
         setOrders([]);
+        setOrdersWithCuttingMaster(new Set());
         setSalesManagers({});
       }
       
@@ -411,6 +413,22 @@ const OrdersPage = () => {
 
       const orderIds = (data || []).map((o) => o.id).filter(Boolean);
       const orderNumbers = (data || []).map((o) => o.order_number).filter(Boolean);
+
+      let ordersWithCuttingMasterSet = new Set<string>();
+      if (orderIds.length > 0) {
+        const { data: assignmentRows, error: assignmentError } = await supabase
+          .from('order_assignments')
+          .select('order_id, cutting_master_id')
+          .in('order_id', orderIds as any)
+          .not('cutting_master_id', 'is', null);
+        if (assignmentError) {
+          console.warn('order_assignments fetch for orders list stats:', assignmentError);
+        } else if (assignmentRows) {
+          ordersWithCuttingMasterSet = new Set(
+            (assignmentRows as Array<{ order_id: string | null }>).map((r) => r.order_id).filter(Boolean) as string[]
+          );
+        }
+      }
 
       let receiptRows: Array<{
         id: string;
@@ -590,6 +608,7 @@ const OrdersPage = () => {
       }
       
       setOrders(ordersWithCalculatedAmounts);
+      setOrdersWithCuttingMaster(ordersWithCuttingMasterSet);
     } catch (error) {
       console.error('Error fetching orders:', error);
       toast.error('Failed to fetch orders');
@@ -734,6 +753,44 @@ const OrdersPage = () => {
     });
   }, [orders, columnFilters, sortBy, salesManagers]);
 
+  const pendingOrders = useMemo(
+    () => filteredOrders.filter((order) => String(order.status).toLowerCase() !== 'completed'),
+    [filteredOrders]
+  );
+
+  const completedOrders = useMemo(
+    () => filteredOrders.filter((order) => String(order.status).toLowerCase() === 'completed'),
+    [filteredOrders]
+  );
+
+  const activeOrders = activeTab === 'completed' ? completedOrders : pendingOrders;
+  const pendingOrdersTotal = useMemo(
+    () => orders.filter((order) => String(order.status).toLowerCase() !== 'completed').length,
+    [orders]
+  );
+  const completedOrdersTotal = useMemo(
+    () => orders.filter((order) => String(order.status).toLowerCase() === 'completed').length,
+    [orders]
+  );
+  const pendingStatsCount = useMemo(
+    () =>
+      orders.filter(
+        (order) =>
+          String(order.status).toLowerCase() !== 'completed' &&
+          !ordersWithCuttingMaster.has(order.id)
+      ).length,
+    [orders, ordersWithCuttingMaster]
+  );
+  const inProductionStatsCount = useMemo(
+    () =>
+      orders.filter(
+        (order) =>
+          String(order.status).toLowerCase() !== 'completed' &&
+          ordersWithCuttingMaster.has(order.id)
+      ).length,
+    [orders, ordersWithCuttingMaster]
+  );
+
   return (
     <ErpLayout>
       <div className="space-y-6">
@@ -770,7 +827,7 @@ const OrdersPage = () => {
             <CardContent>
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold">
-                  {orders.filter(o => o.status === 'pending').length}
+                  {pendingStatsCount}
                 </span>
                 <Clock className="w-5 h-5 text-yellow-700" />
               </div>
@@ -786,7 +843,7 @@ const OrdersPage = () => {
             <CardContent>
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold">
-                  {orders.filter(o => o.status === 'in_production').length}
+                  {inProductionStatsCount}
                 </span>
                 <Package className="w-5 h-5 text-purple-700" />
               </div>
@@ -812,35 +869,47 @@ const OrdersPage = () => {
 
         <div className="space-y-6">
           <div className="flex justify-between items-center">
-            <label
-              htmlFor="orders-page-view-switch"
+            <div
               className="orders-view-switch"
-              aria-label="Switch between orders list and create order"
+              aria-label="Switch between pending orders and completed orders"
+              role="tablist"
             >
-              <input
-                id="orders-page-view-switch"
-                type="checkbox"
-                role="switch"
-                aria-checked={activeTab === "create"}
-                checked={activeTab === "create"}
-                onChange={(e) => setActiveTab(e.target.checked ? "create" : "list")}
-              />
-              <span>Orders List</span>
-              <span>Create Order</span>
-            </label>
+              <button
+                type="button"
+                className={cn("orders-view-switch-tab", activeTab === "list" && "is-active")}
+                onClick={() => setActiveTab("list")}
+                role="tab"
+                aria-selected={activeTab === "list"}
+              >
+                Pending Orders
+              </button>
+              <button
+                type="button"
+                className={cn("orders-view-switch-tab", activeTab === "completed" && "is-active")}
+                onClick={() => setActiveTab("completed")}
+                role="tab"
+                aria-selected={activeTab === "completed"}
+              >
+                Completed
+              </button>
+            </div>
+            <Button onClick={() => setActiveTab("create")}>
+              <Plus className="w-4 h-4 mr-2" />
+              Create Order
+            </Button>
           </div>
 
-          {activeTab === "list" && (
+          {(activeTab === "list" || activeTab === "completed") && (
           <div className="space-y-6">
             <Card>
               <CardHeader>
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
                   <div>
                     <CardTitle className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                      All Orders
+                      {activeTab === "completed" ? "Completed Orders" : "Pending Orders"}
                       {hasActiveColumnFilters && (
                         <span className="text-sm font-normal text-muted-foreground">
-                          ({filteredOrders.length} of {orders.length} shown)
+                          ({activeOrders.length} of {activeTab === "completed" ? completedOrdersTotal : pendingOrdersTotal} shown)
                         </span>
                       )}
                     </CardTitle>
@@ -989,16 +1058,16 @@ const OrdersPage = () => {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {filteredOrders.length === 0 ? (
+                        {activeOrders.length === 0 ? (
                           <TableRow className="hover:bg-transparent">
                             <TableCell colSpan={9} className="text-center text-muted-foreground py-10">
                               {orders.length === 0
                                 ? 'No orders yet.'
-                                : 'No orders match the column filters. Adjust filters or clear them to see all rows.'}
+                                : `No ${activeTab === "completed" ? 'completed' : 'pending'} orders match the column filters. Adjust filters or clear them to see all rows.`}
                             </TableCell>
                           </TableRow>
                         ) : (
-                          filteredOrders.map((order) => (
+                          activeOrders.map((order) => (
                           <TableRow 
                             key={order.id} 
                             className="cursor-pointer hover:bg-muted/50"

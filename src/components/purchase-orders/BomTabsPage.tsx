@@ -9,6 +9,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BomOrderLinePicker } from './BomOrderLinePicker';
 import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
+import { cn } from '@/lib/utils';
 import '../../pages/OrdersPageViewSwitch.css';
 import {
   Dialog,
@@ -1068,22 +1069,30 @@ export function BomTabsPage() {
         }
       >
         <div className="mb-4 flex justify-start pb-2">
-          <label
-            htmlFor="bom-page-view-switch"
+          <div
             className="orders-view-switch"
             aria-label="Switch between pending BOM work and complete BOMs"
+            role="tablist"
           >
-            <input
-              id="bom-page-view-switch"
-              type="checkbox"
-              role="switch"
-              aria-checked={activeBomTab === 'complete'}
-              checked={activeBomTab === 'complete'}
-              onChange={(e) => setBomTab(e.target.checked ? 'complete' : 'pending')}
-            />
-            <span>Pending</span>
-            <span>Complete</span>
-          </label>
+            <button
+              type="button"
+              className={cn('orders-view-switch-tab', activeBomTab === 'pending' && 'is-active')}
+              role="tab"
+              aria-selected={activeBomTab === 'pending'}
+              onClick={() => setBomTab('pending')}
+            >
+              Pending
+            </button>
+            <button
+              type="button"
+              className={cn('orders-view-switch-tab', activeBomTab === 'complete' && 'is-active')}
+              role="tab"
+              aria-selected={activeBomTab === 'complete'}
+              onClick={() => setBomTab('complete')}
+            >
+              Completed
+            </button>
+          </div>
         </div>
 
         {activeBomTab === 'pending' && (

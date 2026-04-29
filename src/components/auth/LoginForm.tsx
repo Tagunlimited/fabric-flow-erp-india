@@ -41,12 +41,22 @@ export function LoginForm() {
 
     try {
       // Only clear an existing session when it's a different user.
-      const { data: existing } = await supabase.auth.getSession();
-      const currentEmail = existing.session?.user?.email?.toLowerCase();
-      if (currentEmail && currentEmail !== email.toLowerCase()) {
-        console.log('🔐 Existing session belongs to different user, signing out first...');
-        await supabase.auth.signOut();
-        await new Promise(resolve => setTimeout(resolve, 100));
+      try {
+        const { data: existing } = await supabase.auth.getSession();
+        const currentEmail = existing.session?.user?.email?.toLowerCase();
+        if (currentEmail && currentEmail !== email.toLowerCase()) {
+          console.log('🔐 Existing session belongs to different user, signing out first...');
+          await supabase.auth.signOut({ scope: 'local' });
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      } catch (sessionErr: any) {
+        const msg = String(sessionErr?.message || '');
+        if (/refresh token|invalid refresh token|refresh token not found/i.test(msg)) {
+          console.warn('⚠️ Stale refresh token detected before login, clearing local auth state');
+          await supabase.auth.signOut({ scope: 'local' });
+        } else {
+          throw sessionErr;
+        }
       }
 
       const { data, error: authError } = await supabase.auth.signInWithPassword({
@@ -126,7 +136,7 @@ export function LoginForm() {
       setError(message);
       toast.error(message);
       // Ensure we're signed out on error
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: 'local' });
     } finally {
       setIsLoading(false);
     }

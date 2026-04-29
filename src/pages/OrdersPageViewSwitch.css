@@ -1,108 +1,36 @@
-/* Pill toggle — adapted from Uiverse.io by cbolson; scoped as .orders-view-switch */
+/* Segmented control for Orders page tabs */
 .orders-view-switch {
-  --_switch-bg-clr: #70a9c5;
-  --_switch-padding: 4px;
-  --_slider-bg-clr: rgba(12, 74, 110, 0.65);
-  --_slider-bg-clr-on: rgba(12, 74, 110, 1);
-  --_slider-txt-clr: #ffffff;
-  --_label-padding: 0.65rem 1.25rem;
-  --_switch-easing: cubic-bezier(0.47, 1.64, 0.41, 0.8);
-  color: var(--_slider-txt-clr);
-  width: fit-content;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  justify-content: center;
-  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
   border-radius: 9999px;
-  cursor: pointer;
-  isolation: isolate;
-  user-select: none;
+  background: #70a9c5;
 }
 
-.orders-view-switch input[type="checkbox"] {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border-width: 0;
-}
-
-.orders-view-switch > span {
-  display: grid;
-  place-content: center;
-  transition: opacity 300ms ease-in-out 150ms;
-  padding: var(--_label-padding);
+.orders-view-switch-tab {
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  padding: 0.65rem 1.25rem;
   font-size: 0.875rem;
-  font-weight: 600;
-  text-align: center;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 200ms ease-in-out;
   white-space: nowrap;
 }
 
-.orders-view-switch::before,
-.orders-view-switch::after {
-  content: "";
-  position: absolute;
-  border-radius: inherit;
-  transition: inset 150ms ease-in-out;
+.orders-view-switch-tab:hover {
+  color: #ffffff;
 }
 
-.orders-view-switch::before {
-  background-color: var(--_slider-bg-clr);
-  inset: var(--_switch-padding) 50% var(--_switch-padding) var(--_switch-padding);
-  transition:
-    inset 500ms var(--_switch-easing),
-    background-color 500ms ease-in-out;
-  z-index: -1;
+.orders-view-switch-tab.is-active {
+  background: rgba(12, 74, 110, 0.95);
+  color: #ffffff;
   box-shadow:
-    inset 0 1px 1px rgba(0, 0, 0, 0.3),
-    0 1px rgba(255, 255, 255, 0.3);
-}
-
-.orders-view-switch::after {
-  background-color: var(--_switch-bg-clr);
-  inset: 0;
-  z-index: -2;
-}
-
-.orders-view-switch:focus-within {
-  outline: none;
-}
-
-.orders-view-switch:focus-within::after {
-  inset: -0.25rem;
-}
-
-.orders-view-switch:has(input:checked):hover > span:first-of-type,
-.orders-view-switch:has(input:not(:checked)):hover > span:last-of-type {
-  opacity: 1;
-  transition-delay: 0ms;
-  transition-duration: 100ms;
-}
-
-.orders-view-switch:has(input:checked):hover::before {
-  inset: var(--_switch-padding) var(--_switch-padding) var(--_switch-padding) 45%;
-}
-
-.orders-view-switch:has(input:not(:checked)):hover::before {
-  inset: var(--_switch-padding) 45% var(--_switch-padding) var(--_switch-padding);
-}
-
-.orders-view-switch:has(input:checked)::before {
-  background-color: var(--_slider-bg-clr-on);
-  inset: var(--_switch-padding) var(--_switch-padding) var(--_switch-padding) 50%;
-}
-
-.orders-view-switch > span:last-of-type,
-.orders-view-switch > input:checked + span:first-of-type {
-  opacity: 0.75;
-}
-
-.orders-view-switch > input:checked ~ span:last-of-type {
-  opacity: 1;
+    inset 0 1px 1px rgba(255, 255, 255, 0.2),
+    0 2px 6px rgba(12, 74, 110, 0.35);
 }
 
 /* Tailor management view switch tweaks */
