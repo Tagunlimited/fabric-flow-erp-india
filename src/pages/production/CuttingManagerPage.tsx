@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useNavigate } from "react-router-dom";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatDueDateIndian } from '@/lib/utils';
+import { cn } from "@/lib/utils";
 import { 
   Scissors, 
   Clock, 
@@ -490,7 +491,7 @@ const CuttingManagerPage = () => {
             cutQuantitiesBySize: p.cut_quantities_by_size || {},
             startDate: p.cutting_work_date || '',
             dueDate: o.expected_delivery_date || '',
-            status: 'pending',
+            status: Number(p.cut_quantity || 0) > 0 ? 'in_progress' : 'pending',
             priority: computePriority(o.expected_delivery_date),
             cuttingPattern: '',
             fabricConsumption: 0,
@@ -639,17 +640,31 @@ const CuttingManagerPage = () => {
   };
 
 
-  // Function to check if a job is completed (all quantities cut and batches assigned)
-  // Note: Fabric usage validation will be handled in the cutting dialog
-  const isJobCompleted = (job: CuttingJob) => {
-    const isFullyCut = job.cutQuantity >= job.quantity;
-    const totalAssignedToBatches = (job.batchAssignments || []).reduce(
-      (sum, assignment) => sum + Number(assignment.total_quantity || 0),
-      0
-    );
-    const isFullyBatchAssigned = totalAssignedToBatches >= Number(job.quantity || 0);
-    return isFullyCut && isFullyBatchAssigned;
+  const getRequiredQuantity = (job: CuttingJob) => Math.max(0, Number(job.quantity || 0));
+
+  const getTotalAssignedToBatches = (job: CuttingJob) =>
+    (job.batchAssignments || []).reduce((sum, assignment) => {
+      const directQty = Number(assignment.total_quantity || 0);
+      if (directQty > 0) return sum + directQty;
+      const fromSizes = (assignment.size_distributions || []).reduce(
+        (sizeSum, row) => sizeSum + Number(row.quantity || 0),
+        0
+      );
+      return sum + fromSizes;
+    }, 0);
+
+  const deriveJobStatus = (job: CuttingJob): CuttingJob['status'] => {
+    const requiredQty = getRequiredQuantity(job);
+    const cutQty = Math.max(0, Number(job.cutQuantity || 0));
+    const assignedQty = getTotalAssignedToBatches(job);
+    const isFullyCut = requiredQty > 0 && cutQty >= requiredQty;
+    const isFullyBatchAssigned = requiredQty > 0 && assignedQty >= requiredQty;
+    if (isFullyCut && isFullyBatchAssigned) return 'completed';
+    if (cutQty > 0 || assignedQty > 0) return 'in_progress';
+    return 'pending';
   };
+
+  const isJobCompleted = (job: CuttingJob) => deriveJobStatus(job) === 'completed';
 
   // Sort handler
   const handleSort = (field: string) => {
@@ -685,9 +700,15 @@ const CuttingManagerPage = () => {
     });
   };
 
+  // Normalize status from one local source of truth for this page.
+  const jobsWithDerivedStatus = cuttingJobs.map((job) => ({
+    ...job,
+    status: deriveJobStatus(job),
+  }));
+
   // Separate jobs into active and completed
-  const activeJobs = cuttingJobs.filter(job => !isJobCompleted(job));
-  const completedJobs = cuttingJobs.filter(job => isJobCompleted(job));
+  const activeJobs = jobsWithDerivedStatus.filter(job => !isJobCompleted(job));
+  const completedJobs = jobsWithDerivedStatus.filter(job => isJobCompleted(job));
 
   const includesFilter = (value: unknown, filterValue: string) =>
     filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
@@ -735,13 +756,13 @@ const CuttingManagerPage = () => {
 
   // Calculate stats after activeJobs and completedJobs are defined
   const stats = {
-    totalJobs: cuttingJobs.length,
+    totalJobs: jobsWithDerivedStatus.length,
     activeJobs: activeJobs.length,
     completedJobs: completedJobs.length,
-    inProgress: cuttingJobs.filter(j => j.status === 'in_progress').length,
-    pending: cuttingJobs.filter(j => j.status === 'pending').length,
-    totalDefects: cuttingJobs.reduce((acc, job) => acc + job.defects, 0),
-    reworkJobs: cuttingJobs.filter(j => j.reworkRequired).length
+    inProgress: jobsWithDerivedStatus.filter(j => j.status === 'in_progress').length,
+    pending: jobsWithDerivedStatus.filter(j => j.status === 'pending').length,
+    totalDefects: jobsWithDerivedStatus.reduce((acc, job) => acc + job.defects, 0),
+    reworkJobs: jobsWithDerivedStatus.filter(j => j.reworkRequired).length
   };
 
   function getCompletionPercentage(job: CuttingJob) {
@@ -853,22 +874,26 @@ const CuttingManagerPage = () => {
           </Card>
         </div>
 
-        <label
-          htmlFor="cutting-manager-view-switch"
-          className="orders-view-switch"
-          aria-label="Switch between active and completed cutting jobs"
-        >
-          <input
-            id="cutting-manager-view-switch"
-            type="checkbox"
-            role="switch"
-            aria-checked={cuttingTab === 'completed'}
-            checked={cuttingTab === 'completed'}
-            onChange={(e) => setCuttingTab(e.target.checked ? 'completed' : 'jobs')}
-          />
-          <span>Active Jobs</span>
-          <span>Completed Jobs</span>
-        </label>
+        <div className="orders-view-switch" role="tablist" aria-label="Cutting jobs view switch">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={cuttingTab === 'jobs'}
+            className={cn('orders-view-switch-tab', cuttingTab === 'jobs' && 'is-active')}
+            onClick={() => setCuttingTab('jobs')}
+          >
+            Active Jobs
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={cuttingTab === 'completed'}
+            className={cn('orders-view-switch-tab', cuttingTab === 'completed' && 'is-active')}
+            onClick={() => setCuttingTab('completed')}
+          >
+            Completed Jobs
+          </button>
+        </div>
 
           {cuttingTab === 'jobs' && (
           <div className="space-y-4">

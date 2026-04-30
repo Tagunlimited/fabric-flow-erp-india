@@ -509,18 +509,36 @@ const WarehouseInventoryPage: React.FC = () => {
             </DialogHeader>
             <ScrollArea className="flex-1 min-h-0 max-h-[min(520px,72vh)] px-6">
               <div className="space-y-4 pb-4">
+              {(() => {
+                const fabricDisplayName =
+                  (selectedInventory as any).fabric_master?.fabric_for_supplier ||
+                  (selectedInventory as any).fabric_master?.fabric_name ||
+                  selectedInventory.grn_item?.fabric_name ||
+                  selectedInventory.item_name;
+                const inventoryDisplayName =
+                  selectedInventory.item_type === 'FABRIC'
+                    ? fabricDisplayName
+                    : selectedInventory.item_name;
+                return (
               <div>
                 <div className="text-sm text-muted-foreground">Item</div>
-                <div className="font-medium">{selectedInventory.item_name}</div>
+                <div className="font-medium">{inventoryDisplayName}</div>
                 <div className="text-xs text-muted-foreground">{selectedInventory.item_code}</div>
               </div>
+                );
+              })()}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <div className="text-sm text-muted-foreground">Image</div>
                   {selectedInventory.grn_item?.item_image_url && (
                     <img
                       src={selectedInventory.grn_item.item_image_url}
-                      alt={selectedInventory.item_name}
+                      alt={selectedInventory.item_type === 'FABRIC'
+                        ? ((selectedInventory as any).fabric_master?.fabric_for_supplier ||
+                           (selectedInventory as any).fabric_master?.fabric_name ||
+                           selectedInventory.grn_item?.fabric_name ||
+                           selectedInventory.item_name)
+                        : selectedInventory.item_name}
                       className="w-24 h-24 object-cover rounded border"
                     />
                   )}
@@ -585,7 +603,14 @@ const WarehouseInventoryPage: React.FC = () => {
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
                     <div className="text-muted-foreground">Item/Fabric Name</div>
-                    <div className="font-medium">{selectedInventory.grn_item?.item_name || selectedInventory.grn_item?.fabric_name || '-'}</div>
+                    <div className="font-medium">
+                      {(selectedInventory as any).fabric_master?.fabric_for_supplier ||
+                        (selectedInventory as any).fabric_master?.fabric_name ||
+                        selectedInventory.grn_item?.fabric_name ||
+                        selectedInventory.grn_item?.item_name ||
+                        selectedInventory.item_name ||
+                        '-'}
+                    </div>
                   </div>
                   <div>
                     <div className="text-muted-foreground">Unit of Measure</div>
