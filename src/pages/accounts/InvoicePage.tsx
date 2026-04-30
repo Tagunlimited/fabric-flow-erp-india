@@ -24,6 +24,7 @@ import '../OrdersPageViewSwitch.css';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 import { cn } from '@/lib/utils';
 import { Filter } from 'lucide-react';
+import { measureAsync } from '@/lib/perf';
 
 interface Order {
   id: string;
@@ -144,12 +145,14 @@ export default function InvoicePage() {
           : (['dispatched', 'partial_dispatched'] as const);
 
       // Get all invoicable orders (completed included only when enabled)
-      const { data: ordersData, error: ordersError } = await supabase
-        .from('orders')
-        .select(`*, customer:customers(company_name, phone)`)
-        .eq('is_deleted', false)
-        .in('status', visibleStatuses as any)
-        .order('created_at', { ascending: false });
+      const { data: ordersData, error: ordersError } = await measureAsync('InvoicePage.fetchOrders.baseOrders', async () =>
+        supabase
+          .from('orders')
+          .select(`*, customer:customers(company_name, phone)`)
+          .eq('is_deleted', false)
+          .in('status', visibleStatuses as any)
+          .order('created_at', { ascending: false })
+      );
 
       if (ordersError) throw ordersError;
       let list: Order[] = (ordersData as any) || [];
@@ -259,68 +262,86 @@ export default function InvoicePage() {
       }
 
       // Get dispatched quantities and invoice status for each order
-      const ordersWithData = await Promise.all(
-        list.map(async (order) => {
-          try {
-            const { data: dispatchItems } = await supabase
-              .from('dispatch_order_items')
-              .select('quantity')
-              .eq('is_deleted', false)
-              .eq('order_id', order.id as any);
-            
-            const dispatchedQuantity = dispatchItems?.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0) || 0;
-            
-            // Get approved/total quantity for comparison
-            // For readymade orders, get from order_items; for custom orders, get from QC reviews
-            let approvedQuantity = 0;
-            if (order.order_type === 'readymade') {
-              const { data: orderItems } = await supabase
-                .from('order_items')
-                .select('quantity')
-                .eq('is_deleted', false)
-                .eq('order_id', order.id as any);
-              approvedQuantity = orderItems?.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0) || 0;
-            } else {
-              const { data: qcReviews } = await supabase
-                .from('qc_reviews')
-                .select('approved_quantity, order_batch_assignment_id')
-                .eq('is_deleted', false)
-                .in('order_batch_assignment_id', 
-                  (await supabase
-                    .from('order_batch_assignments')
-                    .select('id')
-                    .eq('is_deleted', false)
-                    .eq('order_id', order.id as any)
-                  ).data?.map((a: any) => a.id) || []
-                );
-              approvedQuantity = qcReviews?.reduce((sum: number, qc: any) => sum + (qc.approved_quantity || 0), 0) || 0;
-            }
-            
-            const invoice = invoiceMap[order.id];
-            
-            return {
-              ...order,
-              dispatched_quantity: dispatchedQuantity,
-              approved_quantity: approvedQuantity,
-              has_invoice: !!invoice,
-              invoice_id: invoice?.id,
-              invoice_number: invoice?.invoice_number,
-              is_credit: creditOrderIds.has(order.id),
-            };
-          } catch (error) {
-            console.error('Error fetching data for order:', order.id, error);
-            return {
-              ...order,
-              dispatched_quantity: 0,
-              approved_quantity: 0,
-              has_invoice: !!invoiceMap[order.id],
-              invoice_id: invoiceMap[order.id]?.id,
-              invoice_number: invoiceMap[order.id]?.invoice_number,
-              is_credit: creditOrderIds.has(order.id),
-            };
-          }
-        })
+      const [dispatchItemsResp, readymadeItemsResp, assignmentIdsResp] = await measureAsync(
+        'InvoicePage.fetchOrders.bulkDependencies',
+        async () =>
+          Promise.all([
+            orderIds.length > 0
+              ? supabase
+                  .from('dispatch_order_items')
+                  .select('order_id, quantity')
+                  .eq('is_deleted', false)
+                  .in('order_id', orderIds as any)
+              : Promise.resolve({ data: [] as any[] }),
+            orderIds.length > 0
+              ? supabase
+                  .from('order_items')
+                  .select('order_id, quantity')
+                  .eq('is_deleted', false)
+                  .in('order_id', orderIds as any)
+              : Promise.resolve({ data: [] as any[] }),
+            orderIds.length > 0
+              ? supabase
+                  .from('order_batch_assignments')
+                  .select('id, order_id')
+                  .eq('is_deleted', false)
+                  .in('order_id', orderIds as any)
+              : Promise.resolve({ data: [] as any[] }),
+          ])
       );
+
+      const dispatchByOrder = new Map<string, number>();
+      for (const row of dispatchItemsResp.data || []) {
+        const oid = String((row as any).order_id || '');
+        if (!oid) continue;
+        dispatchByOrder.set(oid, (dispatchByOrder.get(oid) || 0) + Number((row as any).quantity || 0));
+      }
+      const itemQtyByOrder = new Map<string, number>();
+      for (const row of readymadeItemsResp.data || []) {
+        const oid = String((row as any).order_id || '');
+        if (!oid) continue;
+        itemQtyByOrder.set(oid, (itemQtyByOrder.get(oid) || 0) + Number((row as any).quantity || 0));
+      }
+      const assignmentToOrder = new Map<string, string>();
+      const assignmentIds: string[] = [];
+      for (const row of assignmentIdsResp.data || []) {
+        const aid = String((row as any).id || '');
+        const oid = String((row as any).order_id || '');
+        if (!aid || !oid) continue;
+        assignmentToOrder.set(aid, oid);
+        assignmentIds.push(aid);
+      }
+      const qcByOrder = new Map<string, number>();
+      if (assignmentIds.length > 0) {
+        const { data: qcRows } = await supabase
+          .from('qc_reviews')
+          .select('order_batch_assignment_id, approved_quantity')
+          .eq('is_deleted', false)
+          .in('order_batch_assignment_id', assignmentIds as any);
+        for (const row of qcRows || []) {
+          const aid = String((row as any).order_batch_assignment_id || '');
+          const oid = assignmentToOrder.get(aid);
+          if (!oid) continue;
+          qcByOrder.set(oid, (qcByOrder.get(oid) || 0) + Number((row as any).approved_quantity || 0));
+        }
+      }
+
+      const ordersWithData = list.map((order) => {
+        const dispatchedQuantity = dispatchByOrder.get(order.id) || 0;
+        const approvedQuantity = order.order_type === 'readymade'
+          ? itemQtyByOrder.get(order.id) || 0
+          : qcByOrder.get(order.id) || 0;
+        const invoice = invoiceMap[order.id];
+        return {
+          ...order,
+          dispatched_quantity: dispatchedQuantity,
+          approved_quantity: approvedQuantity,
+          has_invoice: !!invoice,
+          invoice_id: invoice?.id,
+          invoice_number: invoice?.invoice_number,
+          is_credit: creditOrderIds.has(order.id),
+        };
+      });
 
       setOrders(ordersWithData);
 

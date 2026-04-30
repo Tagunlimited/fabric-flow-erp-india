@@ -172,6 +172,54 @@ const normalizeSizesQuantities = (value: any): Record<string, number> => {
   return result;
 };
 
+const isValidYmdDate = (value: string | null | undefined): boolean =>
+  !!value && /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+const getAllowedSizesForType = (
+  sizeTypeId: string | null | undefined,
+  sizeTypes: SizeType[]
+): string[] => {
+  if (!sizeTypeId) return [];
+  const sizeType = sizeTypes.find((st) => st.id === sizeTypeId);
+  if (!sizeType || !Array.isArray(sizeType.available_sizes)) return [];
+  const rawSizes = sizeType.available_sizes
+    .map((size) => String(size || '').trim())
+    .filter(Boolean);
+  const uniqueSizes = Array.from(new Set(rawSizes));
+  return sortSizesByMasterOrder(uniqueSizes, sizeTypeId, sizeTypes);
+};
+
+const normalizeSizesByAllowed = (
+  value: any,
+  allowedSizes: string[]
+): Record<string, number> => {
+  const normalized = normalizeSizesQuantities(value);
+  if (!allowedSizes.length) return {};
+  const allowedSet = new Set(allowedSizes);
+  return Object.fromEntries(
+    Object.entries(normalized).filter(([size]) => allowedSet.has(size))
+  ) as Record<string, number>;
+};
+
+const normalizeSizePricesByAllowed = (
+  value: any,
+  allowedSizes: string[]
+): Record<string, number> => {
+  if (!value || typeof value !== 'object') return {};
+  if (!allowedSizes.length) return {};
+  const allowedSet = new Set(allowedSizes);
+  const result: Record<string, number> = {};
+  Object.entries(value).forEach(([size, price]) => {
+    const sizeName = String(size || '').trim();
+    if (!sizeName) return;
+    if (allowedSizes.length > 0 && !allowedSet.has(sizeName)) return;
+    const numericPrice = Number(price);
+    if (!Number.isFinite(numericPrice)) return;
+    result[sizeName] = numericPrice;
+  });
+  return result;
+};
+
 const sumSizesQuantities = (sizes: Record<string, number>): number =>
   Object.values(sizes).reduce((sum, qty) => sum + (Number(qty) || 0), 0);
 
@@ -1855,11 +1903,16 @@ export default function OrderDetailPage() {
       console.error('Error fetching customers:', error);
     }
     
+    const normalizedOrderDate = isValidYmdDate(order.order_date?.slice?.(0, 10))
+      ? order.order_date.slice(0, 10)
+      : formatLocalDateYMD(parseBusinessDateLocal(order.order_date) ?? new Date());
+    const normalizedExpectedDate = isValidYmdDate(order.expected_delivery_date?.slice?.(0, 10))
+      ? order.expected_delivery_date.slice(0, 10)
+      : formatLocalDateYMD(parseBusinessDateLocal(order.expected_delivery_date || undefined) ?? new Date());
+
     setEditDraft({
-      order_date: order.order_date ? order.order_date.slice(0, 10) : formatLocalDateYMD(new Date()),
-      expected_delivery_date: order.expected_delivery_date
-        ? order.expected_delivery_date.slice(0, 10)
-        : formatLocalDateYMD(new Date()),
+      order_date: normalizedOrderDate,
+      expected_delivery_date: normalizedExpectedDate,
       sales_manager: order.sales_manager || null,
       customer_id: order.customer_id || null,
       gst_rate: order.gst_rate ?? 0,
@@ -1889,11 +1942,16 @@ export default function OrderDetailPage() {
     
     const itemsDraft = orderItems.map(it => {
       const specs = typeof it.specifications === 'string' ? JSON.parse(it.specifications) : (it.specifications || {});
-      const normalizedSizes = normalizeSizesQuantities(it.sizes_quantities || specs.sizes_quantities || {});
+      const sizeTypeId = specs.size_type_id || it.size_type_id || '';
+      const allowedSizes = getAllowedSizesForType(sizeTypeId, sizeTypes);
+      const normalizedSizes = normalizeSizesByAllowed(
+        it.sizes_quantities || specs.sizes_quantities || {},
+        allowedSizes
+      );
       const computedQty = Object.keys(normalizedSizes).length > 0
         ? sumSizesQuantities(normalizedSizes)
         : Number(it.quantity || 0);
-      const sizePrices = specs.size_prices || it.size_prices || {};
+      const sizePrices = normalizeSizePricesByAllowed(specs.size_prices || it.size_prices || {}, allowedSizes);
       const basePrice = it.unit_price || (sizePrices && Object.values(sizePrices).length > 0 ? Math.min(...Object.values(sizePrices) as number[]) : 0);
       
       return {
@@ -1904,7 +1962,7 @@ export default function OrderDetailPage() {
         color: it.color || '',
         gsm: it.gsm || '',
         product_category_id: it.product_category_id || '',
-        size_type_id: specs.size_type_id || it.size_type_id || '',
+        size_type_id: sizeTypeId,
         quantity: computedQty,
         unit_price: it.unit_price,
         price: basePrice,
@@ -2024,6 +2082,13 @@ export default function OrderDetailPage() {
     if (!order || !editDraft) return;
     try {
       setSavingEdit(true);
+      const safeOrderDate = isValidYmdDate(editDraft.order_date)
+        ? editDraft.order_date
+        : formatLocalDateYMD(parseBusinessDateLocal(editDraft.order_date) ?? new Date());
+      const safeExpectedDate = isValidYmdDate(editDraft.expected_delivery_date)
+        ? editDraft.expected_delivery_date
+        : formatLocalDateYMD(parseBusinessDateLocal(editDraft.expected_delivery_date) ?? new Date());
+
       // Update order items
       await Promise.all(
         editItems.map(async (it) => {
@@ -2040,7 +2105,11 @@ export default function OrderDetailPage() {
                 : existingItem.specifications)
             : {};
           
-          const normalizedSizes = normalizeSizesQuantities(it.sizes_quantities || existingSpecs.sizes_quantities || {});
+          const allowedSizes = getAllowedSizesForType(it.size_type_id, sizeTypes);
+          const normalizedSizes = normalizeSizesByAllowed(
+            it.sizes_quantities || existingSpecs.sizes_quantities || {},
+            allowedSizes
+          );
           const hasSizes = Object.keys(normalizedSizes).length > 0;
           const computedQty = hasSizes ? sumSizesQuantities(normalizedSizes) : Number(it.quantity || 0);
           if (hasSizes && computedQty !== Number(it.quantity || 0)) {
@@ -2051,8 +2120,10 @@ export default function OrderDetailPage() {
             });
           }
 
-          const resolvedSizePrices =
-            it.size_prices != null && Object.keys(it.size_prices).length > 0 ? it.size_prices : {};
+          const resolvedSizePrices = normalizeSizePricesByAllowed(
+            it.size_prices != null && Object.keys(it.size_prices).length > 0 ? it.size_prices : {},
+            allowedSizes
+          );
 
           // Calculate item total using size-based pricing if available
           let itemTotal = 0;
@@ -2133,8 +2204,8 @@ export default function OrderDetailPage() {
       const { error: orderUpdateError } = await (supabase as any)
         .from('orders')
         .update({
-          order_date: editDraft.order_date,
-          expected_delivery_date: editDraft.expected_delivery_date,
+          order_date: safeOrderDate,
+          expected_delivery_date: safeExpectedDate,
           sales_manager: editDraft.sales_manager,
           customer_id: editDraft.customer_id,
           gst_rate: editDraft.gst_rate,
@@ -2958,11 +3029,11 @@ export default function OrderDetailPage() {
                     <div className="space-y-6">
                       {editItems.map((it, itemIdx) => {
                         const amount = calculateItemTotal(it);
-                        const sortedSizes = sortSizesQuantities(
-                          it.sizes_quantities || {},
-                          it.size_type_id,
-                          sizeTypes
-                        );
+                        const allowedSizes = getAllowedSizesForType(it.size_type_id, sizeTypes);
+                        const sortedSizes = allowedSizes.map((size) => [
+                          size,
+                          Number((it.sizes_quantities || {})[size] || 0),
+                        ] as [string, number]);
                         return (
                           <div key={it.id} className="border rounded-lg p-4 space-y-4 bg-muted/10">
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -2997,7 +3068,28 @@ export default function OrderDetailPage() {
                                 <Label>Size Type</Label>
                                 <Select 
                                   value={it.size_type_id || 'none'} 
-                                  onValueChange={(v) => setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, size_type_id: v === 'none' ? '' : v } : p))}
+                                  onValueChange={(v) => {
+                                    const nextSizeTypeId = v === 'none' ? '' : v;
+                                    const nextAllowedSizes = getAllowedSizesForType(nextSizeTypeId, sizeTypes);
+                                    setEditItems(prev =>
+                                      prev.map((p, i) => {
+                                        if (i !== itemIdx) return p;
+                                        const normalizedSizes = normalizeSizesByAllowed(p.sizes_quantities || {}, nextAllowedSizes);
+                                        const normalizedSizePrices = normalizeSizePricesByAllowed(p.size_prices || {}, nextAllowedSizes);
+                                        const quantity =
+                                          nextAllowedSizes.length > 0
+                                            ? sumSizesQuantities(normalizedSizes)
+                                            : Number(p.quantity || 0);
+                                        return {
+                                          ...p,
+                                          size_type_id: nextSizeTypeId,
+                                          sizes_quantities: normalizedSizes,
+                                          size_prices: normalizedSizePrices,
+                                          quantity,
+                                        };
+                                      })
+                                    );
+                                  }}
                                 >
                                   <SelectTrigger><SelectValue placeholder="Select size type" /></SelectTrigger>
                                   <SelectContent>
@@ -3070,8 +3162,12 @@ export default function OrderDetailPage() {
                               <div>
                                 <Label>Total Quantity</Label>
                                 {(() => {
-                                  const normalizedSizes = normalizeSizesQuantities(it.sizes_quantities || {});
-                                  const hasSizeQuantities = Object.keys(normalizedSizes).length > 0;
+                                  const allowedSizesForItem = getAllowedSizesForType(it.size_type_id, sizeTypes);
+                                  const normalizedSizes = normalizeSizesByAllowed(
+                                    it.sizes_quantities || {},
+                                    allowedSizesForItem
+                                  );
+                                  const hasSizeQuantities = allowedSizesForItem.length > 0;
                                   const computedLineQty = hasSizeQuantities ? sumSizesQuantities(normalizedSizes) : Number(it.quantity || 0);
                                   return (
                                 <Input 
@@ -3087,7 +3183,7 @@ export default function OrderDetailPage() {
                                 />
                                   );
                                 })()}
-                                {Object.keys(normalizeSizesQuantities(it.sizes_quantities || {})).length > 0 && (
+                                {getAllowedSizesForType(it.size_type_id, sizeTypes).length > 0 && (
                                   <p className="text-xs text-muted-foreground mt-1">
                                     Auto-calculated from size-wise quantities
                                   </p>
@@ -3250,28 +3346,6 @@ export default function OrderDetailPage() {
                                       />
                                     </div>
                                   ))}
-                                  <div className="flex flex-col space-y-1 flex-shrink-0 min-w-[80px]">
-                                    <Label className="text-xs text-center">Add</Label>
-                                    <Input 
-                                      placeholder="Size"
-                                      onKeyDown={(e) => {
-                                        if (e.key === 'Enter' && e.currentTarget.value) {
-                                          const newSize = e.currentTarget.value.trim();
-                                          if (!it.sizes_quantities[newSize]) {
-                                            setEditItems(prev => prev.map((p, i) => {
-                                              if (i === itemIdx) {
-                                                const newSizes = { ...p.sizes_quantities, [newSize]: 0 };
-                                                return { ...p, sizes_quantities: newSizes };
-                                              }
-                                              return p;
-                                            }));
-                                            e.currentTarget.value = '';
-                                          }
-                                        }
-                                      }}
-                                      className="w-full text-center text-sm"
-                                    />
-                                  </div>
                                 </div>
                               </div>
                             )}
@@ -4249,24 +4323,42 @@ export default function OrderDetailPage() {
                 <CardContent className="space-y-4">
                   <div>
                     <p className="text-sm text-muted-foreground">Order Date</p>
-                    <p className="font-medium">
-                      {new Date(isEditing && editDraft ? editDraft.order_date : order.order_date).toLocaleDateString('en-GB', {
-                        day: '2-digit',
-                        month: 'long',
-                        year: 'numeric'
-                      })}
-                    </p>
-                  </div>
-                  {(isEditing && editDraft ? editDraft.expected_delivery_date : order.expected_delivery_date) && (
-                    <div>
-                      <p className="text-sm text-muted-foreground">Expected Delivery</p>
+                    {isEditing && editDraft ? (
+                      <Input
+                        type="date"
+                        value={editDraft.order_date}
+                        onChange={(e) => setEditDraft({ ...editDraft, order_date: e.target.value })}
+                        className="mt-1"
+                      />
+                    ) : (
                       <p className="font-medium">
-                        {new Date(isEditing && editDraft ? editDraft.expected_delivery_date : order.expected_delivery_date).toLocaleDateString('en-GB', {
+                        {new Date(order.order_date).toLocaleDateString('en-GB', {
                           day: '2-digit',
                           month: 'long',
                           year: 'numeric'
                         })}
                       </p>
+                    )}
+                  </div>
+                  {(isEditing && editDraft ? true : !!order.expected_delivery_date) && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">Expected Delivery</p>
+                      {isEditing && editDraft ? (
+                        <Input
+                          type="date"
+                          value={editDraft.expected_delivery_date}
+                          onChange={(e) => setEditDraft({ ...editDraft, expected_delivery_date: e.target.value })}
+                          className="mt-1"
+                        />
+                      ) : (
+                        <p className="font-medium">
+                          {new Date(order.expected_delivery_date).toLocaleDateString('en-GB', {
+                            day: '2-digit',
+                            month: 'long',
+                            year: 'numeric'
+                          })}
+                        </p>
+                      )}
                     </div>
                   )}
                   {salesManager && (

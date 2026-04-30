@@ -281,29 +281,72 @@ export function UniversalSearchBar({
 
         const orderSelect =
           'id, order_number, customer_id, status, final_amount, created_at, customers(company_name)';
-        let orders: any[] | null = null;
-        let ordersError = null as { message?: string } | null;
+        const invoiceSelect =
+          'id, invoice_number, customer_id, total_amount, status, created_at, customers(company_name)';
 
-        if (customerIds.length > 0) {
-          const inList = customerIds.slice(0, 50).join(',');
-          const res = await supabase
-            .from('orders')
-            .select(orderSelect)
-            .eq('is_deleted', false)
-            .or(`order_number.ilike.${pattern},customer_id.in.(${inList})`)
-            .limit(6);
-          orders = res.data as any[] | null;
-          ordersError = res.error;
-        } else {
-          const res = await supabase
+        const ordersPromise = (() => {
+          if (customerIds.length > 0) {
+            const inList = customerIds.slice(0, 50).join(',');
+            return supabase
+              .from('orders')
+              .select(orderSelect)
+              .eq('is_deleted', false)
+              .or(`order_number.ilike.${pattern},customer_id.in.(${inList})`)
+              .limit(6);
+          }
+          return supabase
             .from('orders')
             .select(orderSelect)
             .eq('is_deleted', false)
             .ilike('order_number', pattern)
             .limit(6);
-          orders = res.data as any[] | null;
-          ordersError = res.error;
-        }
+        })();
+
+        const invoicesPromise = (() => {
+          if (customerIds.length > 0) {
+            const inList = customerIds.slice(0, 50).join(',');
+            return supabase
+              .from('invoices')
+              .select(invoiceSelect)
+              .eq('is_deleted', false)
+              .or(`invoice_number.ilike.${pattern},customer_id.in.(${inList})`)
+              .limit(6);
+          }
+          return supabase
+            .from('invoices')
+            .select(invoiceSelect)
+            .eq('is_deleted', false)
+            .ilike('invoice_number', pattern)
+            .limit(6);
+        })();
+
+        const employeesPromise = supabase
+          .from('employees')
+          .select('id, full_name, employee_code, department, designation, personal_phone')
+          .or(
+            `full_name.ilike.${pattern},employee_code.ilike.${pattern},department.ilike.${pattern}`
+          )
+          .limit(6);
+
+        const productsPromise = fetchProductsForUniversalSearch(pattern);
+        const quotationsPromise = fetchQuotationsForUniversalSearch(pattern, customerIds);
+
+        const [
+          ordersRes,
+          employeesRes,
+          productsRes,
+          invoicesRes,
+          quotationsRes,
+        ] = await Promise.all([
+          ordersPromise,
+          employeesPromise,
+          productsPromise,
+          invoicesPromise,
+          quotationsPromise,
+        ]);
+
+        const orders = ordersRes.data as any[] | null;
+        const ordersError = ordersRes.error as { message?: string } | null;
 
         if (ordersError) {
           logSearchSourceError('orders', ordersError);
@@ -346,13 +389,8 @@ export function UniversalSearchBar({
           });
         }
 
-        const { data: employees, error: employeesError } = await supabase
-          .from('employees')
-          .select('id, full_name, employee_code, department, designation, personal_phone')
-          .or(
-            `full_name.ilike.${pattern},employee_code.ilike.${pattern},department.ilike.${pattern}`
-          )
-          .limit(6);
+        const employees = employeesRes.data as any[] | null;
+        const employeesError = employeesRes.error as { message?: string } | null;
 
         if (employeesError) {
           logSearchSourceError('employees', employeesError);
@@ -375,8 +413,8 @@ export function UniversalSearchBar({
           });
         }
 
-        const { data: products, error: productsError } =
-          await fetchProductsForUniversalSearch(pattern);
+        const products = productsRes.data;
+        const productsError = productsRes.error;
 
         if (productsError) {
           logSearchSourceError('products', productsError);
@@ -389,31 +427,8 @@ export function UniversalSearchBar({
           });
         }
 
-        const invoiceSelect =
-          'id, invoice_number, customer_id, total_amount, status, created_at, customers(company_name)';
-        let invoices: any[] | null = null;
-        let invoicesError = null as { message?: string } | null;
-
-        if (customerIds.length > 0) {
-          const inList = customerIds.slice(0, 50).join(',');
-          const res = await supabase
-            .from('invoices')
-            .select(invoiceSelect)
-            .eq('is_deleted', false)
-            .or(`invoice_number.ilike.${pattern},customer_id.in.(${inList})`)
-            .limit(6);
-          invoices = res.data as any[] | null;
-          invoicesError = res.error;
-        } else {
-          const res = await supabase
-            .from('invoices')
-            .select(invoiceSelect)
-            .eq('is_deleted', false)
-            .ilike('invoice_number', pattern)
-            .limit(6);
-          invoices = res.data as any[] | null;
-          invoicesError = res.error;
-        }
+        const invoices = invoicesRes.data as any[] | null;
+        const invoicesError = invoicesRes.error as { message?: string } | null;
 
         if (invoicesError) {
           logSearchSourceError('invoices', invoicesError);
@@ -437,10 +452,8 @@ export function UniversalSearchBar({
           });
         }
 
-        const {
-          data: quotationRows,
-          error: quotationsError,
-        } = await fetchQuotationsForUniversalSearch(pattern, customerIds);
+        const quotationRows = quotationsRes.data;
+        const quotationsError = quotationsRes.error;
 
         if (quotationsError) {
           logSearchSourceError('quotations', quotationsError);

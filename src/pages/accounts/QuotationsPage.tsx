@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { measureAsync } from '@/lib/perf';
 
 interface Order {
   id: string;
@@ -165,7 +166,9 @@ export default function QuotationsPage() {
         query = query.neq('status', 'completed');
       }
 
-      const { data, error } = await query.order('created_at', { ascending: false });
+      const { data, error } = await measureAsync('QuotationsPage.fetchOrders.baseOrders', async () =>
+        query.order('created_at', { ascending: false })
+      );
       if (error) throw error;
       const list: Order[] = data || [];
       const orderIds = list.map((o) => o.id).filter(Boolean);
@@ -187,37 +190,40 @@ export default function QuotationsPage() {
         }
       }
 
-      // Calculate correct amounts using size-based pricing for each order
-      const ordersWithCalculatedAmounts = await Promise.all(
-        list.map(async (order) => {
-          try {
-            // Fetch order items to calculate correct total
-            const { data: orderItems } = await supabase
+      const { data: allOrderItems } = await measureAsync('QuotationsPage.fetchOrders.orderItems.bulk', async () =>
+        orderIds.length > 0
+          ? supabase
               .from('order_items')
-              .select('*, size_prices, sizes_quantities, specifications')
-              .eq('order_id', order.id);
-            
-            // Calculate correct total using size-based pricing
-            let calculatedAmount = order.final_amount; // Fallback to final_amount
-            if (orderItems && orderItems.length > 0) {
-              const summary = calculateOrderSummary(orderItems, order);
-              const extra = additionalByOrderId.get(order.id) ?? 0;
-              calculatedAmount = summary.grandTotal + extra;
-            }
-            
-            return {
-              ...order,
-              calculatedAmount
-            };
-          } catch (error) {
-            console.error(`Error calculating amount for order ${order.order_number}:`, error);
-            return {
-              ...order,
-              calculatedAmount: order.final_amount // Fallback to final_amount on error
-            };
-          }
-        })
+              .select('order_id, id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate')
+              .eq('is_deleted', false)
+              .in('order_id', orderIds as any)
+          : Promise.resolve({ data: [] as any[] })
       );
+      const itemsByOrderId = new Map<string, any[]>();
+      for (const item of allOrderItems || []) {
+        const oid = String((item as any).order_id || '');
+        if (!oid) continue;
+        const bucket = itemsByOrderId.get(oid) || [];
+        bucket.push(item);
+        itemsByOrderId.set(oid, bucket);
+      }
+
+      const ordersWithCalculatedAmounts = list.map((order) => {
+        const orderItems = itemsByOrderId.get(order.id) || [];
+        const fallback = Number(order.final_amount || order.total_amount || 0);
+        if (orderItems.length === 0) {
+          return {
+            ...order,
+            calculatedAmount: fallback + (additionalByOrderId.get(order.id) ?? 0),
+          };
+        }
+        const summary = calculateOrderSummary(orderItems, order);
+        const extra = additionalByOrderId.get(order.id) ?? 0;
+        return {
+          ...order,
+          calculatedAmount: summary.grandTotal + extra,
+        };
+      });
       
       setOrders(ordersWithCalculatedAmounts);
 

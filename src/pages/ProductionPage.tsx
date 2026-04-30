@@ -6,7 +6,6 @@ import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { useState, useEffect } from "react";
 import { getDashboardData, type DashboardData } from "@/lib/database";
-import { useOrdersWithReceipts } from "@/hooks/useOrdersWithReceipts";
 import { supabase } from "@/integrations/supabase/client";
 import { shouldRetryReadWithoutIsDeletedFilter } from "@/lib/supabaseSoftDeleteCompat";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -16,6 +15,7 @@ import { calculateOrderSummary } from "@/utils/priceCalculation";
 import { formatCurrency } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { measureAsync } from "@/lib/perf";
 
 const ProductionPage = () => {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -40,11 +40,15 @@ const ProductionPage = () => {
     try {
       setOrdersLoading(true);
       // 1) Fetch receipts that point to orders
-      let { data: receipts, error: receiptsError } = await supabase
-        .from("receipts")
-        .select("reference_id, reference_number, reference_type")
-        .eq("is_deleted", false)
-        .or('reference_type.eq.order,reference_type.eq.ORDER');
+      let { data: receipts, error: receiptsError } = await measureAsync(
+        'ProductionPage.fetchOrdersWithReceipts.receipts',
+        async () =>
+          supabase
+            .from("receipts")
+            .select("reference_id, reference_number, reference_type")
+            .eq("is_deleted", false)
+            .or('reference_type.eq.order,reference_type.eq.ORDER')
+      );
 
       if (receiptsError && shouldRetryReadWithoutIsDeletedFilter(receiptsError)) {
         const r2 = await supabase
@@ -115,46 +119,55 @@ const ProductionPage = () => {
         throw ordersError;
       }
 
-      // 3) Fetch order items separately for each order
-      const ordersWithItems = await Promise.all(
-        (ordersData || []).map(async (order: any) => {
-          const { data: orderItems, error: itemsError } = await supabase
-            .from("order_items")
-            .select(`
-              id,
-              quantity,
-              unit_price,
-              size_prices,
-              sizes_quantities,
-              specifications,
-              gst_rate,
-              category_image_url,
-              product_description,
-              mockup_images
-            `)
-            .eq("is_deleted", false)
-            .eq("order_id", order.id);
-
-          if (itemsError) {
-            console.error(`Error fetching items for order ${order.id}:`, itemsError);
-            const fallback = Number(order.final_amount || order.total_amount || 0);
-            return { ...order, order_items: [], calculatedAmount: fallback };
-          }
-
-          const items = orderItems || [];
-          let calculatedAmount = Number(order.final_amount || order.total_amount || 0);
-          if (items.length > 0) {
-            try {
-              const { grandTotal } = calculateOrderSummary(items, order);
-              calculatedAmount = grandTotal;
-            } catch (e) {
-              console.warn(`Order ${order.id} amount calculation failed, using stored total`, e);
-            }
-          }
-
-          return { ...order, order_items: items, calculatedAmount };
-        })
+      const orderIdsForItems = (ordersData || []).map((o: any) => o.id).filter(Boolean);
+      const { data: orderItemsRows, error: orderItemsError } = await measureAsync(
+        'ProductionPage.fetchOrdersWithReceipts.orderItems.bulk',
+        async () =>
+          orderIdsForItems.length > 0
+            ? supabase
+                .from("order_items")
+                .select(`
+                  order_id,
+                  id,
+                  quantity,
+                  unit_price,
+                  size_prices,
+                  sizes_quantities,
+                  specifications,
+                  gst_rate,
+                  category_image_url,
+                  product_description,
+                  mockup_images
+                `)
+                .eq("is_deleted", false)
+                .in("order_id", orderIdsForItems as any)
+            : Promise.resolve({ data: [] as any[], error: null as any })
       );
+      if (orderItemsError) {
+        console.error('Error fetching order items for production page:', orderItemsError);
+      }
+      const itemsByOrderId = new Map<string, any[]>();
+      for (const item of orderItemsRows || []) {
+        const oid = String((item as any).order_id || '');
+        if (!oid) continue;
+        const listForOrder = itemsByOrderId.get(oid) || [];
+        listForOrder.push(item);
+        itemsByOrderId.set(oid, listForOrder);
+      }
+
+      const ordersWithItems = (ordersData || []).map((order: any) => {
+        const items = itemsByOrderId.get(order.id) || [];
+        let calculatedAmount = Number(order.final_amount || order.total_amount || 0);
+        if (items.length > 0) {
+          try {
+            const { grandTotal } = calculateOrderSummary(items, order);
+            calculatedAmount = grandTotal;
+          } catch (e) {
+            console.warn(`Order ${order.id} amount calculation failed, using stored total`, e);
+          }
+        }
+        return { ...order, order_items: items, calculatedAmount };
+      });
 
       // Sort by order date (newest first)
       const sorted = ordersWithItems.sort(

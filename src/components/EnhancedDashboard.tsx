@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -41,7 +42,21 @@ import {
   parseOrderItemSpecifications,
 } from "@/utils/priceCalculation";
 import { sumActiveReceiptAmountsForOrder } from "@/utils/orderFinancials";
-import { format, parse, parseISO } from "date-fns";
+import {
+  endOfMonth,
+  endOfWeek,
+  endOfYear,
+  format,
+  parse,
+  parseISO,
+  startOfMonth,
+  startOfWeek,
+  startOfYear,
+  subDays,
+  subMonths,
+  subWeeks,
+  subYears,
+} from "date-fns";
 import { cn } from "@/lib/utils";
 
 type EnrichedOrder = {
@@ -109,7 +124,78 @@ function groupItemsByOrderId(
 
 type CategoryRevenueRow = { name: string; fullName: string; revenue: number };
 
-async function loadSalesDashboard(): Promise<{
+type DashboardPeriod =
+  | "this_week"
+  | "previous_week"
+  | "this_month"
+  | "previous_month"
+  | "last_30_days"
+  | "this_year"
+  | "previous_year";
+
+type DateRange = {
+  startDate: string;
+  endDate: string;
+};
+
+const PERIOD_OPTIONS: Array<{ value: DashboardPeriod; label: string }> = [
+  { value: "this_week", label: "This Week" },
+  { value: "previous_week", label: "Previous Week" },
+  { value: "this_month", label: "This Month" },
+  { value: "previous_month", label: "Previous Month" },
+  { value: "last_30_days", label: "Last 30 Days" },
+  { value: "this_year", label: "This Year" },
+  { value: "previous_year", label: "Previous Year" },
+];
+
+function toDateOnly(d: Date): string {
+  return format(d, "yyyy-MM-dd");
+}
+
+function getDashboardPeriodRange(period: DashboardPeriod, now = new Date()): DateRange {
+  switch (period) {
+    case "this_week": {
+      const start = startOfWeek(now, { weekStartsOn: 1 });
+      const end = endOfWeek(now, { weekStartsOn: 1 });
+      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
+    }
+    case "previous_week": {
+      const base = subWeeks(now, 1);
+      const start = startOfWeek(base, { weekStartsOn: 1 });
+      const end = endOfWeek(base, { weekStartsOn: 1 });
+      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
+    }
+    case "previous_month": {
+      const base = subMonths(now, 1);
+      const start = startOfMonth(base);
+      const end = endOfMonth(base);
+      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
+    }
+    case "last_30_days": {
+      const start = subDays(now, 29);
+      return { startDate: toDateOnly(start), endDate: toDateOnly(now) };
+    }
+    case "this_year": {
+      const start = startOfYear(now);
+      const end = endOfYear(now);
+      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
+    }
+    case "previous_year": {
+      const base = subYears(now, 1);
+      const start = startOfYear(base);
+      const end = endOfYear(base);
+      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
+    }
+    case "this_month":
+    default: {
+      const start = startOfMonth(now);
+      const end = endOfMonth(now);
+      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
+    }
+  }
+}
+
+async function loadSalesDashboard(range: DateRange): Promise<{
   orders: EnrichedOrder[];
   employees: Record<string, { id: string; full_name: string; avatar_url?: string }>;
   categoryRevenue: CategoryRevenueRow[];
@@ -119,6 +205,8 @@ async function loadSalesDashboard(): Promise<{
       .from("orders")
       .select("id, order_number, order_date, sales_manager, final_amount, total_amount, gst_rate")
       .or("order_type.is.null,order_type.eq.custom")
+      .gte("order_date", range.startDate)
+      .lte("order_date", range.endDate)
       .order("created_at", { ascending: false });
 
   let { data: orderRows, error: orderErr } = await ordersBase().eq("is_deleted", false);
@@ -325,6 +413,7 @@ const ChartTooltip = ({
 };
 
 export function EnhancedDashboard() {
+  const [selectedPeriod, setSelectedPeriod] = useState<DashboardPeriod>("this_month");
   const [orders, setOrders] = useState<EnrichedOrder[]>([]);
   const [employees, setEmployees] = useState<
     Record<string, { id: string; full_name: string; avatar_url?: string }>
@@ -332,12 +421,13 @@ export function EnhancedDashboard() {
   const [categoryRevenue, setCategoryRevenue] = useState<CategoryRevenueRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const periodRange = useMemo(() => getDashboardPeriodRange(selectedPeriod), [selectedPeriod]);
 
   const refresh = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const { orders: o, employees: e, categoryRevenue: cr } = await loadSalesDashboard();
+      const { orders: o, employees: e, categoryRevenue: cr } = await loadSalesDashboard(periodRange);
       setOrders(o);
       setEmployees(e);
       setCategoryRevenue(cr);
@@ -347,7 +437,7 @@ export function EnhancedDashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [periodRange]);
 
   useEffect(() => {
     refresh();
@@ -424,7 +514,7 @@ export function EnhancedDashboard() {
         return 0;
       }
     });
-    return arr.slice(-12);
+    return arr;
   }, [orders]);
 
   const barLeaderData = useMemo(
@@ -482,10 +572,27 @@ export function EnhancedDashboard() {
             orders).
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => refresh()} className="shrink-0 gap-2">
-          <RefreshCw className="h-4 w-4" />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Select
+            value={selectedPeriod}
+            onValueChange={(value: DashboardPeriod) => setSelectedPeriod(value)}
+          >
+            <SelectTrigger className="w-[170px]">
+              <SelectValue placeholder="Select period" />
+            </SelectTrigger>
+            <SelectContent>
+              {PERIOD_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" size="sm" onClick={() => refresh()} className="shrink-0 gap-2">
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -529,7 +636,10 @@ export function EnhancedDashboard() {
               <TrendingUp className="h-5 w-5 text-primary" />
               Revenue vs received
             </CardTitle>
-            <CardDescription>Last twelve months by order date</CardDescription>
+            <CardDescription>
+              By order date ({format(parseISO(periodRange.startDate), "dd MMM yyyy")} -{" "}
+              {format(parseISO(periodRange.endDate), "dd MMM yyyy")})
+            </CardDescription>
           </CardHeader>
           <CardContent className="h-[320px] pt-0">
             {monthlySeries.length === 0 ? (

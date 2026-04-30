@@ -17,6 +17,7 @@ import { calculateSizeBasedTotal } from '@/utils/priceCalculation';
 import { orderHasActiveCreditInReceiptRows, sumActiveReceiptAmountsForOrder } from '@/utils/orderFinancials';
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { getSortedSizes, sortSizesQuantities as sortSizesQuantitiesUtil, sortSizesByMasterOrder } from '@/utils/sizeSorting';
+import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -235,8 +236,7 @@ export default function QuotationDetailPage() {
         setTotalReceipts(0);
         setHasActiveCreditReceipt(false);
       }
-      // Generate quotation number
-      const qNum = await generateQuotationNumber(orderData as any);
+      const qNum = await resolveQuotationNumberForOrder(orderData as any);
       setQuotationNumber(qNum);
     } catch (error) {
       toast.error('Failed to load quotation details');
@@ -245,60 +245,140 @@ export default function QuotationDetailPage() {
     }
   };
 
-  // Generate unique quotation number: SO/YY-YY/MON/SEQ
-  const generateQuotationNumber = async (orderData?: { id?: string; order_date?: string | null; created_at?: string | null }) => {
+  const addDaysYmd = (ymd: string | null | undefined, days: number): string => {
+    const source = ymd ? new Date(ymd) : new Date();
+    source.setDate(source.getDate() + days);
+    return source.toISOString().slice(0, 10);
+  };
+
+  // Generate legacy quotation number: SO/YY-YY/MON/ORDER_SEQ
+  // ORDER_SEQ must match business order serial (e.g. TUC/26-27/APR/165 -> .../165)
+  const generateQuotationNumber = async (orderData?: { id?: string; order_number?: string | null; order_date?: string | null; created_at?: string | null }) => {
     const sourceDate = orderData?.order_date ? new Date(orderData.order_date) : new Date();
     const fyStart = sourceDate.getMonth() < 3 ? sourceDate.getFullYear() - 1 : sourceDate.getFullYear();
     const fyEnd = fyStart + 1;
     const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
     const month = sourceDate.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
 
-    // Check current max sequence from existing quotations (if any).
-    const { data } = await supabase
-      .from('quotations')
-      .select('quotation_number')
-      .eq('is_deleted', false)
-      .ilike('quotation_number', `SO/${fyStr}/${month}/%`)
-      .order('quotation_number', { ascending: false });
-
-    let maxExistingSeq = 0;
-    if (data && data.length > 0) {
-      for (const row of data as any[]) {
-        const lastNum = row?.quotation_number;
-        const match = typeof lastNum === 'string' ? lastNum.match(/(\d+)$/) : null;
-        if (match) {
-          const seq = Number.parseInt(match[1], 10);
-          if (Number.isFinite(seq) && seq > maxExistingSeq) maxExistingSeq = seq;
-        }
+    const orderNumber = String(orderData?.order_number || '');
+    const suffixMatch = orderNumber.match(/\/(\d+)$/);
+    if (suffixMatch) {
+      const serial = Number.parseInt(suffixMatch[1], 10);
+      if (Number.isFinite(serial) && serial > 0) {
+        return `SO/${fyStr}/${month}/${String(serial).padStart(3, '0')}`;
       }
     }
 
-    // Derive a stable serial index from monthly order chronology so
-    // quotations still increment even if quotation rows are not persisted yet.
-    let derivedOrderSeq = 1;
-    if (orderData?.id) {
-      const monthStart = new Date(sourceDate.getFullYear(), sourceDate.getMonth(), 1);
-      const monthEnd = new Date(sourceDate.getFullYear(), sourceDate.getMonth() + 1, 1);
-
-      const { data: monthlyOrders } = await supabase
+    const queryWithSoftDelete = () =>
+      supabase
         .from('orders')
         .select('id, order_date, created_at')
         .eq('is_deleted', false)
-        .gte('order_date', monthStart.toISOString().slice(0, 10))
-        .lt('order_date', monthEnd.toISOString().slice(0, 10))
+        .gte('order_date', new Date(sourceDate.getFullYear(), sourceDate.getMonth(), 1).toISOString().slice(0, 10))
+        .lt('order_date', new Date(sourceDate.getFullYear(), sourceDate.getMonth() + 1, 1).toISOString().slice(0, 10))
+        .order('order_date', { ascending: true })
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true });
+    const queryWithoutSoftDelete = () =>
+      supabase
+        .from('orders')
+        .select('id, order_date, created_at')
+        .gte('order_date', new Date(sourceDate.getFullYear(), sourceDate.getMonth(), 1).toISOString().slice(0, 10))
+        .lt('order_date', new Date(sourceDate.getFullYear(), sourceDate.getMonth() + 1, 1).toISOString().slice(0, 10))
         .order('order_date', { ascending: true })
         .order('created_at', { ascending: true })
         .order('id', { ascending: true });
 
-      if (monthlyOrders && monthlyOrders.length > 0) {
-        const idx = (monthlyOrders as any[]).findIndex((o) => o?.id === orderData.id);
-        if (idx >= 0) derivedOrderSeq = idx + 1;
+    let { data: monthlyOrders, error } = await queryWithSoftDelete();
+    if (error && shouldRetryReadWithoutIsDeletedFilter(error)) {
+      const retry = await queryWithoutSoftDelete();
+      monthlyOrders = retry.data;
+      error = retry.error;
+    }
+    if (error) throw error;
+
+    let derivedOrderSeq = 1;
+    if (orderData?.id && monthlyOrders && monthlyOrders.length > 0) {
+      const idx = (monthlyOrders as any[]).findIndex((o) => o?.id === orderData.id);
+      if (idx >= 0) {
+        derivedOrderSeq = idx + 1;
       }
     }
-
-    const nextSeq = Math.max(maxExistingSeq, derivedOrderSeq);
-    const seqStr = nextSeq.toString().padStart(3, '0');
+    const seqStr = String(derivedOrderSeq).padStart(3, '0');
     return `SO/${fyStr}/${month}/${seqStr}`;
+  };
+
+  const resolveQuotationNumberForOrder = async (orderData: {
+    id?: string;
+    order_number?: string | null;
+    customer_id?: string | null;
+    order_date?: string | null;
+    final_amount?: number | null;
+    gst_rate?: number | null;
+  }) => {
+    const orderId = String(orderData?.id || '');
+    if (!orderId) {
+      return generateQuotationNumber(orderData);
+    }
+
+    const readByOrderWithSoftDelete = () =>
+      supabase
+        .from('quotations')
+        .select('id, quotation_number')
+        .eq('order_id', orderId as any)
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: true })
+        .limit(1);
+    const readByOrderWithoutSoftDelete = () =>
+      supabase
+        .from('quotations')
+        .select('id, quotation_number')
+        .eq('order_id', orderId as any)
+        .order('created_at', { ascending: true })
+        .limit(1);
+
+    let existing = await readByOrderWithSoftDelete();
+    if (existing.error && shouldRetryReadWithoutIsDeletedFilter(existing.error)) {
+      existing = await readByOrderWithoutSoftDelete();
+    }
+    if (existing.error) throw existing.error;
+    const firstExisting = existing.data?.[0] as { quotation_number?: string | null } | undefined;
+    if (firstExisting?.quotation_number) return firstExisting.quotation_number;
+
+    const quotationNumber = await generateQuotationNumber(orderData);
+    const orderDate = String(orderData?.order_date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+    const total = Number(orderData?.final_amount || 0);
+    const gstRate = Number(orderData?.gst_rate || 0);
+    const taxAmount = gstRate > 0 ? Number(((total * gstRate) / (100 + gstRate)).toFixed(2)) : 0;
+    const subtotal = Number((total - taxAmount).toFixed(2));
+
+    const payload = {
+      quotation_number: quotationNumber,
+      order_id: orderId,
+      order_number: orderData?.order_number || null,
+      customer_id: orderData?.customer_id || null,
+      quotation_date: orderDate,
+      valid_until: addDaysYmd(orderDate, 30),
+      subtotal: Number.isFinite(subtotal) ? subtotal : total,
+      tax_amount: Number.isFinite(taxAmount) ? taxAmount : 0,
+      total_amount: total,
+      source: 'automatic',
+      status: 'draft',
+    };
+
+    const { error: insertError } = await supabase.from('quotations').insert(payload as any);
+    if (!insertError) return quotationNumber;
+
+    // Handle races by re-reading existing order-linked quotation.
+    let retryExisting = await readByOrderWithSoftDelete();
+    if (retryExisting.error && shouldRetryReadWithoutIsDeletedFilter(retryExisting.error)) {
+      retryExisting = await readByOrderWithoutSoftDelete();
+    }
+    if (retryExisting.error) throw retryExisting.error;
+    const retried = retryExisting.data?.[0] as { quotation_number?: string | null } | undefined;
+    if (retried?.quotation_number) return retried.quotation_number;
+
+    throw insertError;
   };
 
   // Helper: sort sizes using master order configuration

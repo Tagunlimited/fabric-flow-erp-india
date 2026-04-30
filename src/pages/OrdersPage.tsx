@@ -36,7 +36,7 @@ import {
 } from "@/components/ui/dialog";
 import { calculateOrderSummary } from '@/utils/priceCalculation';
 import { cn, formatDateIndian, formatLocaleDateFromApi, parseBusinessDateLocal } from '@/lib/utils';
-import { fetchOrderIdsWithActiveCreditReceipt, sumActiveReceiptAmountsForOrder } from '@/utils/orderFinancials';
+import { buildActiveReceiptTotalLookup, fetchOrderIdsWithActiveCreditReceipt } from '@/utils/orderFinancials';
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 import { Badge } from '@/components/ui/badge';
@@ -45,6 +45,7 @@ import {
   fetchEmployeeRowsWithSelectFallbacks,
   workEmailFromEmployeeRow,
 } from '@/lib/employeesSchemaCompat';
+import { measureAsync } from '@/lib/perf';
 
 interface Order {
   id: string;
@@ -262,6 +263,7 @@ function OrderColumnFilterTrigger({
 }
 
 const OrdersPage = () => {
+  const ORDERS_PAGE_SIZE = 100;
   const navigate = useNavigate();
   const location = useLocation();
   const [orders, setOrders] = useState<Order[]>([]);
@@ -278,6 +280,7 @@ const OrdersPage = () => {
   const [sortBy, setSortBy] = useState<string>("date_desc");
   const [loggedInSalesManagerFilterValue, setLoggedInSalesManagerFilterValue] = useState<string>("");
   const [prefillFromManualQuotationId, setPrefillFromManualQuotationId] = useState<string | null>(null);
+  const [ordersLimit, setOrdersLimit] = useState<number>(ORDERS_PAGE_SIZE);
 
   const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
 
@@ -400,15 +403,19 @@ const OrdersPage = () => {
             customer:customers(company_name)
           `)
           .or('order_type.is.null,order_type.eq.custom')
+          .range(0, Math.max(ordersLimit - 1, 0))
           .order('created_at', { ascending: false });
 
-      let { data, error } = await buildOrdersQuery().eq('is_deleted', false);
+      let { data, error } = await measureAsync('OrdersPage.fetchOrders.baseOrders', async () =>
+        buildOrdersQuery().eq('is_deleted', false)
+      );
       if (error && shouldRetryReadWithoutIsDeletedFilter(error)) {
-        const retry = await buildOrdersQuery();
+        const retry = await measureAsync('OrdersPage.fetchOrders.baseOrders.retry', async () =>
+          buildOrdersQuery()
+        );
+        if (retry.error) throw retry.error;
         data = retry.data;
-        error = retry.error;
       }
-
       if (error) throw error;
 
       const orderIds = (data || []).map((o) => o.id).filter(Boolean);
@@ -416,11 +423,15 @@ const OrdersPage = () => {
 
       let ordersWithCuttingMasterSet = new Set<string>();
       if (orderIds.length > 0) {
-        const { data: assignmentRows, error: assignmentError } = await supabase
-          .from('order_assignments')
-          .select('order_id, cutting_master_id')
-          .in('order_id', orderIds as any)
-          .not('cutting_master_id', 'is', null);
+        const { data: assignmentRows, error: assignmentError } = await measureAsync(
+          'OrdersPage.fetchOrders.cuttingAssignments',
+          async () =>
+            supabase
+              .from('order_assignments')
+              .select('order_id, cutting_master_id')
+              .in('order_id', orderIds as any)
+              .not('cutting_master_id', 'is', null)
+        );
         if (assignmentError) {
           console.warn('order_assignments fetch for orders list stats:', assignmentError);
         } else if (assignmentRows) {
@@ -475,7 +486,10 @@ const OrdersPage = () => {
           return r.data || [];
         };
 
-        const [receiptsById, receiptsByNumber] = await Promise.all([fetchReceiptsByIds(), fetchReceiptsByNumbers()]);
+        const [receiptsById, receiptsByNumber] = await measureAsync(
+          'OrdersPage.fetchOrders.receipts',
+          async () => Promise.all([fetchReceiptsByIds(), fetchReceiptsByNumbers()])
+        );
 
         const receiptMap = new Map<string, {
           id: string;
@@ -492,14 +506,22 @@ const OrdersPage = () => {
       }
 
       const creditOrderIdSet =
-        orderIds.length > 0 ? await fetchOrderIdsWithActiveCreditReceipt(orderIds) : new Set<string>();
+        orderIds.length > 0
+          ? await measureAsync('OrdersPage.fetchOrders.creditOrderIds', async () =>
+              fetchOrderIdsWithActiveCreditReceipt(orderIds)
+            )
+          : new Set<string>();
 
       const additionalByOrderId = new Map<string, number>();
       if (orderIds.length > 0) {
-        const { data: chargesRows, error: chargesError } = await supabase
-          .from('order_additional_charges')
-          .select('order_id, amount_incl_gst')
-          .in('order_id', orderIds as any);
+        const { data: chargesRows, error: chargesError } = await measureAsync(
+          'OrdersPage.fetchOrders.additionalCharges',
+          async () =>
+            supabase
+              .from('order_additional_charges')
+              .select('order_id, amount_incl_gst')
+              .in('order_id', orderIds as any)
+        );
         if (chargesError) {
           console.warn('order_additional_charges fetch for orders list:', chargesError);
         } else if (chargesRows) {
@@ -514,73 +536,73 @@ const OrdersPage = () => {
         }
       }
 
-      // Calculate correct amounts for each order using size-based pricing
-      const ordersWithCalculatedAmounts = await Promise.all(
-        (data || []).map(async (order) => {
-          try {
-            // Fetch order items with size_prices and sizes_quantities
-            const itemsSelect =
-              'id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate';
-            let { data: orderItems, error: itemsError } = await supabase
-              .from('order_items')
-              .select(itemsSelect)
-              .eq('is_deleted', false)
-              .eq('order_id', order.id);
+      const itemsSelect = 'order_id, id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate';
+      let orderItems: any[] = [];
+      if (orderIds.length > 0) {
+        const itemsFetch = await measureAsync('OrdersPage.fetchOrders.orderItems.bulk', async () =>
+          supabase
+            .from('order_items')
+            .select(itemsSelect)
+            .eq('is_deleted', false)
+            .in('order_id', orderIds as any)
+        );
+        if (itemsFetch.error && shouldRetryReadWithoutIsDeletedFilter(itemsFetch.error)) {
+          const retry = await measureAsync('OrdersPage.fetchOrders.orderItems.bulk.retry', async () =>
+            supabase.from('order_items').select(itemsSelect).in('order_id', orderIds as any)
+          );
+          if (retry.error) throw retry.error;
+          orderItems = retry.data || [];
+        } else if (itemsFetch.error) {
+          throw itemsFetch.error;
+        } else {
+          orderItems = itemsFetch.data || [];
+        }
+      }
 
-            if (itemsError && shouldRetryReadWithoutIsDeletedFilter(itemsError)) {
-              const r2 = await supabase.from('order_items').select(itemsSelect).eq('order_id', order.id);
-              orderItems = r2.data;
-              itemsError = r2.error;
-            }
+      const itemsByOrderId = new Map<string, any[]>();
+      for (const item of orderItems) {
+        const oid = String(item?.order_id || '');
+        if (!oid) continue;
+        const list = itemsByOrderId.get(oid) || [];
+        list.push(item);
+        itemsByOrderId.set(oid, list);
+      }
 
-            if (!itemsError && orderItems && orderItems.length > 0) {
-              // Calculate the correct total using size-based pricing
-              const { grandTotal: lineItemsGrandTotal } = calculateOrderSummary(orderItems, order);
-              const additionalSum = additionalByOrderId.get(order.id) ?? 0;
-              const grandTotal = lineItemsGrandTotal + additionalSum;
-              const totalReceipts = sumActiveReceiptAmountsForOrder(
-                receiptRows,
-                order.id,
-                order.order_number
-              );
+      const activeReceiptRows = receiptRows.filter(
+        (r) => String(r.status || '').trim().toLowerCase() === 'active'
+      );
+      const { byOrderId: receiptsByOrderId, byOrderNumber: receiptsByOrderNumber } =
+        buildActiveReceiptTotalLookup(activeReceiptRows);
 
-              return {
-                ...order,
-                calculatedAmount: grandTotal,
-                calculatedBalance: Math.max(grandTotal - totalReceipts, 0),
-                has_credit_receipt: creditOrderIdSet.has(order.id),
-              };
-            } else {
-              // Fallback to final_amount if no items found
-              const fallbackAmount = Number(order.final_amount || order.total_amount || 0);
-              const totalReceipts = sumActiveReceiptAmountsForOrder(
-                receiptRows,
-                order.id,
-                order.order_number
-              );
+      const ordersWithCalculatedAmounts = measureAsync('OrdersPage.fetchOrders.compute', async () =>
+        (data || []).map((order: any) => {
+          const orderId = String(order.id || '');
+          const orderNumber = String(order.order_number || '').trim();
+          const totalReceipts =
+            (receiptsByOrderId.get(orderId) || 0) ||
+            (orderNumber ? receiptsByOrderNumber.get(orderNumber) || 0 : 0);
 
-              return {
-                ...order,
-                calculatedAmount: fallbackAmount,
-                calculatedBalance: Math.max(fallbackAmount - totalReceipts, 0),
-                has_credit_receipt: creditOrderIdSet.has(order.id),
-              };
-            }
-          } catch (error) {
-            console.error(`Error calculating amount for order ${order.order_number}:`, error);
-            const fallbackAmount = Number(order.final_amount || order.total_amount || 0);
-            const totalReceipts = sumActiveReceiptAmountsForOrder(
-              receiptRows,
-              order.id,
-              order.order_number
-            );
+          const orderLineItems = itemsByOrderId.get(orderId) || [];
+          const additionalSum = additionalByOrderId.get(orderId) ?? 0;
+          const fallbackAmount = Number(order.final_amount || order.total_amount || 0);
+
+          if (orderLineItems.length > 0) {
+            const { grandTotal: lineItemsGrandTotal } = calculateOrderSummary(orderLineItems, order);
+            const grandTotal = lineItemsGrandTotal + additionalSum;
             return {
               ...order,
-              calculatedAmount: fallbackAmount, // Fallback to final_amount on error
-              calculatedBalance: Math.max(fallbackAmount - totalReceipts, 0),
-              has_credit_receipt: creditOrderIdSet.has(order.id),
+              calculatedAmount: grandTotal,
+              calculatedBalance: Math.max(grandTotal - totalReceipts, 0),
+              has_credit_receipt: creditOrderIdSet.has(orderId),
             };
           }
+
+          return {
+            ...order,
+            calculatedAmount: fallbackAmount,
+            calculatedBalance: Math.max(fallbackAmount - totalReceipts, 0),
+            has_credit_receipt: creditOrderIdSet.has(orderId),
+          };
         })
       );
       
@@ -607,7 +629,7 @@ const OrdersPage = () => {
         }
       }
       
-      setOrders(ordersWithCalculatedAmounts);
+      setOrders(await ordersWithCalculatedAmounts);
       setOrdersWithCuttingMaster(ordersWithCuttingMasterSet);
     } catch (error) {
       console.error('Error fetching orders:', error);
@@ -634,9 +656,12 @@ const OrdersPage = () => {
       }
 
       toast.success(`Order ${orderNumber} deleted successfully`);
-      
-      // Refresh the orders list
-      await fetchOrders();
+      setOrders((prev) => prev.filter((o) => o.id !== orderId));
+      setOrdersWithCuttingMaster((prev) => {
+        const next = new Set(prev);
+        next.delete(orderId);
+        return next;
+      });
     } catch (error) {
       console.error('Error deleting order:', error);
       toast.error('An unexpected error occurred while deleting the order');
@@ -682,7 +707,9 @@ const OrdersPage = () => {
 
       playOrderStatusChangeSound();
       toast.success(`Order status changed to ${newStatus.replace('_', ' ').toUpperCase()}`);
-      fetchOrders();
+      setOrders((prev) =>
+        prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
+      );
     } catch (error) {
       console.error('Error updating order status:', error);
       toast.error('Failed to update order status');
@@ -955,6 +982,19 @@ const OrdersPage = () => {
                       <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                       Force Refresh
                     </Button>
+                    {orders.length >= ordersLimit && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setOrdersLimit((prev) => prev + ORDERS_PAGE_SIZE);
+                          setTimeout(() => fetchOrders(true), 0);
+                        }}
+                        disabled={loading}
+                      >
+                        Load More
+                      </Button>
+                    )}
                     <Button variant="outline" size="sm" onClick={handleRestoreByOrderNumber}>
                       Restore Order
                     </Button>
