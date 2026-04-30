@@ -602,6 +602,8 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
     let lastMessageId: string | null = null;
     const pollingInterval = setInterval(async () => {
       try {
+        if (document.hidden) return;
+        if (!navigator.onLine) return;
         const { data: latestMessages, error } = await supabase
           .from('chat_messages')
           .select('id, created_at')
@@ -688,7 +690,7 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
       } catch (error) {
         console.error('Polling error:', error);
       }
-    }, 2000); // Poll every 2 seconds
+    }, 8000); // Poll every 8 seconds
 
     // Initialize lastMessageId
     (async () => {
@@ -727,7 +729,7 @@ export function ChatInterfaceFull({ onClose, scrollToMessageId }: ChatInterfaceF
         }
       }
     };
-  }, [user, messages]);
+  }, [user]);
 
   // Auto-scroll to bottom
   useEffect(() => {

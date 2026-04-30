@@ -106,6 +106,34 @@ export function sumActiveReceiptAmountsForOrder(
   }, 0);
 }
 
+export function buildActiveReceiptTotalLookup(
+  rows: Array<{
+    reference_id?: string | null;
+    reference_number?: string | null;
+    amount?: number | null;
+    status?: string | null;
+  }>
+): {
+  byOrderId: Map<string, number>;
+  byOrderNumber: Map<string, number>;
+} {
+  const byOrderId = new Map<string, number>();
+  const byOrderNumber = new Map<string, number>();
+  for (const r of rows || []) {
+    if (receiptRowIsCancelled(r)) continue;
+    const amount = Number(r.amount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const rid = String(r.reference_id || '').trim();
+    const rnum = String(r.reference_number || '').trim();
+    if (rid) {
+      byOrderId.set(rid, (byOrderId.get(rid) || 0) + amount);
+    } else if (rnum) {
+      byOrderNumber.set(rnum, (byOrderNumber.get(rnum) || 0) + amount);
+    }
+  }
+  return { byOrderId, byOrderNumber };
+}
+
 export function orderHasActiveCreditInReceiptRows(
   rows: Array<{
     reference_id?: string | null;

@@ -34,11 +34,12 @@ import { toast } from 'sonner';
 import { cn, formatCurrency, formatDateIndian } from '@/lib/utils';
 import { calculateOrderSummary } from '@/utils/priceCalculation';
 import {
+  buildActiveReceiptTotalLookup,
   fetchOrderIdsWithActiveCreditReceipt,
-  sumActiveReceiptAmountsForOrder,
 } from '@/utils/orderFinancials';
 import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { RefreshCw, Wallet, AlertTriangle, CalendarClock, Receipt, Filter } from 'lucide-react';
+import { measureAsync } from '@/lib/perf';
 
 type ArRow = {
   id: string;
@@ -183,7 +184,9 @@ export default function ReceivablesPage() {
       if (showCompleted === 'no') {
         ordersQuery = ordersQuery.neq('status', 'completed');
       }
-      const { data, error } = await ordersQuery.order('created_at', { ascending: false });
+      const { data, error } = await measureAsync('Receivables.load.orders', async () =>
+        ordersQuery.order('created_at', { ascending: false })
+      );
 
       if (error) throw error;
 
@@ -229,7 +232,11 @@ export default function ReceivablesPage() {
       }
 
       const creditOrderIdSet =
-        orderIds.length > 0 ? await fetchOrderIdsWithActiveCreditReceipt(orderIds) : new Set<string>();
+        orderIds.length > 0
+          ? await measureAsync('Receivables.load.creditOrderIds', async () =>
+              fetchOrderIdsWithActiveCreditReceipt(orderIds)
+            )
+          : new Set<string>();
 
       const additionalByOrderId = new Map<string, number>();
       if (orderIds.length > 0) {
@@ -248,66 +255,61 @@ export default function ReceivablesPage() {
         }
       }
 
-      const enriched = await Promise.all(
-        list.map(async (order) => {
-          try {
-            const { data: orderItems, error: itemsError } = await supabase
-              .from('order_items')
-              .select('id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate')
-              .eq('order_id', order.id);
-
-            let calculatedTotal = Number(order.final_amount || order.total_amount || 0);
-            if (!itemsError && orderItems && orderItems.length > 0) {
-              const { grandTotal: lineGrand } = calculateOrderSummary(orderItems, order);
-              const additionalSum = additionalByOrderId.get(order.id) ?? 0;
-              calculatedTotal = lineGrand + additionalSum;
-            } else {
-              calculatedTotal += additionalByOrderId.get(order.id) ?? 0;
-            }
-
-            const received = sumActiveReceiptAmountsForOrder(receiptRows, order.id, order.order_number);
-            const pending = Math.max(0, calculatedTotal - received);
-            const paymentDue = (order.payment_due_date as string | null) ?? null;
-
-            return {
-              id: order.id,
-              order_number: order.order_number,
-              order_date: order.order_date,
-              status: order.status,
-              sales_manager: order.sales_manager ?? null,
-              customer_id: order.customer_id,
-              customer_name: order.customer?.company_name || '—',
-              calculatedTotal,
-              received,
-              pending,
-              payment_due_date: paymentDue,
-              hasCreditReceipt: creditOrderIdSet.has(order.id),
-              daysOverdue: overdueDays(paymentDue, pending),
-            } satisfies ArRow;
-          } catch (e) {
-            console.error(`Receivables row error for ${order.order_number}:`, e);
-            const fallbackAmount = Number(order.final_amount || order.total_amount || 0);
-            const received = sumActiveReceiptAmountsForOrder(receiptRows, order.id, order.order_number);
-            const pending = Math.max(0, fallbackAmount - received);
-            const paymentDue = (order.payment_due_date as string | null) ?? null;
-            return {
-              id: order.id,
-              order_number: order.order_number,
-              order_date: order.order_date,
-              status: order.status,
-              sales_manager: order.sales_manager ?? null,
-              customer_id: order.customer_id,
-              customer_name: order.customer?.company_name || '—',
-              calculatedTotal: fallbackAmount,
-              received,
-              pending,
-              payment_due_date: paymentDue,
-              hasCreditReceipt: creditOrderIdSet.has(order.id),
-              daysOverdue: overdueDays(paymentDue, pending),
-            } satisfies ArRow;
-          }
-        })
+      const { data: orderItemsRows, error: orderItemsError } = await measureAsync(
+        'Receivables.load.orderItems.bulk',
+        async () =>
+          orderIds.length > 0
+            ? supabase
+                .from('order_items')
+                .select('order_id, id, unit_price, quantity, size_prices, sizes_quantities, specifications, gst_rate')
+                .eq('is_deleted', false)
+                .in('order_id', orderIds as any)
+            : Promise.resolve({ data: [] as any[], error: null as any })
       );
+      if (orderItemsError) {
+        console.warn('receivables order_items fetch:', orderItemsError);
+      }
+      const itemsByOrderId = new Map<string, any[]>();
+      for (const item of orderItemsRows || []) {
+        const oid = String((item as any).order_id || '');
+        if (!oid) continue;
+        const listForOrder = itemsByOrderId.get(oid) || [];
+        listForOrder.push(item);
+        itemsByOrderId.set(oid, listForOrder);
+      }
+
+      const { byOrderId: receiptsByOrderId, byOrderNumber: receiptsByOrderNumber } =
+        buildActiveReceiptTotalLookup(receiptRows);
+
+      const enriched = (list as any[]).map((order) => {
+        const fallbackAmount = Number(order.final_amount || order.total_amount || 0);
+        const orderItems = itemsByOrderId.get(order.id) || [];
+        const additionalSum = additionalByOrderId.get(order.id) ?? 0;
+        const calculatedTotal =
+          orderItems.length > 0
+            ? calculateOrderSummary(orderItems, order).grandTotal + additionalSum
+            : fallbackAmount + additionalSum;
+        const received =
+          (receiptsByOrderId.get(order.id) || 0) ||
+          (order.order_number ? receiptsByOrderNumber.get(order.order_number) || 0 : 0);
+        const pending = Math.max(0, calculatedTotal - received);
+        const paymentDue = (order.payment_due_date as string | null) ?? null;
+        return {
+          id: order.id,
+          order_number: order.order_number,
+          order_date: order.order_date,
+          status: order.status,
+          sales_manager: order.sales_manager ?? null,
+          customer_id: order.customer_id,
+          customer_name: order.customer?.company_name || '—',
+          calculatedTotal,
+          received,
+          pending,
+          payment_due_date: paymentDue,
+          hasCreditReceipt: creditOrderIdSet.has(order.id),
+          daysOverdue: overdueDays(paymentDue, pending),
+        } satisfies ArRow;
+      });
 
       if (salesManagerIds.length > 0) {
         const { data: emps, error: empErr } = await supabase
