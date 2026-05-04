@@ -28,8 +28,7 @@ import MastersPage from "./pages/masters/MastersPage";
 import ProductMasterPage from "./pages/masters/ProductMasterPage";
 import ItemMasterPage from "./pages/masters/ItemMasterPage";
 import WarehouseMasterPage from "./pages/masters/WarehouseMasterPage";
-import WarehouseInventoryPage from "./pages/warehouse/WarehouseInventoryPage";
-import ProductInventoryPage from "./pages/inventory/ProductInventoryPage";
+import InventoryDashboardPage from "./pages/inventory/InventoryDashboardPage";
 import InventoryAdjustmentPage from "./pages/inventory/InventoryAdjustmentPage";
 import CustomerTypeMasterPage from "./pages/masters/CustomerTypeMasterPage";
 import SupplierMasterPage from "./pages/masters/SupplierMasterPage";
@@ -367,7 +366,7 @@ const App = () => {
                 } />
                 <Route path="/inventory/products" element={
                   <ProtectedRouteWithCompanySettings>
-                    <ProductInventoryPage />
+                    <Navigate to="/warehouse/inventory?tab=product" replace />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/inventory/adjustment" element={
@@ -399,7 +398,7 @@ const App = () => {
                 } />
                 <Route path="/warehouse/inventory" element={
                   <ProtectedRouteWithCompanySettings>
-                    <WarehouseInventoryPage />
+                    <InventoryDashboardPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/masters/customer-types" element={

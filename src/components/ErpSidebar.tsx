@@ -34,7 +34,6 @@ import {
   Quote,
   PackageCheck,
   Boxes,
-  PackageSearch,
   PackageX,
   LayoutDashboard,
   UserCheck,
@@ -95,7 +94,8 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       badgeColor: "bg-manufacturing",
       children: [
         { title: "Custom Orders", url: "/orders", icon: FileEdit },
-        { title: "Readymade Orders", url: "/orders/readymade", icon: Shirt }
+        // Temporarily hidden — re-enable when readymade flow is ready
+        // { title: "Readymade Orders", url: "/orders/readymade", icon: Shirt }
         // { title: "Stock Orders", url: "/stock-orders", icon: Shirt }
         
       ]
@@ -134,8 +134,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       title: "Inventory",
       icon: Package,
       children: [
-        { title: "Raw Material", url: "/warehouse/inventory", icon: Boxes },
-        { title: "Product Inventory", url: "/inventory/products", icon: PackageSearch },
+        { title: "Inventory Dashboard", url: "/warehouse/inventory", icon: Boxes },
         { title: "Inventory Adjustment", url: "/inventory/adjustment", icon: PackageX },
       ]
     },
@@ -502,7 +501,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
     Home, Users, ShoppingCart, Package, Factory, CheckCircle, Truck, BarChart3, 
     Settings, UserCog, Calculator, Palette, Building, ShoppingBag, ClipboardList, 
     Award, AlertTriangle, Scissors, Shirt, Contact, UserPlus, DollarSign, Receipt,
-    CreditCard, Quote, FileText, PackageCheck, Boxes, PackageSearch, PackageX,
+    CreditCard, Quote, FileText, PackageCheck, Boxes, PackageX,
     LayoutDashboard, UserCheck, UsersRound, CheckSquare, ClipboardCheck, Hand,
     Box, FileEdit, Wallet, List, BookOpen, FileImage, Printer
   };

@@ -113,7 +113,7 @@ function mapProductRowToSearchResult(product: any): SearchResult {
     description: product.category || undefined,
     amount: price,
     icon: Package,
-    route: `/inventory/products/${product.id}`,
+    route: `/warehouse/inventory?tab=product`,
   };
 }
 

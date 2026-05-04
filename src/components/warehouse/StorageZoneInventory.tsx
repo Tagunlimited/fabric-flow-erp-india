@@ -1,10 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Archive, Package, Search, Eye, History, Trash2, Download, Truck, Filter } from 'lucide-react';
+import { Archive, Package, Search, Eye, History, Trash2, Download, Truck, Filter, Columns3 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS } from '@/types/warehouse-inventory';
 import { toast } from 'sonner';
@@ -32,6 +35,24 @@ interface AllocationDetail {
   unit: string;
   itemName: string;
   allocatedAt: string;
+}
+
+interface BinWiseInventoryDetail {
+  binId: string;
+  binCode: string;
+  location: string;
+  totalQuantity: number;
+  reservedQuantity: number;
+  availableQuantity: number;
+  unit: string;
+}
+
+interface InventorySummaryDetail {
+  totalQuantity: number;
+  reservedQuantity: number;
+  availableQuantity: number;
+  unit: string;
+  bins: BinWiseInventoryDetail[];
 }
 
 const resolveInventoryDisplayName = (item: WarehouseInventory): string => {
@@ -71,7 +92,175 @@ const resolveFabricDisplayName = (item: WarehouseInventory): string => {
   );
 };
 
-export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onViewDetails, itemType }) => {
+export type StorageInventoryColumnId =
+  | 'name'
+  | 'type'
+  | 'fabric'
+  | 'color'
+  | 'material_gsm'
+  | 'brand'
+  | 'size'
+  | 'total_inventory'
+  | 'reserved'
+  | 'available'
+  | 'status'
+  | 'actions';
+
+type StorageInventoryTableFilterKey =
+  | 'name'
+  | 'type'
+  | 'fabric'
+  | 'color'
+  | 'material_gsm'
+  | 'brand'
+  | 'size'
+  | 'bin_inventory'
+  | 'allocated'
+  | 'status';
+
+interface StorageInventoryColumnConfig {
+  id: StorageInventoryColumnId;
+  label: string;
+  filterKey?: StorageInventoryTableFilterKey;
+  required?: boolean;
+}
+
+const STORAGE_INVENTORY_COLUMNS: StorageInventoryColumnConfig[] = [
+  { id: 'name', label: 'Name', filterKey: 'name', required: true },
+  { id: 'type', label: 'Type', filterKey: 'type' },
+  { id: 'fabric', label: 'Fabric', filterKey: 'fabric' },
+  { id: 'color', label: 'Color', filterKey: 'color' },
+  { id: 'material_gsm', label: 'Material/GSM', filterKey: 'material_gsm' },
+  { id: 'brand', label: 'Brand', filterKey: 'brand' },
+  { id: 'size', label: 'Size', filterKey: 'size' },
+  { id: 'total_inventory', label: 'Total Inventory', filterKey: 'bin_inventory' },
+  { id: 'reserved', label: 'Reserved', filterKey: 'allocated' },
+  { id: 'available', label: 'Available' },
+  { id: 'status', label: 'Status', filterKey: 'status' },
+  { id: 'actions', label: 'Actions', required: true },
+];
+
+const STORAGE_INVENTORY_COLUMN_ORDER: StorageInventoryColumnId[] = STORAGE_INVENTORY_COLUMNS.map((c) => c.id);
+
+const COLUMN_CONFIG_BY_ID: Record<StorageInventoryColumnId, StorageInventoryColumnConfig> =
+  STORAGE_INVENTORY_COLUMNS.reduce(
+    (acc, c) => {
+      acc[c.id] = c;
+      return acc;
+    },
+    {} as Record<StorageInventoryColumnId, StorageInventoryColumnConfig>
+  );
+
+const DEFAULT_STORAGE_INVENTORY_VISIBILITY: Record<StorageInventoryColumnId, boolean> =
+  STORAGE_INVENTORY_COLUMNS.reduce(
+    (acc, c) => {
+      acc[c.id] = true;
+      return acc;
+    },
+    {} as Record<StorageInventoryColumnId, boolean>
+  );
+
+const DEFAULT_STORAGE_INVENTORY_WIDTHS: Record<StorageInventoryColumnId, number> = {
+  name: 240,
+  type: 112,
+  fabric: 160,
+  color: 140,
+  material_gsm: 140,
+  brand: 110,
+  size: 96,
+  total_inventory: 128,
+  reserved: 108,
+  available: 108,
+  status: 120,
+  actions: 200,
+};
+
+const STORAGE_TABLE_PREFS_PREFIX = 'fabric-flow.storage-zone-inventory.table';
+
+function storageInventoryTablePrefsKey(itemType: 'FABRIC' | 'ITEM' | 'PRODUCT' | undefined): string {
+  return `${STORAGE_TABLE_PREFS_PREFIX}:${itemType ?? 'RAW'}`;
+}
+
+interface StoredStorageInventoryTablePrefs {
+  visibility?: Partial<Record<StorageInventoryColumnId, boolean>>;
+  widths?: Partial<Record<StorageInventoryColumnId, number>>;
+}
+
+function readStorageInventoryTablePrefs(
+  itemType: 'FABRIC' | 'ITEM' | 'PRODUCT' | undefined
+): StoredStorageInventoryTablePrefs | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(storageInventoryTablePrefsKey(itemType));
+    if (!raw) return null;
+    return JSON.parse(raw) as StoredStorageInventoryTablePrefs;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorageInventoryTablePrefs(
+  itemType: 'FABRIC' | 'ITEM' | 'PRODUCT' | undefined,
+  prefs: StoredStorageInventoryTablePrefs
+) {
+  try {
+    localStorage.setItem(storageInventoryTablePrefsKey(itemType), JSON.stringify(prefs));
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function mergeStorageInventoryVisibility(
+  partial: Partial<Record<StorageInventoryColumnId, boolean>> | undefined
+): Record<StorageInventoryColumnId, boolean> {
+  return { ...DEFAULT_STORAGE_INVENTORY_VISIBILITY, ...partial };
+}
+
+function mergeStorageInventoryWidths(
+  partial: Partial<Record<StorageInventoryColumnId, number>> | undefined
+): Record<StorageInventoryColumnId, number> {
+  const out = { ...DEFAULT_STORAGE_INVENTORY_WIDTHS };
+  if (!partial) return out;
+  for (const col of STORAGE_INVENTORY_COLUMN_ORDER) {
+    const w = partial[col];
+    if (typeof w === 'number' && Number.isFinite(w)) {
+      out[col] = Math.min(560, Math.max(48, Math.round(w)));
+    }
+  }
+  return out;
+}
+
+function ColumnResizeHandle({ onResize }: { onResize: (delta: number) => void }) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      title="Drag to resize column"
+      className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize select-none hover:bg-primary/20"
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        let lastX = e.clientX;
+        const onMove = (ev: PointerEvent) => {
+          const dx = ev.clientX - lastX;
+          lastX = ev.clientX;
+          if (dx !== 0) onResize(dx);
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+      }}
+    />
+  );
+}
+
+export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
+  onViewDetails,
+  itemType,
+}) => {
   const [inventory, setInventory] = useState<WarehouseInventory[]>([]);
   const [binSummaries, setBinSummaries] = useState<BinInventorySummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,6 +277,11 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     inventory: WarehouseInventory;
     details: AllocationDetail[];
   } | null>(null);
+  const [summaryModalOpen, setSummaryModalOpen] = useState(false);
+  const [selectedSummaryDetails, setSelectedSummaryDetails] = useState<{
+    inventory: WarehouseInventory;
+    summary: InventorySummaryDetail;
+  } | null>(null);
   const [columnFilters, setColumnFilters] = useState({
     name: '',
     type: '',
@@ -101,6 +295,69 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     status: '',
   });
   const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
+  const [columnsPickerOpen, setColumnsPickerOpen] = useState(false);
+  const [columnVisibility, setColumnVisibility] = useState<Record<StorageInventoryColumnId, boolean>>(() =>
+    mergeStorageInventoryVisibility(readStorageInventoryTablePrefs(itemType)?.visibility)
+  );
+  const [columnWidths, setColumnWidths] = useState<Record<StorageInventoryColumnId, number>>(() =>
+    mergeStorageInventoryWidths(readStorageInventoryTablePrefs(itemType)?.widths)
+  );
+  const skipNextTablePrefsPersist = useRef(false);
+
+  useEffect(() => {
+    skipNextTablePrefsPersist.current = true;
+    const stored = readStorageInventoryTablePrefs(itemType);
+    setColumnVisibility(mergeStorageInventoryVisibility(stored?.visibility));
+    setColumnWidths(mergeStorageInventoryWidths(stored?.widths));
+  }, [itemType]);
+
+  useEffect(() => {
+    if (skipNextTablePrefsPersist.current) {
+      skipNextTablePrefsPersist.current = false;
+      return;
+    }
+    writeStorageInventoryTablePrefs(itemType, {
+      visibility: columnVisibility,
+      widths: columnWidths,
+    });
+  }, [itemType, columnVisibility, columnWidths]);
+
+  const visibleColumnIds = useMemo(
+    () => STORAGE_INVENTORY_COLUMN_ORDER.filter((id) => columnVisibility[id]),
+    [columnVisibility]
+  );
+
+  const bumpColumnWidth = useCallback((id: StorageInventoryColumnId, delta: number) => {
+    setColumnWidths((prev) => {
+      const cur = prev[id];
+      const next = Math.min(560, Math.max(48, cur + delta));
+      if (next === cur) return prev;
+      return { ...prev, [id]: next };
+    });
+  }, []);
+
+  const colStyle = useCallback(
+    (id: StorageInventoryColumnId): React.CSSProperties => ({
+      width: columnWidths[id],
+      minWidth: columnWidths[id],
+    }),
+    [columnWidths]
+  );
+
+  const setColumnShown = useCallback((id: StorageInventoryColumnId, shown: boolean) => {
+    if (COLUMN_CONFIG_BY_ID[id]?.required && !shown) return;
+    setColumnVisibility((prev) => {
+      const next = { ...prev, [id]: shown };
+      const count = STORAGE_INVENTORY_COLUMN_ORDER.filter((c) => next[c]).length;
+      if (count < 1) return prev;
+      return next;
+    });
+  }, []);
+
+  const resetTableLayout = useCallback(() => {
+    setColumnVisibility({ ...DEFAULT_STORAGE_INVENTORY_VISIBILITY });
+    setColumnWidths({ ...DEFAULT_STORAGE_INVENTORY_WIDTHS });
+  }, []);
 
   const loadInventory = async () => {
     try {
@@ -148,7 +405,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
             inspection_notes
           )
         `)
-        .eq('status', 'IN_STORAGE' as any);
+        .in('status', ['IN_STORAGE', 'READY_TO_DISPATCH'] as any);
       
       // Filter by item_type if provided
       if (itemType) {
@@ -168,11 +425,15 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
       console.log('🔍 [StorageZone] Raw data from DB:', data?.length || 0);
       
       const filtered = ((data as any) || []).filter((i: any) => {
-        const isStorage = i?.bin?.location_type === 'STORAGE';
-        if (!isStorage && itemType === 'PRODUCT') {
-          console.warn('⚠️ [StorageZone] Excluded non-storage bin:', i.bin?.bin_code, 'location_type:', i.bin?.location_type);
+        const lt = i?.bin?.location_type;
+        const st = i?.status;
+        const inStorageBin = st === 'IN_STORAGE' && lt === 'STORAGE';
+        const readyOnLegacyDispatchBin = st === 'READY_TO_DISPATCH' && lt === 'DISPATCH_ZONE';
+        const include = inStorageBin || readyOnLegacyDispatchBin;
+        if (!include && itemType === 'PRODUCT') {
+          console.warn('⚠️ [StorageZone] Excluded row:', i.bin?.bin_code, 'location_type:', lt, 'status:', st);
         }
-        return isStorage;
+        return include;
       });
       
       // Debug: Log after bin filter
@@ -559,6 +820,85 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
   const includesFilter = (value: unknown, filterValue: string) =>
     filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
 
+  const summarizeInventoryKey = (item: WarehouseInventory) => {
+    const itemColor = item.grn_item?.item_color || item.grn_item?.fabric_color || '';
+    const itemGsm =
+      item.item_type === 'FABRIC'
+        ? String((item as any).fabric_master?.gsm ?? item.grn_item?.fabric_gsm ?? '')
+        : '';
+    // Intentionally exclude bin/status so this becomes a per-item summary across bins.
+    return buildWarehouseIdentityKey({
+      itemType: item.item_type,
+      itemId: item.item_id,
+      itemCode: item.item_code,
+      itemName: item.item_name,
+      unit: item.unit,
+      color: itemColor,
+      gsm: itemGsm,
+    });
+  };
+
+  const inventorySummaryMap = useMemo(() => {
+    const map = new Map<string, InventorySummaryDetail>();
+
+    inventory.forEach((item) => {
+      const key = summarizeInventoryKey(item);
+      const qty = Number(item.quantity || 0);
+      const reserved = Number((item as any).allocated_quantity || 0);
+      const available = Math.max(qty - reserved, 0);
+      const binCode = item.bin?.bin_code || 'Unknown Bin';
+      const location =
+        item.bin?.rack?.floor?.warehouse?.name
+          ? `${item.bin?.rack?.floor?.warehouse?.name} > Floor ${item.bin?.rack?.floor?.floor_number} > ${item.bin?.rack?.rack_code}`
+          : '—';
+
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, {
+          totalQuantity: qty,
+          reservedQuantity: reserved,
+          availableQuantity: available,
+          unit: item.unit,
+          bins: [
+            {
+              binId: item.bin_id,
+              binCode,
+              location,
+              totalQuantity: qty,
+              reservedQuantity: reserved,
+              availableQuantity: available,
+              unit: item.unit,
+            },
+          ],
+        });
+        return;
+      }
+
+      existing.totalQuantity += qty;
+      existing.reservedQuantity += reserved;
+      existing.availableQuantity += available;
+
+      const existingBin = existing.bins.find((b) => b.binId === item.bin_id);
+      if (existingBin) {
+        existingBin.totalQuantity += qty;
+        existingBin.reservedQuantity += reserved;
+        existingBin.availableQuantity += available;
+      } else {
+        existing.bins.push({
+          binId: item.bin_id,
+          binCode,
+          location,
+          totalQuantity: qty,
+          reservedQuantity: reserved,
+          availableQuantity: available,
+          unit: item.unit,
+        });
+      }
+    });
+
+    return map;
+  }, [inventory]);
+
   const columnCellValue = (item: WarehouseInventory, key: keyof typeof columnFilters): string => {
     const fabricMaster = (item as any).fabric_master;
     const itemMaster = (item as any).item_master;
@@ -721,6 +1061,13 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
     const details = (inventoryItem as any).allocation_details || [];
     setSelectedAllocationDetails({ inventory: inventoryItem, details });
     setAllocationModalOpen(true);
+  };
+
+  const handleOpenInventorySummaryDetails = (inventoryItem: WarehouseInventory) => {
+    const summary = inventorySummaryMap.get(summarizeInventoryKey(inventoryItem));
+    if (!summary) return;
+    setSelectedSummaryDetails({ inventory: inventoryItem, summary });
+    setSummaryModalOpen(true);
   };
 
   const getStatusConfig = (status: string) => {
@@ -910,27 +1257,73 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
       </div>
 
       <div>
-        <div className="mb-3">
-          <h3 className="text-lg font-semibold leading-7 tracking-tight text-[#101828]">Inventory Items</h3>
-          <p className="text-sm text-[#6a7282]">
-            Showing {filteredInventory.length} of {inventory.length} items
-          </p>
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3 className="text-lg font-semibold leading-7 tracking-tight text-[#101828]">Inventory Items</h3>
+            <p className="text-sm text-[#6a7282]">
+              Showing {filteredInventory.length} of {inventory.length} items
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0 gap-2 rounded-lg border-black/10 bg-white text-[#0a0a0a] hover:bg-[#fafafa]"
+            onClick={() => setColumnsPickerOpen(true)}
+          >
+            <Columns3 className="h-4 w-4" />
+            Columns
+          </Button>
         </div>
         <div className="overflow-x-auto rounded-[14px] border border-[#e5e7eb] bg-white">
-          <Table>
+          <Table className="table-fixed min-w-max">
               <TableHeader>
                 <TableRow className="border-b border-black/10 bg-[#f9fafb] hover:bg-[#f9fafb]">
-                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Name<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.name ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('name')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Type<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.type ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('type')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Fabric<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.fabric ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('fabric')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Color<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.color ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('color')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Material/GSM<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.material_gsm ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('material_gsm')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Brand<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.brand ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('brand')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Size<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.size ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('size')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Bin &amp; Inventory<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.bin_inventory ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('bin_inventory')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Allocated<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.allocated ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('allocated')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                  <TableHead className="text-[#0a0a0a] font-medium"><div className="flex items-center gap-1">Status<Button variant="ghost" size="icon" className={`h-6 w-6 ${columnFilters.status ? 'text-primary' : 'text-muted-foreground'}`} onClick={() => setFilterDialogColumn('status')}><Filter className="h-3.5 w-3.5" /></Button></div></TableHead>
-                  <TableHead className="text-right text-[#0a0a0a] font-medium">Actions</TableHead>
+                  {visibleColumnIds.map((colId) => {
+                    const cfg = COLUMN_CONFIG_BY_ID[colId];
+                    const fk = cfg.filterKey;
+                    const filterActive = fk ? Boolean(columnFilters[fk]) : false;
+                    return (
+                      <TableHead
+                        key={colId}
+                        className={cn(
+                          'relative text-[#0a0a0a] font-medium',
+                          colId === 'actions' && 'text-right'
+                        )}
+                        style={colStyle(colId)}
+                      >
+                        <div
+                          className={cn(
+                            'flex items-center gap-1 pr-3',
+                            colId === 'actions' && 'justify-end'
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              colId === 'actions' ? '' : 'min-w-0 flex-1 truncate text-left'
+                            )}
+                          >
+                            {cfg.label}
+                          </span>
+                          {fk ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className={cn(
+                                'h-6 w-6 shrink-0',
+                                filterActive ? 'text-primary' : 'text-muted-foreground'
+                              )}
+                              onClick={() => setFilterDialogColumn(fk)}
+                            >
+                              <Filter className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : null}
+                        </div>
+                        <ColumnResizeHandle onResize={(d) => bumpColumnWidth(colId, d)} />
+                      </TableHead>
+                    );
+                  })}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1023,6 +1416,11 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                   
                   const allocatedQuantity = Number((item as any).allocated_quantity || 0);
                   const availableQuantity = Math.max(Number(item.quantity || 0) - allocatedQuantity, 0);
+                  const summary = inventorySummaryMap.get(summarizeInventoryKey(item));
+                  const totalInventoryQty = Number(summary?.totalQuantity ?? item.quantity ?? 0);
+                  const reservedQty = Number(summary?.reservedQuantity ?? allocatedQuantity);
+                  const netQty = Number(summary?.availableQuantity ?? availableQuantity);
+                  const summaryUnit = summary?.unit || item.unit;
                   const qtyNum = Number(item.quantity || 0);
                   const lowStock =
                     item.status === 'IN_STORAGE' &&
@@ -1063,144 +1461,189 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
 
                   return (
                     <TableRow key={`${item.id}-${item.bin_id}`}>
-                      <TableCell>
-                        <div className="flex min-w-0 max-w-[240px] items-center gap-3">
-                          {displayImage ? (
-                            <img
-                              src={displayImage}
-                              alt=""
-                              className="h-10 w-10 shrink-0 rounded-md border border-[#e5e7eb] object-cover"
-                              onError={(e) => {
-                                const img = e.currentTarget as HTMLImageElement;
-                                img.style.display = 'none';
-                              }}
-                            />
-                          ) : (
-                            <div
-                              className="h-10 w-10 shrink-0 rounded-md border border-dashed border-[#e5e7eb] bg-[#f9fafb]"
-                              aria-hidden
-                            />
-                          )}
-                          <span className="truncate text-sm font-medium text-[#101828]">
-                            {displayName || '—'}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {displayType && displayType !== '-' ? (
-                          <span className="inline-flex rounded-lg border border-black/10 bg-white px-2 py-0.5 text-xs font-medium text-[#0a0a0a]">
-                            {displayType}
-                          </span>
-                        ) : (
-                          '—'
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {displayFabric !== '-' ? displayFabric : '-'}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          {displayColorHex ? (
-                            <div
-                              className="h-6 w-6 shrink-0 rounded-full border-2 border-[#e5e7eb] shadow-sm"
-                              style={{ backgroundColor: displayColorHex }}
-                              title={displayColor}
-                            />
-                          ) : null}
-                          <span className="text-sm text-[#4a5565]">
-                            {displayColor !== '-' ? displayColor : '—'}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {displayMaterialGsm !== '-' ? displayMaterialGsm : '-'}
-                      </TableCell>
-                      <TableCell>
-                        {displayBrand !== '-' ? displayBrand : '-'}
-                      </TableCell>
-                      <TableCell>
-                        {displaySize !== '-' ? (
-                          <Badge variant="outline">{displaySize}</Badge>
-                        ) : (
-                          '-'
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <p className="font-medium text-sm">{item.bin?.bin_code}</p>
-                            <Badge variant="outline" className="text-xs">
-                              Total {item.quantity} {item.unit}
-                            </Badge>
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            Available: {availableQuantity} {item.unit}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            Allocated: {allocatedQuantity} {item.unit}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {item.bin?.rack?.floor?.warehouse?.name} &gt; 
-                            Floor {item.bin?.rack?.floor?.floor_number} &gt; 
-                            {item.bin?.rack?.rack_code}
-                          </p>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {allocatedQuantity > 0 ? (
-                          <Button
-                            variant="link"
-                            className="h-auto p-0 text-sm font-semibold text-[#101828]"
-                            onClick={() => handleOpenAllocationDetails(item)}
-                          >
-                            {allocatedQuantity} {item.unit}
-                          </Button>
-                        ) : (
-                          <span className="text-sm text-[#6a7282]">0 {item.unit}</span>
-                        )}
-                      </TableCell>
-                      <TableCell>{statusBadge}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => onViewDetails?.(item)}
-                            className="flex items-center gap-1"
-                          >
-                            <Eye className="h-3 w-3" />
-                            View
-                          </Button>
-                          
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              setSelectedInventoryForLogs(item);
-                              setLogsModalOpen(true);
-                            }}
-                            className="flex items-center gap-1"
-                            title="View item addition logs"
-                          >
-                            <History className="h-3 w-3" />
-                            Logs {(item as any).consolidatedIds?.length > 1 && `(${(item as any).consolidatedIds.length})`}
-                          </Button>
+                      {visibleColumnIds.map((colId) => {
+                        const st = colStyle(colId);
+                        switch (colId) {
+                          case 'name':
+                            return (
+                              <TableCell key={colId} className="max-w-0 align-middle" style={st}>
+                                <div className="flex min-w-0 items-center gap-3">
+                                  {displayImage ? (
+                                    <img
+                                      src={displayImage}
+                                      alt=""
+                                      className="h-10 w-10 shrink-0 rounded-md border border-[#e5e7eb] object-cover"
+                                      onError={(e) => {
+                                        const img = e.currentTarget as HTMLImageElement;
+                                        img.style.display = 'none';
+                                      }}
+                                    />
+                                  ) : (
+                                    <div
+                                      className="h-10 w-10 shrink-0 rounded-md border border-dashed border-[#e5e7eb] bg-[#f9fafb]"
+                                      aria-hidden
+                                    />
+                                  )}
+                                  <span className="truncate text-sm font-medium text-[#101828]">
+                                    {displayName || '—'}
+                                  </span>
+                                </div>
+                              </TableCell>
+                            );
+                          case 'type':
+                            return (
+                              <TableCell key={colId} className="align-middle" style={st}>
+                                {displayType && displayType !== '-' ? (
+                                  <span className="inline-flex rounded-lg border border-black/10 bg-white px-2 py-0.5 text-xs font-medium text-[#0a0a0a]">
+                                    {displayType}
+                                  </span>
+                                ) : (
+                                  '—'
+                                )}
+                              </TableCell>
+                            );
+                          case 'fabric':
+                            return (
+                              <TableCell key={colId} className="align-middle" style={st}>
+                                {displayFabric !== '-' ? displayFabric : '-'}
+                              </TableCell>
+                            );
+                          case 'color':
+                            return (
+                              <TableCell key={colId} className="align-middle" style={st}>
+                                <div className="flex min-w-0 items-center gap-2">
+                                  {displayColorHex ? (
+                                    <div
+                                      className="h-6 w-6 shrink-0 rounded-full border-2 border-[#e5e7eb] shadow-sm"
+                                      style={{ backgroundColor: displayColorHex }}
+                                      title={displayColor}
+                                    />
+                                  ) : null}
+                                  <span className="truncate text-sm text-[#4a5565]">
+                                    {displayColor !== '-' ? displayColor : '—'}
+                                  </span>
+                                </div>
+                              </TableCell>
+                            );
+                          case 'material_gsm':
+                            return (
+                              <TableCell key={colId} className="align-middle" style={st}>
+                                {displayMaterialGsm !== '-' ? displayMaterialGsm : '-'}
+                              </TableCell>
+                            );
+                          case 'brand':
+                            return (
+                              <TableCell key={colId} className="align-middle" style={st}>
+                                {displayBrand !== '-' ? displayBrand : '-'}
+                              </TableCell>
+                            );
+                          case 'size':
+                            return (
+                              <TableCell key={colId} className="align-middle" style={st}>
+                                {displaySize !== '-' ? (
+                                  <Badge variant="outline">{displaySize}</Badge>
+                                ) : (
+                                  '-'
+                                )}
+                              </TableCell>
+                            );
+                          case 'total_inventory':
+                            return (
+                              <TableCell key={colId} className="align-middle" style={st}>
+                                <Button
+                                  type="button"
+                                  variant="link"
+                                  className="h-auto p-0 text-sm font-semibold text-[#101828]"
+                                  onClick={() => handleOpenInventorySummaryDetails(item)}
+                                >
+                                  {totalInventoryQty} {summaryUnit}
+                                </Button>
+                              </TableCell>
+                            );
+                          case 'reserved':
+                            return (
+                              <TableCell key={colId} className="align-middle" style={st}>
+                                {reservedQty > 0 ? (
+                                  <Button
+                                    type="button"
+                                    variant="link"
+                                    className="h-auto p-0 text-sm font-semibold text-[#101828]"
+                                    onClick={() => handleOpenAllocationDetails(item)}
+                                  >
+                                    {reservedQty} {summaryUnit}
+                                  </Button>
+                                ) : (
+                                  <span className="text-sm text-[#6a7282]">0 {summaryUnit}</span>
+                                )}
+                              </TableCell>
+                            );
+                          case 'available':
+                            return (
+                              <TableCell key={colId} className="align-middle" style={st}>
+                                <span className="text-sm text-[#0a0a0a]">
+                                  {netQty} {summaryUnit}
+                                </span>
+                              </TableCell>
+                            );
+                          case 'status':
+                            return (
+                              <TableCell key={colId} className="align-middle" style={st}>
+                                {statusBadge}
+                              </TableCell>
+                            );
+                          case 'actions':
+                            return (
+                              <TableCell key={colId} className="text-right align-middle" style={st}>
+                                <div className="flex flex-wrap justify-end gap-1">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => onViewDetails?.(item)}
+                                    className="flex items-center gap-1"
+                                  >
+                                    <Eye className="h-3 w-3" />
+                                    View
+                                  </Button>
 
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="flex items-center gap-1 text-destructive hover:text-destructive hover:bg-destructive/10"
-                            onClick={() => {
-                              setDeleteTarget(item);
-                              setDeleteOpen(true);
-                            }}
-                            title="Remove this stock line"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Delete
-                          </Button>
-                        </div>
-                      </TableCell>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      setSelectedInventoryForLogs(item);
+                                      setLogsModalOpen(true);
+                                    }}
+                                    className="flex items-center gap-1"
+                                    title="View item addition logs"
+                                  >
+                                    <History className="h-3 w-3" />
+                                    Logs{' '}
+                                    {(item as any).consolidatedIds?.length > 1 &&
+                                      `(${(item as any).consolidatedIds.length})`}
+                                  </Button>
+
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="flex items-center gap-1 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                    onClick={() => {
+                                      setDeleteTarget(item);
+                                      setDeleteOpen(true);
+                                    }}
+                                    title="Remove this stock line"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                    Delete
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            );
+                          default:
+                            return null;
+                        }
+                      })}
                     </TableRow>
                   );
                 })}
@@ -1277,6 +1720,113 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({ onVi
                 </DialogContent>
               </Dialog>
             )}
+            {selectedSummaryDetails && (
+              <Dialog
+                open={summaryModalOpen}
+                onOpenChange={(open) => {
+                  setSummaryModalOpen(open);
+                  if (!open) {
+                    setSelectedSummaryDetails(null);
+                  }
+                }}
+              >
+                <DialogContent className="max-w-2xl">
+                  <DialogHeader>
+                    <DialogTitle>Bin-wise Inventory</DialogTitle>
+                    <DialogDescription>
+                      {selectedSummaryDetails.inventory.item_name}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    {selectedSummaryDetails.summary.bins.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No bin-wise details found.</p>
+                    ) : (
+                      <>
+                        {selectedSummaryDetails.summary.bins.map((bin) => (
+                          <div key={bin.binId} className="rounded-lg border p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm font-semibold text-[#101828]">{bin.binCode}</p>
+                              <p className="text-xs text-muted-foreground">{bin.location}</p>
+                            </div>
+                            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                              <div className="text-xs text-muted-foreground">
+                                Total Inventory: <span className="font-medium text-[#101828]">{bin.totalQuantity} {bin.unit}</span>
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                Reserved: <span className="font-medium text-[#101828]">{bin.reservedQuantity} {bin.unit}</span>
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                Available: <span className="font-medium text-[#101828]">{bin.availableQuantity} {bin.unit}</span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        <div className="rounded-lg border border-black/10 bg-[#f9fafb] p-3">
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                            <div className="text-xs text-muted-foreground">
+                              Total Inventory:{' '}
+                              <span className="font-semibold text-[#101828]">
+                                {selectedSummaryDetails.summary.totalQuantity} {selectedSummaryDetails.summary.unit}
+                              </span>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Reserved:{' '}
+                              <span className="font-semibold text-[#101828]">
+                                {selectedSummaryDetails.summary.reservedQuantity} {selectedSummaryDetails.summary.unit}
+                              </span>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Available:{' '}
+                              <span className="font-semibold text-[#101828]">
+                                {selectedSummaryDetails.summary.availableQuantity} {selectedSummaryDetails.summary.unit}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            )}
+            <Dialog open={columnsPickerOpen} onOpenChange={setColumnsPickerOpen}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Table columns</DialogTitle>
+                  <DialogDescription>
+                    Choose which columns to show. Drag the edge of a column header to change width. Your choices are
+                    saved in this browser.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="max-h-[min(400px,60vh)] space-y-3 overflow-y-auto pr-1">
+                  {STORAGE_INVENTORY_COLUMNS.map((c) => (
+                    <div key={c.id} className="flex items-center gap-3">
+                      <Checkbox
+                        id={`inv-col-${c.id}`}
+                        checked={columnVisibility[c.id]}
+                        disabled={!!c.required}
+                        onCheckedChange={(v) => setColumnShown(c.id, v === true)}
+                      />
+                      <Label
+                        htmlFor={`inv-col-${c.id}`}
+                        className={cn('flex-1 cursor-pointer text-sm font-normal leading-snug', c.required && 'text-muted-foreground')}
+                      >
+                        {c.label}
+                        {c.required ? ' (always shown)' : ''}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-end gap-2 border-t border-[#e5e7eb] pt-4">
+                  <Button type="button" variant="outline" onClick={resetTableLayout}>
+                    Reset layout
+                  </Button>
+                  <Button type="button" onClick={() => setColumnsPickerOpen(false)}>
+                    Done
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
             <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
               <DialogContent className="sm:max-w-md">
                 <DialogHeader>

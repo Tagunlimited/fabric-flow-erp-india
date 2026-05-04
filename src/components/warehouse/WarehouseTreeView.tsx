@@ -14,9 +14,8 @@ import {
   Trash2,
   MapPin,
   Archive,
-  Truck
 } from 'lucide-react';
-import { Warehouse, Floor, Rack, Bin, LocationType, LOCATION_TYPE_CONFIGS } from '@/types/warehouse';
+import { Warehouse, Floor, Rack, Bin, LOCATION_TYPE_CONFIGS } from '@/types/warehouse';
 
 interface WarehouseTreeViewProps {
   warehouses: Warehouse[];
@@ -51,14 +50,7 @@ export const WarehouseTreeView: React.FC<WarehouseTreeViewProps> = ({
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
   // Get icon for location type
-  const getLocationTypeIcon = (locationType: LocationType) => {
-    switch (locationType) {
-      case 'RECEIVING_ZONE': return <Package className="w-4 h-4" />;
-      case 'STORAGE': return <Archive className="w-4 h-4" />;
-      case 'DISPATCH_ZONE': return <Truck className="w-4 h-4" />;
-      default: return <Package className="w-4 h-4" />;
-    }
-  };
+  const getLocationTypeIcon = (_locationType: string) => <Archive className="w-4 h-4" />;
 
   // Build tree structure
   const treeData = useMemo(() => {
@@ -193,7 +185,7 @@ export const WarehouseTreeView: React.FC<WarehouseTreeViewProps> = ({
           
         case 'bin':
           const bin = node.data as Bin;
-          const locationConfig = LOCATION_TYPE_CONFIGS[bin.location_type];
+          const locationConfig = LOCATION_TYPE_CONFIGS.STORAGE;
           badges.push(
             <Badge key="type" className={`${locationConfig.bgColor} ${locationConfig.color}`}>
               {locationConfig.label}
@@ -263,7 +255,7 @@ export const WarehouseTreeView: React.FC<WarehouseTreeViewProps> = ({
       <div key={node.id} className="select-none">
         <div
           className={`
-            flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors
+            flex min-h-11 items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors
             ${isSelected ? 'bg-primary/10 border border-primary/20' : 'hover:bg-muted/50'}
           `}
           style={{ paddingLeft: `${level * 20 + 8}px` }}
@@ -346,13 +338,13 @@ export const WarehouseTreeView: React.FC<WarehouseTreeViewProps> = ({
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2">
           <MapPin className="w-5 h-5" />
           Warehouse Hierarchy
         </CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="pt-0">
         {treeData.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
             <Building className="w-12 h-12 mx-auto mb-4 opacity-50" />

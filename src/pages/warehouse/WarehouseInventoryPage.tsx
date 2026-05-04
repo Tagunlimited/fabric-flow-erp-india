@@ -1,7 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -13,9 +11,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import {
-  Package,
   Archive,
-  Truck,
   BarChart3,
   Plus,
   Trash2,
@@ -23,9 +19,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { ReceivingZoneInventory } from '@/components/warehouse/ReceivingZoneInventory';
 import { StorageZoneInventory } from '@/components/warehouse/StorageZoneInventory';
-import { InventoryTransferModal } from '@/components/warehouse/InventoryTransferModal';
 import { AddRawInventoryModal } from '@/components/warehouse/AddRawInventoryModal';
 import { DeleteWarehouseInventoryDialog } from '@/components/warehouse/DeleteWarehouseInventoryDialog';
 import { WarehouseInventory } from '@/types/warehouse-inventory';
@@ -34,13 +28,16 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { BackButton } from '@/components/common/BackButton';
 
-const WarehouseInventoryPage: React.FC = () => {
+export interface WarehouseInventoryPageProps {
+  /** When true, render only the dashboard body (no ErpLayout, back link, or page chrome). Used by Inventory Dashboard. */
+  embedded?: boolean;
+}
+
+const WarehouseInventoryPage: React.FC<WarehouseInventoryPageProps> = ({ embedded = false }) => {
   const navigate = useNavigate();
   const [selectedInventory, setSelectedInventory] = useState<WarehouseInventory | null>(null);
-  const [showTransferModal, setShowTransferModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
-  const [activeTab, setActiveTab] = useState('receiving');
-  const [totals, setTotals] = useState({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+  const [totals, setTotals] = useState({ storage: 0, all: 0 });
   const [storageBinCount, setStorageBinCount] = useState(0);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [grnHeader, setGrnHeader] = useState<any | null>(null);
@@ -61,7 +58,7 @@ const WarehouseInventoryPage: React.FC = () => {
       if (tableError) {
         console.error('Warehouse inventory table error:', tableError);
         // Set default totals if table doesn't exist
-        setTotals({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+        setTotals({ storage: 0, all: 0 });
         setStorageBinCount(0);
         return;
       }
@@ -84,7 +81,7 @@ const WarehouseInventoryPage: React.FC = () => {
       
       if (error) {
         console.error('Error fetching warehouse inventory totals:', error);
-        setTotals({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+        setTotals({ storage: 0, all: 0 });
         setStorageBinCount(0);
         return;
       }
@@ -96,15 +93,13 @@ const WarehouseInventoryPage: React.FC = () => {
         r.item_type === 'FABRIC' || r.item_type === 'ITEM'
       );
       
-      const receivingQty = filteredRows
-        .filter((r: any) => r.status === 'RECEIVED' && r.bin?.location_type === 'RECEIVING_ZONE')
-        .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
-      const storageQty = filteredRows
+      const storageInStorageBins = filteredRows
         .filter((r: any) => r.status === 'IN_STORAGE' && r.bin?.location_type === 'STORAGE')
         .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
-      const dispatchQty = filteredRows
+      const readyOnLegacyDispatchBins = filteredRows
         .filter((r: any) => r.status === 'READY_TO_DISPATCH' && r.bin?.location_type === 'DISPATCH_ZONE')
         .reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
+      const storageQty = storageInStorageBins + readyOnLegacyDispatchBins;
       const allQty = filteredRows.reduce((s: number, r: any) => s + Number(r.quantity || 0), 0);
 
       const storageBins = new Set(
@@ -117,10 +112,10 @@ const WarehouseInventoryPage: React.FC = () => {
       );
       setStorageBinCount(storageBins.size);
 
-      setTotals({ receiving: receivingQty, storage: storageQty, dispatch: dispatchQty, all: allQty });
+      setTotals({ storage: storageQty, all: allQty });
     } catch (error) {
       console.error('Error in loadTotals:', error);
-      setTotals({ receiving: 0, storage: 0, dispatch: 0, all: 0 });
+      setTotals({ storage: 0, all: 0 });
       setStorageBinCount(0);
     }
   };
@@ -269,224 +264,138 @@ const WarehouseInventoryPage: React.FC = () => {
     }
   }, [showViewModal, selectedInventory?.id]);
 
-  const handleTransferItem = (inventory: WarehouseInventory) => {
-    setSelectedInventory(inventory);
-    setShowTransferModal(true);
-  };
-
   const handleViewDetails = (inventory: WarehouseInventory) => {
     setSelectedInventory(inventory);
     setShowViewModal(true);
   };
 
-  const handleTransferComplete = () => {
-    // Refresh the inventory list
-    setShowTransferModal(false);
-    setSelectedInventory(null);
-  };
+  const actionButtons = (
+    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+      <Button
+        type="button"
+        variant="outline"
+        className="h-9 gap-2 rounded-lg border-black/10 bg-white text-[#0a0a0a] shadow-sm hover:bg-[#fafafa]"
+        onClick={() => loadTotals()}
+      >
+        <RefreshCw className="h-4 w-4" />
+        Refresh
+      </Button>
+      <Button
+        type="button"
+        className="h-9 gap-2 rounded-lg bg-[#030213] px-4 text-white hover:bg-[#030213]/90"
+        onClick={() => setAddInventoryOpen(true)}
+      >
+        <Plus className="h-4 w-4" />
+        Add Inventory
+      </Button>
+    </div>
+  );
 
-  return (
-    <ErpLayout>
-      <div className="w-full space-y-6 bg-[#f9fafb] p-6 -mx-4 sm:-mx-6 rounded-xl">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <BackButton to="/inventory" label="Back to Inventory" />
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 text-sm text-[#6a7282]">
-          <Link to="/inventory" className="hover:text-[#101828] transition-colors">
-            Inventory
-          </Link>
-          <ChevronRight className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
-          <span className="font-medium text-[#101828]">Raw Material Inventory</span>
-        </div>
-
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-2 max-w-3xl">
-            <h1 className="text-[30px] font-bold leading-9 tracking-tight text-[#101828]">
-              Raw Material Inventory
-            </h1>
-            <p className="text-base leading-6 text-[#4a5565]">
-              Fabrics and items received through GRN—or added manually—across receiving and storage bins.
-            </p>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
-            <Button
-              type="button"
-              variant="outline"
-              className="h-9 gap-2 rounded-lg border-black/10 bg-white text-[#0a0a0a] shadow-sm hover:bg-[#fafafa]"
-              onClick={() => loadTotals()}
-            >
-              <RefreshCw className="h-4 w-4" />
-              Refresh
-            </Button>
-            <Button
-              type="button"
-              className="h-9 gap-2 rounded-lg bg-[#030213] px-4 text-white hover:bg-[#030213]/90"
-              onClick={() => setAddInventoryOpen(true)}
-            >
-              <Plus className="h-4 w-4" />
-              Add Inventory
-            </Button>
-          </div>
-        </div>
-
-      {/* Overview Cards — Figma: white + border-2 #e5e7eb, rounded 14px; total card purple gradient */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <div className="rounded-[14px] border-2 border-[#e5e7eb] bg-white p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-[#dbeafe]">
-              <Package className="h-6 w-6 text-blue-600" />
+  const inner = (
+    <>
+      <div
+        className={
+          embedded
+            ? 'w-full space-y-6'
+            : 'w-full space-y-6 bg-[#f9fafb] p-6 -mx-4 sm:-mx-6 rounded-xl'
+        }
+      >
+        {!embedded && (
+          <>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <BackButton to="/inventory" label="Back to Inventory" />
             </div>
-            <span className="rounded-lg bg-[#dbeafe] px-2.5 py-1 text-xs font-medium text-[#1447e6]">
-              Active
-            </span>
-          </div>
-          <p className="mt-4 text-sm font-medium text-[#4a5565]">Receiving Zone</p>
-          <p className="mt-1 text-[30px] font-bold leading-9 tracking-tight text-[#101828] tabular-nums">
-            {Math.round(totals.receiving)}
-          </p>
-          <p className="mt-2 text-sm font-medium text-[#6a7282]">Qty in receiving bins</p>
-        </div>
 
-        <div className="rounded-[14px] border-2 border-[#e5e7eb] bg-white p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-[#dcfce7]">
-              <Archive className="h-6 w-6 text-green-700" />
+            <div className="flex flex-wrap items-center gap-2 text-sm text-[#6a7282]">
+              <Link to="/inventory" className="hover:text-[#101828] transition-colors">
+                Inventory
+              </Link>
+              <ChevronRight className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
+              <span className="font-medium text-[#101828]">Raw Material</span>
             </div>
-            <span className="rounded-lg bg-[#dcfce7] px-2.5 py-1 text-xs font-medium text-[#008236]">
-              {storageBinCount} {storageBinCount === 1 ? 'Bin' : 'Bins'}
-            </span>
-          </div>
-          <p className="mt-4 text-sm font-medium text-[#4a5565]">Storage Zone</p>
-          <p className="mt-1 text-[30px] font-bold leading-9 tracking-tight text-[#101828] tabular-nums">
-            {Math.round(totals.storage)}
-          </p>
-          <p className="mt-2 text-sm font-medium text-[#6a7282]">Items in storage</p>
-        </div>
 
-        <div className="rounded-[14px] border-2 border-[#e5e7eb] bg-white p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-[#ffedd4]">
-              <Truck className="h-6 w-6 text-[#ca3500]" />
-            </div>
-            <span className="rounded-lg bg-[#ffedd4] px-2.5 py-1 text-xs font-medium text-[#ca3500]">
-              Ready
-            </span>
-          </div>
-          <p className="mt-4 text-sm font-medium text-[#4a5565]">Dispatch Zone</p>
-          <p className="mt-1 text-[30px] font-bold leading-9 tracking-tight text-[#101828] tabular-nums">
-            {Math.round(totals.dispatch)}
-          </p>
-          <p className="mt-2 text-sm font-medium text-[#6a7282]">Ready to ship</p>
-        </div>
-
-        <div
-          className="rounded-[14px] p-5 text-white sm:col-span-2 xl:col-span-1"
-          style={{
-            background: 'linear-gradient(153.435deg, rgb(173, 70, 255) 0%, rgb(152, 16, 250) 100%)',
-          }}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-white/20">
-              <BarChart3 className="h-6 w-6 text-white" />
-            </div>
-          </div>
-          <p className="mt-4 text-sm font-medium text-[#f3e8ff]">Total Raw Qty</p>
-          <p className="mt-1 text-[30px] font-bold leading-9 tracking-tight tabular-nums">
-            {Math.round(totals.all)}
-          </p>
-          <p className="mt-2 text-sm text-[#f3e8ff]">Fabrics + items (excl. products)</p>
-        </div>
-      </div>
-
-      {/* Zone tabs — Figma filter-style neutral pills */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="flex h-auto w-full flex-wrap items-center justify-start gap-1 rounded-lg bg-[#f3f3f5] p-1 text-[#0a0a0a] md:w-fit">
-          <TabsTrigger
-            value="receiving"
-            className={cn(
-              'gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-all',
-              'data-[state=active]:border data-[state=active]:border-black/10 data-[state=active]:bg-white data-[state=active]:shadow-sm',
-              'data-[state=inactive]:bg-transparent data-[state=inactive]:shadow-none'
-            )}
-          >
-            <Package className="h-4 w-4 shrink-0" />
-            Receiving
-          </TabsTrigger>
-          <TabsTrigger
-            value="storage"
-            className={cn(
-              'gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-all',
-              'data-[state=active]:border data-[state=active]:border-black/10 data-[state=active]:bg-white data-[state=active]:shadow-sm',
-              'data-[state=inactive]:bg-transparent data-[state=inactive]:shadow-none'
-            )}
-          >
-            <Archive className="h-4 w-4 shrink-0" />
-            Storage
-          </TabsTrigger>
-          <TabsTrigger
-            value="dispatch"
-            className={cn(
-              'gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-all',
-              'data-[state=active]:border data-[state=active]:border-black/10 data-[state=active]:bg-white data-[state=active]:shadow-sm',
-              'data-[state=inactive]:bg-transparent data-[state=inactive]:shadow-none'
-            )}
-          >
-            <Truck className="h-4 w-4 shrink-0" />
-            Dispatch
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="receiving" className="space-y-4">
-          <ReceivingZoneInventory
-            onTransferItem={handleTransferItem}
-            onViewDetails={handleViewDetails}
-            itemType={undefined} // Don't filter by single type, but components will filter out PRODUCT
-          />
-        </TabsContent>
-
-        <TabsContent value="storage" className="space-y-4">
-          <StorageZoneInventory 
-            onViewDetails={handleViewDetails}
-            itemType={undefined} // Don't filter by single type, but components will filter out PRODUCT
-          />
-        </TabsContent>
-
-        <TabsContent value="dispatch" className="space-y-4">
-          <Card className="shadow-erp-md border-border/60 rounded-xl border-dashed">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Truck className="h-5 w-5 text-muted-foreground" />
-                Dispatch zone
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-center py-12 px-4 rounded-lg bg-muted/20 border border-border/40">
-                <Truck className="h-12 w-12 text-muted-foreground/70 mx-auto mb-4" />
-                <p className="text-muted-foreground font-medium">Dispatch tracking is not wired here yet</p>
-                <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
-                  Raw materials in the dispatch zone will be listed in a future update. Use receiving and storage tabs for active stock.
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-2 max-w-3xl">
+                <h1 className="text-[30px] font-bold leading-9 tracking-tight text-[#101828]">
+                  Raw Material
+                </h1>
+                <p className="text-base leading-6 text-[#4a5565]">
+                  Fabrics and items received through GRN or added manually, held in storage bins (and
+                  ready-to-dispatch on legacy dispatch bins).
                 </p>
               </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+              {actionButtons}
+            </div>
+          </>
+        )}
+
+        {embedded && (
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1 max-w-3xl">
+              <h2 className="text-lg font-semibold text-[#101828]">Raw materials</h2>
+              <p className="text-sm leading-5 text-[#4a5565]">
+                Fabrics and items in storage bins (and ready-to-dispatch on legacy dispatch bins).
+              </p>
+            </div>
+            {actionButtons}
+          </div>
+        )}
+
+      {!embedded && (
+        <>
+          {/* Overview Cards — shown on standalone page only */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="rounded-[14px] border-2 border-[#e5e7eb] bg-white p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-[#dcfce7]">
+                  <Archive className="h-6 w-6 text-green-700" />
+                </div>
+                <span className="rounded-lg bg-[#dcfce7] px-2.5 py-1 text-xs font-medium text-[#008236]">
+                  {storageBinCount} {storageBinCount === 1 ? 'Bin' : 'Bins'}
+                </span>
+              </div>
+              <p className="mt-4 text-sm font-medium text-[#4a5565]">Storage</p>
+              <p className="mt-1 text-[30px] font-bold leading-9 tracking-tight text-[#101828] tabular-nums">
+                {Math.round(totals.storage)}
+              </p>
+              <p className="mt-2 text-sm font-medium text-[#6a7282]">
+                In storage bins plus ready-to-dispatch on legacy dispatch bins (listed under Storage tab)
+              </p>
+            </div>
+
+            <div
+              className="rounded-[14px] p-5 text-white"
+              style={{
+                background: 'linear-gradient(153.435deg, rgb(173, 70, 255) 0%, rgb(152, 16, 250) 100%)',
+              }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[10px] bg-white/20">
+                  <BarChart3 className="h-6 w-6 text-white" />
+                </div>
+              </div>
+              <p className="mt-4 text-sm font-medium text-[#f3e8ff]">Total Raw Qty</p>
+              <p className="mt-1 text-[30px] font-bold leading-9 tracking-tight tabular-nums">
+                {Math.round(totals.all)}
+              </p>
+              <p className="mt-2 text-sm text-[#f3e8ff]">Fabrics + items (excl. products)</p>
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="space-y-4">
+        <StorageZoneInventory
+          onViewDetails={handleViewDetails}
+          itemType={undefined}
+        />
+      </div>
       </div>
 
       <AddRawInventoryModal
         open={addInventoryOpen}
         onOpenChange={setAddInventoryOpen}
         onSuccess={() => loadTotals()}
-      />
-
-      {/* Transfer Modal */}
-      <InventoryTransferModal
-        open={showTransferModal}
-        onOpenChange={setShowTransferModal}
-        inventory={selectedInventory}
-        onTransferComplete={handleTransferComplete}
       />
 
       {/* View Details */}
@@ -875,8 +784,14 @@ const WarehouseInventoryPage: React.FC = () => {
           loadTotals();
         }}
       />
-    </ErpLayout>
+    </>
   );
+
+  if (embedded) {
+    return inner;
+  }
+
+  return <ErpLayout>{inner}</ErpLayout>;
 };
 
 export default WarehouseInventoryPage;

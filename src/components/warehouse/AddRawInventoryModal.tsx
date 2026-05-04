@@ -40,8 +40,6 @@ import {
   uniqueFabricNameBases,
 } from '@/utils/fabricMasterPicker';
 
-type Zone = 'RECEIVING_ZONE' | 'STORAGE';
-
 const FABRIC_CATALOG_PAGE_SIZE = 1000;
 
 async function fetchAllFabricMasterForPicker(): Promise<FabricMasterPickerRow[]> {
@@ -113,7 +111,6 @@ async function applyManualInventoryLine(args: {
   quantity: number;
   unit: string;
   binId: string;
-  zone: Zone;
   notes: string;
 }): Promise<void> {
   const {
@@ -125,11 +122,10 @@ async function applyManualInventoryLine(args: {
     quantity: qty,
     unit,
     binId,
-    zone,
     notes,
   } = args;
 
-  const status = zone === 'RECEIVING_ZONE' ? 'RECEIVED' : 'IN_STORAGE';
+  const status = 'IN_STORAGE';
   const now = new Date().toISOString();
   const kind = itemType === 'FABRIC' ? 'fabric' : 'item';
 
@@ -216,9 +212,7 @@ async function applyManualInventoryLine(args: {
     updated_at: now,
   };
 
-  if (zone === 'STORAGE') {
-    insertPayload.moved_to_storage_date = now;
-  }
+  insertPayload.moved_to_storage_date = now;
 
   const { data: inserted, error: insErr } = await supabase
     .from('warehouse_inventory' as any)
@@ -254,7 +248,6 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
   onSuccess,
 }) => {
   const [kind, setKind] = useState<'FABRIC' | 'ITEM'>('FABRIC');
-  const [zone, setZone] = useState<Zone>('RECEIVING_ZONE');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [itemSearchResults, setItemSearchResults] = useState<ItemRow[]>([]);
@@ -336,7 +329,6 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
     if (!open) {
       resetForm();
       setKind('FABRIC');
-      setZone('RECEIVING_ZONE');
       setUnit('meters');
       setFabricCatalog([]);
     }
@@ -375,13 +367,13 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
     }
   }, [kind]);
 
-  const loadBins = useCallback(async (z: Zone) => {
+  const loadBins = useCallback(async () => {
     try {
       setLoadingBins(true);
       const { data, error } = await supabase
         .from('bins' as any)
         .select('id, bin_code, location_type')
-        .eq('location_type', z)
+        .eq('location_type', 'STORAGE' as any)
         .eq('is_active', true as any)
         .order('bin_code');
 
@@ -404,8 +396,8 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
 
   useEffect(() => {
     if (!open) return;
-    loadBins(zone);
-  }, [open, zone, loadBins]);
+    loadBins();
+  }, [open, loadBins]);
 
   useEffect(() => {
     if (!open || kind !== 'ITEM' || debouncedSearch.length < 2) {
@@ -552,7 +544,6 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
             quantity: line.quantity,
             unit: line.unit,
             binId,
-            zone,
             notes: noteText,
           });
         } catch (e: any) {
@@ -605,43 +596,29 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
 
         <ScrollArea className="max-h-[min(560px,72vh)] px-6">
           <div className="space-y-4 pb-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Type (for next line)</Label>
-                <Select
-                  value={kind}
-                  onValueChange={(v) => {
-                    setKind(v as 'FABRIC' | 'ITEM');
-                    setSelectedItem(null);
-                    setSearch('');
-                    setDebouncedSearch('');
-                    setItemSearchResults([]);
-                    setSelectedBaseFabricId('');
-                    setSelectedGsmSelectValue('');
-                    setSelectedVariantId('');
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="FABRIC">Fabric</SelectItem>
-                    <SelectItem value="ITEM">Item / trim</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Zone</Label>
-                <Select value={zone} onValueChange={(v) => setZone(v as Zone)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="RECEIVING_ZONE">Receiving</SelectItem>
-                    <SelectItem value="STORAGE">Storage</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-2">
+              <Label>Type (for next line)</Label>
+              <Select
+                value={kind}
+                onValueChange={(v) => {
+                  setKind(v as 'FABRIC' | 'ITEM');
+                  setSelectedItem(null);
+                  setSearch('');
+                  setDebouncedSearch('');
+                  setItemSearchResults([]);
+                  setSelectedBaseFabricId('');
+                  setSelectedGsmSelectValue('');
+                  setSelectedVariantId('');
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="FABRIC">Fabric</SelectItem>
+                  <SelectItem value="ITEM">Item / trim</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-2">
@@ -666,7 +643,7 @@ export const AddRawInventoryModal: React.FC<AddRawInventoryModalProps> = ({
               </Select>
               {bins.length === 0 && !loadingBins && (
                 <p className="text-xs text-muted-foreground">
-                  No active bins for this zone. Add bins under Warehouse Master.
+                  No active storage bins. Add bins under Warehouse Master.
                 </p>
               )}
             </div>

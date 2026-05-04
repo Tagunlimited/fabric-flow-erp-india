@@ -119,7 +119,7 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
           to_bin_id: selectedBinId,
           quantity: transferQuantity,
           movement_type: 'TRANSFER',
-          reason: reason || 'Transfer to storage',
+          reason: reason || 'Transfer between storage bins',
           notes: notes
         } as any)
         .select()
@@ -134,6 +134,7 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
       const { data: existingStorageRow } = await supabase
         .from('warehouse_inventory' as any)
         .select('id, quantity')
+        .eq('item_type', inventory.item_type as any)
         .eq('item_id', inventory.item_id as any)
         .eq('bin_id', selectedBinId as any)
         .eq('status', 'IN_STORAGE' as any)
@@ -143,12 +144,12 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
 
       if (remainingQty > 0) {
         // Partial transfer: split into two rows
-        // 1) Reduce quantity on the original (keep RECEIVED in receiving bin)
+        // 1) Reduce quantity on the original row (stays IN_STORAGE in source bin)
         const { error: reduceError } = await supabase
           .from('warehouse_inventory' as any)
           .update({
             quantity: remainingQty,
-            status: 'RECEIVED',
+            status: inventory.status,
             notes: notes || inventory.notes
           } as any)
           .eq('id', inventory.id as any);
@@ -206,7 +207,7 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
             transferQuantity,
             fromBinId,
             selectedBinId,
-            'RECEIVED',
+            inventory.status,
             'IN_STORAGE',
             {
               notes: notes || `Transferred ${transferQuantity} ${inventory.unit} from ${inventory.bin?.bin_code} to storage`
@@ -273,7 +274,7 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
         }
       }
 
-      toast.success('Item transferred to storage successfully');
+      toast.success('Transfer completed');
 
       // Notify other views to refresh
       try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
@@ -287,7 +288,7 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
       if (err?.code === '409' || err?.message?.includes('409')) {
         toast.error('Transfer conflict detected. Please refresh inventory and try again.');
       } else {
-        toast.error(err?.message ? `Failed to transfer item: ${err.message}` : 'Failed to transfer item to storage');
+        toast.error(err?.message ? `Failed to transfer item: ${err.message}` : 'Failed to transfer item');
       }
     } finally {
       setLoading(false);
@@ -304,10 +305,10 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ArrowRight className="h-5 w-5" />
-            Transfer Item to Storage
+            Transfer to another bin
           </DialogTitle>
           <DialogDescription>
-            Move item from receiving zone to storage zone
+            Move quantity to a different storage bin. Rows remain in IN_STORAGE status unless merged with an existing line at the destination.
           </DialogDescription>
         </DialogHeader>
 

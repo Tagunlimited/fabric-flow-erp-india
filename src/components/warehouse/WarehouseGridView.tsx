@@ -15,17 +15,15 @@ import {
   Building, 
   Layers, 
   Rows, 
-  Package,
   Plus,
   Edit,
   Trash2,
   Search,
   Archive,
-  Truck,
   ChevronDown,
   ChevronRight
 } from 'lucide-react';
-import { Warehouse, Floor, Rack, Bin, LocationType, LOCATION_TYPE_CONFIGS } from '@/types/warehouse';
+import { Warehouse, Floor, Rack, Bin, LOCATION_TYPE_CONFIGS } from '@/types/warehouse';
 
 interface WarehouseGridViewProps {
   warehouses: Warehouse[];
@@ -48,14 +46,7 @@ export const WarehouseGridView: React.FC<WarehouseGridViewProps> = ({
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   // Get icon for location type
-  const getLocationTypeIcon = (locationType: LocationType) => {
-    switch (locationType) {
-      case 'RECEIVING_ZONE': return <Package className="w-4 h-4" />;
-      case 'STORAGE': return <Archive className="w-4 h-4" />;
-      case 'DISPATCH_ZONE': return <Truck className="w-4 h-4" />;
-      default: return <Package className="w-4 h-4" />;
-    }
-  };
+  const getLocationTypeIcon = (_locationType: string) => <Archive className="w-4 h-4" />;
 
   // Flatten data for grid view
   const gridData = useMemo(() => {
@@ -314,7 +305,7 @@ export const WarehouseGridView: React.FC<WarehouseGridViewProps> = ({
 
   // Render bin row
   const renderBinRow = (bin: any) => {
-    const locationConfig = LOCATION_TYPE_CONFIGS[bin.location_type];
+    const locationConfig = LOCATION_TYPE_CONFIGS.STORAGE;
     
     return (
       <TableRow key={bin.id} className="hover:bg-muted/50">
@@ -382,9 +373,9 @@ export const WarehouseGridView: React.FC<WarehouseGridViewProps> = ({
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle>Grid View</CardTitle>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant={viewType === 'warehouses' ? 'default' : 'outline'}
               size="sm"
@@ -414,7 +405,7 @@ export const WarehouseGridView: React.FC<WarehouseGridViewProps> = ({
               size="sm"
               onClick={() => setViewType('bins')}
             >
-              <Package className="w-4 h-4 mr-2" />
+              <Archive className="w-4 h-4 mr-2" />
               Bins
             </Button>
           </div>
@@ -423,7 +414,7 @@ export const WarehouseGridView: React.FC<WarehouseGridViewProps> = ({
       <CardContent>
         {gridData.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
-            <Package className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <Archive className="w-12 h-12 mx-auto mb-4 opacity-50" />
             <p>No {viewType} found</p>
             {searchTerm && <p>Try adjusting your search terms</p>}
           </div>
@@ -433,7 +424,9 @@ export const WarehouseGridView: React.FC<WarehouseGridViewProps> = ({
               <TableHeader>
                 <TableRow>
                   {getTableHeaders().map((header) => (
-                    <TableHead key={header}>{header}</TableHead>
+                    <TableHead key={header} className="align-middle">
+                      {header}
+                    </TableHead>
                   ))}
                 </TableRow>
               </TableHeader>

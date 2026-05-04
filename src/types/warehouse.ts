@@ -1,10 +1,11 @@
 // Warehouse Master TypeScript Interfaces
 // Hierarchical structure: Warehouse → Floor → Rack → Bin
 
-export type LocationType = 
-  | 'RECEIVING_ZONE'
-  | 'STORAGE'
-  | 'DISPATCH_ZONE';
+/** Warehouse bins are storage-only in active flows. */
+export type LocationType = 'STORAGE';
+
+/** Values that may still exist on older seeded rows (read/display compatibility). */
+export type LegacyBinLocationType = LocationType | 'DISPATCH_ZONE';
 
 export interface Dimensions {
   length: number;
@@ -16,7 +17,7 @@ export interface Bin {
   id: string;
   rack_id: string;
   bin_code: string;
-  location_type: LocationType;
+  location_type: LegacyBinLocationType;
   is_active: boolean;
   dimensions?: Dimensions;
   created_at: string;
@@ -117,14 +118,6 @@ export interface LocationTypeConfig {
 }
 
 export const LOCATION_TYPE_CONFIGS: Record<LocationType, LocationTypeConfig> = {
-  RECEIVING_ZONE: {
-    type: 'RECEIVING_ZONE',
-    label: 'Receiving Zone',
-    color: 'text-blue-800',
-    bgColor: 'bg-blue-100',
-    icon: 'Package',
-    description: 'Default zone for all received goods from GRN'
-  },
   STORAGE: {
     type: 'STORAGE',
     label: 'Storage',
@@ -133,14 +126,6 @@ export const LOCATION_TYPE_CONFIGS: Record<LocationType, LocationTypeConfig> = {
     icon: 'Archive',
     description: 'Main storage area for organized inventory'
   },
-  DISPATCH_ZONE: {
-    type: 'DISPATCH_ZONE',
-    label: 'Dispatch Zone',
-    color: 'text-orange-800',
-    bgColor: 'bg-orange-100',
-    icon: 'Truck',
-    description: 'Staging area for goods ready to dispatch'
-  }
 };
 
 // Warehouse statistics interface

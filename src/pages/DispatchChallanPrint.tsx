@@ -254,11 +254,11 @@ export default function DispatchChallanPrint() {
         {/* Delivery Challan Content */}
         <div
           ref={printRef}
-          className="bg-white p-8 w-full max-w-[210mm] mx-auto print:max-w-none print:w-full print:mx-0 print:m-0 print:px-[16mm] print:py-[12mm]"
+          className="delivery-challan-print bg-white p-8 w-full max-w-[210mm] mx-auto print:max-w-none print:w-full print:mx-0 print:m-0"
         >
-          <div className="w-full max-w-4xl mx-auto print:max-w-none print:mx-0 print:w-full print:p-0">
+          <div className="delivery-challan-content w-full max-w-4xl mx-auto print:max-w-none print:mx-0 print:w-full print:p-0">
             {/* Company Header */}
-            <div className="flex items-start gap-3 mb-3 pb-2 border-b-2 border-gray-300">
+            <div className="challan-print-keep-together flex items-start gap-3 mb-3 pb-2 border-b-2 border-gray-300">
               {company?.logo_url && (
                 <div className="flex-shrink-0">
                   <img 
@@ -283,7 +283,7 @@ export default function DispatchChallanPrint() {
             </div>
 
             {/* Challan Header */}
-            <div className="flex justify-between items-start mb-4 gap-4">
+            <div className="challan-print-keep-together flex justify-between items-start mb-4 gap-4">
               <div className="flex-1 max-w-[55%]">
                 <h2 className="text-2xl font-bold mb-2">DELIVERY CHALLAN</h2>
                 <div className="space-y-0.5">
@@ -327,9 +327,9 @@ export default function DispatchChallanPrint() {
 
             {/* Dispatched Items - Size Distribution */}
             {dispatchItems.length > 0 && (
-              <div className="mb-3 pb-2 border-b">
+              <div className="challan-print-keep-together mb-3 pb-2 border-b">
                 <h3 className="text-sm font-semibold mb-2">Dispatched Items (Size-wise):</h3>
-                <div className="grid grid-cols-8 gap-1.5" style={{ gridAutoFlow: 'dense' }}>
+                <div className="challan-size-grid grid grid-cols-8 gap-1.5" style={{ gridAutoFlow: 'dense' }}>
                   {dispatchItems.map((item, index) => (
                     <div key={index} className="border border-gray-300 rounded p-1.5 text-center bg-gray-50">
                       <div className="text-xs font-semibold text-gray-700">{item.size_name === 'Total' ? 'Total' : item.size_name}</div>
@@ -341,7 +341,7 @@ export default function DispatchChallanPrint() {
             )}
 
             {/* Order summary — same product/branding layout as quotation; no rates/amounts */}
-            <div className="mb-4">
+            <div className="challan-order-summary mb-4">
               <h3 className="text-lg font-semibold text-gray-800 mb-3">ORDER SUMMARY</h3>
               <div className="overflow-x-auto print:overflow-visible">
                 <table className="order-summary-print-table w-full table-fixed border-collapse border border-gray-400 text-sm">
@@ -385,7 +385,7 @@ export default function DispatchChallanPrint() {
             </div>
 
             {/* Quantity Summary */}
-            <div className="flex justify-end mb-4">
+            <div className="challan-print-keep-together flex justify-end mb-4">
               <div className="w-80">
                 <div className="space-y-2 border-t pt-3">
                   <div className="flex justify-between py-1 text-sm">
@@ -411,7 +411,7 @@ export default function DispatchChallanPrint() {
             </div>
 
             {/* Footer with Signatures */}
-            <div className="mt-8 pt-4 border-t">
+            <div className="challan-signature-section mt-8 pt-4 border-t">
               <div className="flex justify-between items-end">
                 <div className="flex-1">
                   <div className="border-t border-gray-400 pt-2 mt-16 w-48">

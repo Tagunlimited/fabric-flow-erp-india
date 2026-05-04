@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import "./OrdersPageViewSwitch.css";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ShoppingCart, Eye, CheckCircle, Filter, X, Printer } from "lucide-react";
+import { ShoppingCart, Eye, CheckCircle, Filter, X, Printer, FileImage } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { useOrdersWithReceipts } from "@/hooks/useOrdersWithReceipts";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -15,7 +15,12 @@ import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from '@/lib/utils';
-import { isDesignWorkComplete, getDesignOrderStatusColor } from '@/lib/designOrderStage';
+import {
+  getDesignOrderStatusColor,
+  getOrderMockupPreviewUrls,
+  hasBranding,
+  isDesignWorkComplete,
+} from '@/lib/designOrderStage';
 
 interface Order {
   id: string;
@@ -36,6 +41,56 @@ interface Order {
     category_image_url?: string | null;
   }>;
 }
+
+const parseSpecs = (value: unknown): Record<string, unknown> => {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof value === "object" ? (value as Record<string, unknown>) : {};
+};
+
+const collectPrintingPreviewUrls = (order: Order): string[] => {
+  const primary = getOrderMockupPreviewUrls(order);
+  if (primary.length > 0) return primary;
+
+  const seen = new Set<string>();
+  const pushUrl = (value: unknown) => {
+    if (typeof value !== "string") return;
+    const normalized = value.trim();
+    if (!normalized) return;
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
+  };
+
+  for (const item of order.order_items || []) {
+    for (const url of item.mockup_images || []) pushUrl(url);
+
+    const specs = parseSpecs(item.specifications);
+    const specMockups = specs.mockup_images;
+    if (Array.isArray(specMockups)) {
+      for (const url of specMockups) pushUrl(url);
+    }
+
+    pushUrl(specs.class_image);
+    pushUrl(item.category_image_url);
+  }
+
+  return Array.from(seen);
+};
+
+const isReadymadeOrder = (order: Order): boolean => {
+  if (order.order_type === "readymade") return true;
+  const firstItem = order.order_items?.[0];
+  if (!firstItem) return false;
+  const specs = parseSpecs(firstItem.specifications);
+  return specs.order_type === "readymade";
+};
 
 const DesignPrintingPage = () => {
   const navigate = useNavigate();
@@ -300,7 +355,7 @@ const DesignPrintingPage = () => {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <Table className="min-w-[860px]">
+                  <Table className="min-w-[1000px]">
                     <TableHeader>
                       <TableRow>
                         <TableHead>
@@ -335,63 +390,106 @@ const DesignPrintingPage = () => {
                             </Button>
                           </div>
                         </TableHead>
+                        <TableHead>Mockups</TableHead>
                         {activeTab === "completed" && <TableHead>Printed on</TableHead>}
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredOrders.map((order) => (
-                        <TableRow
-                          key={order.id}
-                          className="cursor-pointer hover:bg-muted/50"
-                          onClick={() => goToOrder(order)}
-                        >
-                          <TableCell className="font-medium">{order.order_number}</TableCell>
-                          <TableCell>{order.customer?.company_name}</TableCell>
-                          <TableCell>
-                            {new Date(order.order_date).toLocaleDateString('en-GB', {
-                              day: '2-digit',
-                              month: 'short',
-                              year: '2-digit'
-                            })}
-                          </TableCell>
-                          <TableCell>
-                            <Badge className={getDesignOrderStatusColor(order.status)}>
-                              {order.status.replace('_', ' ').toUpperCase()}
-                            </Badge>
-                          </TableCell>
-                          {activeTab === "completed" && (
-                            <TableCell className="text-sm text-muted-foreground">
-                              {order.printing_completed_at
-                                ? format(new Date(order.printing_completed_at), "dd-MMM-yy HH:mm")
-                                : '—'}
+                      {filteredOrders.map((order) => {
+                        const mockupImages = collectPrintingPreviewUrls(order);
+                        return (
+                          <TableRow
+                            key={order.id}
+                            className="cursor-pointer hover:bg-muted/50"
+                            onClick={() => goToOrder(order)}
+                          >
+                            <TableCell className="font-medium">{order.order_number}</TableCell>
+                            <TableCell>{order.customer?.company_name}</TableCell>
+                            <TableCell>
+                              {new Date(order.order_date).toLocaleDateString('en-GB', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: '2-digit'
+                              })}
                             </TableCell>
-                          )}
-                          <TableCell>
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  goToOrder(order);
-                                }}
-                              >
-                                <Eye className="w-4 h-4" />
-                              </Button>
-                              {activeTab === "pending" && (
-                                <Button
-                                  size="sm"
-                                  disabled={completingId === order.id}
-                                  onClick={(e) => markPrintingCompleted(order.id, e)}
-                                >
-                                  {completingId === order.id ? 'Saving…' : 'Mark printing completed'}
-                                </Button>
+                            <TableCell>
+                              <Badge className={getDesignOrderStatusColor(order.status)}>
+                                {order.status.replace('_', ' ').toUpperCase()}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {mockupImages.length === 0 ? (
+                                (() => {
+                                  const hasBrandingOnly = isReadymadeOrder(order) && hasBranding(order);
+                                  if (hasBrandingOnly) {
+                                    return (
+                                      <div className="w-6 h-6 bg-green-100 rounded flex items-center justify-center">
+                                        <FileImage className="w-4 h-4 text-green-600" />
+                                      </div>
+                                    );
+                                  }
+                                  return (
+                                    <div className="w-6 h-6 bg-gray-100 rounded flex items-center justify-center">
+                                      <FileImage className="w-4 h-4 text-gray-400" />
+                                    </div>
+                                  );
+                                })()
+                              ) : (
+                                (() => {
+                                  const visible = mockupImages.slice(0, 4);
+                                  const remaining = mockupImages.length - visible.length;
+                                  return (
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      {visible.map((url, idx) => (
+                                      <img
+                                        key={`${order.id}-mockup-printing-${idx}`}
+                                        src={url}
+                                        alt={`Mockup ${idx + 1}`}
+                                        className="w-8 h-8 object-cover rounded border border-gray-200"
+                                      />
+                                      ))}
+                                      {remaining > 0 && (
+                                        <span className="text-[10px] font-medium text-gray-600">+{remaining}</span>
+                                      )}
+                                    </div>
+                                  );
+                                })()
                               )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                            </TableCell>
+                            {activeTab === "completed" && (
+                              <TableCell className="text-sm text-muted-foreground">
+                                {order.printing_completed_at
+                                  ? format(new Date(order.printing_completed_at), "dd-MMM-yy HH:mm")
+                                  : '—'}
+                              </TableCell>
+                            )}
+                            <TableCell>
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    goToOrder(order);
+                                  }}
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </Button>
+                                {activeTab === "pending" && (
+                                  <Button
+                                    size="sm"
+                                    disabled={completingId === order.id}
+                                    onClick={(e) => markPrintingCompleted(order.id, e)}
+                                  >
+                                    {completingId === order.id ? 'Saving…' : 'Mark printing completed'}
+                                  </Button>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                   {filteredOrders.length === 0 && !loading && (

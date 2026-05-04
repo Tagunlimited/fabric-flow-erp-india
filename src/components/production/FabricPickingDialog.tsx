@@ -184,7 +184,7 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
         .from('warehouse_inventory')
         .select('*')
         .eq('item_type', 'FABRIC' as any)
-        .in('status', ['IN_STORAGE', 'RECEIVED'] as any);
+        .eq('status', 'IN_STORAGE' as any);
       if (error) {
         console.error('Error loading zone availability:', error);
         return;
@@ -217,8 +217,8 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
       const { data, error } = await (supabase as any)
         .from('bins')
         .select('id, bin_code, location_type')
-        .in('location_type', ['RECEIVING_ZONE', 'STORAGE', 'DISPATCH_ZONE'] as any)
-        .order('location_type, bin_code');
+        .eq('location_type', 'STORAGE' as any)
+        .order('bin_code');
 
       if (error) {
         console.error('Error loading storage zones:', error);
@@ -605,7 +605,7 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
                   newQuantity,
                   {
                     bin_id: binId,
-                    status: bestMatch.status || 'RECEIVED',
+                    status: bestMatch.status || 'IN_STORAGE',
                     color: bestMatch.fabric_color || bestMatch.item_color || undefined,
                     reference_type: 'PICKING',
                     reference_id: orderId || undefined,
@@ -694,7 +694,7 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
             <div>
               <DialogTitle>Pick Fabric for Cutting</DialogTitle>
               <DialogDescription>
-                Select fabrics from storage zones for order {orderNumber} - {customerName}
+                Select fabrics from storage bins for order {orderNumber} - {customerName}
               </DialogDescription>
             </div>
             {dataLoaded && (
@@ -790,39 +790,17 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
                       <CardContent className="space-y-3">
                         {/* Zone-wise Availability Cards */}
                         <div className="space-y-3">
-                          <div className="text-xs text-gray-600 font-medium">Available by Zone Type:</div>
-                          
-                          {/* Receiving Zone Card */}
-                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center space-x-2">
-                                <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                                <span className="text-sm font-medium text-blue-800">Receiving Zone</span>
-                              </div>
-                              <span className="text-lg font-bold text-blue-900">
-                                {(() => {
-                                  const receivingZones = storageZones.filter(z => z.location === 'RECEIVING_ZONE');
-                                  const totalReceiving = receivingZones.reduce((sum, zone) => {
-                                    const zoneData = zoneAvailability[fabric.fabric_id]?.[zone.id];
-                                    return sum + (zoneData ? Math.max(0, (zoneData.available || 0) - (zoneData.reserved || 0)) : 0);
-                                  }, 0);
-                                  return totalReceiving.toFixed(2) + ' ' + (fabric.unit || 'units');
-                                })()}
-                              </span>
-                            </div>
-                          </div>
+                          <div className="text-xs text-gray-600 font-medium">Available in storage bins (IN_STORAGE):</div>
 
-                          {/* Storage Zone Card */}
                           <div className="bg-green-50 border border-green-200 rounded-lg p-3">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center space-x-2">
                                 <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                                <span className="text-sm font-medium text-green-800">Storage Zone</span>
+                                <span className="text-sm font-medium text-green-800">Total in storage</span>
                               </div>
                               <span className="text-lg font-bold text-green-900">
                                 {(() => {
-                                  const storageZoneBins = storageZones.filter(z => z.location === 'STORAGE');
-                                  const totalStorage = storageZoneBins.reduce((sum, zone) => {
+                                  const totalStorage = storageZones.reduce((sum, zone) => {
                                     const zoneData = zoneAvailability[fabric.fabric_id]?.[zone.id];
                                     return sum + (zoneData ? Math.max(0, (zoneData.available || 0) - (zoneData.reserved || 0)) : 0);
                                   }, 0);
@@ -832,30 +810,11 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
                             </div>
                           </div>
 
-                          {/* Dispatch Zone Card */}
-                          <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center space-x-2">
-                                <div className="w-3 h-3 bg-orange-500 rounded-full"></div>
-                                <span className="text-sm font-medium text-orange-800">Dispatch Zone</span>
-                              </div>
-                              <span className="text-lg font-bold text-orange-900">
-                                {(() => {
-                                  const dispatchZones = storageZones.filter(z => z.location === 'DISPATCH_ZONE');
-                                  const totalDispatch = dispatchZones.reduce((sum, zone) => {
-                                    const zoneData = zoneAvailability[fabric.fabric_id]?.[zone.id];
-                                    return sum + (zoneData ? Math.max(0, (zoneData.available || 0) - (zoneData.reserved || 0)) : 0);
-                                  }, 0);
-                                  return totalDispatch.toFixed(2) + ' ' + (fabric.unit || 'units');
-                                })()}
-                              </span>
-                            </div>
-                          </div>
                         </div>
 
-                        {/* Storage Zone Selection */}
+                        {/* Bin selection */}
                         <div className="space-y-2">
-                          <Label className="text-xs">Pick from Storage Zone:</Label>
+                          <Label className="text-xs">Pick from bin:</Label>
                           <Select 
                             value={selectedZones[fabric.fabric_id] || ''} 
                             onValueChange={(value) => setSelectedZones(prev => ({

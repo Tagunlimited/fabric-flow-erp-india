@@ -877,27 +877,28 @@ const GRNForm = () => {
     try {
       console.log('Updating inventory for approved items:', approvedItems);
       
-      // Get a receiving zone bin for placing items
-      const { data: receivingBins, error: binError } = await supabase
+      // Default placement: first active STORAGE bin (matches server GRN trigger)
+      const { data: storageBins, error: binError } = await supabase
         .from('bins')
         .select('id, bin_code')
-        .eq('location_type', 'RECEIVING_ZONE' as any)
+        .eq('location_type', 'STORAGE' as any)
         .eq('is_active', true as any)
+        .order('created_at', { ascending: true })
         .limit(1);
 
       if (binError) {
-        console.error('Error fetching receiving bins:', binError);
-        throw new Error(`Failed to fetch receiving bins: ${binError.message}`);
+        console.error('Error fetching storage bins:', binError);
+        throw new Error(`Failed to fetch storage bins: ${binError.message}`);
       }
 
-      if (!receivingBins || receivingBins.length === 0) {
-        console.warn('No receiving zone bins found. Please create receiving zone bins first.');
-        toast.error('No receiving zone bins found. Please create receiving zone bins first.');
+      if (!storageBins || storageBins.length === 0) {
+        console.warn('No storage bins found. Please create storage bins in Warehouse Master.');
+        toast.error('No storage bins found. Please create storage bins in Warehouse Master.');
         return;
       }
 
-      const defaultBin = (receivingBins as any)?.[0];
-      console.log(`Using default receiving bin: ${defaultBin?.bin_code} (${defaultBin?.id})`);
+      const defaultBin = (storageBins as any)?.[0];
+      console.log(`Using default storage bin: ${defaultBin?.bin_code} (${defaultBin?.id})`);
       
       for (const item of approvedItems) {
         if (item.quality_status === 'approved' && item.approved_quantity > 0) {
@@ -998,7 +999,7 @@ const GRNForm = () => {
                 .select('*')
                 .eq('item_id', item.item_id)
                 .eq('bin_id', defaultBin?.id)
-                .eq('status', 'RECEIVED')
+                .eq('status', 'IN_STORAGE')
                 .eq('item_type', itemType)
                 .eq('unit', item.unit_of_measure || 'pcs')
                 .limit(1)
@@ -1025,7 +1026,7 @@ const GRNForm = () => {
                 .eq('item_code', itemCode)
                 .eq('item_name', item.item_name)
                 .eq('bin_id', defaultBin?.id)
-                .eq('status', 'RECEIVED')
+                .eq('status', 'IN_STORAGE')
                 .eq('item_type', itemType)
                 .eq('unit', item.unit_of_measure || 'pcs')
                 .limit(1);
@@ -1085,7 +1086,8 @@ const GRNForm = () => {
                 quantity: item.approved_quantity,
                 unit: item.unit_of_measure || 'pcs',
                 bin_id: defaultBin?.id,
-                status: 'RECEIVED' as any,
+                status: 'IN_STORAGE' as any,
+                moved_to_storage_date: new Date().toISOString(),
                 notes: `Auto-placed from GRN ${grn.grn_number}`
               };
               
@@ -1127,7 +1129,7 @@ const GRNForm = () => {
               item.approved_quantity,
               {
                 bin_id: defaultBin?.id,
-                status: 'RECEIVED',
+                status: 'IN_STORAGE',
                 color: itemColor || undefined,
                 action: existingInventory ? 'CONSOLIDATED' : 'ADDED',
                 grn_id: grn.id,

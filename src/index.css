@@ -382,4 +382,64 @@ All colors MUST be HSL.
     overflow-wrap: break-word !important;
     hyphens: auto;
   }
+
+  /* Delivery challan print surface: enforce A4-safe padding and overflow control */
+  .delivery-challan-print,
+  .delivery-challan-print * {
+    box-sizing: border-box !important;
+  }
+
+  .delivery-challan-print {
+    width: 100% !important;
+    max-width: 210mm !important;
+    margin: 0 auto !important;
+    padding: 12mm 14mm !important;
+    overflow: visible !important;
+  }
+
+  .delivery-challan-print .delivery-challan-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .delivery-challan-print p,
+  .delivery-challan-print div,
+  .delivery-challan-print span,
+  .delivery-challan-print td,
+  .delivery-challan-print th {
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+    white-space: normal !important;
+  }
+
+  .delivery-challan-print table {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .delivery-challan-print .challan-size-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+  }
+
+  /* Delivery challan pagination control */
+  .delivery-challan-print .challan-print-keep-together,
+  .delivery-challan-print .challan-signature-section {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .delivery-challan-print .challan-order-summary thead {
+    display: table-header-group;
+  }
+
+  .delivery-challan-print .challan-order-summary tfoot {
+    display: table-footer-group;
+  }
+
+  .delivery-challan-print .challan-order-summary tr {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
 }
