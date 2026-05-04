@@ -74,6 +74,10 @@ const NAMED_COLORS: Record<string, string> = {
   rust: '#B7410E',
   apple: '#8DB600',
   'apple green': '#8DB600',
+  aqua: '#00FFFF',
+  'aqua blue': '#6EC6FF',
+  carrot: '#ED9121',
+  'carrot pink': '#F4A6B8',
   /* Multi-word fabric / catalog colors (must win over generic last words like "blue") */
   'peacock blue': '#0d6570',
   'ice blue': '#a8d4e6',

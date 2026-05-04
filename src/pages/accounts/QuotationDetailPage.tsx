@@ -251,61 +251,49 @@ export default function QuotationDetailPage() {
     return source.toISOString().slice(0, 10);
   };
 
-  // Generate legacy quotation number: SO/YY-YY/MON/ORDER_SEQ
-  // ORDER_SEQ must match business order serial (e.g. TUC/26-27/APR/165 -> .../165)
+  // Generate legacy quotation number: SO/YY-YY/NNN
+  // NNN is globally incremental within the financial year (no month reset)
   const generateQuotationNumber = async (orderData?: { id?: string; order_number?: string | null; order_date?: string | null; created_at?: string | null }) => {
     const sourceDate = orderData?.order_date ? new Date(orderData.order_date) : new Date();
     const fyStart = sourceDate.getMonth() < 3 ? sourceDate.getFullYear() - 1 : sourceDate.getFullYear();
     const fyEnd = fyStart + 1;
     const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
-    const month = sourceDate.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+    const pattern = `SO/${fyStr}/`;
 
+    // Try to derive sequence from linked order number
     const orderNumber = String(orderData?.order_number || '');
     const suffixMatch = orderNumber.match(/\/(\d+)$/);
     if (suffixMatch) {
       const serial = Number.parseInt(suffixMatch[1], 10);
       if (Number.isFinite(serial) && serial > 0) {
-        return `SO/${fyStr}/${month}/${String(serial).padStart(3, '0')}`;
+        return `${pattern}${String(serial).padStart(3, '0')}`;
       }
     }
 
-    const queryWithSoftDelete = () =>
-      supabase
-        .from('orders')
-        .select('id, order_date, created_at')
-        .eq('is_deleted', false)
-        .gte('order_date', new Date(sourceDate.getFullYear(), sourceDate.getMonth(), 1).toISOString().slice(0, 10))
-        .lt('order_date', new Date(sourceDate.getFullYear(), sourceDate.getMonth() + 1, 1).toISOString().slice(0, 10))
-        .order('order_date', { ascending: true })
-        .order('created_at', { ascending: true })
-        .order('id', { ascending: true });
-    const queryWithoutSoftDelete = () =>
-      supabase
-        .from('orders')
-        .select('id, order_date, created_at')
-        .gte('order_date', new Date(sourceDate.getFullYear(), sourceDate.getMonth(), 1).toISOString().slice(0, 10))
-        .lt('order_date', new Date(sourceDate.getFullYear(), sourceDate.getMonth() + 1, 1).toISOString().slice(0, 10))
-        .order('order_date', { ascending: true })
-        .order('created_at', { ascending: true })
-        .order('id', { ascending: true });
+    // Find max sequence from existing SO numbers in this financial year
+    const { data: existingQuotations, error } = await supabase
+      .from('quotations')
+      .select('quotation_number')
+      .like('quotation_number', `${pattern}%`)
+      .order('quotation_number', { ascending: false });
 
-    let { data: monthlyOrders, error } = await queryWithSoftDelete();
-    if (error && shouldRetryReadWithoutIsDeletedFilter(error)) {
-      const retry = await queryWithoutSoftDelete();
-      monthlyOrders = retry.data;
-      error = retry.error;
-    }
     if (error) throw error;
 
-    let derivedOrderSeq = 1;
-    if (orderData?.id && monthlyOrders && monthlyOrders.length > 0) {
-      const idx = (monthlyOrders as any[]).findIndex((o) => o?.id === orderData.id);
-      if (idx >= 0) {
-        derivedOrderSeq = idx + 1;
+    let nextSequence = 1;
+    if (existingQuotations && existingQuotations.length > 0) {
+      const sequences = existingQuotations
+        .map(q => {
+          const match = q.quotation_number.match(/\/(\d+)$/);
+          return match ? parseInt(match[1]) : 0;
+        })
+        .filter(seq => !isNaN(seq));
+
+      if (sequences.length > 0) {
+        nextSequence = Math.max(...sequences) + 1;
       }
     }
-    const seqStr = String(derivedOrderSeq).padStart(3, '0');
-    return `SO/${fyStr}/${month}/${seqStr}`;
+
+    return `${pattern}${String(nextSequence).padStart(3, '0')}`;
   };
 
   const resolveQuotationNumberForOrder = async (orderData: {

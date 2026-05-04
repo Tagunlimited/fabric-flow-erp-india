@@ -5,7 +5,18 @@ import { Button } from "@/components/ui/button";
 import "./OrdersPageViewSwitch.css";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ShoppingCart, Plus, Eye, Package, Clock, CheckCircle, Trash2, RefreshCw, X, Filter } from "lucide-react";
+import {
+  Plus,
+  Eye,
+  Trash2,
+  RefreshCw,
+  X,
+  Filter,
+  ClipboardList,
+  IndianRupee,
+  Wallet,
+  CalendarClock,
+} from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { usePersistentTabState } from "@/hooks/usePersistentTabState";
@@ -179,6 +190,31 @@ function buildStatusSearchText(status: string | undefined): string {
   return [status, status.replace(/_/g, ' '), status.replace(/_/g, '-')]
     .join(' ')
     .toLowerCase();
+}
+
+function isOpenOrderStatus(status: string | undefined): boolean {
+  const s = String(status || '').toLowerCase();
+  return s !== 'completed' && s !== 'cancelled';
+}
+
+function startOfDayLocal(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function formatOrdersPageInr(n: number): string {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 0,
+  }).format(n);
+}
+
+function formatOrdersPageInrCompact(n: number): string {
+  const abs = Math.abs(n);
+  if (abs >= 10000000) return `₹${(n / 10000000).toFixed(2)} Cr`;
+  if (abs >= 100000) return `₹${(n / 100000).toFixed(2)} L`;
+  if (abs >= 1000) return `₹${(n / 1000).toFixed(2)} K`;
+  return formatOrdersPageInr(n);
 }
 
 function colCellIncludes(filterRaw: string, cellHaystack: string): boolean {
@@ -717,7 +753,7 @@ const OrdersPage = () => {
   };
 
   const handleRestoreByOrderNumber = async () => {
-    const orderNumber = window.prompt('Enter Order Number to restore (example: TUC/26-27/APR/006)');
+    const orderNumber = window.prompt('Enter Order Number to restore (example: TUC/26-27/006)');
     if (!orderNumber?.trim()) return;
 
     try {
@@ -799,24 +835,37 @@ const OrdersPage = () => {
     () => orders.filter((order) => String(order.status).toLowerCase() === 'completed').length,
     [orders]
   );
-  const pendingStatsCount = useMemo(
-    () =>
-      orders.filter(
-        (order) =>
-          String(order.status).toLowerCase() !== 'completed' &&
-          !ordersWithCuttingMaster.has(order.id)
-      ).length,
-    [orders, ordersWithCuttingMaster]
-  );
-  const inProductionStatsCount = useMemo(
-    () =>
-      orders.filter(
-        (order) =>
-          String(order.status).toLowerCase() !== 'completed' &&
-          ordersWithCuttingMaster.has(order.id)
-      ).length,
-    [orders, ordersWithCuttingMaster]
-  );
+  /** Actionable snapshot from the same orders loaded for the list (lines + receipts + charges when available). */
+  const ordersPageSnapshot = useMemo(() => {
+    const open = orders.filter((o) => isOpenOrderStatus(o.status));
+    const today = startOfDayLocal(new Date());
+    const overdueOpen = open.filter((o) => {
+      if (!o.expected_delivery_date) return false;
+      let exp = parseBusinessDateLocal(o.expected_delivery_date);
+      if (!exp) {
+        const d = new Date(o.expected_delivery_date);
+        exp = Number.isNaN(d.getTime()) ? null : d;
+      }
+      if (!exp) return false;
+      return startOfDayLocal(exp).getTime() < today.getTime();
+    });
+    const pipelineValue = open.reduce(
+      (s, o) => s + Number(o.calculatedAmount ?? o.final_amount ?? o.total_amount ?? 0),
+      0
+    );
+    const balanceDueOpen = open.reduce(
+      (s, o) => s + Number(o.calculatedBalance ?? o.balance_amount ?? 0),
+      0
+    );
+    const completedLoaded = orders.filter((o) => String(o.status).toLowerCase() === 'completed').length;
+    return {
+      openCount: open.length,
+      pipelineValue,
+      balanceDueOpen,
+      overdueOpenCount: overdueOpen.length,
+      completedLoaded,
+    };
+  }, [orders]);
 
   return (
     <ErpLayout>
@@ -833,66 +882,80 @@ const OrdersPage = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <Card className="shadow-erp-md bg-blue-100 text-blue-900">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium opacity-90">
-                Total Orders
-              </CardTitle>
+              <CardTitle className="text-sm font-medium opacity-90">Open orders</CardTitle>
+              <p className="text-xs font-normal opacity-80 leading-snug">
+                Not completed or cancelled — work still in flight.
+              </p>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold">{orders.length}</span>
-                <ShoppingCart className="w-5 h-5 text-blue-700" />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-2xl font-bold tabular-nums">{ordersPageSnapshot.openCount}</span>
+                <ClipboardList className="w-5 h-5 shrink-0 text-blue-700" />
               </div>
             </CardContent>
           </Card>
 
-          <Card className="shadow-erp-md bg-yellow-100 text-yellow-900">
+          <Card className="shadow-erp-md bg-violet-100 text-violet-900">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium opacity-90">
-                Pending
-              </CardTitle>
+              <CardTitle className="text-sm font-medium opacity-90">Pipeline value</CardTitle>
+              <p className="text-xs font-normal opacity-80 leading-snug">
+                Booked value on open orders (lines + GST + charges when loaded).
+              </p>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold">
-                  {pendingStatsCount}
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  className="text-2xl font-bold tabular-nums truncate"
+                  title={formatOrdersPageInr(ordersPageSnapshot.pipelineValue)}
+                >
+                  {formatOrdersPageInrCompact(ordersPageSnapshot.pipelineValue)}
                 </span>
-                <Clock className="w-5 h-5 text-yellow-700" />
+                <IndianRupee className="w-5 h-5 shrink-0 text-violet-700" />
               </div>
             </CardContent>
           </Card>
 
-          <Card className="shadow-erp-md bg-purple-100 text-purple-900">
+          <Card className="shadow-erp-md bg-amber-100 text-amber-950">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium opacity-90">
-                In Production
-              </CardTitle>
+              <CardTitle className="text-sm font-medium opacity-90">Balance due (open)</CardTitle>
+              <p className="text-xs font-normal opacity-80 leading-snug">
+                Outstanding on open orders after matched receipts.
+              </p>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold">
-                  {inProductionStatsCount}
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  className="text-2xl font-bold tabular-nums truncate"
+                  title={formatOrdersPageInr(ordersPageSnapshot.balanceDueOpen)}
+                >
+                  {formatOrdersPageInrCompact(ordersPageSnapshot.balanceDueOpen)}
                 </span>
-                <Package className="w-5 h-5 text-purple-700" />
+                <Wallet className="w-5 h-5 shrink-0 text-amber-800" />
               </div>
             </CardContent>
           </Card>
 
-          <Card className="shadow-erp-md bg-green-100 text-green-900">
+          <Card className="shadow-erp-md bg-rose-100 text-rose-950">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium opacity-90">
-                Completed
-              </CardTitle>
+              <CardTitle className="text-sm font-medium opacity-90">Past expected delivery</CardTitle>
+              <p className="text-xs font-normal opacity-80 leading-snug">
+                Open orders whose EDD is before today — needs attention.
+              </p>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold">
-                  {orders.filter(o => o.status === 'completed').length}
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-2xl font-bold tabular-nums">
+                  {ordersPageSnapshot.overdueOpenCount}
                 </span>
-                <CheckCircle className="w-5 h-5 text-green-700" />
+                <CalendarClock className="w-5 h-5 shrink-0 text-rose-800" />
               </div>
             </CardContent>
           </Card>
         </div>
+        <p className="text-xs text-muted-foreground -mt-2">
+          Figures reflect the orders currently loaded for this page (newest first, up to {ordersLimit} rows).
+          Completed count in tabs: {ordersPageSnapshot.completedLoaded} completed in this load.
+        </p>
 
         <div className="space-y-6">
           <div className="flex justify-between items-center">

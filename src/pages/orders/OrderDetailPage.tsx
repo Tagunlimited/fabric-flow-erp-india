@@ -1233,6 +1233,7 @@ export default function OrderDetailPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const isFromDesignPage = (location.state as any)?.from === 'design';
+  const isFromPrintingPage = (location.state as any)?.from === 'printing';
   const [searchParams] = useSearchParams();
   const printRef = useRef<HTMLDivElement>(null);
   const { config: company } = useCompanySettings();
@@ -1334,7 +1335,12 @@ export default function OrderDetailPage() {
       return;
     }
     if (fromState === 'design') {
-      navigate('/design', { state: { refreshOrders: true, defaultTab: 'pending' } });
+      navigate('/design/designs', { state: { refreshOrders: true, defaultTab: 'pending' } });
+      return;
+    }
+    if (fromState === 'printing') {
+      const tab = (location.state as any)?.printingTab === 'completed' ? 'completed' : 'pending';
+      navigate('/design/printing', { state: { refreshOrders: true, defaultTab: tab } });
       return;
     }
     if (from === 'production') {
@@ -2757,7 +2763,7 @@ export default function OrderDetailPage() {
             <p className="text-muted-foreground mb-4">The requested order could not be found.</p>
             <Button onClick={handleBackNavigation}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to {order?.order_type === 'readymade' ? 'Readymade Orders' : (((location.state as any)?.from === 'design') ? 'Design & Printing' : (searchParams.get('from') === 'production' ? 'Production' : 'Orders'))}
+              Back to {order?.order_type === 'readymade' ? 'Readymade Orders' : (((location.state as any)?.from === 'printing') ? 'Printing' : ((location.state as any)?.from === 'design') ? 'Designs' : (searchParams.get('from') === 'production' ? 'Production' : 'Orders'))}
             </Button>
           </div>
         </div>
@@ -2806,7 +2812,7 @@ export default function OrderDetailPage() {
               className="flex items-center"
             >
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to {(location.state as any)?.from === 'design' ? 'Design & Printing' : (searchParams.get('from') === 'production' ? 'Production' : 'Orders')}
+              Back to {(location.state as any)?.from === 'printing' ? 'Printing' : (location.state as any)?.from === 'design' ? 'Designs' : (searchParams.get('from') === 'production' ? 'Production' : 'Orders')}
             </Button>
             <div>
               <h1 className="text-3xl font-bold">Order Details</h1>
@@ -2814,7 +2820,7 @@ export default function OrderDetailPage() {
             </div>
           </div>
           
-          {!isFromDesignPage && (
+          {!isFromDesignPage && !isFromPrintingPage && (
           <div className="flex items-center space-x-2">
             <div className="flex items-center space-x-3">
               <Badge className={getStatusColor(order.status)}>

@@ -4,7 +4,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "next-themes";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { FormPersistenceProvider } from "@/contexts/FormPersistenceContext";
@@ -55,7 +55,8 @@ import DispatchPage from "./pages/DispatchPage";
 import DispatchChallanPrint from "./pages/DispatchChallanPrint";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import SettingsPage from "./pages/SettingsPage";
-import DesignPage from "./pages/DesignPage";
+import DesignDesignsPage from "./pages/DesignDesignsPage";
+import DesignPrintingPage from "./pages/DesignPrintingPage";
 import ProcurementPage from "./pages/ProcurementPage";
 import PurchaseOrderListPage from "./pages/procurement/PurchaseOrderListPage";
 import PurchaseOrderFormPage from "./pages/procurement/PurchaseOrderFormPage";
@@ -164,7 +165,7 @@ const syncSidebarUrls = async () => {
       { title: 'CRM', url: null, icon: 'Users', sort_order: 2, is_active: true },
       { title: 'Orders', url: '/orders', icon: 'ShoppingCart', sort_order: 3, is_active: true },
       { title: 'Accounts', url: null, icon: 'Calculator', sort_order: 4, is_active: true },
-      { title: 'Design & Printing', url: '/design', icon: 'Palette', sort_order: 5, is_active: true },
+      { title: 'Design & Printing', url: null, icon: 'Palette', sort_order: 5, is_active: true },
       { title: 'Procurement', url: null, icon: 'ShoppingBag', sort_order: 6, is_active: true },
       { title: 'Inventory', url: null, icon: 'Package', sort_order: 7, is_active: true },
       { title: 'Production', url: null, icon: 'Factory', sort_order: 8, is_active: true },
@@ -462,9 +463,15 @@ const App = () => {
                     <PickerPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
-                <Route path="/design" element={
+                <Route path="/design" element={<Navigate to="/design/designs" replace />} />
+                <Route path="/design/designs" element={
                   <ProtectedRouteWithCompanySettings>
-                    <DesignPage />
+                    <DesignDesignsPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/design/printing" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <DesignPrintingPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/procurement" element={

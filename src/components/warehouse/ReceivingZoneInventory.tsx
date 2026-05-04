@@ -29,12 +29,24 @@ import {
   resolveWarehouseFabricSwatch,
 } from '@/lib/grnColorSwatch';
 import { buildWarehouseIdentityKey } from '@/utils/fabricVariantIdentity';
+import { resolveWarehouseFabricId } from '@/utils/fabricInventoryIdentity';
 
 interface ReceivingZoneInventoryProps {
   onTransferItem?: (inventory: WarehouseInventory) => void;
   onViewDetails?: (inventory: WarehouseInventory) => void;
   itemType?: 'FABRIC' | 'ITEM' | 'PRODUCT'; // Optional filter for item type
 }
+
+const resolveFabricDisplayName = (item: WarehouseInventory): string => {
+  const fabricMaster = (item as any).fabric_master;
+  return (
+    (fabricMaster?.fabric_for_supplier && String(fabricMaster.fabric_for_supplier).trim()) ||
+    fabricMaster?.fabric_name ||
+    item.grn_item?.fabric_name ||
+    item.item_name ||
+    '-'
+  );
+};
 
 export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
   onTransferItem,
@@ -93,6 +105,7 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
             )
           )
           ,grn_item:grn_item_id (
+            po_item_id,
             fabric_color,
             fabric_gsm,
             fabric_name,
@@ -144,9 +157,45 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
       console.log('🔍 [ReceivingZone] After bin filter:', filtered.length);
       
       // Fetch item_master and fabric_master data for FABRIC and ITEM types
-      const fabricIds = filtered
-        .filter((i: any) => i.item_type === 'FABRIC' && i.item_id)
-        .map((i: any) => i.item_id) as string[];
+      const poItemIdsNeedingFabricFallback = Array.from(
+        new Set(
+          filtered
+            .filter((i: any) => i.item_type === 'FABRIC' && !i.item_id && i.grn_item?.po_item_id)
+            .map((i: any) => String(i.grn_item?.po_item_id || '').trim())
+            .filter(Boolean)
+        )
+      ) as string[];
+      const poFabricMap = new Map<string, string>();
+      if (poItemIdsNeedingFabricFallback.length > 0) {
+        const { data: poItemsData } = await supabase
+          .from('purchase_order_items')
+          .select('id, fabric_id')
+          .in('id', poItemIdsNeedingFabricFallback as any);
+        (poItemsData || []).forEach((row: any) => {
+          const poItemId = String(row?.id || '').trim();
+          const fabricId = String(row?.fabric_id || '').trim();
+          if (poItemId && fabricId) poFabricMap.set(poItemId, fabricId);
+        });
+      }
+
+      const fabricIds = Array.from(
+        new Set(
+          filtered
+            .filter((i: any) => i.item_type === 'FABRIC')
+            .map((i: any) => {
+              return String(
+                resolveWarehouseFabricId(
+                  {
+                    item_id: i.item_id,
+                    grn_item_po_item_id: i.grn_item?.po_item_id,
+                  },
+                  poFabricMap
+                ) || ''
+              ).trim();
+            })
+            .filter(Boolean)
+        )
+      ) as string[];
       
       const itemIds = filtered
         .filter((i: any) => i.item_type === 'ITEM' && i.item_id)
@@ -207,11 +256,20 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
       // Merge master data into inventory items
       const inventoryWithMasters = filtered.map((item: any) => {
         if (item.item_type === 'FABRIC') {
-          // Try to find fabric by item_id first
-          if (item.item_id && fabricMap.has(item.item_id)) {
+          const fabricRefId = String(
+            resolveWarehouseFabricId(
+              {
+                item_id: item.item_id,
+                grn_item_po_item_id: item.grn_item?.po_item_id,
+              },
+              poFabricMap
+            ) || ''
+          ).trim();
+          if (fabricRefId && fabricMap.has(fabricRefId)) {
             return {
               ...item,
-              fabric_master: fabricMap.get(item.item_id)
+              item_id: item.item_id || fabricRefId,
+              fabric_master: fabricMap.get(fabricRefId)
             };
           }
           // Debug log if fabric not found
@@ -385,7 +443,7 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
         if (item.item_type === 'PRODUCT' && product) return product.sku || '';
         return item.item_code || '';
       case 'name':
-        if (item.item_type === 'FABRIC' && fabricMaster) return fabricMaster.fabric_name || item.item_name || '';
+        if (item.item_type === 'FABRIC') return resolveFabricDisplayName(item);
         if (item.item_type === 'ITEM' && itemMaster) return itemMaster.item_name || item.item_name || '';
         if (item.item_type === 'PRODUCT' && product) return product.name || item.item_name || '';
         return item.item_name || '';
@@ -395,14 +453,7 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
         if (item.item_type === 'PRODUCT' && product) return product.class || '';
         return item.item_type || '';
       case 'fabric':
-        if (item.item_type === 'FABRIC' && fabricMaster) {
-          return (
-            (fabricMaster.fabric_for_supplier && String(fabricMaster.fabric_for_supplier).trim()) ||
-            fabricMaster.fabric_name ||
-            fabricMaster.type ||
-            ''
-          );
-        }
+        if (item.item_type === 'FABRIC') return resolveFabricDisplayName(item);
         return '';
       case 'color': {
         if (item.item_type === 'FABRIC' && fabricMaster) {
@@ -673,13 +724,9 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                   if (item.item_type === 'FABRIC' && fabricMaster) {
                     displayImage = fabricMaster.image || null;
                     displayCode = fabricMaster.fabric_code || '-';
-                    displayName = fabricMaster.fabric_name || item.item_name;
+                    displayName = resolveFabricDisplayName(item);
                     displayType = 'Fabric';
-                    displayFabric =
-                      (fabricMaster.fabric_for_supplier && String(fabricMaster.fabric_for_supplier).trim()) ||
-                      fabricMaster.fabric_name ||
-                      fabricMaster.type ||
-                      '-';
+                    displayFabric = resolveFabricDisplayName(item);
                     displayColor = lineFabricColor || fabricMaster.color || '-';
                     if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
                     displayColorHex =
@@ -725,7 +772,7 @@ export const ReceivingZoneInventory: React.FC<ReceivingZoneInventoryProps> = ({
                     displayCode = (itemCode.startsWith('http://') || itemCode.startsWith('https://')) ? '-' : itemCode;
                     displayName = item.item_name;
                     displayType = item.item_type === 'FABRIC' ? 'Fabric' : item.item_type || '-';
-                    displayFabric = '-';
+                    displayFabric = item.item_type === 'FABRIC' ? resolveFabricDisplayName(item) : '-';
                     displayColor = lineFabricColor || lineItemColor || '-';
                     if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
                     displayColorHex =

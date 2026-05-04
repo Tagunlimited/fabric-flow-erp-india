@@ -462,18 +462,18 @@ function OrdersWithoutBom({ onOpenLinePicker, refreshTrigger }: OrdersWithoutBom
                 console.log('2. All receipts:', allReceipts);
                 
                 // Test 3: Check for specific order
-                const { data: specificOrder, error: specificError } = await supabase
-                  .from('orders')
-                  .select('*')
-                  .eq('order_number', 'TUC/25-26/SEP/004');
-                console.log('3. Specific order TUC/25-26/SEP/004:', specificOrder);
-                
-                // Test 4: Check for receipts with this order number
-                const { data: specificReceipts, error: specificReceiptError } = await supabase
-                  .from('receipts')
-                  .select('*')
-                  .eq('reference_number', 'TUC/25-26/SEP/004');
-                console.log('4. Receipts for TUC/25-26/SEP/004:', specificReceipts);
+                 const { data: specificOrder, error: specificError } = await supabase
+                   .from('orders')
+                   .select('*')
+                   .eq('order_number', 'TUC/25-26/004');
+                 console.log('3. Specific order TUC/25-26/004:', specificOrder);
+                 
+                 // Test 4: Check for receipts with this order number
+                 const { data: specificReceipts, error: specificReceiptError } = await supabase
+                   .from('receipts')
+                   .select('*')
+                   .eq('reference_number', 'TUC/25-26/004');
+                 console.log('4. Receipts for TUC/25-26/004:', specificReceipts);
                 
                 console.log('=== DEBUGGING END ===');
               }}

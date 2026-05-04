@@ -26,6 +26,19 @@ const SIDEBAR_CACHE_TTL_MS = 5 * 60 * 1000;
 const sharedPermissionsCache = new Map<string, { timestamp: number; data: SidebarPermissions }>();
 const sharedPermissionsInflight = new Map<string, Promise<SidebarPermissions>>();
 const SIDEBAR_PERMISSIONS_SESSION_KEY = 'sidebar_permissions_cache_v1';
+const SIDEBAR_FETCH_TIMEOUT_MS = 4000;
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs = SIDEBAR_FETCH_TIMEOUT_MS): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`sidebar_permissions_timeout_${timeoutMs}ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
 
 function readSessionPermissionsCache(userId: string): { timestamp: number; data: SidebarPermissions } | null {
   try {
@@ -166,11 +179,13 @@ export function useSidebarPermissions() {
       
       // Get user's profile to determine their role
       // Use maybeSingle() to avoid errors when profile doesn't exist
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('user_id', user.id as any)
-        .maybeSingle();
+      const { data: profile, error: profileError } = await withTimeout(
+        supabase
+          .from('profiles')
+          .select('role')
+          .eq('user_id', user.id as any)
+          .maybeSingle()
+      );
 
       // Check if user is admin by profile role
       const isAdminByProfile = (profile as any)?.role === 'admin';
@@ -198,6 +213,18 @@ export function useSidebarPermissions() {
         };
       }
 
+      // If profile read times out/hangs, fail open for navigation to avoid app lock.
+      if (!profile && !profileError && !isPreConfiguredAdmin) {
+        const timeoutFallback: SidebarPermissions = {
+          items: [],
+          loading: false,
+          error: null,
+          permissionsSetup: false,
+          isAdmin: false
+        };
+        return finalizePermissions(timeoutFallback);
+      }
+
       // If user is admin (pre-configured or by profile), bypass all permission checks
       // The sidebar will use static items for admin users
       // IMPORTANT: Set permissionsSetup to false so PermissionAwareRedirect bypasses the check
@@ -213,14 +240,16 @@ export function useSidebarPermissions() {
       }
 
       // Get user-specific sidebar permissions (overrides)
-      const { data: userPermissions, error: userPermsError } = await supabase
-        .from('user_sidebar_permissions')
-        .select(`
-          *,
-          sidebar_item:sidebar_items(*)
-        `)
-        .eq('user_id', user.id as any)
-        .eq('is_override', true as any);
+      const { data: userPermissions, error: userPermsError } = await withTimeout(
+        supabase
+          .from('user_sidebar_permissions')
+          .select(`
+            *,
+            sidebar_item:sidebar_items(*)
+          `)
+          .eq('user_id', user.id as any)
+          .eq('is_override', true as any)
+      );
 
       if (userPermsError) {
         console.error('Error fetching user permissions:', userPermsError);
@@ -267,20 +296,24 @@ export function useSidebarPermissions() {
       let rolePermsError = null;
       
       if ((profile as any)?.role) {
-        const { data: roleData, error: roleError } = await supabase
-          .from('roles')
-          .select('id')
-          .eq('name', (profile as any).role)
-          .single();
+        const { data: roleData, error: roleError } = await withTimeout(
+          supabase
+            .from('roles')
+            .select('id')
+            .eq('name', (profile as any).role)
+            .single()
+        );
           
         if (roleData && !roleError) {
-          const { data: rolePerms, error: rolePermsErr } = await supabase
-            .from('role_sidebar_permissions')
-            .select(`
-              *,
-              sidebar_item:sidebar_items(*)
-            `)
-            .eq('role_id', (roleData as any).id as any);
+          const { data: rolePerms, error: rolePermsErr } = await withTimeout(
+            supabase
+              .from('role_sidebar_permissions')
+              .select(`
+                *,
+                sidebar_item:sidebar_items(*)
+              `)
+              .eq('role_id', (roleData as any).id as any)
+          );
             
           rolePermissions = rolePerms;
           rolePermsError = rolePermsErr;
@@ -329,11 +362,13 @@ export function useSidebarPermissions() {
       // or if the user simply has no access to any items
       if (effectivePermissions.size === 0) {
         // Check if there are any sidebar items in the database at all
-        const { data: allSidebarItems, error: allItemsError } = await supabase
-          .from('sidebar_items')
-          .select('id')
-          .eq('is_active', true as any)
-          .limit(1);
+        const { data: allSidebarItems, error: allItemsError } = await withTimeout(
+          supabase
+            .from('sidebar_items')
+            .select('id')
+            .eq('is_active', true as any)
+            .limit(1)
+        );
         
         if (allItemsError) {
           console.error('Error checking sidebar items:', allItemsError);
@@ -360,11 +395,13 @@ export function useSidebarPermissions() {
           const isAdminByProfile = (profile as any)?.role === 'admin';
           if (isPreConfiguredAdmin || isAdminByProfile) {
             // Get all sidebar items for admin
-            const { data: allItems, error: allItemsErr } = await supabase
-              .from('sidebar_items')
-              .select('*')
-              .eq('is_active', true as any)
-              .order('sort_order');
+            const { data: allItems, error: allItemsErr } = await withTimeout(
+              supabase
+                .from('sidebar_items')
+                .select('*')
+                .eq('is_active', true as any)
+                .order('sort_order')
+            );
               
             if (allItemsErr) {
               console.error('Error fetching all sidebar items for admin:', allItemsErr);
@@ -472,10 +509,12 @@ export function useSidebarPermissions() {
       });
       
       // Fetch all sidebar items to get parent details for hierarchy
-      const { data: allSidebarItems } = await supabase
-        .from('sidebar_items')
-        .select('*')
-        .eq('is_active', true as any);
+      const { data: allSidebarItems } = await withTimeout(
+        supabase
+          .from('sidebar_items')
+          .select('*')
+          .eq('is_active', true as any)
+      );
       
       // Third pass: add parent items to map if they're not already there but have children with permissions
       if (allSidebarItems) {

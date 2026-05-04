@@ -19,24 +19,9 @@ import {
 import { sizesFromOrderItem } from '@/utils/sizesFromOrderItem';
 import { getOrderItemLineQuantity } from '@/utils/orderItemLineQuantity';
 import { resolveSwatchHex } from '@/lib/grnColorSwatch';
+import { normalizeUnit, sameUnitFamily } from '@/utils/fabricInventoryIdentity';
+import { getFabricAvailabilityByFabricIds } from '@/utils/fabricAvailability';
 import '@/components/purchase-orders/BomLinePicker.css';
-
-function normLower(s: string | null | undefined): string {
-  return `${s ?? ''}`.trim().toLowerCase();
-}
-
-function warehouseItemNameMatchesVariant(
-  itemName: string | undefined,
-  fabric: { fabric_name?: string | null; color?: string | null; gsm?: string | number | null }
-): boolean {
-  const n = normLower(itemName);
-  if (!n) return false;
-  const name = normLower(fabric.fabric_name);
-  const color = normLower(fabric.color);
-  const gsm = normLower(String(fabric.gsm ?? ''));
-  if (!name || !color || !gsm) return false;
-  return n.includes(name) && n.includes(color) && n.includes(gsm);
-}
 
 function fabricSwatchCss(fabric: { color?: string | null; hex?: string | null } | null | undefined): string {
   if (!fabric) return '#e5e7eb';
@@ -163,67 +148,26 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
           return;
         }
 
-        // Fallback source: some setups keep fabric quantities in fabric_inventory.
-        const { data: fabricInventoryRows, error: fabricInventoryError } = await supabase
-          .from('fabric_inventory' as any)
-          .select('fabric_id, quantity, approved_quantity')
-          .in('fabric_id', fabricIds as any);
-
-        const fabricInventoryMap: Record<string, number> = {};
-        if (!fabricInventoryError && fabricInventoryRows) {
-          (fabricInventoryRows as any[]).forEach((row: any) => {
-            const fid = row?.fabric_id as string | undefined;
-            if (!fid) return;
-            const qty = Number(row?.quantity ?? row?.approved_quantity ?? 0);
-            fabricInventoryMap[fid] = (fabricInventoryMap[fid] || 0) + qty;
-          });
-        }
-
-        const { data: warehouseInventory, error: warehouseError } = await supabase
-          .from('warehouse_inventory')
-          .select('item_id, item_name, quantity, unit')
-          .eq('item_type', 'FABRIC')
-          .in('status', ['IN_STORAGE', 'RECEIVED']);
-
-        const fabricIdSet = new Set(fabricIds);
-        const warehouseInventoryMap: Record<string, { quantity: number; unit: string }> = {};
-        if (!warehouseError && warehouseInventory) {
-          warehouseInventory.forEach((invRow: any) => {
-            const fabricId = invRow.item_id as string | undefined;
-            let matchKey: string | null = null;
-            if (fabricId && fabricIdSet.has(fabricId)) {
-              matchKey = fabricId;
-            } else if (!fabricId && invRow.item_name) {
-              // Legacy safe fallback: only for rows without item_id, and only if exactly one variant matches.
-              const candidates = (fabricData as any[]).filter((f: any) =>
-                warehouseItemNameMatchesVariant(invRow.item_name, f)
-              );
-              if (candidates.length === 1) {
-                matchKey = candidates[0].id;
-              }
-            }
-
-            if (matchKey) {
-              const current = warehouseInventoryMap[matchKey] || {
-                quantity: 0,
-                unit: invRow.unit || 'kgs',
-              };
-              warehouseInventoryMap[matchKey] = {
-                quantity: current.quantity + Number(invRow.quantity || 0),
-                unit: invRow.unit || current.unit || 'kgs',
-              };
-            }
-          });
-        }
+        const availabilityByFabricId = await getFabricAvailabilityByFabricIds({
+          fabricIds,
+          currentOrderId: jobId,
+        });
 
         const fabrics: AvailableFabric[] = fabricData.map((fabric: any) => {
-          const warehouseInv = warehouseInventoryMap[fabric.id];
-          const masterQty = Number(fabric.inventory || 0);
-          const directFabricQty = Number(fabricInventoryMap[fabric.id] || 0);
-          const whQty = warehouseInv ? Number(warehouseInv.quantity || 0) : null;
-          // Pick the most reliable non-zero source to avoid false zero in cutting dialog.
-          const inventoryQty = Math.max(masterQty, whQty ?? 0, directFabricQty);
-          const inventoryUnit = fabric.uom || warehouseInv?.unit || 'kgs';
+          const availability = availabilityByFabricId[String(fabric.id)];
+          const inventoryQty = Number(availability?.available_quantity || 0);
+          const inventoryUnit = normalizeUnit(availability?.unit || fabric.uom || 'kg');
+
+          if (import.meta.env.DEV) {
+            console.log('[CuttingAvailabilityDebug]', {
+              orderId: jobId,
+              fabricId: fabric.id,
+              gross: availability?.gross_quantity || 0,
+              allocated: availability?.allocated_quantity || 0,
+              net: inventoryQty,
+              rowIds: availability?.contributing_row_ids || [],
+            });
+          }
 
           return {
             fabric_id: fabric.id,
@@ -233,7 +177,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
             gsm: fabric.gsm || 0,
             image: fabric.image,
             available_quantity: inventoryQty,
-            unit: inventoryUnit,
+            unit: inventoryUnit === 'kg' ? 'Kgs' : inventoryUnit,
           };
         });
 
@@ -455,167 +399,29 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
         throw error;
       }
 
-      // Record fabric usage and deduct from inventory if fabric is selected
+      // Record fabric usage and deduct from inventory in one RPC transaction
       if (fabricUsage.fabric_id && fabricUsage.used_quantity > 0) {
         const { data: { user } } = await supabase.auth.getUser();
         const selectedFabric = availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id);
-        const fabricUnit = selectedFabric?.unit || 'kgs';
-        
-        // Verify fabric exists in fabric_master before inserting
-        const { data: fabricCheck, error: fabricCheckError } = await supabase
-          .from('fabric_master')
-          .select('id')
-          .eq('id', fabricUsage.fabric_id)
-          .single();
-
-        if (fabricCheckError || !fabricCheck) {
-          console.warn('Fabric not found in fabric_master, skipping fabric_usage_records insert:', fabricUsage.fabric_id);
-          toast.error('Fabric validation failed. Cutting quantities saved but fabric usage not recorded.');
-        } else {
-          // Record fabric usage - try different column names based on schema variations
-          const usageRecord: any = {
-            order_id: jobId,
-            fabric_id: fabricUsage.fabric_id,
-            used_quantity: fabricUsage.used_quantity,
-            unit: fabricUnit,
-            used_for_cutting_date: new Date().toISOString(),
-            used_by_id: user?.id || null,
-            used_by_name: user?.user_metadata?.full_name || user?.email || 'System',
-            cutting_quantity: getTotalAdditionalCutQuantity(),
-            notes: `Cutting operation for ${getTotalAdditionalCutQuantity()} pieces`
-          };
-
-          // Try insert with used_quantity first
-          let { error: fabricUsageError } = await supabase
-            .from('fabric_usage_records')
-            .insert(usageRecord);
-
-          // If that fails, try with actual_quantity instead (some schemas use different column names)
-          if (fabricUsageError && fabricUsageError.message?.includes('column')) {
-            const altUsageRecord = {
-              order_id: jobId,
-              fabric_id: fabricUsage.fabric_id,
-              actual_quantity: fabricUsage.used_quantity,
-              unit: fabricUnit,
-              used_at: new Date().toISOString(),
-              used_by: user?.id || null,
-              notes: `Cutting operation for ${getTotalAdditionalCutQuantity()} pieces`
-            };
-
-            const { error: altError } = await supabase
-              .from('fabric_usage_records')
-              .insert(altUsageRecord);
-
-            if (altError) {
-              console.error('Fabric usage error (both attempts failed):', fabricUsageError, altError);
-              // Don't throw - just log and continue, since cutting quantities are saved
-              toast.error('Cutting quantities saved, but fabric usage record failed. Check console for details.');
-            }
-          } else if (fabricUsageError) {
-            console.error('Fabric usage error:', fabricUsageError);
-            // Check if it's a foreign key constraint error
-            if (fabricUsageError.message?.includes('foreign key') || fabricUsageError.message?.includes('fkey')) {
-              console.error('Foreign key constraint violation. fabric_id might not exist in referenced table.');
-              toast.error('Fabric ID validation failed. Cutting quantities saved but fabric usage not recorded.');
-            } else {
-              // For other errors, still log but don't block the save
-              toast.error('Cutting quantities saved, but fabric usage record had an error.');
-            }
-          }
+        const requestedUnit = normalizeUnit(selectedFabric?.unit || 'kg');
+        if (selectedFabric && !sameUnitFamily(requestedUnit, selectedFabric.unit)) {
+          throw new Error(`Unit mismatch for selected fabric. Expected ${selectedFabric.unit}, got ${requestedUnit}.`);
         }
-
-        // Deduct from fabric_master inventory
-        const { data: currentFabricData, error: fetchError } = await supabase
-          .from('fabric_master')
-          .select('inventory')
-          .eq('id', fabricUsage.fabric_id)
-          .single();
-
-        if (!fetchError && currentFabricData) {
-          const currentInventory = Number((currentFabricData as any).inventory || 0);
-          const newInventory = Math.max(0, currentInventory - fabricUsage.used_quantity);
-
-          const { error: inventoryUpdateError } = await supabase
-            .from('fabric_master')
-            .update({
-              inventory: newInventory
-            } as any)
-            .eq('id', fabricUsage.fabric_id);
-
-          if (inventoryUpdateError) {
-            console.error('Error updating fabric_master inventory:', inventoryUpdateError);
-            // Don't throw - just log the error
-          } else {
-            console.log(`Updated fabric_master inventory: ${fabricUsage.fabric_id} - ${currentInventory} - ${fabricUsage.used_quantity} = ${newInventory}`);
-          }
-        }
-
-        // Also deduct from warehouse_inventory if records exist
-        try {
-          const { data: warehouseInventory, error: warehouseError } = await supabase
-            .from('warehouse_inventory')
-            .select('id, quantity, item_id')
-            .eq('item_type', 'FABRIC')
-            .eq('item_id', fabricUsage.fabric_id);
-
-          if (!warehouseError && warehouseInventory && warehouseInventory.length > 0) {
-            // Update the first matching record (or you could update all matching records)
-            const bestMatch = warehouseInventory
-              .filter(r => Number(r.quantity || 0) > 0)
-              .sort((a: any, b: any) => Number(b.quantity || 0) - Number(a.quantity || 0))[0] 
-              || warehouseInventory[0];
-
-            if (bestMatch) {
-              const currentQty = Number(bestMatch.quantity || 0);
-              const newQty = Math.max(0, currentQty - fabricUsage.used_quantity);
-
-              const { error: warehouseUpdateError } = await supabase
-                .from('warehouse_inventory')
-                .update({
-                  quantity: newQty,
-                  updated_at: new Date().toISOString()
-                })
-                .eq('id', bestMatch.id);
-
-              if (warehouseUpdateError) {
-                console.error('Error updating warehouse_inventory:', warehouseUpdateError);
-              } else {
-                console.log(`Updated warehouse_inventory: ${bestMatch.id} - ${currentQty} - ${fabricUsage.used_quantity} = ${newQty}`);
-                
-                // Log the inventory removal for cutting
-                try {
-                  const { logInventoryRemoval } = await import('@/utils/inventoryLogging');
-                  await logInventoryRemoval(
-                    bestMatch.id,
-                    {
-                      item_type: bestMatch.item_type || 'FABRIC',
-                      item_id: bestMatch.item_id || undefined,
-                      item_name: bestMatch.item_name || fabricUsage.fabric_name || 'Unknown',
-                      item_code: bestMatch.item_code || bestMatch.item_name || 'Unknown',
-                      unit: bestMatch.unit || 'kgs',
-                    },
-                    fabricUsage.used_quantity,
-                    currentQty,
-                    newQty,
-                    {
-                      bin_id: bestMatch.bin_id || undefined,
-                      status: bestMatch.status || 'RECEIVED',
-                      color: bestMatch.fabric_color || bestMatch.item_color || undefined,
-                      reference_type: 'CUTTING',
-                      reference_id: jobId || undefined,
-                      reference_number: orderNumber || undefined,
-                      notes: `Fabric used in cutting - Job: ${jobId || 'N/A'}, Order: ${orderNumber || 'N/A'}`
-                    }
-                  );
-                } catch (logError) {
-                  console.error('Error logging inventory removal:', logError);
-                }
-              }
-            }
-          }
-        } catch (warehouseError) {
-          console.error('Error processing warehouse inventory update:', warehouseError);
-          // Don't throw - just log the error
+        const { data: rpcResult, error: rpcError } = await supabase.rpc('consume_fabric_for_cutting' as any, {
+          p_order_id: jobId,
+          p_order_number: orderNumber || null,
+          p_fabric_id: fabricUsage.fabric_id,
+          p_used_quantity: Number(fabricUsage.used_quantity || 0),
+          p_unit: requestedUnit,
+          p_user_id: user?.id || null,
+          p_user_name: user?.user_metadata?.full_name || user?.email || 'System',
+          p_cutting_quantity: Number(getTotalAdditionalCutQuantity() || 0),
+          p_notes: `Cutting operation for ${getTotalAdditionalCutQuantity()} pieces`,
+        });
+        if (rpcError) throw rpcError;
+        const resultObj = rpcResult as any;
+        if (resultObj?.ok === false) {
+          throw new Error(String(resultObj?.message || 'Failed to record fabric usage'));
         }
 
         setFabricAvailabilityTick((t) => t + 1);

@@ -115,6 +115,15 @@ type Supplier = {
   billing_address: string;
 };
 
+const resolveInventoryItemId = (item: any): string | null => {
+  if (!item) return null;
+  const itemType = String(item.item_type || '').toLowerCase();
+  if (itemType === 'fabric') {
+    return String(item.fabric_id || item.item_id || '').trim() || null;
+  }
+  return String(item.item_id || '').trim() || null;
+};
+
 const GRNForm = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -776,7 +785,7 @@ const GRNForm = () => {
         return {
           po_item_id: item.id,
           item_type: item.item_type || 'item',
-          item_id: item.item_id,
+          item_id: resolveInventoryItemId(item) || '',
           item_name: item.item_name,
           item_image_url: itemImageUrl,
           ordered_quantity: item.quantity || 0,
@@ -1374,7 +1383,7 @@ const GRNForm = () => {
           grn_id: (grnData as any).id,
           po_item_id: item.po_item_id,
           item_type: item.item_type,
-          item_id: item.item_id || null, // Allow null for items without specific item_id
+          item_id: resolveInventoryItemId(item),
           item_name: item.item_name,
           item_image_url: item.item_image_url,
           ordered_quantity: item.ordered_quantity,
@@ -1520,7 +1529,7 @@ const GRNForm = () => {
                 grn_id: id,
                 po_item_id: item.po_item_id,
                 item_type: item.item_type,
-                item_id: item.item_id || null, // Allow null for items without specific item_id
+                item_id: resolveInventoryItemId(item),
                 item_name: item.item_name,
                 item_image_url: item.item_image_url,
                 ordered_quantity: item.ordered_quantity,
@@ -1550,7 +1559,7 @@ const GRNForm = () => {
                 grn_id: id,
                 po_item_id: item.po_item_id,
                 item_type: item.item_type,
-                item_id: item.item_id || null,
+                item_id: resolveInventoryItemId(item),
                 item_name: item.item_name,
                 item_image_url: item.item_image_url,
                 ordered_quantity: item.ordered_quantity,
