@@ -2,7 +2,27 @@
  * Shared batch assignment “stitching job card” model: SN + OF earnings per batch qty, product split, totals.
  */
 
+import {
+  orderLineBomProductColumnLabel,
+  orderLineFabricFromOrder,
+} from '@/components/purchase-orders/bomOrderLineUtils';
 import { buildLineRatesMapFromOrderItems } from '@/utils/orderItemCuttingRates';
+
+/** Fabric line on slip (Order form “Product” + color/GSM), not free-text description alone. */
+export function productFabricLineFromOrderItem(it: any): string {
+  const fromFabric = orderLineFabricFromOrder(it).trim();
+  if (fromFabric) return fromFabric;
+  const fabricName = orderLineBomProductColumnLabel(it).trim();
+  if (fabricName) return fabricName;
+  return String(it?.product_description || '').trim() || 'Product';
+}
+
+function productCategoryFromOrderItem(it: any): string {
+  return (
+    String(it?.product_categories?.category_name || it?.product_category?.category_name || '')
+      .trim() || '—'
+  );
+}
 
 export interface BatchAssignmentDocumentCompany {
   company_name: string;
@@ -92,6 +112,8 @@ export interface BatchAssignmentDocumentData {
   productEarningRows: ProductEarningRow[];
   /** Production / internal notes on the order */
   orderNotes?: string;
+  /** Order-level cutting master (Cutting Manager), not batch tailor leader */
+  cuttingMasterName?: string;
 }
 
 export function normalizeTailorType(tailorType: string | undefined): 'single_needle' | 'overlock_flatlock' {
@@ -128,8 +150,8 @@ export function buildProductEarningRows(orderItems: any[], totalSn: number, tota
     const snEarning = Math.round(totalSn * w * 100) / 100;
     const ofEarning = Math.round(totalOf * w * 100) / 100;
     return {
-      label: String(item.product_description || '').trim() || 'Product',
-      category: String(item.product_categories?.category_name || item.product_category?.category_name || '').trim() || '—',
+      label: productFabricLineFromOrderItem(item),
+      category: productCategoryFromOrderItem(item),
       orderQty: weights[idx],
       snEarning,
       ofEarning,
@@ -165,8 +187,8 @@ export function buildProductEarningRowsWeighted(
     const snEarning = Math.round(totalSn * ratio * 100) / 100;
     const ofEarning = Math.round(totalOf * ratio * 100) / 100;
     return {
-      label: String(item.product_description || '').trim() || 'Product',
-      category: String(item.product_categories?.category_name || item.product_category?.category_name || '').trim() || '—',
+      label: productFabricLineFromOrderItem(item),
+      category: productCategoryFromOrderItem(item),
       orderQty: w[idx],
       snEarning,
       ofEarning,
@@ -226,6 +248,7 @@ export function buildBatchAssignmentDocumentData(params: {
   dueDate?: string;
   orderDate?: string;
   orderNotes?: string;
+  cuttingMasterName?: string;
 }): BatchAssignmentDocumentData {
   const batchAssignments: BatchAssignmentDocumentBatch[] = params.rawBatches.map((b) => {
     let itemsInBatch = params.orderItems;
@@ -330,9 +353,8 @@ export function buildBatchAssignmentDocumentData(params: {
           }
         }
         return {
-          label: String(it.product_description || '').trim() || 'Product',
-          category:
-            String(it.product_categories?.category_name || it.product_category?.category_name || '').trim() || '—',
+          label: productFabricLineFromOrderItem(it),
+          category: productCategoryFromOrderItem(it),
           orderQty: lineQty,
           snEarning: rowSn,
           ofEarning: rowOf,
@@ -412,6 +434,7 @@ export function buildBatchAssignmentDocumentData(params: {
     dueDate: params.dueDate,
     orderDate: params.orderDate,
     orderNotes: params.orderNotes?.trim() || undefined,
+    cuttingMasterName: params.cuttingMasterName?.trim() || undefined,
     summaryTotals: { totalSn, totalOf, grandTotal },
     productEarningRows: [],
   };

@@ -9,6 +9,7 @@
     "build:dev": "npx vite build --mode development",
     "lint": "eslint .",
     "test:roles": "node --test tests/role-regression.test.mjs",
+    "test:fulfillment": "node --test tests/order-fulfillment-policy.test.mjs",
     "preview": "npx vite preview"
   },
   "dependencies": {

@@ -17,6 +17,7 @@ import {
   sortOrderLines,
   bomNumberForOrderLine,
   BOM_ORDER_ITEMS_SELECT,
+  orderLineEligibleForBom,
   orderLineFabricFromOrder,
   orderLineFabricColorGsmSuffix,
   orderLineBomProductColumnLabel,
@@ -741,12 +742,34 @@ export function BomForm({
       if (orderError) throw orderError;
 
       setOrderData(order as any);
-      const linesRaw: any[] = ((order as any)?.order_items || []).filter((it: any) => it?.is_deleted !== true);
+      const allRaw: any[] = ((order as any)?.order_items || []).filter((it: any) => it?.is_deleted !== true);
+      const linesRaw = allRaw.filter(orderLineEligibleForBom);
       const lines = sortOrderLines(linesRaw);
 
-      const resolvedLineId =
-        explicitOrderItemId ||
-        (lines.length === 1 ? lines[0].id : null);
+      if (allRaw.length > 0 && lines.length === 0) {
+        toast.error(
+          'No lines on this order are eligible for a BOM. Assign execution flows first, or use stitching lines only.'
+        );
+        setNeedsOrderLineChoice(false);
+        setOrderFabricData(null);
+        setItems([]);
+        setBom((prev) => ({
+          ...prev,
+          order_id: (order as any).id,
+          order_item_id: undefined,
+          product_name: '',
+          product_image_url: undefined,
+          total_order_qty: 0,
+        }));
+        return;
+      }
+
+      let resolvedLineId: string | null =
+        explicitOrderItemId || (lines.length === 1 ? lines[0].id : null);
+      if (resolvedLineId && !lines.some((l: any) => l.id === resolvedLineId)) {
+        toast.error('This order line is not eligible for a BOM on its current fulfillment path.');
+        resolvedLineId = lines.length === 1 ? lines[0].id : null;
+      }
 
       if (lines.length > 1 && !resolvedLineId) {
         setNeedsOrderLineChoice(true);
@@ -2245,7 +2268,9 @@ export function BomForm({
          </div>
       </div>
 
-      {needsOrderLineChoice && orderData?.order_items?.length > 0 && !id && (
+      {needsOrderLineChoice &&
+        (orderData?.order_items || []).filter(orderLineEligibleForBom).length > 0 &&
+        !id && (
         <Card>
           <CardHeader>
             <CardTitle>Select product line</CardTitle>
@@ -2255,7 +2280,9 @@ export function BomForm({
               This order has multiple products. Choose which line this BOM is for. Each line has its own fabric and items.
             </p>
             <div className="bom-line-radio-inputs" role="radiogroup" aria-label="Product lines">
-              {sortOrderLines(orderData.order_items as any[]).map((item: any) => {
+              {sortOrderLines((orderData.order_items as any[]) || [])
+                .filter(orderLineEligibleForBom)
+                .map((item: any) => {
                 const fabricSuffix = orderLineFabricColorGsmSuffix(item);
                 return (
                   <label key={item.id} className="cursor-pointer">

@@ -234,7 +234,7 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
       console.log('📊 Fetching stitching prices...');
       const { data: priceData, error: priceError } = await supabase
         .from('order_assignments' as any)
-        .select('cutting_price_single_needle, cutting_price_overlock_flatlock')
+        .select('cutting_price_single_needle, cutting_price_overlock_flatlock, cutting_master_name')
         .eq('order_id', orderId as any)
         .single();
 
@@ -243,6 +243,22 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
         return;
       }
       console.log('✅ Pricing data fetched:', priceData);
+
+      let cuttingMasterName = String((priceData as any)?.cutting_master_name || '').trim();
+      if (!cuttingMasterName) {
+        const { data: ocaRows } = await supabase
+          .from('order_cutting_assignments' as any)
+          .select('cutting_master_name')
+          .eq('order_id', orderId as any);
+        const names = [
+          ...new Set(
+            (ocaRows || [])
+              .map((r: any) => String(r?.cutting_master_name || '').trim())
+              .filter(Boolean)
+          ),
+        ];
+        if (names.length > 0) cuttingMasterName = names.join(', ');
+      }
 
       const orderDefaults = {
         cutting_price_single_needle: (priceData as any)?.cutting_price_single_needle,
@@ -412,6 +428,7 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
         dueDate: (orderData as any).expected_delivery_date,
         orderDate: (orderData as any).order_date,
         orderNotes: (orderData as any).notes ? String((orderData as any).notes) : undefined,
+        cuttingMasterName: cuttingMasterName || undefined,
       });
 
       console.log('✅ Job card document prepared');

@@ -282,11 +282,12 @@ export function EmployeeAccessManagement() {
           { title: 'Printing', url: '/design/printing', icon: 'Printer', sort_order: 2, is_active: true }
         ]},
         { title: 'Procurement', url: null, icon: 'ShoppingBag', sort_order: 6, is_active: true, children: [
-          { title: 'Bills of Materials', url: '/bom', icon: 'ClipboardList', sort_order: 1, is_active: true },
-          { title: 'Purchase Orders', url: '/procurement/po', icon: 'ShoppingBag', sort_order: 2, is_active: true },
-          { title: 'Goods Receipt Note', url: '/procurement/grn', icon: 'ClipboardList', sort_order: 3, is_active: true },
-          { title: 'Return to Vendor', url: '/procurement/returns', icon: 'Truck', sort_order: 4, is_active: true },
-          { title: 'Material Shortfall Alerts', url: '/procurement/alerts', icon: 'AlertTriangle', sort_order: 5, is_active: true }
+          { title: 'Order flow assignment', url: '/procurement/order-flow-assignment', icon: 'ClipboardList', sort_order: 1, is_active: true },
+          { title: 'Bills of Materials', url: '/bom', icon: 'ClipboardList', sort_order: 2, is_active: true },
+          { title: 'Purchase Orders', url: '/procurement/po', icon: 'ShoppingBag', sort_order: 3, is_active: true },
+          { title: 'Goods Receipt Note', url: '/procurement/grn', icon: 'ClipboardList', sort_order: 4, is_active: true },
+          { title: 'Return to Vendor', url: '/procurement/returns', icon: 'Truck', sort_order: 5, is_active: true },
+          { title: 'Material Shortfall Alerts', url: '/procurement/alerts', icon: 'AlertTriangle', sort_order: 6, is_active: true }
         ]},
         { title: 'Inventory', url: null, icon: 'Package', sort_order: 7, is_active: true, children: [
           { title: 'Inventory Dashboard', url: '/warehouse/inventory', icon: 'Boxes', sort_order: 1, is_active: true },

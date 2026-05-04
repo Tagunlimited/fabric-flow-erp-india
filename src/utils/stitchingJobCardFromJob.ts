@@ -11,6 +11,9 @@ export interface StitchingJobCardJob {
   id: string;
   orderNumber: string;
   customerName: string;
+  /** Primary cutting master display name (enriched on Cutting Manager). */
+  cuttingMasterName?: string;
+  cuttingMasters?: Array<{ name?: string }>;
   batchAssignments?: Array<{
     id?: string;
     batch_id?: string;
@@ -346,6 +349,13 @@ export async function buildStitchingJobCardDocumentForJob(
       return null;
     }
 
+    const masterNames =
+      job.cuttingMasters?.map((m) => String(m?.name || '').trim()).filter(Boolean) ?? [];
+    const cuttingMasterDisplay =
+      masterNames.length > 0
+        ? masterNames.join(', ')
+        : String(job.cuttingMasterName || '').trim();
+
     const doc = buildBatchAssignmentDocumentData({
       orderNumber: job.orderNumber,
       customerName: job.customerName,
@@ -357,6 +367,7 @@ export async function buildStitchingJobCardDocumentForJob(
       dueDate: (orderData as any).expected_delivery_date,
       orderDate: (orderData as any).order_date,
       orderNotes: (orderData as any).notes ? String((orderData as any).notes) : undefined,
+      cuttingMasterName: cuttingMasterDisplay || undefined,
     });
 
     if (doc.batchAssignments.length === 0) {

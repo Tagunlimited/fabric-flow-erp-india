@@ -105,7 +105,10 @@ export default function ProcurementPage() {
           <h1 className="text-3xl font-bold">Procurement</h1>
           <p className="text-muted-foreground mt-1">Orders with receipts for procurement actions</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
+          <Button onClick={() => navigate('/procurement/order-flow-assignment')} variant="outline">
+            Order flow assignment
+          </Button>
           <Button onClick={() => navigate('/bom/new')} className="rounded-full bg-emerald-600 hover:bg-emerald-700">
             <PlusCircle className="w-4 h-4 mr-2" /> Create BOM
           </Button>

@@ -43,6 +43,7 @@ import {
   Hand,
   Box,
   FileEdit,
+  Workflow,
   Wallet,
   List,
   BookOpen,
@@ -123,6 +124,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
       title: "Procurement",
       icon: ShoppingBag,
       children: [
+        { title: "Order flow assignment", url: "/procurement/order-flow-assignment", icon: Workflow },
         { title: "Bills of Materials", url: "/bom", icon: List },
         { title: "Purchase Orders", url: "/procurement/po", icon: ShoppingCart },
         { title: "Goods Receipt Note", url: "/procurement/grn", icon: PackageCheck }

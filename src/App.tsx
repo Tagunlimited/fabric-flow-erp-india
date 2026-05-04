@@ -60,6 +60,7 @@ import ProcurementPage from "./pages/ProcurementPage";
 import PurchaseOrderListPage from "./pages/procurement/PurchaseOrderListPage";
 import PurchaseOrderFormPage from "./pages/procurement/PurchaseOrderFormPage";
 import BomListPage from "./pages/procurement/BomListPage";
+import OrderFlowAssignmentPage from "./pages/procurement/OrderFlowAssignmentPage";
 import { BomForm } from "./components/purchase-orders/BomForm";
 import { BomCreator } from "./components/purchase-orders/BomCreator";
 import { GRNList } from "./components/goods-receipt-notes/GRNList";
@@ -476,6 +477,11 @@ const App = () => {
                 <Route path="/procurement" element={
                   <ProtectedRouteWithCompanySettings>
                     <ProcurementPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/procurement/order-flow-assignment" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <OrderFlowAssignmentPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
                 <Route path="/procurement/po" element={
