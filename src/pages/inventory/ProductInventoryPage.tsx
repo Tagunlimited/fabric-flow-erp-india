@@ -39,7 +39,12 @@ interface Product {
   created_at?: string;
 }
 
-const ProductInventoryPage: React.FC = () => {
+export interface ProductInventoryPageProps {
+  /** When true, render without ErpLayout or back navigation (Inventory Dashboard tab). */
+  embedded?: boolean;
+}
+
+const ProductInventoryPage: React.FC<ProductInventoryPageProps> = ({ embedded = false }) => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
@@ -659,8 +664,39 @@ const ProductInventoryPage: React.FC = () => {
     }
   };
 
-  return (
-    <ErpLayout>
+  const productDescription =
+    'View and manage finished product inventory. Products use the same warehouse structure (bins, racks, floors) as raw materials.';
+
+  const headerActions = (
+    <div className="flex flex-wrap items-center justify-end gap-3">
+      <Button
+        variant="outline"
+        onClick={() => setBulkUploadDialogOpen(true)}
+        className="flex items-center gap-2 transition-all duration-200 hover:scale-105 hover:shadow-md active:scale-95"
+      >
+        <Upload className="h-4 w-4 transition-transform duration-200 group-hover:rotate-12" />
+        Bulk Upload
+      </Button>
+      <Button
+        variant="outline"
+        onClick={() => setAdjustmentDialogOpen(true)}
+        className="flex items-center gap-2 transition-all duration-200 hover:scale-105 hover:shadow-md active:scale-95"
+      >
+        <Settings className="h-4 w-4 transition-transform duration-200 group-hover:rotate-90" />
+        Inventory Adjustment
+      </Button>
+      <Badge
+        variant="outline"
+        className="flex items-center gap-1 transition-all duration-200 hover:scale-105 hover:shadow-sm cursor-default"
+      >
+        <Package className="h-3 w-3 transition-transform duration-200 hover:rotate-12" />
+        {filteredProducts.length} Products
+      </Badge>
+    </div>
+  );
+
+  const pageInner = (
+    <>
       <style>{`
         @keyframes fadeIn {
           from {
@@ -673,43 +709,27 @@ const ProductInventoryPage: React.FC = () => {
           }
         }
       `}</style>
-      <div className="w-full px-6 py-6 space-y-6">
-        <div className="flex items-center">
-          <BackButton to="/inventory" label="Back to Inventory" />
-        </div>
-        {/* Header */}
-        <div className="flex items-center justify-between">
+      <div className={embedded ? 'w-full space-y-6' : 'w-full px-6 py-6 space-y-6'}>
+        {!embedded && (
+          <div className="flex items-center">
+            <BackButton to="/inventory" label="Back to Inventory" />
+          </div>
+        )}
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Product Inventory</h1>
-            <p className="text-muted-foreground mt-1">
-              View and manage finished product inventory. Products use the same warehouse structure (bins, racks, floors) as raw materials.
-            </p>
+            {embedded ? (
+              <>
+                <h2 className="text-xl font-semibold">Products</h2>
+                <p className="text-sm text-muted-foreground mt-1">{productDescription}</p>
+              </>
+            ) : (
+              <>
+                <h1 className="text-3xl font-bold">Product Inventory</h1>
+                <p className="text-muted-foreground mt-1">{productDescription}</p>
+              </>
+            )}
           </div>
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              onClick={() => setBulkUploadDialogOpen(true)}
-              className="flex items-center gap-2 transition-all duration-200 hover:scale-105 hover:shadow-md active:scale-95"
-            >
-              <Upload className="h-4 w-4 transition-transform duration-200 group-hover:rotate-12" />
-              Bulk Upload
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setAdjustmentDialogOpen(true)}
-              className="flex items-center gap-2 transition-all duration-200 hover:scale-105 hover:shadow-md active:scale-95"
-            >
-              <Settings className="h-4 w-4 transition-transform duration-200 group-hover:rotate-90" />
-              Inventory Adjustment
-            </Button>
-            <Badge 
-              variant="outline" 
-              className="flex items-center gap-1 transition-all duration-200 hover:scale-105 hover:shadow-sm cursor-default"
-            >
-              <Package className="h-3 w-3 transition-transform duration-200 hover:rotate-12" />
-              {filteredProducts.length} Products
-            </Badge>
-          </div>
+          {headerActions}
         </div>
 
         {/* Search */}
@@ -1236,8 +1256,8 @@ const ProductInventoryPage: React.FC = () => {
                           <TableCell>
                             <Badge variant="outline">
                               {bin?.location_type === 'STORAGE' ? 'Storage' :
-                               bin?.location_type === 'RECEIVING_ZONE' ? 'Receiving' :
-                               bin?.location_type === 'DISPATCH_ZONE' ? 'Dispatch' :
+                               bin?.location_type === 'RECEIVING_ZONE' ? 'Receiving (legacy)' :
+                               bin?.location_type === 'DISPATCH_ZONE' ? 'Storage (legacy bin)' :
                                bin?.location_type || '-'}
                             </Badge>
                           </TableCell>
@@ -1295,8 +1315,14 @@ const ProductInventoryPage: React.FC = () => {
           </DialogContent>
         </Dialog>
       </div>
-    </ErpLayout>
+    </>
   );
+
+  if (embedded) {
+    return pageInner;
+  }
+
+  return <ErpLayout>{pageInner}</ErpLayout>;
 };
 
 export default ProductInventoryPage;

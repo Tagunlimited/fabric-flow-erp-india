@@ -25,7 +25,7 @@ export const BinForm: React.FC<BinFormProps> = ({
   const [formData, setFormData] = useState<BinFormData>({
     rack_id: '',
     bin_code: '',
-    location_type: 'RECEIVING_ZONE',
+    location_type: 'STORAGE',
     dimensions: {
       length: 0,
       width: 0,
@@ -42,7 +42,7 @@ export const BinForm: React.FC<BinFormProps> = ({
       setFormData({
         rack_id: editingItem.rack_id || '',
         bin_code: editingItem.bin_code || '',
-        location_type: editingItem.location_type || 'RECEIVING_ZONE',
+        location_type: editingItem.location_type || 'STORAGE',
         dimensions: editingItem.dimensions || { length: 0, width: 0, height: 0 },
         is_active: editingItem.is_active ?? true
       });
@@ -50,7 +50,7 @@ export const BinForm: React.FC<BinFormProps> = ({
       setFormData({
         rack_id: '',
         bin_code: '',
-        location_type: 'RECEIVING_ZONE',
+        location_type: 'STORAGE',
         dimensions: { length: 0, width: 0, height: 0 },
         is_active: true
       });

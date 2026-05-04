@@ -1119,11 +1119,11 @@ export default function DispatchQCPage() {
 
       {/* Dispatch dialog */}
       <Dialog open={dispatchOpen} onOpenChange={(v) => { if (!v) { setDispatchOpen(false); setDispatchTarget(null); } }}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
+        <DialogContent className="w-[96vw] max-w-3xl max-h-[90vh] overflow-hidden p-0 sm:p-6">
+          <DialogHeader className="px-4 pt-4 sm:px-0 sm:pt-0">
             <DialogTitle>Mark RTD</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-4 overflow-y-auto px-4 pb-4 sm:px-0 sm:pb-0 max-h-[calc(90vh-72px)]">
             {/* Order info with product image */}
             <div className="flex items-center gap-4 pb-3 border-b">
               {dispatchTarget?.image_url && (
@@ -1195,7 +1195,7 @@ export default function DispatchQCPage() {
               <div className="text-xs mb-1">Note (optional)</div>
               <Textarea rows={3} value={dispatchNote} onChange={(e) => setDispatchNote(e.target.value)} />
             </div>
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 pt-2 sticky bottom-0 bg-background pb-1">
               <Button variant="outline" onClick={() => { setDispatchOpen(false); setDispatchTarget(null); }} disabled={savingDispatch}>Cancel</Button>
               {!dispatchOrderId ? (
                 <Button onClick={handleGenerateChallan} disabled={savingDispatch}>Generate Challan</Button>

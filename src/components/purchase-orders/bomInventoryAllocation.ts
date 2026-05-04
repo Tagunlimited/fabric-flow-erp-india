@@ -249,7 +249,7 @@ export async function fetchStockForBomRecordItem(
           )
         `
         )
-        .in('status', ['IN_STORAGE', 'RECEIVED'])
+        .eq('status', 'IN_STORAGE')
         .eq('item_type', itemTypeFilter);
 
       if (configureQuery) {
@@ -268,7 +268,7 @@ export async function fetchStockForBomRecordItem(
       }
 
       if (data && data.length > 0) {
-        let working = data as any[];
+        let working = (data as any[]).filter((row) => row.bin?.location_type === 'STORAGE');
         if (
           category === 'fabric' &&
           fabricName &&

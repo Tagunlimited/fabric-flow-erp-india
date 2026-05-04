@@ -12,9 +12,7 @@ import {
   TreePine, 
   Grid3X3, 
   MapPin,
-  Package,
   Archive,
-  Truck,
   BarChart3,
   Settings
 } from 'lucide-react';
@@ -43,13 +41,7 @@ export const WarehouseMaster: React.FC = () => {
     activeRacks: 0,
     activeBins: 0,
     locationTypeDistribution: {
-      PICKING: 0,
-      BULK_STORAGE: 0,
-      QUARANTINE: 0,
-      RETURNS: 0,
-      FABRIC_STORAGE: 0,
-      TRIMS_STORAGE: 0,
-      GARMENT_STORAGE: 0
+      STORAGE: 0,
     }
   });
 
@@ -107,11 +99,7 @@ export const WarehouseMaster: React.FC = () => {
     let activeFloors = 0;
     let activeRacks = 0;
     let activeBins = 0;
-    const locationTypeDistribution: Record<LocationType, number> = {
-      RECEIVING_ZONE: 0,
-      STORAGE: 0,
-      DISPATCH_ZONE: 0
-    };
+    const locationTypeDistribution: Record<LocationType, number> = { STORAGE: 0 };
 
     warehousesData.forEach(warehouse => {
       if (warehouse.is_active) activeWarehouses++;
@@ -126,7 +114,8 @@ export const WarehouseMaster: React.FC = () => {
           rack.bins?.forEach(bin => {
             totalBins++;
             if (bin.is_active) activeBins++;
-            locationTypeDistribution[bin.location_type]++;
+            const lt = bin.location_type === 'STORAGE' ? 'STORAGE' : 'STORAGE';
+            locationTypeDistribution[lt]++;
           });
         });
       });
@@ -382,17 +371,20 @@ export const WarehouseMaster: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-1">
           <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
             Warehouse Master
           </h1>
-          <p className="text-muted-foreground mt-1">
+          <p className="text-muted-foreground">
             Manage your warehouse locations and storage facilities
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button onClick={() => handleAdd('warehouse')} className="bg-gradient-to-r from-blue-500 to-purple-500">
+        <div className="flex gap-2 sm:self-center">
+          <Button
+            onClick={() => handleAdd('warehouse')}
+            className="h-9 bg-gradient-to-r from-blue-500 to-purple-500"
+          >
             <Plus className="w-4 h-4 mr-2" />
             Add Warehouse
           </Button>
@@ -401,41 +393,41 @@ export const WarehouseMaster: React.FC = () => {
 
       {/* Statistics Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="bg-gradient-to-br from-blue-50 to-blue-100">
+        <Card className="h-full bg-gradient-to-br from-blue-50 to-blue-100">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-blue-700">Total Warehouses</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-0">
             <div className="text-2xl font-bold text-blue-900">{stats.totalWarehouses}</div>
             <p className="text-xs text-blue-600">{stats.activeWarehouses} active</p>
           </CardContent>
         </Card>
 
-        <Card className="bg-gradient-to-br from-green-50 to-green-100">
+        <Card className="h-full bg-gradient-to-br from-green-50 to-green-100">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-green-700">Total Floors</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-0">
             <div className="text-2xl font-bold text-green-900">{stats.totalFloors}</div>
             <p className="text-xs text-green-600">{stats.activeFloors} active</p>
           </CardContent>
         </Card>
 
-        <Card className="bg-gradient-to-br from-yellow-50 to-yellow-100">
+        <Card className="h-full bg-gradient-to-br from-yellow-50 to-yellow-100">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-yellow-700">Total Racks</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-0">
             <div className="text-2xl font-bold text-yellow-900">{stats.totalRacks}</div>
             <p className="text-xs text-yellow-600">{stats.activeRacks} active</p>
           </CardContent>
         </Card>
 
-        <Card className="bg-gradient-to-br from-purple-50 to-purple-100">
+        <Card className="h-full bg-gradient-to-br from-purple-50 to-purple-100">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-purple-700">Total Bins</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-0">
             <div className="text-2xl font-bold text-purple-900">{stats.totalBins}</div>
             <p className="text-xs text-purple-600">{stats.activeBins} active</p>
           </CardContent>
@@ -444,18 +436,18 @@ export const WarehouseMaster: React.FC = () => {
 
       {/* Location Type Distribution */}
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2">
             <BarChart3 className="w-5 h-5" />
             Storage Distribution
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+        <CardContent className="pt-0">
+          <div className="flex flex-wrap items-start gap-4">
             {Object.entries(LOCATION_TYPE_CONFIGS).map(([type, config]) => (
-              <div key={type} className="text-center">
+              <div key={type} className="min-w-[120px] text-center">
                 <div className={`w-12 h-12 rounded-lg ${config.bgColor} flex items-center justify-center mx-auto mb-2`}>
-                  <Package className={`w-6 h-6 ${config.color}`} />
+                  <Archive className={`w-6 h-6 ${config.color}`} />
                 </div>
                 <p className="text-sm font-medium">{config.label}</p>
                 <p className="text-lg font-bold">{stats.locationTypeDistribution[type as LocationType]}</p>
@@ -467,24 +459,22 @@ export const WarehouseMaster: React.FC = () => {
 
       {/* Search and Filters */}
       <Card>
-        <CardHeader>
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-              <Input
-                placeholder="Search warehouses, floors, racks, or bins..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10"
-              />
-            </div>
+        <CardContent className="pt-6">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+            <Input
+              placeholder="Search warehouses, floors, racks, or bins..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10"
+            />
           </div>
-        </CardHeader>
+        </CardContent>
       </Card>
 
       {/* Main Content Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className="grid h-auto w-full grid-cols-2 p-1">
           <TabsTrigger value="tree" className="flex items-center gap-2">
             <TreePine className="w-4 h-4" />
             Tree View
