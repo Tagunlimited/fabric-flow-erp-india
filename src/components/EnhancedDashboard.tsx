@@ -13,11 +13,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -31,8 +30,8 @@ import {
   Trophy,
   RefreshCw,
   AlertTriangle,
-  TrendingUp,
   Layers,
+  Lightbulb,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { shouldRetryReadWithoutIsDeletedFilter } from "@/lib/supabaseSoftDeleteCompat";
@@ -47,7 +46,6 @@ import {
   endOfWeek,
   endOfYear,
   format,
-  parse,
   parseISO,
   startOfMonth,
   startOfWeek,
@@ -80,7 +78,6 @@ type SalesPersonRow = {
 };
 
 const CHART_REVENUE = "hsl(214 88% 42%)";
-const CHART_RECEIVED = "hsl(152 60% 40%)";
 
 const inr = (n: number) =>
   new Intl.NumberFormat("en-IN", {
@@ -122,7 +119,21 @@ function groupItemsByOrderId(
   return map;
 }
 
-type CategoryRevenueRow = { name: string; fullName: string; revenue: number };
+type CategoryRevenueRow = { name: string; fullName: string; revenue: number; quantity: number };
+
+type OwnerInsightTone = "warning" | "positive" | "info";
+
+type OwnerInsight = { tone: OwnerInsightTone; headline: string; body: string };
+
+function lineItemQuantity(it: Record<string, unknown>): number {
+  const n = Number(it.quantity);
+  if (Number.isFinite(n) && n > 0) return n;
+  const sq = it.sizes_quantities as Record<string, unknown> | null | undefined;
+  if (sq && typeof sq === "object" && !Array.isArray(sq)) {
+    return Object.values(sq).reduce<number>((sum, v) => sum + Number(v ?? 0), 0);
+  }
+  return 0;
+}
 
 type DashboardPeriod =
   | "this_week"
@@ -286,6 +297,7 @@ async function loadSalesDashboard(range: DateRange): Promise<{
   const itemsByOrder = groupItemsByOrderId(itemRows || []);
 
   const categoryTotals = new Map<string, number>();
+  const categoryQty = new Map<string, number>();
   for (const order of list as Array<Record<string, unknown> & { id: string }>) {
     const items = (itemsByOrder[order.id] || []) as Array<
       Record<string, unknown> & {
@@ -316,6 +328,8 @@ async function loadSalesDashboard(range: DateRange): Promise<{
         }
       }
       categoryTotals.set(catName, (categoryTotals.get(catName) ?? 0) + allocated);
+      const q = lineItemQuantity(it);
+      categoryQty.set(catName, (categoryQty.get(catName) ?? 0) + q);
     });
   }
 
@@ -329,13 +343,18 @@ async function loadSalesDashboard(range: DateRange): Promise<{
       fullName,
       name: fullName.length > 18 ? `${fullName.slice(0, 16)}…` : fullName,
       revenue,
+      quantity: categoryQty.get(fullName) ?? 0,
     });
   }
   if (restSum > 0) {
+    const restQty = categorySorted
+      .slice(topN)
+      .reduce((s, [k]) => s + (categoryQty.get(k) ?? 0), 0);
     categoryRevenue.push({
       fullName: "All other categories",
       name: "Others",
       revenue: restSum,
+      quantity: restQty,
     });
   }
 
@@ -388,29 +407,6 @@ async function loadSalesDashboard(range: DateRange): Promise<{
 
   return { orders: enriched, employees, categoryRevenue };
 }
-
-const ChartTooltip = ({
-  active,
-  payload,
-  label,
-}: {
-  active?: boolean;
-  payload?: Array<{ value?: number; name?: string; dataKey?: string; color?: string }>;
-  label?: string;
-}) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="rounded-lg border bg-background/95 px-3 py-2 text-xs shadow-md backdrop-blur">
-      <p className="font-medium text-foreground">{label}</p>
-      {payload.map((p) => (
-        <p key={String(p.dataKey)} className="text-muted-foreground">
-          <span className="inline-block h-2 w-2 rounded-full align-middle mr-1.5" style={{ background: p.color }} />
-          {p.name}: {inr(Number(p.value) || 0)}
-        </p>
-      ))}
-    </div>
-  );
-};
 
 export function EnhancedDashboard() {
   const [selectedPeriod, setSelectedPeriod] = useState<DashboardPeriod>("this_month");
@@ -488,35 +484,6 @@ export function EnhancedDashboard() {
     return rows.sort((a, b) => b.revenue - a.revenue);
   }, [orders, employees]);
 
-  const monthlySeries = useMemo(() => {
-    const map = new Map<string, { month: string; revenue: number; received: number }>();
-    for (const o of orders) {
-      if (!o.order_date) continue;
-      let monthKey: string;
-      try {
-        monthKey = format(parseISO(o.order_date), "MMM yyyy");
-      } catch {
-        continue;
-      }
-      const cur = map.get(monthKey) || { month: monthKey, revenue: 0, received: 0 };
-      cur.revenue += o.revenue;
-      cur.received += o.received;
-      map.set(monthKey, cur);
-    }
-    const arr = Array.from(map.values());
-    arr.sort((a, b) => {
-      try {
-        return (
-          parse(a.month, "MMM yyyy", new Date()).getTime() -
-          parse(b.month, "MMM yyyy", new Date()).getTime()
-        );
-      } catch {
-        return 0;
-      }
-    });
-    return arr;
-  }, [orders]);
-
   const barLeaderData = useMemo(
     () =>
       salesRows.slice(0, 8).map((r) => ({
@@ -528,6 +495,126 @@ export function EnhancedDashboard() {
     [salesRows]
   );
 
+  /** Plain-language signals for planning collections, pipeline risk, and data hygiene (same period as charts). */
+  const ownerInsights = useMemo((): OwnerInsight[] => {
+    const { totalRevenue, totalReceived, totalBalance, totalOrders } = totals;
+    const out: OwnerInsight[] = [];
+
+    if (totalOrders === 0) {
+      out.push({
+        tone: "info",
+        headline: "No orders in this period",
+        body: "Try another date range, or confirm orders have an order_date in range.",
+      });
+      return out;
+    }
+
+    if (totalRevenue <= 0) {
+      out.push({
+        tone: "info",
+        headline: "No booked revenue",
+        body: "Line-based revenue is zero for orders in this window. Check order lines and charges.",
+      });
+      return out;
+    }
+
+    const collectedPct = Math.round((totalReceived / totalRevenue) * 100);
+    const balancePct = Math.round((totalBalance / totalRevenue) * 100);
+
+    if (collectedPct < 60) {
+      out.push({
+        tone: "warning",
+        headline: "Prioritise collections",
+        body: `Only about ${collectedPct}% of booked revenue is matched to receipts. Follow up on large balances and payment terms.`,
+      });
+    } else if (collectedPct >= 85) {
+      out.push({
+        tone: "positive",
+        headline: "Strong cash-in",
+        body: `Roughly ${collectedPct}% of booked revenue is already received. Keep discipline on the remaining ~${balancePct}%.`,
+      });
+    }
+
+    if (balancePct > 40) {
+      out.push({
+        tone: "warning",
+        headline: "High outstanding share",
+        body: `About ${balancePct}% of booked revenue is still outstanding (${inrCompact(totalBalance)}). Deposits or milestones on new orders may help.`,
+      });
+    }
+
+    const heavyPending = orders.filter(
+      (o) => o.revenue > 0 && o.balance / o.revenue > 0.5 && o.balance >= 5000
+    ).length;
+    if (heavyPending >= 3) {
+      out.push({
+        tone: "warning",
+        headline: "Concentrated follow-up list",
+        body: `${heavyPending} orders still have over half their value pending (₹5,000+ each). A short chase list may unlock cash quickly.`,
+      });
+    }
+
+    const topRep = salesRows[0];
+    if (topRep && salesRows.length >= 2) {
+      const repShare = Math.round((topRep.revenue / totalRevenue) * 100);
+      if (repShare >= 50) {
+        out.push({
+          tone: "info",
+          headline: "Sales concentration",
+          body: `${topRep.name} represents about ${repShare}% of revenue this period. If that is a single relationship or region, consider diversifying pipeline or backup coverage.`,
+        });
+      }
+    }
+
+    const unassigned = salesRows.find((r) => r.name === "Unassigned");
+    if (unassigned && unassigned.orderCount > 0) {
+      out.push({
+        tone: "info",
+        headline: "Unassigned owners",
+        body: `${unassigned.orderCount} order(s) have no sales manager. Assigning owners improves accountability and handoffs.`,
+      });
+    }
+
+    const uncategorized = categoryRevenue.find((c) => c.fullName === "Uncategorized");
+    if (uncategorized) {
+      const uShare = Math.round((uncategorized.revenue / totalRevenue) * 100);
+      if (uShare >= 15) {
+        out.push({
+          tone: "info",
+          headline: "Category data gap",
+          body: `About ${uShare}% of revenue is "Uncategorized". Tighter product categories improve margin and mix decisions.`,
+        });
+      }
+    }
+
+    const topCat = categoryRevenue.find(
+      (c) =>
+        c.fullName !== "All other categories" &&
+        c.name !== "Others" &&
+        c.fullName !== "No line items"
+    );
+    if (topCat && categoryRevenue.length >= 2) {
+      const catShare = Math.round((topCat.revenue / totalRevenue) * 100);
+      if (catShare >= 45) {
+        out.push({
+          tone: "info",
+          headline: "Category dependency",
+          body: `${topCat.fullName} is roughly ${catShare}% of revenue. Stress-test capacity, sourcing, and margin for that segment.`,
+        });
+      }
+    }
+
+    if (out.length === 0) {
+      out.push({
+        tone: "positive",
+        headline: "No major red flags in ratios",
+        body: "Collection and balance mix look moderate for this period. Still scan the leaderboard and category chart before hiring or capex calls.",
+      });
+    }
+
+    return out.slice(0, 6);
+  }, [orders, totals, salesRows, categoryRevenue]);
+
   if (loading) {
     return (
       <div className="space-y-8 animate-pulse">
@@ -537,10 +624,8 @@ export function EnhancedDashboard() {
             <div key={i} className="h-32 rounded-2xl bg-muted" />
           ))}
         </div>
-        <div className="grid gap-6 lg:grid-cols-2">
-          <div className="h-80 rounded-2xl bg-muted" />
-          <div className="h-80 rounded-2xl bg-muted" />
-        </div>
+        <div className="h-28 rounded-2xl bg-muted" />
+        <div className="h-80 rounded-2xl bg-muted" />
       </div>
     );
   }
@@ -629,68 +714,37 @@ export function EnhancedDashboard() {
         />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-5">
-        <Card className="rounded-2xl border bg-card/80 shadow-sm backdrop-blur-sm lg:col-span-3">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <TrendingUp className="h-5 w-5 text-primary" />
-              Revenue vs received
-            </CardTitle>
-            <CardDescription>
-              By order date ({format(parseISO(periodRange.startDate), "dd MMM yyyy")} -{" "}
-              {format(parseISO(periodRange.endDate), "dd MMM yyyy")})
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="h-[320px] pt-0">
-            {monthlySeries.length === 0 ? (
-              <p className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                No dated orders to chart yet.
-              </p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={monthlySeries} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="fillRev" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={CHART_REVENUE} stopOpacity={0.35} />
-                      <stop offset="100%" stopColor={CHART_REVENUE} stopOpacity={0.02} />
-                    </linearGradient>
-                    <linearGradient id="fillRec" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={CHART_RECEIVED} stopOpacity={0.3} />
-                      <stop offset="100%" stopColor={CHART_RECEIVED} stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border/60" />
-                  <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-                  <YAxis
-                    tick={{ fontSize: 11 }}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(v) => inrCompact(Number(v))}
-                  />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Area
-                    type="monotone"
-                    dataKey="revenue"
-                    name="Revenue"
-                    stroke={CHART_REVENUE}
-                    fill="url(#fillRev)"
-                    strokeWidth={2}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="received"
-                    name="Received"
-                    stroke={CHART_RECEIVED}
-                    fill="url(#fillRec)"
-                    strokeWidth={2}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
+      <Card className="rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/[0.06] via-card to-card shadow-sm backdrop-blur-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Lightbulb className="h-5 w-5 text-amber-500" />
+            Owner briefing
+          </CardTitle>
+          <CardDescription>
+            Signals derived from this period&apos;s orders and receipts — use with your market context; not
+            financial or legal advice.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {ownerInsights.map((ins, idx) => (
+            <div
+              key={`${ins.headline}-${idx}`}
+              className={cn(
+                "rounded-xl border p-4 text-sm shadow-sm",
+                ins.tone === "warning" && "border-amber-500/35 bg-amber-500/[0.07]",
+                ins.tone === "positive" && "border-emerald-500/35 bg-emerald-500/[0.07]",
+                ins.tone === "info" && "border-border/80 bg-muted/25"
+              )}
+            >
+              <p className="font-semibold leading-tight text-foreground">{ins.headline}</p>
+              <p className="mt-2 leading-snug text-muted-foreground">{ins.body}</p>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
 
-        <Card className="rounded-2xl border bg-card/80 shadow-sm backdrop-blur-sm lg:col-span-2">
+      <div className="grid gap-6">
+        <Card className="rounded-2xl border bg-card/80 shadow-sm backdrop-blur-sm">
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-lg">
               <Trophy className="h-5 w-5 text-amber-500" />
@@ -753,7 +807,7 @@ export function EnhancedDashboard() {
           </CardTitle>
           <CardDescription>
             Line totals including GST, with order-level additional charges split by line share (same basis
-            as total revenue).
+            as total revenue). Quantity is sum of line units (order line quantity or sizes breakdown).
           </CardDescription>
         </CardHeader>
         <CardContent className="h-[320px] pt-0">
@@ -791,11 +845,24 @@ export function EnhancedDashboard() {
                       <div className="rounded-lg border bg-background/95 px-3 py-2 text-xs shadow-md">
                         <p className="font-medium">{row.fullName}</p>
                         <p className="text-muted-foreground">{inr(row.revenue)}</p>
+                        <p className="text-muted-foreground tabular-nums">
+                          Qty: {row.quantity.toLocaleString("en-IN")}
+                        </p>
                       </div>
                     );
                   }}
                 />
-                <Bar dataKey="revenue" name="Revenue" fill="hsl(262 52% 47%)" radius={[0, 6, 6, 0]} />
+                <Bar dataKey="revenue" name="Revenue" fill="hsl(262 52% 47%)" radius={[0, 6, 6, 0]}>
+                  <LabelList
+                    dataKey="quantity"
+                    position="right"
+                    className="fill-muted-foreground"
+                    fontSize={10}
+                    formatter={(v: number) =>
+                      Number(v) > 0 ? `${Number(v).toLocaleString("en-IN")} qty` : ""
+                    }
+                  />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           )}

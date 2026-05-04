@@ -49,7 +49,9 @@ import {
   BookOpen,
   UserSearch,
   Sun,
-  Moon
+  Moon,
+  FileImage,
+  Printer
 } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -109,7 +111,14 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         // { title: "Payments", url: "/accounts/payments", icon: CreditCard },
       ]
     },
-    { title: "Design & Printing", url: "/design", icon: Palette },
+    {
+      title: "Design & Printing",
+      icon: Palette,
+      children: [
+        { title: "Designs", url: "/design/designs", icon: FileImage },
+        { title: "Printing", url: "/design/printing", icon: Printer },
+      ]
+    },
     {
       title: "Procurement",
       icon: ShoppingBag,
@@ -495,7 +504,7 @@ export function ErpSidebar({ mobileOpen = false, onMobileClose, onCollapsedChang
     Award, AlertTriangle, Scissors, Shirt, Contact, UserPlus, DollarSign, Receipt,
     CreditCard, Quote, FileText, PackageCheck, Boxes, PackageSearch, PackageX,
     LayoutDashboard, UserCheck, UsersRound, CheckSquare, ClipboardCheck, Hand,
-    Box, FileEdit, Wallet, List, BookOpen
+    Box, FileEdit, Wallet, List, BookOpen, FileImage, Printer
   };
 
   // Convert dynamic sidebar items to the old format

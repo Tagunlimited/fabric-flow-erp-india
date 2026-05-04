@@ -162,7 +162,7 @@ export function EmployeeAccessManagement() {
           { title: 'CRM', url: null, icon: 'Users', sort_order: 2, is_active: true }, // Parent item, no URL
           { title: 'Orders', url: '/orders', icon: 'ShoppingCart', sort_order: 3, is_active: true },
           { title: 'Accounts', url: null, icon: 'Calculator', sort_order: 4, is_active: true }, // Parent item, no URL
-          { title: 'Design & Printing', url: '/design', icon: 'Palette', sort_order: 5, is_active: true },
+          { title: 'Design & Printing', url: null, icon: 'Palette', sort_order: 5, is_active: true },
           { title: 'Procurement', url: null, icon: 'ShoppingBag', sort_order: 6, is_active: true }, // Parent item, no URL
           { title: 'Inventory', url: null, icon: 'Package', sort_order: 7, is_active: true }, // Parent item, no URL
           { title: 'Production', url: null, icon: 'Factory', sort_order: 8, is_active: true }, // Parent item, no URL
@@ -277,7 +277,10 @@ export function EmployeeAccessManagement() {
           { title: 'Receipts', url: '/accounts/receipts', icon: 'Calculator', sort_order: 3, is_active: true },
           { title: 'Payments', url: '/accounts/payments', icon: 'Calculator', sort_order: 4, is_active: true }
         ]},
-        { title: 'Design & Printing', url: '/design', icon: 'Palette', sort_order: 5, is_active: true, children: [] },
+        { title: 'Design & Printing', url: null, icon: 'Palette', sort_order: 5, is_active: true, children: [
+          { title: 'Designs', url: '/design/designs', icon: 'FileImage', sort_order: 1, is_active: true },
+          { title: 'Printing', url: '/design/printing', icon: 'Printer', sort_order: 2, is_active: true }
+        ]},
         { title: 'Procurement', url: null, icon: 'ShoppingBag', sort_order: 6, is_active: true, children: [
           { title: 'Bills of Materials', url: '/bom', icon: 'ClipboardList', sort_order: 1, is_active: true },
           { title: 'Purchase Orders', url: '/procurement/po', icon: 'ShoppingBag', sort_order: 2, is_active: true },
@@ -1752,7 +1755,7 @@ export function EmployeeAccessManagement() {
                             const currentSidebarItems = [
                               { title: 'Dashboard', url: '/dashboard', icon: 'Home', sort_order: 1, is_active: true },
                               { title: 'Orders', url: '/orders', icon: 'ShoppingCart', sort_order: 3, is_active: true },
-                              { title: 'Design & Printing', url: '/design', icon: 'Palette', sort_order: 5, is_active: true },
+                              { title: 'Design & Printing', url: null, icon: 'Palette', sort_order: 5, is_active: true },
                               { title: 'Quality Check', url: '/quality', icon: 'CheckCircle', sort_order: 9, is_active: true },
                               { title: 'Configuration', url: '/configuration', icon: 'Settings', sort_order: 13, is_active: true },
                               { title: 'Reports', url: '/reports', icon: 'FileText', sort_order: 14, is_active: true }

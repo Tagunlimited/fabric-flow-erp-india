@@ -314,8 +314,8 @@ export function SizeTypeManager() {
               Add Size Type
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-xl">
-            <DialogHeader>
+          <DialogContent className="max-w-xl max-h-[90vh] flex flex-col overflow-hidden gap-4">
+            <DialogHeader className="shrink-0">
               <DialogTitle>
                 {editingSizeType ? 'Edit Size Type' : 'Add New Size Type'}
               </DialogTitle>
@@ -323,7 +323,8 @@ export function SizeTypeManager() {
                 {editingSizeType ? 'Update the details for this size type.' : 'Add a new size type with its available sizes and an optional image.'}
               </DialogDescription>
             </DialogHeader>
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col gap-4">
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
               <div>
                 <Label htmlFor="size_name">Size Type Name</Label>
                 <Input
@@ -469,8 +470,9 @@ export function SizeTypeManager() {
                   </Button>
                 </div>
               </div>
+              </div>
 
-              <div className="flex justify-end space-x-2 pt-4">
+              <div className="flex shrink-0 justify-end gap-2 border-t bg-background pt-4">
                 <Button 
                   type="button" 
                   variant="outline" 

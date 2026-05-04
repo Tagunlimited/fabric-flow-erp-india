@@ -345,39 +345,47 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
 
   const generateOrderNumber = async () => {
     try {
+      const now = new Date();
+      const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+      const fyEnd = fyStart + 1;
+      const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
+      const pattern = `RMO/${fyStr}/`;
+
+      // Get all readymade order numbers for the current financial year
       const { data, error } = await supabase
         .from('orders')
         .select('order_number')
         .eq('order_type', 'readymade')
-        .order('created_at', { ascending: false })
-        .limit(1);
+        .like('order_number', `${pattern}%`)
+        .order('order_number', { ascending: false });
 
       if (error) throw error;
 
       let nextSequence = 1;
       if (data && data.length > 0) {
-        const lastOrderNumber = data[0].order_number;
-        const match = lastOrderNumber.match(/(\d+)$/);
-        if (match) {
-          nextSequence = parseInt(match[1]) + 1;
+        // Find the maximum sequence number across all readymade orders in this financial year
+        const sequences = data
+          .map(order => {
+            const match = order.order_number.match(/\/(\d+)$/);
+            return match ? parseInt(match[1]) : 0;
+          })
+          .filter(seq => !isNaN(seq));
+
+        if (sequences.length > 0) {
+          nextSequence = Math.max(...sequences) + 1;
         }
       }
 
-      const now = new Date();
-      const year = now.getFullYear().toString().slice(-2);
-      const nextYear = (now.getFullYear() + 1).toString().slice(-2);
-      const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
       const sequence = nextSequence.toString().padStart(3, '0');
-      
-      return `RMO/${year}-${nextYear}/${month}/${sequence}`;
+      return `${pattern}${sequence}`;
     } catch (error) {
       console.error('Error generating order number:', error);
       const now = new Date();
-      const year = now.getFullYear().toString().slice(-2);
-      const nextYear = (now.getFullYear() + 1).toString().slice(-2);
-      const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-      const sequence = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-      return `RMO/${year}-${nextYear}/${month}/${sequence}`;
+      const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+      const fyEnd = fyStart + 1;
+      const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
+      const timestamp = Date.now().toString().slice(-6);
+      return `RMO/${fyStr}/${timestamp}`;
     }
   };
 

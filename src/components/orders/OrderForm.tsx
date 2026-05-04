@@ -1025,12 +1025,12 @@ const getSelectedFabricVariant = (productIndex: number) => {
   const generateOrderNumber = async () => {
     try {
       const now = new Date();
-      const year = now.getFullYear().toString().slice(-2);
-      const nextYear = (now.getFullYear() + 1).toString().slice(-2);
-      const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-      const pattern = `TUC/${year}-${nextYear}/${month}/`;
-      
-      // Get all order numbers with the current month/year pattern
+      const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+      const fyEnd = fyStart + 1;
+      const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
+      const pattern = `TUC/${fyStr}/`;
+
+      // Get all order numbers for the current financial year (no month filter)
       const { data, error } = await supabase
         .from('orders')
         .select('order_number')
@@ -1041,14 +1041,14 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
       let nextSequence = 1;
       if (data && data.length > 0) {
-        // Find the maximum sequence number for this month
+        // Find the maximum sequence number across all orders in this financial year
         const sequences = data
           .map(order => {
-            const match = (order as any).order_number.match(/(\d+)$/);
+            const match = (order as any).order_number.match(/\/(\d+)$/);
             return match ? parseInt(match[1]) : 0;
           })
           .filter(seq => !isNaN(seq));
-        
+
         if (sequences.length > 0) {
           nextSequence = Math.max(...sequences) + 1;
         }
@@ -1060,11 +1060,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
       console.error('Error generating order number:', error);
       // Fallback to timestamp-based unique number if sequence generation fails
       const now = new Date();
-      const year = now.getFullYear().toString().slice(-2);
-      const nextYear = (now.getFullYear() + 1).toString().slice(-2);
-      const month = now.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-      const timestamp = Date.now().toString().slice(-6); // Last 6 digits of timestamp
-      return `TUC/${year}-${nextYear}/${month}/${timestamp}`;
+      const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+      const fyEnd = fyStart + 1;
+      const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
+      const timestamp = Date.now().toString().slice(-6);
+      return `TUC/${fyStr}/${timestamp}`;
     }
   };
 
@@ -1072,8 +1072,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
     const fyStart = sourceDate.getMonth() < 3 ? sourceDate.getFullYear() - 1 : sourceDate.getFullYear();
     const fyEnd = fyStart + 1;
     const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
-    const month = sourceDate.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
-    const prefix = `MQ/${fyStr}/${month}/`;
+    const prefix = `MQ/${fyStr}/`;
 
     const { data } = await supabase
       .from('manual_quotations' as any)
@@ -1085,7 +1084,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
     let maxSeq = 0;
     (data || []).forEach((row: any) => {
       const qn = row?.quotation_number;
-      const m = typeof qn === 'string' ? qn.match(/(\d+)$/) : null;
+      const m = typeof qn === 'string' ? qn.match(/\/(\d+)$/) : null;
       if (!m) return;
       const seq = Number.parseInt(m[1], 10);
       if (Number.isFinite(seq) && seq > maxSeq) maxSeq = seq;
