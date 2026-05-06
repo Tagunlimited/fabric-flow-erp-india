@@ -77,6 +77,7 @@ type LineItem = {
   bom_qty_total?: number;
   bom_number?: string;
   product_name?: string | null;
+  sales_order_item_id?: string | null;
 };
 
 function buildPoLineBomRecordStub(line: LineItem, bomId: string): Record<string, unknown> {
@@ -149,6 +150,8 @@ type PurchaseOrder = {
   notes?: string;
   delivery_address?: string;
   expected_delivery_date?: string;
+  /** Linked sales order when PO is raised for outsource / traceability */
+  sales_order_id?: string | null;
   // Transporter details
   preferred_transporter?: string;
   transport_remark?: string;
@@ -236,6 +239,7 @@ export function PurchaseOrderForm() {
   const [allocateDialogOpen, setAllocateDialogOpen] = useState(false);
   const [allocateTarget, setAllocateTarget] = useState<BomDisplayAllocationTarget | null>(null);
   const [nonBomLinesOpen, setNonBomLinesOpen] = useState(false);
+  const salesOrderLinePrefillDoneRef = useRef(false);
 
   const poBomStockByItemId = useMemo(() => {
     const m = new Map<string, PoBomStockPanelRow>();
@@ -1284,6 +1288,65 @@ export function PurchaseOrderForm() {
       });
     }
   }, [location.state]);
+
+  // Header link + optional first line from sales order (outsource from flow assignment)
+  useEffect(() => {
+    if (id) return;
+    if (bomParam) return;
+    if (location.state?.bomData) return;
+
+    const so = searchParams.get('sales_order_id');
+    const soi = searchParams.get('sales_order_item_id');
+    if (so) {
+      setPo((p) => (p.sales_order_id === so ? p : { ...p, sales_order_id: so }));
+    }
+    if (!so || !soi || salesOrderLinePrefillDoneRef.current) return;
+
+    salesOrderLinePrefillDoneRef.current = true;
+    void (async () => {
+      const { data, error } = await supabase
+        .from('order_items')
+        .select('id, quantity, product_id, product_description')
+        .eq('id', soi)
+        .maybeSingle();
+
+      if (error || !data) {
+        salesOrderLinePrefillDoneRef.current = false;
+        toast.error('Could not load the sales order line for this purchase order.');
+        return;
+      }
+
+      let label = String(data.product_description || '').trim();
+      if (data.product_id) {
+        const pr = await supabase
+          .from('product_master')
+          .select('product_name')
+          .eq('id', data.product_id)
+          .maybeSingle();
+        if (!pr.error && pr.data && (pr.data as { product_name?: string }).product_name) {
+          label = String((pr.data as { product_name?: string }).product_name);
+        }
+      }
+      if (!label) label = 'Sales order line';
+
+      const qty = Number(data.quantity) || 0;
+      setItems((prev) =>
+        prev.length > 0
+          ? prev
+          : [
+              {
+                item_type: 'product',
+                item_id: String(data.product_id || ''),
+                item_name: label,
+                item_image_url: null,
+                quantity: qty,
+                unit_of_measure: 'pcs',
+                sales_order_item_id: soi,
+              },
+            ]
+      );
+    })();
+  }, [id, bomParam, location.state, searchParams]);
 
   // Load BOM data into form
   useEffect(() => {
@@ -2479,6 +2542,7 @@ export function PurchaseOrderForm() {
           unit_of_measure: item.unit_of_measure || 'pcs',
           bom_item_id: item.bom_item_id || tracking?.bom_item_id || null,
           bom_id: item.bom_id || tracking?.bom_id || null,
+          sales_order_item_id: (item as { sales_order_item_id?: string | null }).sales_order_item_id ?? null,
         };
       });
       
@@ -2606,6 +2670,7 @@ export function PurchaseOrderForm() {
         transport_remark: (po.transport_remark && po.transport_remark.trim() !== '') ? po.transport_remark : null,
         // BOM reference
         bom_id: bomData?.id || null, // Link to BOM if created from BOM
+        sales_order_id: po.sales_order_id || null,
       };
 
       console.log('🔧 TIMESTAMP:', new Date().toISOString(), 'PO Data being saved:', poData);
@@ -2713,6 +2778,7 @@ export function PurchaseOrderForm() {
         quantity: item.quantity,
         unit_of_measure: item.unit_of_measure,
         remarks: item.remarks,
+        sales_order_item_id: item.sales_order_item_id || null,
         selected_colors: normalizeSelectedColors(item.selected_colors),
         // Add fabric-specific fields for fabric items
         ...(item.item_type === 'fabric' && {

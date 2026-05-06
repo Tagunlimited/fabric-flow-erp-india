@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, Fragment } from 'react';
+import React, { useRef, useCallback, useMemo } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -9,12 +9,11 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Printer, Download } from 'lucide-react';
-import type { BatchAssignmentDocumentData } from '@/utils/batchAssignmentDocument';
-import { normalizeTailorType } from '@/utils/batchAssignmentDocument';
-import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
+import type { BatchAssignmentDocumentBatch, BatchAssignmentDocumentData, ProductEarningRow } from '@/utils/batchAssignmentDocument';
 import { exportBatchAssignmentA5Pdf } from '@/utils/batchAssignmentPDF';
 
-const PRINT_ROOT_CLASS = 'batch-assignment-print-root';
+const THERMAL_ROOT_CLASS = 'thermal-job-card-print-root';
+const THERMAL_SLIP_CLASS = 'thermal-job-card-slip';
 
 function escapeHtml(s: string): string {
   return String(s)
@@ -22,6 +21,32 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function formatRupeeInr(n: number): string {
+  const r = Math.round(Math.max(0, n) * 100) / 100;
+  if (Number.isInteger(r)) return `₹${r}`;
+  return `₹${r.toFixed(2)}`;
+}
+
+function formatSizesSummary(breakdown?: { size: string; quantity: number }[]): string {
+  if (!breakdown?.length) return '—';
+  return breakdown.map((s) => `${escapeHtml(s.size)}-${s.quantity}`).join(', ');
+}
+
+type ThermalSlipModel = {
+  batch: BatchAssignmentDocumentBatch;
+  row: ProductEarningRow;
+};
+
+function buildThermalSlips(data: BatchAssignmentDocumentData): ThermalSlipModel[] {
+  const out: ThermalSlipModel[] = [];
+  for (const batch of data.batchAssignments || []) {
+    for (const row of batch.productEarningRows || []) {
+      out.push({ batch, row });
+    }
+  }
+  return out;
 }
 
 interface BatchAssignmentPreviewDialogProps {
@@ -37,6 +62,8 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
 }) => {
   const printRef = useRef<HTMLDivElement>(null);
 
+  const slips = useMemo(() => (documentData ? buildThermalSlips(documentData) : []), [documentData]);
+
   const handlePrint = useCallback(() => {
     const root = printRef.current;
     if (!root) return;
@@ -51,14 +78,20 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
         <head>
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>Stitching Job Card</title>
+          <title>Stitching job card — thermal</title>
           ${styleTags}
           <style>
-            @page { size: A5 landscape; margin: 4mm; }
+            @page { size: 80mm auto; margin: 0; }
             html, body { margin: 0; padding: 0; background: #fff; }
-            .print-root { display: flex; flex-direction: column; gap: 0; align-items: center; }
-            .ba-a5-page { page-break-after: always; break-after: page; box-shadow: none !important; }
-            .ba-a5-page:last-child { page-break-after: auto; break-after: auto; }
+            .print-root { margin: 0; padding: 0; }
+            .${THERMAL_SLIP_CLASS} {
+              page-break-after: always;
+              break-after: page;
+            }
+            .${THERMAL_SLIP_CLASS}:last-child {
+              page-break-after: auto;
+              break-after: auto;
+            }
           </style>
         </head>
         <body>
@@ -119,7 +152,7 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
   if (!documentData) return null;
 
   const companyName = documentData.companySettings?.company_name || 'Company';
-  const deliveryDate = documentData.dueDate
+  const deadlineStr = documentData.dueDate
     ? new Date(documentData.dueDate).toLocaleDateString('en-IN', {
         day: '2-digit',
         month: 'short',
@@ -138,36 +171,74 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
         year: 'numeric',
       });
 
+  const snRate = (b: BatchAssignmentDocumentBatch) => Math.max(0, Number(b.snRate) || 0);
+  const ofRate = (b: BatchAssignmentDocumentBatch) => Math.max(0, Number(b.ofRate) || 0);
+
   return (
     <>
       <style>{`
-        @media screen {
-          .${PRINT_ROOT_CLASS} {
-            transform-origin: top center;
-          }
+        .${THERMAL_ROOT_CLASS} {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+        .${THERMAL_SLIP_CLASS} {
+          width: 80mm;
+          max-width: 100%;
+          margin-left: auto;
+          margin-right: auto;
+          box-sizing: border-box;
+          padding: 8px 10px 10px;
+          background: #fff;
+          color: #000;
+          font-size: 11px;
+          line-height: 1.45;
+        }
+        .thermal-sep {
+          border: none;
+          border-top: 1px dashed #000;
+          margin: 8px 0;
+          opacity: 0.85;
+        }
+        .thermal-center {
+          text-align: center;
+        }
+        .thermal-title {
+          font-weight: 700;
+          letter-spacing: 0.02em;
+          font-size: 12px;
+        }
+        .thermal-company {
+          margin-top: 2px;
+          font-size: 10px;
+        }
+        .thermal-section-gap {
+          margin-top: 6px;
+        }
+        .thermal-bold {
+          font-weight: 700;
         }
         @media print {
           @page {
-            size: A5 landscape;
-            margin: 4mm;
+            size: 80mm auto;
+            margin: 0;
           }
           body * {
             visibility: hidden;
           }
-          .${PRINT_ROOT_CLASS}, .${PRINT_ROOT_CLASS} * {
+          .${THERMAL_ROOT_CLASS}, .${THERMAL_ROOT_CLASS} * {
             visibility: visible;
           }
-          .${PRINT_ROOT_CLASS} {
+          .${THERMAL_ROOT_CLASS} {
             position: absolute;
             left: 0;
             top: 0;
             width: 100%;
           }
-          .ba-a5-page {
+          .${THERMAL_SLIP_CLASS} {
             page-break-after: always;
             break-after: page;
+            box-shadow: none !important;
           }
-          .ba-a5-page:last-child {
+          .${THERMAL_SLIP_CLASS}:last-child {
             page-break-after: auto;
             break-after: auto;
           }
@@ -175,253 +246,100 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
       `}</style>
 
       <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-        <DialogContent className="max-w-[95vw] w-[min(1100px,95vw)] max-h-[92vh] flex flex-col gap-0 p-0">
-          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+        <DialogContent className="max-w-md w-[calc(100vw-2rem)] max-h-[92vh] flex flex-col gap-0 p-0 sm:max-w-md">
+          <DialogHeader className="px-4 pt-4 pb-2 shrink-0">
             <DialogTitle>Stitching job card — preview</DialogTitle>
             <DialogDescription>
-              A5 landscape, one page per batch (all products on that batch on the same page). Print or export PDF.
+              80mm thermal slip (receipt printer). One slip per product. Use Print slip for clean thermal output.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto px-6 pb-2 border-y bg-muted/30">
-            <div
-              ref={printRef}
-              className={`${PRINT_ROOT_CLASS} flex flex-col items-center gap-6 py-4`}
-            >
-              {documentData.batchAssignments.map((batch, pageIndex) => {
-                const mode = normalizeTailorType(batch.tailorType);
-                const tailorLabel =
-                  mode === 'single_needle' ? 'Single Needle (SN)' : 'Overlock / Flatlock (OF)';
+          <div className="flex-1 overflow-y-auto px-4 pb-2 border-y bg-muted/40">
+            <div className="mx-auto w-[320px] max-w-full rounded-md border bg-white py-3 shadow-sm">
+              <div
+                ref={printRef}
+                className={`${THERMAL_ROOT_CLASS} flex flex-col items-stretch gap-0`}
+              >
+                {slips.length === 0 ? (
+                  <div className={`${THERMAL_SLIP_CLASS} text-center text-muted-foreground`}>
+                    No product lines on this job card.
+                  </div>
+                ) : (
+                  slips.map(({ batch, row }, i) => {
+                    const qty = Math.max(0, Number(row.orderQty) || 0);
+                    const sr = snRate(batch);
+                    const or = ofRate(batch);
+                    const snTotal = Math.round(sr * qty * 100) / 100;
+                    const ofTotal = Math.round(or * qty * 100) / 100;
+                    const rateSum = Math.round((sr + or) * 100) / 100;
+                    const lineTotal = Math.round((snTotal + ofTotal) * 100) / 100;
+                    const sizesLine = formatSizesSummary(row.sizeBreakdown);
 
-                const batchItems = (documentData.orderItems || []).filter((it: any) =>
-                  batch.batchOrderItemIds?.includes(String(it.id))
-                );
-                const itemImageForRow = (row: (typeof batch.productEarningRows)[0], ri: number) => {
-                  const byId = row.orderItemId
-                    ? batchItems.find((it: any) => String(it.id) === String(row.orderItemId))
-                    : undefined;
-                  const it = byId || batchItems[ri];
-                  return it ? getOrderItemDisplayImage(it) : null;
-                };
+                    return (
+                      <section
+                        key={`${batch.batchName}-${row.orderItemId || row.label}-${i}`}
+                        className={THERMAL_SLIP_CLASS}
+                      >
+                        <div className="thermal-center thermal-title">STITCHING JOB CARD</div>
+                        <div className="thermal-center thermal-company">{escapeHtml(companyName)}</div>
+                        <hr className="thermal-sep" />
 
-                return (
-                  <article
-                    key={`${batch.batchName}-${pageIndex}`}
-                    className="ba-a5-page bg-white text-black shadow-md overflow-hidden"
-                    style={{
-                      width: '210mm',
-                      height: '148mm',
-                      maxWidth: '100%',
-                      fontSize: '9px',
-                      lineHeight: 1.25,
-                      fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
-                    }}
-                  >
-                    <div
-                      className="flex items-start justify-between px-4 py-2 text-white"
-                      style={{ background: '#1a1a1a', minHeight: '46px' }}
-                    >
-                      <div>
-                        <div className="text-[17px] font-semibold leading-tight tracking-tight">
-                          Stitching Job Card
+                        <div>Order: {escapeHtml(documentData.orderNumber)}</div>
+                        <div>Batch: {escapeHtml(batch.batchName)}</div>
+                        <div>
+                          Cutting Master:{' '}
+                          {escapeHtml(
+                            (documentData.cuttingMasterName && documentData.cuttingMasterName.trim()) || '—'
+                          )}
                         </div>
-                        <div className="text-[11px] opacity-90">{escapeHtml(companyName)}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-[10px] opacity-90">Order number</div>
-                        <div className="text-[14px] font-medium">{escapeHtml(documentData.orderNumber)}</div>
-                      </div>
-                    </div>
+                        <div>Date: {orderDateStr}</div>
+                        <div>Deadline: {deadlineStr}</div>
+                        <hr className="thermal-sep" />
 
-                    <div
-                      className="px-4 py-1 text-white font-semibold text-[11px]"
-                      style={{ background: '#404040' }}
-                    >
-                      Batch: {escapeHtml(batch.batchName)} · Leader: {escapeHtml(batch.batchLeaderName)}
-                    </div>
-
-                    <div className="px-3 pt-2 pb-1 flex flex-wrap gap-x-6 gap-y-1 border-b border-neutral-400">
-                      <div>
-                        <div className="text-neutral-600 text-[8px]">Customer</div>
-                        <div className="font-medium text-[10px]">{escapeHtml(documentData.customerName)}</div>
-                      </div>
-                      <div>
-                        <div className="text-neutral-600 text-[8px]">Order date</div>
-                        <div className="text-[10px]">{orderDateStr}</div>
-                      </div>
-                      <div>
-                        <div className="text-neutral-600 text-[8px]">Deadline</div>
-                        <div className="text-[10px] font-semibold border-b border-black border-dotted inline-block">
-                          {deliveryDate}
+                        <div className="thermal-section-gap">
+                          Product category: {escapeHtml(row.category || '—')}
                         </div>
-                      </div>
-                    </div>
+                        <div>Product (from fabric): {escapeHtml(row.label || '—')}</div>
+                        <div>Qty: {qty} pcs</div>
+                        <div>Sizes: {sizesLine}</div>
+                        <hr className="thermal-sep" />
 
-                    {documentData.orderNotes ? (
-                      <div className="px-3 py-1 border-b border-neutral-400 bg-white">
-                        <div className="text-[8px] font-semibold text-neutral-700">Order notes (production)</div>
-                        <div className="text-[8px] text-neutral-900 whitespace-pre-wrap">{escapeHtml(documentData.orderNotes)}</div>
-                      </div>
-                    ) : null}
+                        <div className="thermal-bold">RATE</div>
+                        <div>SN: {formatRupeeInr(sr)}</div>
+                        <div>OF: {formatRupeeInr(or)}</div>
+                        <hr className="thermal-sep" />
 
-                    <div className="px-3 py-1.5 bg-neutral-100 border-b border-neutral-400">
-                      <div className="text-[10px] font-semibold text-black mb-1">Earnings (this batch)</div>
-                      <div className="flex flex-wrap gap-3 text-[9px] mb-1.5">
-                        <span>
-                          <span className="text-neutral-600">Batch total:</span>{' '}
-                          <strong>₹{batch.totalEarning.toFixed(2)}</strong>
-                        </span>
-                        <span>
-                          <span className="text-neutral-600">SN:</span>{' '}
-                          <strong>₹{batch.snEarning.toFixed(2)}</strong>
-                        </span>
-                        <span>
-                          <span className="text-neutral-600">OF:</span>{' '}
-                          <strong>₹{batch.ofEarning.toFixed(2)}</strong>
-                        </span>
-                      </div>
-                      <table className="w-full border-collapse text-[8px]">
-                        <thead>
-                          <tr className="bg-white border border-neutral-400">
-                            <th className="text-center p-1 border border-neutral-400 font-semibold w-[48px]">
-                              Img
-                            </th>
-                            <th className="text-left p-1 border border-neutral-400 font-semibold">Product</th>
-                            <th className="text-left p-1 border border-neutral-400 font-semibold">Category</th>
-                            <th className="text-right p-1 border border-neutral-400 font-semibold">Batch qty</th>
-                            <th className="text-right p-1 border border-neutral-400 font-semibold">SN ₹</th>
-                            <th className="text-right p-1 border border-neutral-400 font-semibold">OF ₹</th>
-                            <th className="text-right p-1 border border-neutral-400 font-semibold">Line ₹</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {batch.productEarningRows.map((row, ri) => {
-                            const rowImg = itemImageForRow(row, ri);
-                            return (
-                            <Fragment key={ri}>
-                              <tr className="bg-white">
-                                <td className="p-0.5 border border-neutral-400 align-middle text-center w-[48px]">
-                                  {rowImg ? (
-                                    <img
-                                      src={rowImg}
-                                      alt=""
-                                      className="w-10 h-10 object-cover border border-neutral-500 rounded-sm mx-auto block"
-                                    />
-                                  ) : (
-                                    <div className="w-10 h-10 mx-auto border border-dashed border-neutral-400 rounded-sm bg-neutral-100 flex items-center justify-center text-[6px] text-neutral-500">
-                                      —
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="p-1 border border-neutral-400">{escapeHtml(row.label)}</td>
-                                <td className="p-1 border border-neutral-400">{escapeHtml(row.category)}</td>
-                                <td className="p-1 border border-neutral-400 text-right">{row.orderQty}</td>
-                                <td className="p-1 border border-neutral-400 text-right">{row.snEarning.toFixed(2)}</td>
-                                <td className="p-1 border border-neutral-400 text-right">{row.ofEarning.toFixed(2)}</td>
-                                <td className="p-1 border border-neutral-400 text-right font-medium">
-                                  {row.lineTotal.toFixed(2)}
-                                </td>
-                              </tr>
-                              {(row.sizeBreakdown?.length ||
-                                row.lineCustomizations ||
-                                row.lineRemarks) && (
-                                <tr className="bg-neutral-50">
-                                  <td colSpan={7} className="p-1.5 border border-neutral-400 text-[7px] align-top">
-                                    {row.sizeBreakdown && row.sizeBreakdown.length > 0 ? (
-                                      <div className="mb-1">
-                                        <span className="font-semibold text-neutral-800">Sizes in this batch: </span>
-                                        <span className="inline-flex flex-wrap gap-0.5">
-                                          {row.sizeBreakdown.map((s) => (
-                                            <span
-                                              key={s.size}
-                                              className="inline-block px-1 py-0.5 border border-neutral-500 rounded-sm bg-white font-medium"
-                                            >
-                                              {escapeHtml(s.size)}: {s.quantity}
-                                            </span>
-                                          ))}
-                                        </span>
-                                      </div>
-                                    ) : null}
-                                    {row.lineCustomizations ? (
-                                      <div className="mb-0.5 text-neutral-900">
-                                        <span className="font-semibold">Customizations: </span>
-                                        {escapeHtml(row.lineCustomizations)}
-                                      </div>
-                                    ) : null}
-                                    {row.lineRemarks ? (
-                                      <div className="text-neutral-900">
-                                        <span className="font-semibold">Line remarks: </span>
-                                        {escapeHtml(row.lineRemarks)}
-                                      </div>
-                                    ) : null}
-                                  </td>
-                                </tr>
-                              )}
-                            </Fragment>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    <div className="px-3 py-1.5 border-t border-neutral-300">
-                      <div className="text-[10px] font-semibold text-black">This batch / tailor</div>
-                      <div className="text-[8px] text-neutral-700 mt-0.5">
-                        Batch type: {tailorLabel} · Qty assigned: <strong>{batch.assignedQuantity}</strong> pcs · SN ₹
-                        {batch.snRate.toFixed(2)}/pc · OF ₹{batch.ofRate.toFixed(2)}/pc
-                      </div>
-                      <div className="text-[8px] mt-0.5">
-                        <span className="text-neutral-600">Batch earning —</span> SN:{' '}
-                        <strong>₹{batch.snEarning.toFixed(2)}</strong> · OF:{' '}
-                        <strong>₹{batch.ofEarning.toFixed(2)}</strong> ·{' '}
-                        <strong>Total ₹{batch.totalEarning.toFixed(2)}</strong>
-                      </div>
-                    </div>
-
-                    {batch.combinedSizeBreakdown && batch.combinedSizeBreakdown.length > 0 ? (
-                      <div className="px-3 pb-1 border-t border-neutral-300 pt-1">
-                        <div className="text-[9px] font-semibold text-black mb-0.5">
-                          Sizes (assignment not linked to a product line)
+                        <div className="thermal-bold">EARNING</div>
+                        <div>
+                          SN: {qty} Pcs X {formatRupeeInr(sr)} = {formatRupeeInr(snTotal)}
                         </div>
-                        <div
-                          className="grid gap-0.5"
-                          style={{
-                            gridTemplateColumns: `repeat(${Math.min(batch.combinedSizeBreakdown.length || 1, 14)}, minmax(0, 1fr))`,
-                          }}
-                        >
-                          {batch.combinedSizeBreakdown.map((sd) => (
-                            <div
-                              key={sd.size}
-                              className="text-center border border-neutral-400 rounded-sm bg-neutral-50 py-0.5 px-0.5"
-                            >
-                              <div className="text-[7px] font-semibold text-neutral-700">{escapeHtml(sd.size)}</div>
-                              <div className="text-[9px] font-bold">{sd.quantity}</div>
-                            </div>
-                          ))}
+                        <div>
+                          OF: {qty} Pcs X {formatRupeeInr(or)} = {formatRupeeInr(ofTotal)}
                         </div>
-                      </div>
-                    ) : null}
+                        <hr className="thermal-sep" />
 
-                    <div className="px-3 py-0.5 text-[7px] text-neutral-500 text-center border-t border-neutral-300">
-                      Page {pageIndex + 1} of {documentData.batchAssignments.length} · {escapeHtml(batch.batchName)}
-                    </div>
-                  </article>
-                );
-              })}
+                        <div className="thermal-bold">
+                          TOTAL: {qty} Pcs X {formatRupeeInr(rateSum)} = {formatRupeeInr(lineTotal)}
+                        </div>
+                      </section>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </div>
 
-          <DialogFooter className="px-6 py-4 shrink-0 gap-2 sm:gap-2">
+          <DialogFooter className="px-4 py-3 shrink-0 gap-2 flex-col sm:flex-row sm:justify-end">
             <Button type="button" variant="outline" onClick={onClose}>
               Close
             </Button>
-            <Button type="button" variant="outline" onClick={handlePrint}>
+            <Button type="button" variant="default" onClick={handlePrint}>
               <Printer className="w-4 h-4 mr-2" />
-              Print
+              Print slip
             </Button>
-            <Button type="button" onClick={handleExportPdf}>
+            <Button type="button" variant="outline" onClick={handleExportPdf}>
               <Download className="w-4 h-4 mr-2" />
-              Export PDF
+              Export A5 PDF
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -10,6 +10,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BomOrderLinePicker } from './BomOrderLinePicker';
 import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
 import { cn } from '@/lib/utils';
+import { orderLineEligibleForBom } from './bomOrderLineUtils';
 import '../../pages/OrdersPageViewSwitch.css';
 import {
   Dialog,
@@ -32,19 +33,31 @@ function getOrderBomCoverage(orderId: string, bomRows: BomRowRef[]) {
   return { hasLegacyFullOrderBom, coveredItemIds };
 }
 
-function orderHasLineMissingBom(order: { id: string; order_items?: { id: string }[] }, bomRows: BomRowRef[]) {
+function orderHasLineMissingBom(
+  order: { id: string; order_items?: any[] },
+  bomRows: BomRowRef[]
+) {
   const { hasLegacyFullOrderBom, coveredItemIds } = getOrderBomCoverage(order.id, bomRows);
   if (hasLegacyFullOrderBom) return false;
-  const itemIds = (order.order_items || []).map(i => i.id).filter(Boolean);
+  const itemIds = (order.order_items || [])
+    .filter(orderLineEligibleForBom)
+    .map(i => i.id)
+    .filter(Boolean);
   if (itemIds.length === 0) return false;
   return itemIds.some(id => !coveredItemIds.has(id));
 }
 
 /** Every line has a BOM (or legacy whole-order BOM). Orders with no lines are excluded. */
-function orderFullyCoveredByBom(order: { id: string; order_items?: { id: string }[] }, bomRows: BomRowRef[]) {
+function orderFullyCoveredByBom(
+  order: { id: string; order_items?: any[] },
+  bomRows: BomRowRef[]
+) {
   const { hasLegacyFullOrderBom, coveredItemIds } = getOrderBomCoverage(order.id, bomRows);
   if (hasLegacyFullOrderBom) return true;
-  const itemIds = (order.order_items || []).map(i => i.id).filter(Boolean);
+  const itemIds = (order.order_items || [])
+    .filter((i: any) => orderLineEligibleForBom(i) || coveredItemIds.has(String(i?.id || '')))
+    .map(i => i.id)
+    .filter(Boolean);
   if (itemIds.length === 0) return false;
   return itemIds.every(id => coveredItemIds.has(id));
 }
@@ -88,7 +101,9 @@ async function fetchCustomOrdersWithBomRefs(): Promise<{ orders: Order[]; bomRow
         total_price,
         product_description,
         category_image_url,
-        created_at
+        created_at,
+        execution_flow,
+        fulfillment_status
       )
     `)
     .eq('is_deleted', false)
@@ -139,7 +154,8 @@ async function fetchCustomOrdersWithBomRefs(): Promise<{ orders: Order[]; bomRow
     .map((o: any) => ({
       ...o,
       order_items: (o.order_items || []).filter((it: any) => it?.is_deleted !== true),
-    })) as unknown as Order[];
+    }))
+    .filter((o: any) => (o.order_items || []).length > 0) as unknown as Order[];
 
   return { orders: allOrders, bomRows: bomList };
 }
@@ -382,8 +398,8 @@ function OrdersWithoutBom({ onOpenLinePicker, refreshTrigger }: OrdersWithoutBom
   };
 
   return (
-    <div className="h-full min-h-0">
-      <Card className="h-full min-h-0 flex flex-col">
+    <div>
+      <Card>
         <CardHeader>
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
           <CardTitle className="flex items-center gap-2">
@@ -483,13 +499,13 @@ function OrdersWithoutBom({ onOpenLinePicker, refreshTrigger }: OrdersWithoutBom
           </div>
         </div>
       </CardHeader>
-      <CardContent className="min-h-0 flex-1">
+      <CardContent>
         {loading ? (
           <div className="flex items-center justify-center py-8">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
           </div>
         ) : (
-          <div className="h-full overflow-y-auto">
+          <div>
               <Table>
               <TableHeader className="sticky top-0 z-20 bg-background">
                 <TableRow>
@@ -779,8 +795,8 @@ function OrdersCompleteBom({ refreshTrigger }: OrdersCompleteBomProps) {
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col gap-4">
-      <Card className="min-h-0 flex-1 flex flex-col">
+    <div className="space-y-4">
+      <Card>
         <CardHeader>
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
             <CardTitle className="flex items-center gap-2">
@@ -808,13 +824,13 @@ function OrdersCompleteBom({ refreshTrigger }: OrdersCompleteBomProps) {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="min-h-0 flex-1">
+        <CardContent>
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
             </div>
           ) : (
-            <div className="h-full overflow-y-auto">
+            <div>
               <Table>
                 <TableHeader className="sticky top-0 z-20 bg-background">
                   <TableRow>
@@ -1045,13 +1061,13 @@ export function BomTabsPage() {
   };
 
   return (
-    <div className={isLinePickerOpen ? 'space-y-6' : 'space-y-6 h-[calc(100vh-11rem)] min-h-0 flex flex-col'}>
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold">Bills of Material</h2>
           <p className="text-muted-foreground">
-            Pending: orders still in progress that are missing a BOM on at least one line. Complete: every line has
-            a BOM, or the order is marked completed/dispatched.
+            Pending: only stitching-assigned lines that still need BOM. Complete: every stitching-assigned line has a
+            BOM, or the order is marked completed/dispatched.
           </p>
         </div>
         <div className="flex gap-2">
@@ -1065,7 +1081,7 @@ export function BomTabsPage() {
         className={
           isLinePickerOpen
             ? 'border rounded-lg p-4'
-            : 'border rounded-lg p-4 flex-1 min-h-0 flex flex-col overflow-hidden'
+            : 'border rounded-lg p-4'
         }
       >
         <div className="mb-4 flex justify-start pb-2">
@@ -1096,7 +1112,7 @@ export function BomTabsPage() {
         </div>
 
         {activeBomTab === 'pending' && (
-          <div className={isLinePickerOpen ? '' : 'min-h-0 flex-1'}>
+          <div>
             {pickOrder ? (
               <BomOrderLinePicker orderId={pickOrder} onBack={closeLinePicker} />
             ) : (
@@ -1106,7 +1122,7 @@ export function BomTabsPage() {
         )}
 
         {activeBomTab === 'complete' && (
-          <div className="min-h-0 flex-1">
+          <div>
             <OrdersCompleteBom refreshTrigger={refreshTrigger} />
           </div>
         )}

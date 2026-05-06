@@ -1,6 +1,16 @@
+import type { ExecutionFlow, FulfillmentStatus } from '@/domain/fulfillment/types';
+import { bomAllowedForLine } from '@/domain/fulfillment/transitions';
+
 /** Nested `order_items` shape for Supabase when loading BOM context from an order */
 export const BOM_ORDER_ITEMS_SELECT =
-  'id, product_id, quantity, unit_price, total_price, product_description, category_image_url, mockup_images, specifications, fabric_id, gsm, color, created_at, product_category_id, product_category:product_categories(category_name), fabric:fabric_master(id, fabric_name, color, gsm, fabric_for_supplier)';
+  'id, product_id, quantity, unit_price, total_price, product_description, category_image_url, mockup_images, specifications, fabric_id, gsm, color, created_at, product_category_id, execution_flow, fulfillment_status, product_category:product_categories(category_name), fabric:fabric_master(id, fabric_name, color, gsm, fabric_for_supplier)';
+
+/** Order lines that may have a BOM (stitching / legacy); excludes pending flow and outsource/inventory paths. */
+export function orderLineEligibleForBom(line: any): boolean {
+  const fulfillment = (line?.fulfillment_status ?? 'flow_assigned') as FulfillmentStatus;
+  const flow = (line?.execution_flow ?? null) as ExecutionFlow | null;
+  return bomAllowedForLine(flow, fulfillment);
+}
 
 /**
  * Free-text from `order_items.product_description` (internal / customer-facing line text).

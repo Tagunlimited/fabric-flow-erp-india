@@ -29,6 +29,7 @@ export interface BatchAssignmentPDFData {
   salesManager?: BatchAssignmentDocumentData['salesManager'];
   customizations: BatchAssignmentDocumentData['customizations'];
   dueDate?: string;
+  cuttingMasterName?: string;
 }
 
 /** Base64 <img> or placeholder HTML per order_items.id for table column */
@@ -210,7 +211,9 @@ function createA5PageHtml(
     </div>
   </div>
   <div style="background:#404040;color:#fff;padding:5px 14px;font-weight:600;font-size:11px;">
-    Batch: ${esc(batch.batchName)} · Leader: ${esc(batch.batchLeaderName)}
+    Batch: ${esc(batch.batchName)}${
+      data.cuttingMasterName ? ` · Cutting master: ${esc(data.cuttingMasterName)}` : ''
+    } · Batch leader: ${esc(batch.batchLeaderName)}
   </div>
   <div style="display:flex;flex-wrap:wrap;gap:12px 22px;padding:8px 12px;border-bottom:1px solid #666;">
     <div><div style="color:#444;font-size:8px;">Customer</div><div style="font-weight:500;font-size:10px;">${esc(data.customerName)}</div></div>
@@ -228,7 +231,7 @@ function createA5PageHtml(
     <table style="width:100%;border-collapse:collapse;">
       <tr style="background:#fff;">
         <th style="text-align:center;padding:3px;border:1px solid #666;font-size:8px;width:44px;">Img</th>
-        <th style="text-align:left;padding:3px;border:1px solid #666;font-size:8px;">Product</th>
+        <th style="text-align:left;padding:3px;border:1px solid #666;font-size:8px;">Product (fabric)</th>
         <th style="text-align:left;padding:3px;border:1px solid #666;font-size:8px;">Category</th>
         <th style="text-align:right;padding:3px;border:1px solid #666;font-size:8px;">Batch qty</th>
         <th style="text-align:right;padding:3px;border:1px solid #666;font-size:8px;">SN ₹</th>
@@ -324,6 +327,7 @@ export async function generateBatchAssignmentPDF(data: BatchAssignmentPDFData): 
     salesManager: data.salesManager,
     customizations: data.customizations,
     dueDate: data.dueDate,
+    cuttingMasterName: data.cuttingMasterName,
   });
 
   await exportBatchAssignmentA5Pdf(doc);

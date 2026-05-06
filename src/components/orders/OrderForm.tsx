@@ -1022,6 +1022,8 @@ const getSelectedFabricVariant = (productIndex: number) => {
     }
   };
 
+  const ORDER_NUMBER_PATTERN = /^(TUC|RMO)\/\d{2}-\d{2}\/\d+$/;
+
   const generateOrderNumber = async () => {
     try {
       const now = new Date();
@@ -1055,7 +1057,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
       }
 
       const sequence = nextSequence.toString().padStart(3, '0');
-      return `${pattern}${sequence}`;
+      const candidate = `${pattern}${sequence}`;
+      if (!ORDER_NUMBER_PATTERN.test(candidate)) {
+        throw new Error(`Invalid generated order number format: ${candidate}`);
+      }
+      return candidate;
     } catch (error) {
       console.error('Error generating order number:', error);
       // Fallback to timestamp-based unique number if sequence generation fails
@@ -1064,7 +1070,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
       const fyEnd = fyStart + 1;
       const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
       const timestamp = Date.now().toString().slice(-6);
-      return `TUC/${fyStr}/${timestamp}`;
+      const fallback = `TUC/${fyStr}/${timestamp}`;
+      if (!ORDER_NUMBER_PATTERN.test(fallback)) {
+        throw new Error(`Invalid fallback order number format: ${fallback}`);
+      }
+      return fallback;
     }
   };
 
@@ -1752,6 +1762,9 @@ const getSelectedFabricVariant = (productIndex: number) => {
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
           const orderNumber = await generateOrderNumber();
+          if (!ORDER_NUMBER_PATTERN.test(orderNumber)) {
+            throw new Error(`Invalid order number generated: ${orderNumber}`);
+          }
           
           // Check if any product has mockup images uploaded
           // User requirement: ONLY mockup images trigger status change, reference images not required

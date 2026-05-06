@@ -28,6 +28,8 @@ export interface CompanyConfig {
   gstin: string;
   contact_phone: string;
   contact_email: string;
+  /** When true, receipting an order requires per-line flow assignment before downstream modules. */
+  require_order_flow_assignment?: boolean;
   bank_details: {
     bank_name: string;
     account_number: string;
@@ -62,6 +64,7 @@ const defaultConfig: CompanyConfig = {
   gstin: '',
   contact_phone: '',
   contact_email: '',
+  require_order_flow_assignment: false,
   bank_details: {
     bank_name: '',
     account_number: '',

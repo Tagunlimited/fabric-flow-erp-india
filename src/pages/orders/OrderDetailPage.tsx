@@ -54,6 +54,7 @@ import { CreditOrderBadge } from '@/components/orders/CreditOrderBadge';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
 import { ProductCustomizationModal } from "@/components/orders/ProductCustomizationModal";
+import { executionFlowLabel, fulfillmentStatusLabel } from '@/domain/fulfillment/types';
 import { CustomizationColorChips } from "@/components/common/CustomizationColorChips";
 import {
   AlertDialog,
@@ -129,6 +130,7 @@ interface OrderItem {
   id: string;
   order_id: string;
   product_category_id: string;
+  product_id?: string | null;
   product_description: string;
   fabric_id: string;
   color: string;
@@ -144,6 +146,8 @@ interface OrderItem {
   reference_images?: string[];
   mockup_images?: string[];
   attachments?: string[];
+  execution_flow?: string | null;
+  fulfillment_status?: string | null;
 }
 
 interface OrderActivity {
@@ -534,6 +538,8 @@ function ReadymadeOrderFormView({ orderId, order, customer, orderItems, sizeType
           return 'Advance payment received, order confirmed.';
         case 'under_procurement':
           return 'Materials planned and sent for procurement.';
+        case 'pending_flow_assignment':
+          return 'Receipt recorded; assign stitching, outsource, or inventory path for each line.';
         case 'under_cutting':
           return 'Cutting process started for this order.';
         case 'under_stitching':
@@ -1329,9 +1335,14 @@ export default function OrderDetailPage() {
   const handleBackNavigation = () => {
     const from = searchParams.get('from');
     const fromState = (location.state as any)?.from;
+    const returnTo = (location.state as any)?.returnTo as string | undefined;
     // Check if this is a readymade order
     if (order?.order_type === 'readymade') {
       navigate('/orders/readymade', { state: { refreshOrders: true } });
+      return;
+    }
+    if (fromState === 'flow-assignment' || from === 'flow-assignment') {
+      navigate(returnTo || '/procurement/order-flow-assignment', { state: { refreshOrders: true } });
       return;
     }
     if (fromState === 'design') {
@@ -1437,7 +1448,11 @@ export default function OrderDetailPage() {
         navigate('/orders/readymade', { state: { refreshOrders: true } });
       } else {
         const from = searchParams.get('from');
-        if (from === 'production') {
+        const fromState = (location.state as any)?.from;
+        const returnTo = (location.state as any)?.returnTo as string | undefined;
+        if (fromState === 'flow-assignment' || from === 'flow-assignment') {
+          navigate(returnTo || '/procurement/order-flow-assignment', { state: { refreshOrders: true } });
+        } else if (from === 'production') {
           navigate('/production', { state: { refreshOrders: true } });
         } else {
           navigate('/orders', { state: { refreshOrders: true } });
@@ -2596,6 +2611,7 @@ export default function OrderDetailPage() {
       case 'quality_check': return 'bg-purple-100 text-purple-800';
       case 'designing_done': return 'bg-teal-100 text-teal-800';
       case 'under_procurement': return 'bg-amber-100 text-amber-800';
+      case 'pending_flow_assignment': return 'bg-rose-100 text-rose-900';
       case 'under_cutting': return 'bg-orange-100 text-orange-800';
       case 'under_stitching': return 'bg-indigo-100 text-indigo-800';
       case 'under_qc': return 'bg-pink-100 text-pink-800';
@@ -2704,6 +2720,8 @@ export default function OrderDetailPage() {
           return 'Advance payment received, order confirmed.';
         case 'under_procurement':
           return 'Materials planned and sent for procurement.';
+        case 'pending_flow_assignment':
+          return 'Receipt recorded; assign stitching, outsource, or inventory path for each line.';
         case 'under_cutting':
           return 'Cutting process started for this order.';
         case 'under_stitching':
@@ -2858,6 +2876,17 @@ export default function OrderDetailPage() {
                 <Receipt className="w-4 h-4 mr-2" />
                 Create Receipt
               </Button>
+
+              {order.status === 'pending_flow_assignment' && (
+                <Button
+                  variant="default"
+                  onClick={() =>
+                    navigate(`/procurement/order-flow-assignment?orderId=${encodeURIComponent(order.id)}`)
+                  }
+                >
+                  Assign line flows
+                </Button>
+              )}
               
               {order.status !== 'completed' && order.status !== 'cancelled' && (
                 <Button 
@@ -3955,6 +3984,7 @@ export default function OrderDetailPage() {
                              <tr className="bg-gray-100">
                                <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Image</th>
                                <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Product Name</th>
+                               <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Fulfillment</th>
                                <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Customizations</th>
                                <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Remarks</th>
                                <th className="border border-gray-300 px-3 py-2 text-left text-sm font-medium">Total Qty</th>
@@ -4014,6 +4044,20 @@ export default function OrderDetailPage() {
                                       <div className="font-medium">{displayItem.product_description || item.product_description}</div>
                                       <div className="text-gray-600 text-xs">
                                         {productCategories[displayItem.product_category_id || item.product_category_id]?.category_name}
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td className="border border-gray-300 px-3 py-2 text-xs align-top whitespace-nowrap">
+                                    <div className="space-y-1">
+                                      <Badge variant="outline" className="font-normal">
+                                        {executionFlowLabel(
+                                          (displayItem.execution_flow ?? item.execution_flow) as any
+                                        )}
+                                      </Badge>
+                                      <div className="text-muted-foreground max-w-[10rem] leading-snug">
+                                        {fulfillmentStatusLabel(
+                                          (displayItem.fulfillment_status ?? item.fulfillment_status) as any
+                                        )}
                                       </div>
                                     </div>
                                   </td>
