@@ -343,6 +343,8 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
     }
   };
 
+  const ORDER_NUMBER_PATTERN = /^(TUC|RMO)\/\d{2}-\d{2}\/\d+$/;
+
   const generateOrderNumber = async () => {
     try {
       const now = new Date();
@@ -377,7 +379,11 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
       }
 
       const sequence = nextSequence.toString().padStart(3, '0');
-      return `${pattern}${sequence}`;
+      const candidate = `${pattern}${sequence}`;
+      if (!ORDER_NUMBER_PATTERN.test(candidate)) {
+        throw new Error(`Invalid generated order number format: ${candidate}`);
+      }
+      return candidate;
     } catch (error) {
       console.error('Error generating order number:', error);
       const now = new Date();
@@ -385,7 +391,11 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
       const fyEnd = fyStart + 1;
       const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
       const timestamp = Date.now().toString().slice(-6);
-      return `RMO/${fyStr}/${timestamp}`;
+      const fallback = `RMO/${fyStr}/${timestamp}`;
+      if (!ORDER_NUMBER_PATTERN.test(fallback)) {
+        throw new Error(`Invalid fallback order number format: ${fallback}`);
+      }
+      return fallback;
     }
   };
 
@@ -800,6 +810,9 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
     try {
       setLoading(true);
       const orderNumber = await generateOrderNumber();
+      if (!ORDER_NUMBER_PATTERN.test(orderNumber)) {
+        throw new Error(`Invalid order number generated: ${orderNumber}`);
+      }
       const { subtotal, gstAmount, total, balance } = calculateTotals();
 
       // Create order

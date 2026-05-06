@@ -1,6 +1,69 @@
 import { supabase } from '@/integrations/supabase/client';
 import { normalizeUnit, resolveWarehouseFabricId, sameUnitFamily } from '@/utils/fabricInventoryIdentity';
 
+/** Normalized variant key aligned with inventory grouping (name + color + gsm). */
+function fabricVariantKey(parts: { name: string; color: string; gsm: string }): string {
+  return [
+    String(parts.name || '').trim().toLowerCase(),
+    String(parts.color || '').trim().toLowerCase(),
+    String(parts.gsm ?? '').trim().toLowerCase(),
+  ].join('|');
+}
+
+function fabricMasterVariantParts(fabric: FabricMasterLite): { name: string; color: string; gsm: string } {
+  return {
+    name: String(fabric.fabric_name || '').trim(),
+    color: String(fabric.color || '').trim(),
+    gsm: String(fabric.gsm ?? '').trim(),
+  };
+}
+
+type PoLineFabricHint = {
+  fabric_id: string | null;
+  fabric_name: string | null;
+  fabric_color: string | null;
+  fabric_gsm: string | null;
+};
+
+/** GRN + PO + warehouse row text used when item_id / PO fabric_id are missing (mirrors inventory fallback). */
+function warehouseRowVariantParts(row: any, poLineByPoItemId: Map<string, PoLineFabricHint>): { name: string; color: string; gsm: string } | null {
+  const gi = row?.grn_item;
+  const poItemId = String(gi?.po_item_id || '').trim();
+  const po = poItemId ? poLineByPoItemId.get(poItemId) : undefined;
+  const name = String(gi?.fabric_name || po?.fabric_name || row?.item_name || '').trim();
+  const color = String(gi?.item_color || gi?.fabric_color || po?.fabric_color || '').trim();
+  const gsm = String(gi?.fabric_gsm ?? po?.fabric_gsm ?? '').trim();
+  if (!name && !color && !gsm) return null;
+  return { name, color, gsm };
+}
+
+/** True if warehouse row matches fabric_master variant exactly (normalized). */
+function warehouseRowMatchesFabricVariant(row: any, fabric: FabricMasterLite, poLineByPoItemId: Map<string, PoLineFabricHint>): boolean {
+  const rp = warehouseRowVariantParts(row, poLineByPoItemId);
+  if (!rp) return false;
+  return fabricVariantKey(rp) === fabricVariantKey(fabricMasterVariantParts(fabric));
+}
+
+/**
+ * Whether this inventory row contributes to availability for `fabricId`.
+ * Uses direct id / PO fabric_id first, then strict name+color+gsm match (inventory parity).
+ */
+function warehouseRowMatchesFabricForCutting(
+  row: any,
+  fabricId: string,
+  fabric: FabricMasterLite | undefined,
+  poFabricByPoItemId: Map<string, string>,
+  poLineByPoItemId: Map<string, PoLineFabricHint>
+): boolean {
+  const direct =
+    resolveWarehouseFabricId({ item_id: row.item_id, grn_item_po_item_id: row?.grn_item?.po_item_id }, poFabricByPoItemId) || '';
+  if (direct === fabricId) return true;
+  if (!fabric) return false;
+  if (!warehouseRowMatchesFabricVariant(row, fabric, poLineByPoItemId)) return false;
+  // Variant match: include when no resolved id, wrong id, or id not tied to PO row (still duplicates master risk is acceptable per single-fabric dialogs).
+  return !direct || direct !== fabricId;
+}
+
 type FabricMasterLite = {
   id: string;
   fabric_name?: string | null;
@@ -19,6 +82,32 @@ export type FabricAvailabilityResult = {
   gross_quantity: number;
   allocated_quantity: number;
 };
+
+/** Returns true if this allocation row should reduce cutting-time “available” fabric (active BOM/order on another order). */
+function allocationShouldReserveStock(allocRow: any, currentOrderId: string): boolean {
+  const current = String(currentOrderId || '').trim();
+  const bom = allocRow?.bom_item?.bom;
+  if (!bom) return false;
+  const allocOrderId = String(bom.order_id ?? bom.order?.id ?? '').trim();
+  if (!allocOrderId || allocOrderId === current) return false;
+  if (bom.is_deleted === true) return false;
+  const bomStatus = String(bom.status || '').trim().toLowerCase();
+  if (['cancelled', 'void', 'archived'].includes(bomStatus)) return false;
+  const ord = bom.order;
+  if (ord) {
+    if (ord.is_deleted === true) return false;
+    const orderStatus = String(ord.status || '').trim().toLowerCase();
+    if (['cancelled', 'completed', 'dispatched'].includes(orderStatus)) return false;
+  }
+  return true;
+}
+
+/** Same inclusion rule as [StorageZoneInventory] raw-material bin filter. */
+export function isFabricWarehouseRowInInventoryScope(status: string | null | undefined, binLocationType: string | null | undefined): boolean {
+  const st = String(status || '');
+  const lt = String(binLocationType || '');
+  return (st === 'IN_STORAGE' && lt === 'STORAGE') || (st === 'READY_TO_DISPATCH' && lt === 'DISPATCH_ZONE');
+}
 
 export function variantLikelyMatches(
   rowColor: string | null | undefined,
@@ -47,19 +136,21 @@ export async function getFabricAvailabilityByFabricIds(params: {
     .select(`
       id,
       item_id,
+      item_type,
+      item_name,
       quantity,
       unit,
       status,
-      bin:bin_id (id, location_type),
-      grn_item:grn_item_id (po_item_id, fabric_color, fabric_gsm)
+      bin:bin_id (id, bin_code, location_type),
+      grn_item:grn_item_id (po_item_id, fabric_name, fabric_color, fabric_gsm, item_color)
     `)
     .eq('item_type', 'FABRIC')
-    .eq('status', 'IN_STORAGE');
+    .in('status', ['IN_STORAGE', 'READY_TO_DISPATCH'] as any);
 
   if (whError) throw whError;
 
-  const storageRows = (warehouseRows || []).filter(
-    (r: any) => String(r?.bin?.location_type || '') === 'STORAGE'
+  const storageRows = (warehouseRows || []).filter((r: any) =>
+    isFabricWarehouseRowInInventoryScope(r?.status, r?.bin?.location_type)
   );
 
   const poItemIds = Array.from(
@@ -71,17 +162,103 @@ export async function getFabricAvailabilityByFabricIds(params: {
   );
 
   const poFabricByPoItemId = new Map<string, string>();
+  const poLineByPoItemId = new Map<string, PoLineFabricHint>();
   if (poItemIds.length > 0) {
     const { data: poItemsData, error: poErr } = await supabase
       .from('purchase_order_items')
-      .select('id, fabric_id')
+      .select('id, fabric_id, fabric_name, fabric_color, fabric_gsm')
       .in('id', poItemIds as any);
     if (poErr) throw poErr;
     (poItemsData || []).forEach((row: any) => {
       const poId = String(row?.id || '').trim();
+      if (!poId) return;
       const fid = String(row?.fabric_id || '').trim();
-      if (poId && fid) poFabricByPoItemId.set(poId, fid);
+      if (fid) poFabricByPoItemId.set(poId, fid);
+      poLineByPoItemId.set(poId, {
+        fabric_id: row?.fabric_id ?? null,
+        fabric_name: row?.fabric_name ?? null,
+        fabric_color: row?.fabric_color ?? null,
+        fabric_gsm: row?.fabric_gsm ?? null,
+      });
     });
+  }
+
+  const { data: fabricRowsEarly, error: fabricEarlyErr } = await supabase
+    .from('fabric_master')
+    .select('id, fabric_name, color, gsm, uom')
+    .in('id', fabricIds as any);
+  if (fabricEarlyErr) throw fabricEarlyErr;
+  const fabricByIdForDiag = new Map<string, FabricMasterLite>();
+  (fabricRowsEarly || []).forEach((f: any) => fabricByIdForDiag.set(String(f.id), f));
+
+  if (import.meta.env.DEV) {
+    const diag = (warehouseRows || []).map((row: any) => {
+      const st = String(row?.status || '');
+      const lt = String(row?.bin?.location_type || '');
+      const scopeOk = isFabricWarehouseRowInInventoryScope(st, lt);
+      const resolvedDirect =
+        resolveWarehouseFabricId(
+          { item_id: row.item_id, grn_item_po_item_id: row?.grn_item?.po_item_id },
+          poFabricByPoItemId
+        ) || '';
+
+      let resolvedFabricId = '';
+      let resolution_path = '';
+      if (resolvedDirect && fabricIds.includes(resolvedDirect)) {
+        resolvedFabricId = resolvedDirect;
+        resolution_path = 'direct_or_po';
+      } else {
+        for (const fid of fabricIds) {
+          const fab = fabricByIdForDiag.get(fid);
+          if (fab && warehouseRowMatchesFabricVariant(row, fab, poLineByPoItemId)) {
+            resolvedFabricId = fid;
+            resolution_path = 'name_color_gsm_match';
+            break;
+          }
+        }
+        if (!resolvedFabricId && resolvedDirect) {
+          resolvedFabricId = resolvedDirect;
+          resolution_path = 'direct_not_in_target_list';
+        }
+      }
+
+      let excluded_reason: string;
+      if (!['IN_STORAGE', 'READY_TO_DISPATCH'].includes(st)) {
+        excluded_reason = 'wrong_status';
+      } else if (!scopeOk) {
+        excluded_reason = 'wrong_bin';
+      } else if (!resolvedFabricId) {
+        excluded_reason = 'null_resolution';
+      } else if (!fabricIds.includes(resolvedFabricId)) {
+        excluded_reason = 'fabric_id_mismatch';
+      } else {
+        const fab = fabricByIdForDiag.get(resolvedFabricId);
+        const baseUom = String(fab?.uom || 'kg');
+        const rowUnit = String(row.unit || fab?.uom || 'kg');
+        if (!sameUnitFamily(baseUom, rowUnit)) excluded_reason = 'unit_mismatch';
+        else if (resolution_path === 'name_color_gsm_match') excluded_reason = 'name_color_gsm_match';
+        else excluded_reason = 'included';
+      }
+
+      const included = excluded_reason === 'included' || excluded_reason === 'name_color_gsm_match';
+      return {
+        id: row.id,
+        item_id: row.item_id,
+        item_type: row.item_type,
+        status: row.status,
+        bin_code: row.bin?.bin_code,
+        location_type: row.bin?.location_type,
+        quantity: row.quantity,
+        unit: row.unit,
+        grn_po_item_id: row.grn_item?.po_item_id ?? '',
+        resolved_fabric_id: resolvedFabricId,
+        resolution_path,
+        included,
+        excluded_reason,
+      };
+    });
+    console.table(diag);
+    console.log('[getFabricAvailabilityByFabricIds] target fabricIds', fabricIds);
   }
 
   const invIds = storageRows.map((r: any) => r.id).filter(Boolean);
@@ -94,30 +271,29 @@ export async function getFabricAvailabilityByFabricIds(params: {
         quantity,
         bom_item:bom_item_id (
           bom:bom_id (
-            order_id
+            order_id,
+            is_deleted,
+            status,
+            order:order_id (
+              id,
+              status,
+              is_deleted
+            )
           )
         )
       `)
       .in('warehouse_inventory_id', invIds as any);
     if (allocErr) throw allocErr;
+    const currentOrderId = String(params.currentOrderId || '').trim();
     (allocRows || []).forEach((row: any) => {
       const key = String(row?.warehouse_inventory_id || '').trim();
       if (!key) return;
-      const allocOrderId = String(row?.bom_item?.bom?.order_id || '').trim();
-      const currentOrderId = String(params.currentOrderId || '').trim();
-      const isOtherOrderAllocation = !!allocOrderId && allocOrderId !== currentOrderId;
-      if (!isOtherOrderAllocation) return;
+      if (!allocationShouldReserveStock(row, currentOrderId)) return;
       allocationsByInvId[key] = (allocationsByInvId[key] || 0) + Number(row?.quantity || 0);
     });
   }
 
-  const { data: fabricRows, error: fabricErr } = await supabase
-    .from('fabric_master')
-    .select('id, color, gsm, uom')
-    .in('id', fabricIds as any);
-  if (fabricErr) throw fabricErr;
-  const fabricById = new Map<string, FabricMasterLite>();
-  (fabricRows || []).forEach((f: any) => fabricById.set(String(f.id), f));
+  const fabricById = fabricByIdForDiag;
 
   const out: Record<string, FabricAvailabilityResult> = {};
   fabricIds.forEach((fabricId) => {
@@ -128,14 +304,7 @@ export async function getFabricAvailabilityByFabricIds(params: {
     const rowIds: string[] = [];
 
     storageRows.forEach((row: any) => {
-      const resolvedFabricId = resolveWarehouseFabricId(
-        { item_id: row.item_id, grn_item_po_item_id: row?.grn_item?.po_item_id },
-        poFabricByPoItemId
-      );
-      if (resolvedFabricId !== fabricId) return;
-      if (!variantLikelyMatches(row?.grn_item?.fabric_color, row?.grn_item?.fabric_gsm, fabric.color, fabric.gsm)) {
-        return;
-      }
+      if (!warehouseRowMatchesFabricForCutting(row, fabricId, fabric, poFabricByPoItemId, poLineByPoItemId)) return;
       const rowUnit = String(row.unit || fabric.uom || 'kg');
       if (!unit) unit = rowUnit;
       if (!sameUnitFamily(unit, rowUnit)) return;

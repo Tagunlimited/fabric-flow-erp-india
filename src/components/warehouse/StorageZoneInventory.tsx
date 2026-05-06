@@ -6,7 +6,20 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Archive, Package, Search, Eye, History, Trash2, Download, Truck, Filter, Columns3 } from 'lucide-react';
+import {
+  Archive,
+  Package,
+  Search,
+  Eye,
+  History,
+  Trash2,
+  Download,
+  Truck,
+  Filter,
+  Columns3,
+  ChevronDown,
+  ChevronRight,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { WarehouseInventory, BinInventorySummary, INVENTORY_STATUS_CONFIGS } from '@/types/warehouse-inventory';
@@ -14,6 +27,7 @@ import { toast } from 'sonner';
 import { InventoryLogsModal } from './InventoryLogsModal';
 import { DeleteWarehouseInventoryDialog } from './DeleteWarehouseInventoryDialog';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   hasMeaningfulColorLabel,
   resolveSwatchHex,
@@ -55,6 +69,110 @@ interface InventorySummaryDetail {
   bins: BinWiseInventoryDetail[];
 }
 
+type WarehouseInventoryRow = WarehouseInventory & { consolidatedIds?: string[] };
+
+interface InventoryGroupRow {
+  groupKey: string;
+  representative: WarehouseInventoryRow;
+  children: WarehouseInventoryRow[];
+  consolidatedIds: string[];
+  summary: InventorySummaryDetail | undefined;
+}
+
+function summarizeInventoryKey(item: WarehouseInventory): string {
+  const itemColor = item.grn_item?.item_color || item.grn_item?.fabric_color || '';
+  const itemGsm =
+    item.item_type === 'FABRIC'
+      ? String((item as any).fabric_master?.gsm ?? item.grn_item?.fabric_gsm ?? '')
+      : '';
+  return buildWarehouseIdentityKey({
+    itemType: item.item_type,
+    itemId: item.item_id,
+    itemCode: item.item_code,
+    itemName: item.item_name,
+    unit: item.unit,
+    color: itemColor,
+    gsm: itemGsm,
+  });
+}
+
+function flattenWarehouseInventoryIds(rows: WarehouseInventoryRow[]): string[] {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    const arr = row.consolidatedIds?.length ? row.consolidatedIds : [row.id];
+    for (const id of arr) ids.add(id);
+  }
+  return Array.from(ids);
+}
+
+/** `children` should be sorted newest `moved_to_storage_date` first. */
+function pickRepresentativeInventory(sortedNewestFirst: WarehouseInventoryRow[]): WarehouseInventoryRow {
+  const inStorage = sortedNewestFirst.find((c) => c.status === 'IN_STORAGE');
+  return inStorage || sortedNewestFirst[0];
+}
+
+function buildGroupBinInventoryFilterBlob(group: InventoryGroupRow): string {
+  return group.children.map((c) => columnCellValueStatic(c, 'bin_inventory')).join(' | ');
+}
+
+/** Same logic as in-component columnCellValue for filtering / export (no hooks). */
+function columnCellValueStatic(item: WarehouseInventory, key: StorageInventoryTableFilterKey): string {
+  const fabricMaster = (item as any).fabric_master;
+  const itemMaster = (item as any).item_master;
+  const product = (item as any).product;
+  const lineFabricColor = item.grn_item?.fabric_color;
+  const lineItemColor = item.grn_item?.item_color;
+  const allocatedQuantity = Number((item as any).allocated_quantity || 0);
+  const availableQuantity = Math.max(Number(item.quantity || 0) - allocatedQuantity, 0);
+  const qtyNum = Number(item.quantity || 0);
+
+  switch (key) {
+    case 'name':
+      return resolveInventoryDisplayName(item);
+    case 'type':
+      if (item.item_type === 'FABRIC') return 'Fabric';
+      if (item.item_type === 'ITEM' && itemMaster) return itemMaster.item_type || '';
+      if (item.item_type === 'PRODUCT' && product) return product.class || '';
+      return item.item_type || '';
+    case 'fabric':
+      if (item.item_type === 'FABRIC') return resolveFabricDisplayName(item);
+      return '';
+    case 'color':
+      if (item.item_type === 'FABRIC' && fabricMaster) return lineFabricColor || fabricMaster.color || '';
+      if (item.item_type === 'ITEM' && itemMaster) return lineItemColor || itemMaster.color || '';
+      return lineFabricColor || lineItemColor || '';
+    case 'material_gsm':
+      if (item.item_type === 'FABRIC' && fabricMaster) {
+        const material = fabricMaster.type || '';
+        const gsm = fabricMaster.gsm || '';
+        return material && gsm ? `${material} ${gsm} GSM` : material || gsm || '';
+      }
+      if (item.item_type === 'ITEM' && itemMaster) return itemMaster.material || '';
+      return item.grn_item?.fabric_gsm || '';
+    case 'brand':
+      if (item.item_type === 'ITEM' && itemMaster) return itemMaster.brand || '';
+      if (item.item_type === 'PRODUCT' && product) return product.brand || '';
+      return '';
+    case 'size':
+      if (item.item_type === 'ITEM' && itemMaster) return itemMaster.size || '';
+      if (item.item_type === 'PRODUCT' && product) return product.size || '';
+      return '';
+    case 'bin_inventory':
+      return `${item.bin?.bin_code || ''} total ${item.quantity} ${item.unit} available ${availableQuantity} ${item.unit} allocated ${allocatedQuantity} ${item.unit} ${item.bin?.rack?.floor?.warehouse?.name || ''} floor ${item.bin?.rack?.floor?.floor_number || ''} ${item.bin?.rack?.rack_code || ''}`;
+    case 'allocated':
+      return `${allocatedQuantity} ${item.unit || ''}`;
+    case 'status':
+      if (item.status === 'IN_STORAGE') {
+        if (availableQuantity <= 0 && qtyNum > 0) return 'Allocated';
+        if (availableQuantity > 0 && qtyNum > 0 && availableQuantity / qtyNum < 0.25) return 'Low Stock';
+        return 'Available';
+      }
+      return item.status || '';
+    default:
+      return '';
+  }
+}
+
 const resolveInventoryDisplayName = (item: WarehouseInventory): string => {
   const fabricMaster = (item as any).fabric_master;
   const itemMaster = (item as any).item_master;
@@ -91,6 +209,105 @@ const resolveFabricDisplayName = (item: WarehouseInventory): string => {
     '-'
   );
 };
+
+interface InventoryDisplayFields {
+  displayImage: string | undefined;
+  displayName: string;
+  displayType: string;
+  displayFabric: string;
+  displayColor: string;
+  displayColorHex: string | null;
+  displayMaterialGsm: string;
+  displayBrand: string;
+  displaySize: string;
+}
+
+function buildInventoryDisplayFields(item: WarehouseInventory): InventoryDisplayFields {
+  const fabricMaster = (item as any).fabric_master;
+  const itemMaster = (item as any).item_master;
+  const product = (item as any).product;
+  const lineFabricColor = item.grn_item?.fabric_color;
+  const lineItemColor = item.grn_item?.item_color;
+
+  let displayImage: string | undefined;
+  let displayName: string;
+  let displayType: string;
+  let displayFabric: string;
+  let displayColor: string;
+  let displayColorHex: string | null = null;
+  let displayMaterialGsm: string;
+  let displayBrand: string;
+  let displaySize: string;
+
+  if (item.item_type === 'FABRIC' && fabricMaster) {
+    displayImage = fabricMaster.image || null;
+    displayName = resolveInventoryDisplayName(item);
+    displayType = 'Fabric';
+    displayFabric = resolveFabricDisplayName(item);
+    displayColor = lineFabricColor || fabricMaster.color || '-';
+    if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
+    displayColorHex =
+      displayColor !== '-' ? resolveWarehouseFabricSwatch(displayColor, fabricMaster.hex, lineFabricColor) : null;
+    const material = fabricMaster.type || '';
+    const gsm = fabricMaster.gsm || '';
+    displayMaterialGsm = material && gsm ? `${material} ${gsm} GSM` : material || gsm || '-';
+    displayBrand = '-';
+    displaySize = '-';
+  } else if (item.item_type === 'ITEM' && itemMaster) {
+    displayImage = itemMaster.image || item.grn_item?.item_image_url;
+    displayName = resolveInventoryDisplayName(item);
+    displayType = itemMaster.item_type || '-';
+    displayFabric = '-';
+    displayColor = lineItemColor || itemMaster.color || '-';
+    if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
+    displayColorHex = displayColor !== '-' ? resolveSwatchHex(displayColor, null) : null;
+    displayMaterialGsm = itemMaster.material || '-';
+    displayBrand = itemMaster.brand || '-';
+    displaySize = itemMaster.size || '-';
+  } else if (item.item_type === 'PRODUCT' && product) {
+    displayImage = product.main_image || product.image_url || product.image1 || item.grn_item?.item_image_url;
+    displayName = resolveInventoryDisplayName(item);
+    displayType = product.class || '-';
+    displayFabric = '-';
+    displayColor = '-';
+    displayColorHex = null;
+    displayMaterialGsm = '-';
+    displayBrand = product.brand || '-';
+    displaySize = product.size || '-';
+  } else {
+    if (item.item_type === 'FABRIC') {
+      displayImage = null;
+    } else {
+      displayImage = item.grn_item?.item_image_url;
+    }
+    displayName = resolveInventoryDisplayName(item);
+    displayType = item.item_type === 'FABRIC' ? 'Fabric' : item.item_type || '-';
+    displayFabric = item.item_type === 'FABRIC' ? resolveFabricDisplayName(item) : '-';
+    displayColor = lineFabricColor || lineItemColor || '-';
+    if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
+    displayColorHex = displayColor !== '-' ? resolveSwatchHex(displayColor, null) : null;
+    if (item.item_type === 'FABRIC') {
+      const fabricGsm = item.grn_item?.fabric_gsm || '';
+      displayMaterialGsm = fabricGsm ? `${fabricGsm} GSM` : '-';
+    } else {
+      displayMaterialGsm = item.grn_item?.fabric_gsm || '-';
+    }
+    displayBrand = '-';
+    displaySize = '-';
+  }
+
+  return {
+    displayImage,
+    displayName,
+    displayType,
+    displayFabric,
+    displayColor,
+    displayColorHex,
+    displayMaterialGsm,
+    displayBrand,
+    displaySize,
+  };
+}
 
 export type StorageInventoryColumnId =
   | 'name'
@@ -269,6 +486,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
   const [itemTypeFilter, setItemTypeFilter] = useState<string>('all');
   const [zoneFilter, setZoneFilter] = useState<string>('all');
   const [logsModalOpen, setLogsModalOpen] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [selectedInventoryForLogs, setSelectedInventoryForLogs] = useState<WarehouseInventory | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WarehouseInventory | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -820,24 +1038,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
   const includesFilter = (value: unknown, filterValue: string) =>
     filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
 
-  const summarizeInventoryKey = (item: WarehouseInventory) => {
-    const itemColor = item.grn_item?.item_color || item.grn_item?.fabric_color || '';
-    const itemGsm =
-      item.item_type === 'FABRIC'
-        ? String((item as any).fabric_master?.gsm ?? item.grn_item?.fabric_gsm ?? '')
-        : '';
-    // Intentionally exclude bin/status so this becomes a per-item summary across bins.
-    return buildWarehouseIdentityKey({
-      itemType: item.item_type,
-      itemId: item.item_id,
-      itemCode: item.item_code,
-      itemName: item.item_name,
-      unit: item.unit,
-      color: itemColor,
-      gsm: itemGsm,
-    });
-  };
-
   const inventorySummaryMap = useMemo(() => {
     const map = new Map<string, InventorySummaryDetail>();
 
@@ -899,100 +1099,110 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
     return map;
   }, [inventory]);
 
-  const columnCellValue = (item: WarehouseInventory, key: keyof typeof columnFilters): string => {
-    const fabricMaster = (item as any).fabric_master;
-    const itemMaster = (item as any).item_master;
-    const product = (item as any).product;
-    const lineFabricColor = item.grn_item?.fabric_color;
-    const lineItemColor = item.grn_item?.item_color;
-    const allocatedQuantity = Number((item as any).allocated_quantity || 0);
-    const availableQuantity = Math.max(Number(item.quantity || 0) - allocatedQuantity, 0);
-    const qtyNum = Number(item.quantity || 0);
-
-    switch (key) {
-      case 'name':
-        return resolveInventoryDisplayName(item);
-      case 'type':
-        if (item.item_type === 'FABRIC') return 'Fabric';
-        if (item.item_type === 'ITEM' && itemMaster) return itemMaster.item_type || '';
-        if (item.item_type === 'PRODUCT' && product) return product.class || '';
-        return item.item_type || '';
-      case 'fabric':
-        if (item.item_type === 'FABRIC') return resolveFabricDisplayName(item);
-        return '';
-      case 'color':
-        if (item.item_type === 'FABRIC' && fabricMaster) return lineFabricColor || fabricMaster.color || '';
-        if (item.item_type === 'ITEM' && itemMaster) return lineItemColor || itemMaster.color || '';
-        return lineFabricColor || lineItemColor || '';
-      case 'material_gsm':
-        if (item.item_type === 'FABRIC' && fabricMaster) {
-          const material = fabricMaster.type || '';
-          const gsm = fabricMaster.gsm || '';
-          return material && gsm ? `${material} ${gsm} GSM` : material || gsm || '';
-        }
-        if (item.item_type === 'ITEM' && itemMaster) return itemMaster.material || '';
-        return item.grn_item?.fabric_gsm || '';
-      case 'brand':
-        if (item.item_type === 'ITEM' && itemMaster) return itemMaster.brand || '';
-        if (item.item_type === 'PRODUCT' && product) return product.brand || '';
-        return '';
-      case 'size':
-        if (item.item_type === 'ITEM' && itemMaster) return itemMaster.size || '';
-        if (item.item_type === 'PRODUCT' && product) return product.size || '';
-        return '';
-      case 'bin_inventory':
-        return `${item.bin?.bin_code || ''} total ${item.quantity} ${item.unit} available ${availableQuantity} ${item.unit} allocated ${allocatedQuantity} ${item.unit} ${item.bin?.rack?.floor?.warehouse?.name || ''} floor ${item.bin?.rack?.floor?.floor_number || ''} ${item.bin?.rack?.rack_code || ''}`;
-      case 'allocated':
-        return `${allocatedQuantity} ${item.unit || ''}`;
-      case 'status':
-        if (item.status === 'IN_STORAGE') {
-          if (availableQuantity <= 0 && qtyNum > 0) return 'Allocated';
-          if (availableQuantity > 0 && qtyNum > 0 && availableQuantity / qtyNum < 0.25) return 'Low Stock';
-          return 'Available';
-        }
-        return item.status || '';
-      default:
-        return '';
+  const inventoryGroupsAll = useMemo((): InventoryGroupRow[] => {
+    const map = new Map<string, WarehouseInventoryRow[]>();
+    for (const raw of inventory) {
+      const item = raw as WarehouseInventoryRow;
+      const key = summarizeInventoryKey(item);
+      const arr = map.get(key);
+      if (!arr) map.set(key, [item]);
+      else arr.push(item);
     }
-  };
+    return Array.from(map.entries()).map(([groupKey, children]) => {
+      const sortedChildren = [...children].sort((a, b) => {
+        const da = a.moved_to_storage_date ? new Date(a.moved_to_storage_date).getTime() : 0;
+        const db = b.moved_to_storage_date ? new Date(b.moved_to_storage_date).getTime() : 0;
+        return db - da;
+      });
+      const representative = pickRepresentativeInventory(sortedChildren);
+      const consolidatedIds = flattenWarehouseInventoryIds(sortedChildren);
+      const summary = inventorySummaryMap.get(groupKey);
+      return {
+        groupKey,
+        representative,
+        children: sortedChildren,
+        consolidatedIds,
+        summary,
+      };
+    });
+  }, [inventory, inventorySummaryMap]);
+
+  const columnCellValue = (item: WarehouseInventory, key: keyof typeof columnFilters): string =>
+    columnCellValueStatic(item, key as StorageInventoryTableFilterKey);
 
   const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
-  const filteredInventory = inventory.filter((item) => {
-    const t = searchTerm.trim().toLowerCase();
-    const resolvedName = resolveInventoryDisplayName(item).toLowerCase();
-    const matchesSearch =
-      t === '' ||
-      resolvedName.includes(t) ||
-      (item.item_name || '').toLowerCase().includes(t) ||
-      (item.item_code || '').toLowerCase().includes(t) ||
-      (item.bin?.bin_code || '').toLowerCase().includes(t) ||
-      (() => {
-        const fm = (item as any).fabric_master;
-        if (fm) {
-          return (
-            (fm.fabric_code || '').toLowerCase().includes(t) ||
-            (fm.fabric_name || '').toLowerCase().includes(t)
-          );
+  const filteredInventoryGroups = useMemo(() => {
+    return inventoryGroupsAll.filter((group) => {
+      const rep = group.representative;
+      const children = group.children;
+      const summary = group.summary;
+
+      const t = searchTerm.trim().toLowerCase();
+      const resolvedName = resolveInventoryDisplayName(rep).toLowerCase();
+      const matchesSearch =
+        t === '' ||
+        resolvedName.includes(t) ||
+        (rep.item_name || '').toLowerCase().includes(t) ||
+        (rep.item_code || '').toLowerCase().includes(t) ||
+        children.some(
+          (ch) =>
+            (ch.item_name || '').toLowerCase().includes(t) ||
+            (ch.item_code || '').toLowerCase().includes(t) ||
+            (ch.bin?.bin_code || '').toLowerCase().includes(t)
+        ) ||
+        (() => {
+          const tryMaster = (item: WarehouseInventory) => {
+            const fm = (item as any).fabric_master;
+            if (fm) {
+              return (
+                (fm.fabric_code || '').toLowerCase().includes(t) ||
+                (fm.fabric_name || '').toLowerCase().includes(t)
+              );
+            }
+            const im = (item as any).item_master;
+            if (im) {
+              return (
+                (im.item_code || '').toLowerCase().includes(t) ||
+                (im.item_name || '').toLowerCase().includes(t)
+              );
+            }
+            return false;
+          };
+          return tryMaster(rep) || children.some(tryMaster);
+        })();
+
+      const matchesStatus = statusFilter === 'all' || children.some((c) => c.status === statusFilter);
+      const matchesItemType = itemTypeFilter === 'all' || children.some((c) => c.item_type === itemTypeFilter);
+      const matchesZone =
+        zoneFilter === 'all' ||
+        children.some((c) => (c.bin?.rack?.floor?.warehouse?.name || '') === zoneFilter);
+
+      const matchesColumns = (Object.keys(columnFilters) as Array<keyof typeof columnFilters>).every((columnKey) => {
+        if (columnKey === 'bin_inventory') {
+          return includesFilter(buildGroupBinInventoryFilterBlob(group), columnFilters.bin_inventory);
         }
-        const im = (item as any).item_master;
-        if (im) {
-          return (
-            (im.item_code || '').toLowerCase().includes(t) ||
-            (im.item_name || '').toLowerCase().includes(t)
-          );
+        if (columnKey === 'allocated') {
+          const s = summary ? `${summary.reservedQuantity} ${summary.unit}` : '';
+          return includesFilter(s, columnFilters.allocated);
         }
-        return false;
-      })();
-    const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
-    const matchesItemType = itemTypeFilter === 'all' || item.item_type === itemTypeFilter;
-    const wh = item.bin?.rack?.floor?.warehouse?.name || '';
-    const matchesZone = zoneFilter === 'all' || wh === zoneFilter;
-    const matchesColumns = (Object.keys(columnFilters) as Array<keyof typeof columnFilters>).every((columnKey) =>
-      includesFilter(columnCellValue(item, columnKey), columnFilters[columnKey])
-    );
-    return matchesSearch && matchesStatus && matchesItemType && matchesZone && matchesColumns;
-  });
+        if (columnKey === 'status') {
+          const statuses = [...new Set(children.map((c) => columnCellValueStatic(c, 'status')))].join(' ');
+          return includesFilter(statuses, columnFilters.status);
+        }
+        return includesFilter(columnCellValueStatic(rep, columnKey), columnFilters[columnKey]);
+      });
+
+      return matchesSearch && matchesStatus && matchesItemType && matchesZone && matchesColumns;
+    });
+  }, [
+    inventoryGroupsAll,
+    searchTerm,
+    statusFilter,
+    itemTypeFilter,
+    zoneFilter,
+    columnFilters,
+  ]);
 
   const handleExportReport = () => {
     const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -1005,21 +1215,31 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
       'Status',
       'Warehouse path',
     ];
-    const lines = filteredInventory.map((item) => [
-      item.item_name,
-      item.item_type,
-      item.bin?.bin_code ?? '',
-      String(item.quantity),
-      item.unit,
-      item.status,
-      [
-        item.bin?.rack?.floor?.warehouse?.name,
-        `Floor ${item.bin?.rack?.floor?.floor_number ?? ''}`,
-        item.bin?.rack?.rack_code,
-      ]
-        .filter(Boolean)
-        .join(' > '),
-    ]);
+    const lines = filteredInventoryGroups.map((group) => {
+      const rep = group.representative;
+      const summary = group.summary;
+      const qty = summary?.totalQuantity ?? rep.quantity;
+      const unit = summary?.unit ?? rep.unit;
+      const statuses = [...new Set(group.children.map((c) => c.status))].join('; ');
+      const bins = summary?.bins?.map((b) => b.binCode).join('; ') || '';
+      const pathFirst =
+        [
+          rep.bin?.rack?.floor?.warehouse?.name,
+          `Floor ${rep.bin?.rack?.floor?.floor_number ?? ''}`,
+          rep.bin?.rack?.rack_code,
+        ]
+          .filter(Boolean)
+          .join(' > ') || '';
+      return [
+        resolveInventoryDisplayName(rep),
+        rep.item_type,
+        bins,
+        String(qty),
+        unit ?? '',
+        statuses,
+        pathFirst,
+      ];
+    });
     const csv = [header.join(','), ...lines.map((row) => row.map(esc).join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -1072,6 +1292,90 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
 
   const getStatusConfig = (status: string) => {
     return INVENTORY_STATUS_CONFIGS[status as keyof typeof INVENTORY_STATUS_CONFIGS] || INVENTORY_STATUS_CONFIGS.IN_STORAGE;
+  };
+
+  const toggleGroupExpanded = useCallback((groupKey: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
+
+  const openGroupAllocationDetails = (group: InventoryGroupRow) => {
+    const merged = group.children.flatMap((c) => (c as any).allocation_details || []);
+    setSelectedAllocationDetails({ inventory: group.representative, details: merged });
+    setAllocationModalOpen(true);
+  };
+
+  const buildRowStatusBadge = (item: WarehouseInventory): React.ReactNode => {
+    const statusConfig = getStatusConfig(item.status);
+    const allocatedQuantity = Number((item as any).allocated_quantity || 0);
+    const availableQuantity = Math.max(Number(item.quantity || 0) - allocatedQuantity, 0);
+    const qtyNum = Number(item.quantity || 0);
+    const lowStock =
+      item.status === 'IN_STORAGE' &&
+      availableQuantity > 0 &&
+      qtyNum > 0 &&
+      availableQuantity / qtyNum < 0.25;
+
+    if (item.status === 'IN_STORAGE') {
+      if (availableQuantity <= 0 && qtyNum > 0) {
+        return (
+          <span className="inline-flex rounded-lg border border-black/10 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
+            Allocated
+          </span>
+        );
+      }
+      if (lowStock) {
+        return (
+          <span className="inline-flex rounded-lg border border-black/10 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
+            Low Stock
+          </span>
+        );
+      }
+      return (
+        <span className="inline-flex rounded-lg border border-black/10 bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">
+          Available
+        </span>
+      );
+    }
+    return (
+      <span
+        className={`inline-flex rounded-lg border border-black/10 px-2 py-0.5 text-xs font-medium ${statusConfig.bgColor} ${statusConfig.color}`}
+      >
+        {statusConfig.label}
+      </span>
+    );
+  };
+
+  const buildParentGroupStatusBadge = (group: InventoryGroupRow): React.ReactNode => {
+    const labels = group.children.map((c) => columnCellValueStatic(c, 'status'));
+    const unique = [...new Set(labels)];
+    if (unique.length === 1) {
+      return buildRowStatusBadge(group.children[0]);
+    }
+    const lines = group.children.map((c) => {
+      const bin = c.bin?.bin_code || '—';
+      return `${bin}: ${columnCellValueStatic(c, 'status')} (${c.quantity} ${c.unit})`;
+    });
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex cursor-default rounded-lg border border-black/10 bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-800">
+            Mixed ({group.children.length})
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-xs">
+          <ul className="list-inside list-disc text-xs">
+            {lines.map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        </TooltipContent>
+      </Tooltip>
+    );
   };
 
   if (loading) {
@@ -1135,9 +1439,9 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
               <p className="text-sm font-medium text-[#4a5565]">Total Items</p>
             </div>
             <p className="mt-3 text-[30px] font-bold leading-9 tracking-tight text-[#101828]">
-              {inventory.length}
+              {inventoryGroupsAll.length}
             </p>
-            <p className="mt-1 text-sm text-[#4a5565]">Items in storage</p>
+            <p className="mt-1 text-sm text-[#4a5565]">Distinct items in storage</p>
           </div>
 
           <div
@@ -1261,7 +1565,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
           <div>
             <h3 className="text-lg font-semibold leading-7 tracking-tight text-[#101828]">Inventory Items</h3>
             <p className="text-sm text-[#6a7282]">
-              Showing {filteredInventory.length} of {inventory.length} items
+              Showing {filteredInventoryGroups.length} of {inventoryGroupsAll.length} items
             </p>
           </div>
           <Button
@@ -1327,175 +1631,76 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredInventory.map((item) => {
-                  const statusConfig = getStatusConfig(item.status);
+                {filteredInventoryGroups.flatMap((group) => {
+                  const rep = group.representative;
+                  const summary = group.summary;
+                  const disp = buildInventoryDisplayFields(rep);
+                  const summaryUnit = summary?.unit || rep.unit || '';
+                  const totalInventoryQty = Number(summary?.totalQuantity ?? rep.quantity ?? 0);
+                  const reservedQty = Number(summary?.reservedQuantity ?? 0);
+                  const netQty = Number(summary?.availableQuantity ?? 0);
+                  const multi = group.children.length > 1;
+                  const expanded = expandedGroups.has(group.groupKey);
+                  const parentStatusBadge = multi ? buildParentGroupStatusBadge(group) : buildRowStatusBadge(rep);
 
-                  // Get master data based on item type
-                  const fabricMaster = (item as any).fabric_master;
-                  const itemMaster = (item as any).item_master;
-                  const product = (item as any).product;
-                  
-                  // Determine display values based on item type
-                  let displayImage: string | undefined;
-                  let displayName: string;
-                  let displayType: string;
-                  let displayFabric: string;
-                  let displayColor: string;
-                  let displayColorHex: string | null = null;
-                  let displayMaterialGsm: string;
-                  let displayBrand: string;
-                  let displaySize: string;
-
-                  const lineFabricColor = item.grn_item?.fabric_color;
-                  const lineItemColor = item.grn_item?.item_color;
-
-                  if (item.item_type === 'FABRIC' && fabricMaster) {
-                    displayImage = fabricMaster.image || null;
-                    displayName = resolveInventoryDisplayName(item);
-                    displayType = 'Fabric';
-                    displayFabric = resolveFabricDisplayName(item);
-                    displayColor = lineFabricColor || fabricMaster.color || '-';
-                    if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
-                    displayColorHex =
-                      displayColor !== '-'
-                        ? resolveWarehouseFabricSwatch(displayColor, fabricMaster.hex, lineFabricColor)
-                        : null;
-                    const material = fabricMaster.type || '';
-                    const gsm = fabricMaster.gsm || '';
-                    displayMaterialGsm = material && gsm ? `${material} ${gsm} GSM` : material || gsm || '-';
-                    displayBrand = '-';
-                    displaySize = '-';
-                  } else if (item.item_type === 'ITEM' && itemMaster) {
-                    displayImage = itemMaster.image || item.grn_item?.item_image_url;
-                    displayName = resolveInventoryDisplayName(item);
-                    displayType = itemMaster.item_type || '-';
-                    displayFabric = '-';
-                    displayColor = lineItemColor || itemMaster.color || '-';
-                    if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
-                    displayColorHex =
-                      displayColor !== '-' ? resolveSwatchHex(displayColor, null) : null;
-                    displayMaterialGsm = itemMaster.material || '-';
-                    displayBrand = itemMaster.brand || '-';
-                    displaySize = itemMaster.size || '-';
-                  } else if (item.item_type === 'PRODUCT' && product) {
-                    displayImage = product.main_image || product.image_url || product.image1 || item.grn_item?.item_image_url;
-                    displayName = resolveInventoryDisplayName(item);
-                    displayType = product.class || '-';
-                    displayFabric = '-';
-                    displayColor = '-';
-                    displayColorHex = null;
-                    displayMaterialGsm = '-';
-                    displayBrand = product.brand || '-';
-                    displaySize = product.size || '-';
-                  } else {
-                    // Fallback to GRN item data - but check if item_code looks like a URL
-                    // For fabric items, don't show mockup images - only show if fabric image exists in database
-                    if (item.item_type === 'FABRIC') {
-                      displayImage = null; // Don't show mockup images for fabric items
-                    } else {
-                    displayImage = item.grn_item?.item_image_url;
-                    }
-                    displayName = resolveInventoryDisplayName(item);
-                    displayType = item.item_type === 'FABRIC' ? 'Fabric' : item.item_type || '-';
-                    displayFabric = item.item_type === 'FABRIC' ? resolveFabricDisplayName(item) : '-';
-                    displayColor = lineFabricColor || lineItemColor || '-';
-                    if (!hasMeaningfulColorLabel(displayColor)) displayColor = '-';
-                    displayColorHex =
-                      displayColor !== '-' ? resolveSwatchHex(displayColor, null) : null;
-                    // For fabric items, try to combine material and GSM if available
-                    if (item.item_type === 'FABRIC') {
-                      // Try to get material from fabric_name or other sources if available
-                      const fabricGsm = item.grn_item?.fabric_gsm || '';
-                      displayMaterialGsm = fabricGsm ? `${fabricGsm} GSM` : '-';
-                    } else {
-                      displayMaterialGsm = item.grn_item?.fabric_gsm || '-';
-                    }
-                    displayBrand = '-';
-                    displaySize = '-';
-                  }
-                  
-                  const allocatedQuantity = Number((item as any).allocated_quantity || 0);
-                  const availableQuantity = Math.max(Number(item.quantity || 0) - allocatedQuantity, 0);
-                  const summary = inventorySummaryMap.get(summarizeInventoryKey(item));
-                  const totalInventoryQty = Number(summary?.totalQuantity ?? item.quantity ?? 0);
-                  const reservedQty = Number(summary?.reservedQuantity ?? allocatedQuantity);
-                  const netQty = Number(summary?.availableQuantity ?? availableQuantity);
-                  const summaryUnit = summary?.unit || item.unit;
-                  const qtyNum = Number(item.quantity || 0);
-                  const lowStock =
-                    item.status === 'IN_STORAGE' &&
-                    availableQuantity > 0 &&
-                    qtyNum > 0 &&
-                    availableQuantity / qtyNum < 0.25;
-
-                  let statusBadge: React.ReactNode;
-                  if (item.status === 'IN_STORAGE') {
-                    if (availableQuantity <= 0 && qtyNum > 0) {
-                      statusBadge = (
-                        <span className="inline-flex rounded-lg border border-black/10 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
-                          Allocated
-                        </span>
-                      );
-                    } else if (lowStock) {
-                      statusBadge = (
-                        <span className="inline-flex rounded-lg border border-black/10 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
-                          Low Stock
-                        </span>
-                      );
-                    } else {
-                      statusBadge = (
-                        <span className="inline-flex rounded-lg border border-black/10 bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">
-                          Available
-                        </span>
-                      );
-                    }
-                  } else {
-                    statusBadge = (
-                      <span
-                        className={`inline-flex rounded-lg border border-black/10 px-2 py-0.5 text-xs font-medium ${statusConfig.bgColor} ${statusConfig.color}`}
-                      >
-                        {statusConfig.label}
-                      </span>
-                    );
-                  }
-
-                  return (
-                    <TableRow key={`${item.id}-${item.bin_id}`}>
+                  const parentRow = (
+                    <TableRow key={group.groupKey}>
                       {visibleColumnIds.map((colId) => {
                         const st = colStyle(colId);
                         switch (colId) {
                           case 'name':
                             return (
                               <TableCell key={colId} className="max-w-0 align-middle" style={st}>
-                                <div className="flex min-w-0 items-center gap-3">
-                                  {displayImage ? (
-                                    <img
-                                      src={displayImage}
-                                      alt=""
-                                      className="h-10 w-10 shrink-0 rounded-md border border-[#e5e7eb] object-cover"
-                                      onError={(e) => {
-                                        const img = e.currentTarget as HTMLImageElement;
-                                        img.style.display = 'none';
-                                      }}
-                                    />
+                                <div className="flex min-w-0 items-center gap-2">
+                                  {multi ? (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7 shrink-0"
+                                      onClick={() => toggleGroupExpanded(group.groupKey)}
+                                      aria-expanded={expanded}
+                                      title={expanded ? 'Collapse stock lines' : 'Expand stock lines by bin'}
+                                    >
+                                      {expanded ? (
+                                        <ChevronDown className="h-4 w-4" />
+                                      ) : (
+                                        <ChevronRight className="h-4 w-4" />
+                                      )}
+                                    </Button>
                                   ) : (
-                                    <div
-                                      className="h-10 w-10 shrink-0 rounded-md border border-dashed border-[#e5e7eb] bg-[#f9fafb]"
-                                      aria-hidden
-                                    />
+                                    <span className="inline-block w-7 shrink-0" aria-hidden />
                                   )}
-                                  <span className="truncate text-sm font-medium text-[#101828]">
-                                    {displayName || '—'}
-                                  </span>
+                                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                                    {disp.displayImage ? (
+                                      <img
+                                        src={disp.displayImage}
+                                        alt=""
+                                        className="h-10 w-10 shrink-0 rounded-md border border-[#e5e7eb] object-cover"
+                                        onError={(e) => {
+                                          const img = e.currentTarget as HTMLImageElement;
+                                          img.style.display = 'none';
+                                        }}
+                                      />
+                                    ) : (
+                                      <div
+                                        className="h-10 w-10 shrink-0 rounded-md border border-dashed border-[#e5e7eb] bg-[#f9fafb]"
+                                        aria-hidden
+                                      />
+                                    )}
+                                    <span className="truncate text-sm font-medium text-[#101828]">
+                                      {disp.displayName || '—'}
+                                    </span>
+                                  </div>
                                 </div>
                               </TableCell>
                             );
                           case 'type':
                             return (
                               <TableCell key={colId} className="align-middle" style={st}>
-                                {displayType && displayType !== '-' ? (
+                                {disp.displayType && disp.displayType !== '-' ? (
                                   <span className="inline-flex rounded-lg border border-black/10 bg-white px-2 py-0.5 text-xs font-medium text-[#0a0a0a]">
-                                    {displayType}
+                                    {disp.displayType}
                                   </span>
                                 ) : (
                                   '—'
@@ -1505,22 +1710,22 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                           case 'fabric':
                             return (
                               <TableCell key={colId} className="align-middle" style={st}>
-                                {displayFabric !== '-' ? displayFabric : '-'}
+                                {disp.displayFabric !== '-' ? disp.displayFabric : '-'}
                               </TableCell>
                             );
                           case 'color':
                             return (
                               <TableCell key={colId} className="align-middle" style={st}>
                                 <div className="flex min-w-0 items-center gap-2">
-                                  {displayColorHex ? (
+                                  {disp.displayColorHex ? (
                                     <div
                                       className="h-6 w-6 shrink-0 rounded-full border-2 border-[#e5e7eb] shadow-sm"
-                                      style={{ backgroundColor: displayColorHex }}
-                                      title={displayColor}
+                                      style={{ backgroundColor: disp.displayColorHex }}
+                                      title={disp.displayColor}
                                     />
                                   ) : null}
                                   <span className="truncate text-sm text-[#4a5565]">
-                                    {displayColor !== '-' ? displayColor : '—'}
+                                    {disp.displayColor !== '-' ? disp.displayColor : '—'}
                                   </span>
                                 </div>
                               </TableCell>
@@ -1528,20 +1733,20 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                           case 'material_gsm':
                             return (
                               <TableCell key={colId} className="align-middle" style={st}>
-                                {displayMaterialGsm !== '-' ? displayMaterialGsm : '-'}
+                                {disp.displayMaterialGsm !== '-' ? disp.displayMaterialGsm : '-'}
                               </TableCell>
                             );
                           case 'brand':
                             return (
                               <TableCell key={colId} className="align-middle" style={st}>
-                                {displayBrand !== '-' ? displayBrand : '-'}
+                                {disp.displayBrand !== '-' ? disp.displayBrand : '-'}
                               </TableCell>
                             );
                           case 'size':
                             return (
                               <TableCell key={colId} className="align-middle" style={st}>
-                                {displaySize !== '-' ? (
-                                  <Badge variant="outline">{displaySize}</Badge>
+                                {disp.displaySize !== '-' ? (
+                                  <Badge variant="outline">{disp.displaySize}</Badge>
                                 ) : (
                                   '-'
                                 )}
@@ -1554,7 +1759,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                                   type="button"
                                   variant="link"
                                   className="h-auto p-0 text-sm font-semibold text-[#101828]"
-                                  onClick={() => handleOpenInventorySummaryDetails(item)}
+                                  onClick={() => handleOpenInventorySummaryDetails(rep)}
                                 >
                                   {totalInventoryQty} {summaryUnit}
                                 </Button>
@@ -1568,7 +1773,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                                     type="button"
                                     variant="link"
                                     className="h-auto p-0 text-sm font-semibold text-[#101828]"
-                                    onClick={() => handleOpenAllocationDetails(item)}
+                                    onClick={() => openGroupAllocationDetails(group)}
                                   >
                                     {reservedQty} {summaryUnit}
                                   </Button>
@@ -1588,7 +1793,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                           case 'status':
                             return (
                               <TableCell key={colId} className="align-middle" style={st}>
-                                {statusBadge}
+                                {parentStatusBadge}
                               </TableCell>
                             );
                           case 'actions':
@@ -1599,44 +1804,48 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                                     type="button"
                                     size="sm"
                                     variant="ghost"
-                                    onClick={() => onViewDetails?.(item)}
+                                    onClick={() => onViewDetails?.(rep)}
                                     className="flex items-center gap-1"
                                   >
                                     <Eye className="h-3 w-3" />
                                     View
                                   </Button>
-
                                   <Button
                                     type="button"
                                     size="sm"
                                     variant="ghost"
                                     onClick={() => {
-                                      setSelectedInventoryForLogs(item);
+                                      setSelectedInventoryForLogs({
+                                        ...rep,
+                                        consolidatedIds: group.consolidatedIds,
+                                      } as WarehouseInventoryRow);
                                       setLogsModalOpen(true);
                                     }}
                                     className="flex items-center gap-1"
-                                    title="View item addition logs"
+                                    title="View inventory logs for all stock lines"
                                   >
                                     <History className="h-3 w-3" />
-                                    Logs{' '}
-                                    {(item as any).consolidatedIds?.length > 1 &&
-                                      `(${(item as any).consolidatedIds.length})`}
+                                    Logs
+                                    {group.consolidatedIds.length > 1
+                                      ? ` (${group.consolidatedIds.length})`
+                                      : ''}
                                   </Button>
-
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    className="flex items-center gap-1 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                    onClick={() => {
-                                      setDeleteTarget(item);
-                                      setDeleteOpen(true);
-                                    }}
-                                    title="Remove this stock line"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                    Delete
-                                  </Button>
+                                  {!multi && (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="ghost"
+                                      className="flex items-center gap-1 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                      onClick={() => {
+                                        setDeleteTarget(rep);
+                                        setDeleteOpen(true);
+                                      }}
+                                      title="Remove this stock line"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                      Delete
+                                    </Button>
+                                  )}
                                 </div>
                               </TableCell>
                             );
@@ -1646,10 +1855,161 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                       })}
                     </TableRow>
                   );
+
+                  const childRows =
+                    multi && expanded
+                      ? group.children.map((child) => {
+                          const allocatedQuantity = Number((child as any).allocated_quantity || 0);
+                          const availableQuantity = Math.max(
+                            Number(child.quantity || 0) - allocatedQuantity,
+                            0
+                          );
+                          const qtyNum = Number(child.quantity || 0);
+                          const childUnit = child.unit || '';
+                          const childStatusBadge = buildRowStatusBadge(child);
+                          const binLabel = child.bin?.bin_code || '—';
+
+                          return (
+                            <TableRow
+                              key={`${group.groupKey}-${child.id}-${child.bin_id ?? ''}`}
+                              className="bg-[#f9fafb]/90"
+                            >
+                              {visibleColumnIds.map((colId) => {
+                                const st = colStyle(colId);
+                                switch (colId) {
+                                  case 'name':
+                                    return (
+                                      <TableCell key={colId} className="max-w-0 align-middle" style={st}>
+                                        <div className="flex min-w-0 items-center gap-2 pl-9">
+                                          <Package className="h-4 w-4 shrink-0 text-[#6a7282]" aria-hidden />
+                                          <span className="truncate text-xs text-[#4a5565]">
+                                            <span className="font-medium text-[#101828]">{binLabel}</span>
+                                            {' · '}
+                                            {qtyNum} {childUnit}
+                                            {child.status ? ` · ${child.status}` : ''}
+                                          </span>
+                                        </div>
+                                      </TableCell>
+                                    );
+                                  case 'type':
+                                  case 'fabric':
+                                  case 'color':
+                                  case 'material_gsm':
+                                  case 'brand':
+                                  case 'size':
+                                    return (
+                                      <TableCell key={colId} className="align-middle text-[#9ca3af]" style={st}>
+                                        —
+                                      </TableCell>
+                                    );
+                                  case 'total_inventory':
+                                    return (
+                                      <TableCell key={colId} className="align-middle" style={st}>
+                                        <Button
+                                          type="button"
+                                          variant="link"
+                                          className="h-auto p-0 text-sm font-semibold text-[#101828]"
+                                          onClick={() => handleOpenInventorySummaryDetails(child)}
+                                        >
+                                          {qtyNum} {childUnit}
+                                        </Button>
+                                      </TableCell>
+                                    );
+                                  case 'reserved':
+                                    return (
+                                      <TableCell key={colId} className="align-middle" style={st}>
+                                        {allocatedQuantity > 0 ? (
+                                          <Button
+                                            type="button"
+                                            variant="link"
+                                            className="h-auto p-0 text-sm font-semibold text-[#101828]"
+                                            onClick={() => handleOpenAllocationDetails(child)}
+                                          >
+                                            {allocatedQuantity} {childUnit}
+                                          </Button>
+                                        ) : (
+                                          <span className="text-sm text-[#6a7282]">
+                                            0 {childUnit}
+                                          </span>
+                                        )}
+                                      </TableCell>
+                                    );
+                                  case 'available':
+                                    return (
+                                      <TableCell key={colId} className="align-middle" style={st}>
+                                        <span className="text-sm text-[#0a0a0a]">
+                                          {availableQuantity} {childUnit}
+                                        </span>
+                                      </TableCell>
+                                    );
+                                  case 'status':
+                                    return (
+                                      <TableCell key={colId} className="align-middle" style={st}>
+                                        {childStatusBadge}
+                                      </TableCell>
+                                    );
+                                  case 'actions':
+                                    return (
+                                      <TableCell key={colId} className="text-right align-middle" style={st}>
+                                        <div className="flex flex-wrap justify-end gap-1">
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => onViewDetails?.(child)}
+                                            className="flex items-center gap-1"
+                                          >
+                                            <Eye className="h-3 w-3" />
+                                            View
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => {
+                                              setSelectedInventoryForLogs(child);
+                                              setLogsModalOpen(true);
+                                            }}
+                                            className="flex items-center gap-1"
+                                            title="View logs for this stock line"
+                                          >
+                                            <History className="h-3 w-3" />
+                                            Logs
+                                            {(child as WarehouseInventoryRow).consolidatedIds &&
+                                              (child as WarehouseInventoryRow).consolidatedIds!.length > 1 &&
+                                              ` (${(child as WarehouseInventoryRow).consolidatedIds!.length})`}
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="ghost"
+                                            className="flex items-center gap-1 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                            onClick={() => {
+                                              setDeleteTarget(child);
+                                              setDeleteOpen(true);
+                                            }}
+                                            title="Remove this stock line"
+                                          >
+                                            <Trash2 className="h-3 w-3" />
+                                            Delete
+                                          </Button>
+                                        </div>
+                                      </TableCell>
+                                    );
+                                  default:
+                                    return null;
+                                }
+                              })}
+                            </TableRow>
+                          );
+                        })
+                      : [];
+
+                  return [parentRow, ...childRows];
                 })}
               </TableBody>
             </Table>
-            {filteredInventory.length === 0 && (
+            {filteredInventoryGroups.length === 0 && (
               <div className="border-t border-[#e5e7eb] px-4 py-12 text-center">
                 <Archive className="mx-auto mb-4 h-12 w-12 text-[#6a7282]" />
                 <p className="text-sm text-[#6a7282]">No items found in storage zone</p>

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { ErpLayout } from '@/components/ErpLayout';
 import { BackButton } from '@/components/common/BackButton';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { assignOrderItemFlows } from '@/api/fulfillment/assignFlows';
@@ -16,13 +17,20 @@ import type { ExecutionFlow } from '@/domain/fulfillment/types';
 import { EXECUTION_FLOWS, executionFlowLabel, fulfillmentStatusLabel } from '@/domain/fulfillment/types';
 import { AlertTriangle, ExternalLink, Loader2 } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { formatLocaleDateFromApi } from '@/lib/utils';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 type QueueRow = {
   order_id: string;
   order_number: string;
   order_date: string | null;
+  expected_delivery_date?: string | null;
   order_type: string | null;
   order_status: string | null;
+  sales_manager?: string | null;
+  final_amount?: number | null;
+  balance_amount?: number | null;
   customer_id: string | null;
   customer_name: string | null;
   line_count: number | null;
@@ -39,6 +47,38 @@ type OrderLine = {
 };
 
 type WiRow = { id: string; quantity: number; item_name: string | null };
+type SalesManager = { id: string; full_name: string | null; avatar_url?: string | null };
+
+function isLineAwaitingAssignment(line: OrderLine): boolean {
+  return line.fulfillment_status === 'pending_flow' || !line.execution_flow;
+}
+const ORDER_NUMBER_PATTERN = /^(TUC|RMO)\/\d{2}-\d{2}\/\d+$/;
+const FLOW_CARD_META: Record<
+  ExecutionFlow,
+  { subtitle: string; blobClass: string; fillClass: string; fillSelectedClass: string; badgeClass: string }
+> = {
+  stitching: {
+    subtitle: 'Handled by in-house stitching team.',
+    blobClass: 'bg-violet-500/80',
+    fillClass: 'bg-blue-50 border-blue-200',
+    fillSelectedClass: 'bg-blue-100 border-blue-300',
+    badgeClass: 'bg-blue-600/15 text-blue-700',
+  },
+  outsource: {
+    subtitle: 'Sent to an external vendor via PO.',
+    blobClass: 'bg-amber-500/80',
+    fillClass: 'bg-amber-50 border-amber-200',
+    fillSelectedClass: 'bg-amber-100 border-amber-300',
+    badgeClass: 'bg-amber-600/15 text-amber-700',
+  },
+  inventory: {
+    subtitle: 'Fulfilled from available warehouse stock.',
+    blobClass: 'bg-emerald-500/80',
+    fillClass: 'bg-emerald-50 border-emerald-200',
+    fillSelectedClass: 'bg-emerald-100 border-emerald-300',
+    badgeClass: 'bg-emerald-600/15 text-emerald-700',
+  },
+};
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -83,7 +123,7 @@ async function fetchPendingFlowQueueFallback(): Promise<QueueRow[]> {
   const { data: pendingLines, error: plErr } = await supabase
     .from('order_items')
     .select('order_id')
-    .eq('fulfillment_status', 'pending_flow');
+    .or('fulfillment_status.eq.pending_flow,execution_flow.is.null');
   if (plErr) {
     console.warn('Order flow queue fallback: order_items failed', plErr);
     return [];
@@ -94,9 +134,11 @@ async function fetchPendingFlowQueueFallback(): Promise<QueueRow[]> {
 
   const { data: orders, error: oErr } = await supabase
     .from('orders')
-    .select('id, order_number, order_date, order_type, status, customer_id, is_deleted, customer:customers(company_name)')
+    .select(
+      'id, order_number, order_date, expected_delivery_date, order_type, status, sales_manager, final_amount, balance_amount, customer_id, is_deleted, customer:customers(company_name)'
+    )
     .in('id', orderIds)
-    .neq('status', 'cancelled');
+    .not('status', 'in', '(cancelled,completed,ready_for_dispatch,dispatched)');
   if (oErr || !orders?.length) {
     if (oErr) console.warn('Order flow queue fallback: orders failed', oErr);
     return [];
@@ -123,11 +165,22 @@ async function fetchPendingFlowQueueFallback(): Promise<QueueRow[]> {
     }
   }
 
-  const distinctNumbers = [...new Set(openOrders.map((o) => o.order_number).filter(Boolean))] as string[];
+  const distinctNumbers = [
+    ...new Set(
+      openOrders
+        .map((o) => o.order_number)
+        .filter((n): n is string => Boolean(n && ORDER_NUMBER_PATTERN.test(String(n))))
+    ),
+  ];
   const byNumber = new Set<string>();
   for (const batch of chunkArray(distinctNumbers, 80)) {
     if (!batch.length) continue;
-    const { data: rec, error } = await supabase.from('receipts').select('reference_number').in('reference_number', batch);
+    const { data: rec, error } = await supabase
+      .from('receipts')
+      .select('reference_number,reference_id,reference_type')
+      .is('reference_id', null)
+      .eq('reference_type', 'order')
+      .in('reference_number', batch);
     if (error) continue;
     for (const r of rec || []) {
       const n = (r as { reference_number?: string }).reference_number;
@@ -140,31 +193,61 @@ async function fetchPendingFlowQueueFallback(): Promise<QueueRow[]> {
   );
   if (!withReceipt.length) return [];
 
-  const finalIds = withReceipt.map((o) => String(o.id));
+  const withReceiptIds = withReceipt.map((o) => String(o.id));
+  const { data: bomRows, error: bomErr } = await supabase
+    .from('bom_records')
+    .select('order_id')
+    .in('order_id', withReceiptIds);
+  if (bomErr) {
+    console.warn('Order flow queue fallback: bom_records failed', bomErr);
+  }
+  const ordersWithBom = new Set((bomRows || []).map((r: any) => String(r.order_id)).filter(Boolean));
+  const eligibleOrders = withReceipt.filter((o) => !ordersWithBom.has(String(o.id)));
+  if (!eligibleOrders.length) return [];
+
+  const finalIds = eligibleOrders.map((o) => String(o.id));
   const { data: countRows, error: cErr } = await supabase
     .from('order_items')
-    .select('order_id, fulfillment_status')
+    .select('order_id, fulfillment_status, execution_flow')
     .in('order_id', finalIds);
   if (cErr) console.warn('Order flow queue fallback: counts failed', cErr);
 
   const lineCount = new Map<string, number>();
   const pendingCount = new Map<string, number>();
+  const startedCount = new Map<string, number>();
   for (const row of countRows || []) {
     const oid = String((row as { order_id: string }).order_id);
     lineCount.set(oid, (lineCount.get(oid) || 0) + 1);
-    if ((row as { fulfillment_status?: string }).fulfillment_status === 'pending_flow') {
+    const rr = row as { fulfillment_status?: string; execution_flow?: string | null };
+    if (rr.fulfillment_status === 'pending_flow' || !rr.execution_flow) {
       pendingCount.set(oid, (pendingCount.get(oid) || 0) + 1);
+    }
+    if (
+      rr.execution_flow ||
+      [
+        'awaiting_procurement',
+        'awaiting_production',
+        'awaiting_dispatch_prep',
+        'ready_for_dispatch',
+        'dispatched',
+      ].includes(String(rr.fulfillment_status || ''))
+    ) {
+      startedCount.set(oid, (startedCount.get(oid) || 0) + 1);
     }
   }
 
-  const rows: QueueRow[] = withReceipt
-    .filter((o) => (pendingCount.get(String(o.id)) || 0) > 0)
+  const rows: QueueRow[] = eligibleOrders
+    .filter((o) => (pendingCount.get(String(o.id)) || 0) > 0 && (startedCount.get(String(o.id)) || 0) === 0)
     .map((o: any) => ({
       order_id: o.id,
       order_number: o.order_number,
       order_date: o.order_date ?? null,
+      expected_delivery_date: o.expected_delivery_date ?? null,
       order_type: o.order_type ?? null,
       order_status: o.status ?? null,
+      sales_manager: o.sales_manager ?? null,
+      final_amount: o.final_amount ?? null,
+      balance_amount: o.balance_amount ?? null,
       customer_id: o.customer_id ?? null,
       customer_name: o.customer?.company_name ?? null,
       line_count: lineCount.get(String(o.id)) ?? 0,
@@ -181,11 +264,13 @@ async function fetchPendingFlowQueueFallback(): Promise<QueueRow[]> {
 
 const OrderFlowAssignmentPage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const orderIdParam = searchParams.get('orderId');
 
   const [loadingQueue, setLoadingQueue] = useState(true);
   const [queue, setQueue] = useState<QueueRow[]>([]);
+  const [salesManagers, setSalesManagers] = useState<Record<string, SalesManager>>({});
   const [requireFlag, setRequireFlag] = useState(false);
   const [flagLoading, setFlagLoading] = useState(true);
 
@@ -193,11 +278,24 @@ const OrderFlowAssignmentPage: React.FC = () => {
   const [orderLines, setOrderLines] = useState<OrderLine[]>([]);
   const [loadingLines, setLoadingLines] = useState(false);
   const [choices, setChoices] = useState<Record<string, ExecutionFlow>>({});
+  const [bulkAssignEnabled, setBulkAssignEnabled] = useState(false);
+  const [bulkFlowChoice, setBulkFlowChoice] = useState<ExecutionFlow>('stitching');
   const [invPick, setInvPick] = useState<Record<string, { wiId: string; qty: string }[]>>({});
   const [wiOptions, setWiOptions] = useState<Record<string, WiRow[]>>({});
   const [saving, setSaving] = useState(false);
   const [settingsSchemaError, setSettingsSchemaError] = useState<string | null>(null);
   const [queueLoadNotice, setQueueLoadNotice] = useState<string | null>(null);
+
+  const openOrderDetail = useCallback(
+    (orderId: string) => {
+      const qs = location.search || '';
+      const returnTo = `/procurement/order-flow-assignment${qs}`;
+      navigate(`/orders/${orderId}?from=flow-assignment`, {
+        state: { from: 'flow-assignment', returnTo },
+      });
+    },
+    [location.search, navigate]
+  );
 
   const isMissingRequireFlowColumn = (e: unknown) => {
     const err = e as { code?: string; message?: string } | null;
@@ -266,22 +364,60 @@ const OrderFlowAssignmentPage: React.FC = () => {
         .select('*')
         .order('order_date', { ascending: false });
       if (!error) {
-        setQueue((data as QueueRow[]) || []);
+        const rows = (data as QueueRow[]) || [];
+        setQueue(rows);
+        const managerIds = [...new Set(rows.map((r) => r.sales_manager).filter(Boolean))] as string[];
+        if (!managerIds.length) {
+          setSalesManagers({});
+          return;
+        }
+        const { data: empRows } = await supabase
+          .from('employees')
+          .select('id, full_name, avatar_url')
+          .in('id', managerIds);
+        const map: Record<string, SalesManager> = {};
+        for (const emp of empRows || []) {
+          map[String((emp as any).id)] = {
+            id: String((emp as any).id),
+            full_name: (emp as any).full_name ?? null,
+            avatar_url: (emp as any).avatar_url ?? null,
+          };
+        }
+        setSalesManagers(map);
         return;
       }
 
-      const rows = await fetchPendingFlowQueueFallback();
-      if (rows.length > 0) {
-        console.warn('v_orders_pending_flow_assignment query failed; using client fallback', error);
-        setQueue(rows);
-        setQueueLoadNotice(
-          'The database view v_orders_pending_flow_assignment is missing or not in the API schema. Showing the same queue via a temporary client query. Apply migration 20260507160000_ensure_v_orders_pending_flow_assignment.sql (or the full fulfillment migrations), then reload the PostgREST schema in the Supabase dashboard.'
-        );
-        return;
-      }
       if (isPendingFlowViewMissing(error)) {
+        const rows = await fetchPendingFlowQueueFallback();
+        if (rows.length > 0) {
+          console.warn('v_orders_pending_flow_assignment query failed; using client fallback', error);
+          setQueue(rows);
+          const managerIds = [...new Set(rows.map((r) => r.sales_manager).filter(Boolean))] as string[];
+          if (managerIds.length) {
+            const { data: empRows } = await supabase
+              .from('employees')
+              .select('id, full_name, avatar_url')
+              .in('id', managerIds);
+            const map: Record<string, SalesManager> = {};
+            for (const emp of empRows || []) {
+              map[String((emp as any).id)] = {
+                id: String((emp as any).id),
+                full_name: (emp as any).full_name ?? null,
+                avatar_url: (emp as any).avatar_url ?? null,
+              };
+            }
+            setSalesManagers(map);
+          } else {
+            setSalesManagers({});
+          }
+          setQueueLoadNotice(
+            'The database view v_orders_pending_flow_assignment is missing or not in the API schema. Showing the same queue via a temporary client query. Apply migration 20260507160000_ensure_v_orders_pending_flow_assignment.sql (or the full fulfillment migrations), then reload the PostgREST schema in the Supabase dashboard.'
+          );
+          return;
+        }
         console.warn('v_orders_pending_flow_assignment unavailable (empty queue)', error);
         setQueue([]);
+        setSalesManagers({});
         setQueueLoadNotice(
           'The database view v_orders_pending_flow_assignment is missing or not in the API schema. Apply migration 20260507160000_ensure_v_orders_pending_flow_assignment.sql (or the full fulfillment migrations), then reload the PostgREST schema in the Supabase dashboard.'
         );
@@ -291,6 +427,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
     } catch (e) {
       console.error(e);
       setQueue([]);
+      setSalesManagers({});
     } finally {
       setLoadingQueue(false);
     }
@@ -329,6 +466,11 @@ const OrderFlowAssignmentPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    setBulkAssignEnabled(false);
+    setBulkFlowChoice('stitching');
+  }, [selectedOrderId]);
+
+  useEffect(() => {
     if (selectedOrderId) void loadLines(selectedOrderId);
     else {
       setOrderLines([]);
@@ -357,11 +499,21 @@ const OrderFlowAssignmentPage: React.FC = () => {
     setWiOptions((prev) => ({ ...prev, [line.id]: (data as WiRow[]) || [] }));
   };
 
-  const pendingLines = useMemo(() => orderLines.filter((l) => l.fulfillment_status === 'pending_flow'), [orderLines]);
+  const pendingLines = useMemo(() => orderLines.filter(isLineAwaitingAssignment), [orderLines]);
+  const applyBulkFlowToAllLines = useCallback(
+    (flow: ExecutionFlow) => {
+      setChoices((prev) => {
+        const next = { ...prev };
+        for (const line of orderLines) next[line.id] = flow;
+        return next;
+      });
+    },
+    [orderLines]
+  );
 
   const submitAssignments = async () => {
     if (!selectedOrderId) return;
-    const linesToSave = orderLines.filter((l) => l.fulfillment_status === 'pending_flow');
+    const linesToSave = orderLines.filter(isLineAwaitingAssignment);
     if (linesToSave.length === 0) {
       toast.info('No lines are pending flow assignment on this order.');
       return;
@@ -369,7 +521,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
     setSaving(true);
     try {
       const assignments = linesToSave.map((l) => {
-        const flow = choices[l.id] || 'stitching';
+        const flow = bulkAssignEnabled ? bulkFlowChoice : choices[l.id] || 'stitching';
         const base: any = { order_item_id: l.id, execution_flow: flow };
         if (flow === 'inventory') {
           const rows = invPick[l.id] || [];
@@ -423,7 +575,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
 
         <Card>
           <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle className="text-base">Require flow assignment (custom orders)</CardTitle>
+            <CardTitle className="text-base">Require flow assignment (orders)</CardTitle>
             {flagLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
@@ -435,7 +587,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
                   disabled={!!settingsSchemaError}
                 />
                 <Label htmlFor="req-flow" className="text-sm font-normal cursor-pointer">
-                  When enabled, first receipt sets lines to pending assignment
+                  When enabled, receipt sets order lines to pending assignment
                 </Label>
               </div>
             )}
@@ -454,57 +606,145 @@ const OrderFlowAssignmentPage: React.FC = () => {
             ) : queue.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4">
                 {requireFlag
-                  ? 'No orders are waiting for flow assignment (or no receipts yet).'
+                  ? 'No orders are waiting for flow assignment (requires a linked receipt).'
                   : 'Turn on “Require flow assignment” above to gate orders after receipt.'}
               </p>
             ) : (
-              <Table>
+              <div className="overflow-x-auto">
+              <Table className="min-w-[720px]">
                 <TableHeader>
-                  <TableRow>
-                    <TableHead>Order</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Pending lines</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="align-middle min-w-[6.5rem]">
+                      <span className="text-xs font-semibold">Order #</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[6rem]">
+                      <span className="text-xs font-semibold">Customer</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[7rem]">
+                      <span className="text-xs font-semibold">Sales Mgr.</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[6.5rem]">
+                      <span className="text-xs font-semibold">Order date</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[6.5rem]">
+                      <span className="text-xs font-semibold">Exp. delivery</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[14rem] w-56 text-left">
+                      <span className="text-xs font-semibold">Status</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[6rem]">
+                      <span className="text-xs font-semibold">Pending</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[5.5rem]">
+                      <span className="text-xs font-semibold">Amount</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[5.5rem]">
+                      <span className="text-xs font-semibold">Balance</span>
+                    </TableHead>
+                    <TableHead className="align-middle w-[1%] whitespace-nowrap">
+                      <span className="text-xs font-semibold">Actions</span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {queue.map((r) => (
-                    <TableRow key={r.order_id}>
-                      <TableCell className="font-medium">{r.order_number}</TableCell>
-                      <TableCell>{r.customer_name || '—'}</TableCell>
-                      <TableCell>{r.order_type || '—'}</TableCell>
+                    <TableRow
+                      key={r.order_id}
+                      className={selectedOrderId === r.order_id ? 'bg-muted/40' : ''}
+                    >
                       <TableCell>
-                        {r.pending_line_count ?? 0} / {r.line_count ?? 0}
+                        <button
+                          type="button"
+                          className="font-medium hover:underline"
+                          onClick={() => openOrderDetail(r.order_id)}
+                        >
+                          {r.order_number}
+                        </button>
                       </TableCell>
-                      <TableCell className="text-right">
-                        <Button size="sm" variant="outline" onClick={() => setSelectedOrderId(r.order_id)}>
-                          Assign flows
-                        </Button>
+                      <TableCell>{r.customer_name || '—'}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Avatar className="w-10 h-10">
+                            <AvatarImage
+                              src={r.sales_manager ? salesManagers[r.sales_manager]?.avatar_url ?? undefined : undefined}
+                              alt={r.sales_manager ? salesManagers[r.sales_manager]?.full_name ?? 'Sales manager' : 'Sales manager'}
+                            />
+                            <AvatarFallback className="text-xs">
+                              {(r.sales_manager ? salesManagers[r.sales_manager]?.full_name : '')
+                                ?.split(' ')
+                                .map((n) => n[0])
+                                .join('')
+                                .toUpperCase() || 'SM'}
+                            </AvatarFallback>
+                          </Avatar>
+                          <span className="text-sm">{(r.sales_manager && salesManagers[r.sales_manager]?.full_name) || 'N/A'}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {r.order_date
+                          ? formatLocaleDateFromApi(r.order_date, 'en-GB', {
+                              day: '2-digit',
+                              month: 'short',
+                              year: '2-digit',
+                            })
+                          : 'N/A'}
+                      </TableCell>
+                      <TableCell>
+                        {r.expected_delivery_date
+                          ? formatLocaleDateFromApi(r.expected_delivery_date, 'en-GB', {
+                              day: '2-digit',
+                              month: 'short',
+                              year: '2-digit',
+                            })
+                          : 'N/A'}
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">{r.order_status || 'pending'}</div>
+                      </TableCell>
+                      <TableCell>
+                        <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+                          {r.pending_line_count ?? 0}/{r.line_count ?? 0}
+                        </span>
+                      </TableCell>
+                      <TableCell>₹{Number(r.final_amount ?? 0).toFixed(2)}</TableCell>
+                      <TableCell>₹{Number(r.balance_amount ?? 0).toFixed(2)}</TableCell>
+                      <TableCell>
+                        <div className="flex space-x-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedOrderId(r.order_id);
+                            }}
+                          >
+                            Assign flows
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardContent>
         </Card>
 
-        {selectedOrderId && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base">Lines for order</CardTitle>
-              <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={() => navigate(`/orders/${selectedOrderId}`)}>
-                  <ExternalLink className="h-4 w-4 mr-1" />
-                  Order detail
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setSelectedOrderId(null)}>
-                  Close
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
+        <Dialog open={!!selectedOrderId} onOpenChange={(open) => !open && setSelectedOrderId(null)}>
+          <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Assign execution flows</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-6">
+              {selectedOrderId && (
+                <div className="flex gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => openOrderDetail(selectedOrderId)}>
+                    <ExternalLink className="h-4 w-4 mr-1" />
+                    Order detail
+                  </Button>
+                </div>
+              )}
               {loadingLines ? (
                 <Loader2 className="h-6 w-6 animate-spin" />
               ) : (
@@ -512,7 +752,78 @@ const OrderFlowAssignmentPage: React.FC = () => {
                   {pendingLines.length === 0 && (
                     <p className="text-sm text-muted-foreground">All lines on this order already have a flow assigned.</p>
                   )}
-                  {orderLines.map((line) => (
+                  {pendingLines.length > 0 && (
+                    <div className="rounded-lg border border-border p-4 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id="bulk-flow-assignment"
+                          checked={bulkAssignEnabled}
+                          onCheckedChange={(checked) => {
+                            const enabled = checked === true;
+                            setBulkAssignEnabled(enabled);
+                            if (enabled) {
+                              applyBulkFlowToAllLines(bulkFlowChoice);
+                            }
+                          }}
+                        />
+                        <Label htmlFor="bulk-flow-assignment" className="text-sm font-medium cursor-pointer">
+                          Assign a single flow for all products
+                        </Label>
+                      </div>
+                      {bulkAssignEnabled && (
+                        <RadioGroup
+                          value={bulkFlowChoice}
+                          onValueChange={(v) => {
+                            const flow = v as ExecutionFlow;
+                            setBulkFlowChoice(flow);
+                            applyBulkFlowToAllLines(flow);
+                          }}
+                          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
+                        >
+                          {EXECUTION_FLOWS.map((f) => (
+                            <Label
+                              key={`bulk-${f}`}
+                              htmlFor={`bulk-${f}`}
+                              className={`group relative block cursor-pointer overflow-hidden rounded-2xl border p-1 transition-all ${
+                                bulkFlowChoice === f ? 'border-primary ring-2 ring-primary/30' : 'border-border hover:border-primary/40'
+                              }`}
+                            >
+                              <RadioGroupItem value={f} id={`bulk-${f}`} className="sr-only" />
+                              <div className="pointer-events-none relative h-full min-h-[170px] rounded-[14px] bg-background">
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                  <div
+                                    className={`h-24 w-24 rounded-full blur-xl opacity-25 ${FLOW_CARD_META[f].blobClass}`}
+                                    aria-hidden="true"
+                                  />
+                                </div>
+                                <div
+                                  className={`absolute inset-[6px] z-10 rounded-xl border p-3 ${
+                                    bulkFlowChoice === f ? FLOW_CARD_META[f].fillSelectedClass : FLOW_CARD_META[f].fillClass
+                                  }`}
+                                >
+                                  <div className="flex h-full flex-col justify-between gap-3">
+                                    <div>
+                                      <p className="text-sm font-semibold text-foreground">{executionFlowLabel(f)}</p>
+                                      <p className="mt-1 text-xs text-muted-foreground">{FLOW_CARD_META[f].subtitle}</p>
+                                    </div>
+                                    <div className="flex items-center justify-between text-xs">
+                                      <span className="text-muted-foreground">Tap to select</span>
+                                      {bulkFlowChoice === f && (
+                                        <span className={`rounded-full px-2 py-0.5 font-medium ${FLOW_CARD_META[f].badgeClass}`}>
+                                          Selected
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </Label>
+                          ))}
+                        </RadioGroup>
+                      )}
+                    </div>
+                  )}
+                  {!bulkAssignEnabled && orderLines.map((line) => (
                     <div key={line.id} className="rounded-lg border border-border p-4 space-y-3">
                       <div className="flex flex-wrap justify-between gap-2">
                         <div>
@@ -535,15 +846,48 @@ const OrderFlowAssignmentPage: React.FC = () => {
                             void loadWiForLine(line);
                           }
                         }}
-                        className="flex flex-wrap gap-4"
+                        className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
                       >
                         {EXECUTION_FLOWS.map((f) => (
-                          <div key={f} className="flex items-center space-x-2">
-                            <RadioGroupItem value={f} id={`${line.id}-${f}`} />
-                            <Label htmlFor={`${line.id}-${f}`} className="font-normal cursor-pointer">
-                              {executionFlowLabel(f)}
-                            </Label>
-                          </div>
+                          <Label
+                            key={f}
+                            htmlFor={`${line.id}-${f}`}
+                            className={`group relative block cursor-pointer overflow-hidden rounded-2xl border p-1 transition-all ${
+                              (choices[line.id] || 'stitching') === f
+                                ? 'border-primary ring-2 ring-primary/30'
+                                : 'border-border hover:border-primary/40'
+                            }`}
+                          >
+                            <RadioGroupItem value={f} id={`${line.id}-${f}`} className="sr-only" />
+                            <div className="pointer-events-none relative h-full min-h-[170px] rounded-[14px] bg-background">
+                              <div className="absolute inset-0 flex items-center justify-center">
+                                <div
+                                  className={`h-24 w-24 rounded-full blur-xl opacity-25 ${FLOW_CARD_META[f].blobClass}`}
+                                  aria-hidden="true"
+                                />
+                              </div>
+                              <div
+                                className={`absolute inset-[6px] z-10 rounded-xl border p-3 ${
+                                  (choices[line.id] || 'stitching') === f ? FLOW_CARD_META[f].fillSelectedClass : FLOW_CARD_META[f].fillClass
+                                }`}
+                              >
+                                <div className="flex h-full flex-col justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-foreground">{executionFlowLabel(f)}</p>
+                                    <p className="mt-1 text-xs text-muted-foreground">{FLOW_CARD_META[f].subtitle}</p>
+                                  </div>
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-muted-foreground">Tap to select</span>
+                                    {(choices[line.id] || 'stitching') === f && (
+                                      <span className={`rounded-full px-2 py-0.5 font-medium ${FLOW_CARD_META[f].badgeClass}`}>
+                                        Selected
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </Label>
                         ))}
                       </RadioGroup>
                       {choices[line.id] === 'inventory' && (
@@ -621,9 +965,9 @@ const OrderFlowAssignmentPage: React.FC = () => {
                   </Button>
                 </>
               )}
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </ErpLayout>
   );

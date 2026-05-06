@@ -42,8 +42,17 @@ interface AvailableFabric {
   hex?: string | null;
   gsm: number;
   image?: string;
+  /** Gross warehouse qty for this fabric (IN_STORAGE + STORAGE bins only). */
+  gross_quantity: number;
+  /** Allocations on active other orders only (see fabricAvailability). */
+  allocated_quantity: number;
   available_quantity: number;
   unit: string;
+}
+
+function fabricAvailabilitySummaryLine(f: AvailableFabric): string {
+  const u = f.unit;
+  return `Total: ${f.gross_quantity.toFixed(2)} ${u} · Reserved: ${f.allocated_quantity.toFixed(2)} ${u} · Available: ${f.available_quantity.toFixed(2)} ${u}`;
 }
 
 interface FabricUsage {
@@ -155,6 +164,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
 
         const fabrics: AvailableFabric[] = fabricData.map((fabric: any) => {
           const availability = availabilityByFabricId[String(fabric.id)];
+          const grossQty = Number(availability?.gross_quantity || 0);
+          const allocatedQty = Number(availability?.allocated_quantity || 0);
           const inventoryQty = Number(availability?.available_quantity || 0);
           const inventoryUnit = normalizeUnit(availability?.unit || fabric.uom || 'kg');
 
@@ -162,8 +173,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
             console.log('[CuttingAvailabilityDebug]', {
               orderId: jobId,
               fabricId: fabric.id,
-              gross: availability?.gross_quantity || 0,
-              allocated: availability?.allocated_quantity || 0,
+              gross: grossQty,
+              allocated: allocatedQty,
               net: inventoryQty,
               rowIds: availability?.contributing_row_ids || [],
             });
@@ -176,6 +187,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
             hex: fabric.hex ?? null,
             gsm: fabric.gsm || 0,
             image: fabric.image,
+            gross_quantity: grossQty,
+            allocated_quantity: allocatedQty,
             available_quantity: inventoryQty,
             unit: inventoryUnit === 'kg' ? 'Kgs' : inventoryUnit,
           };
@@ -637,7 +650,7 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                                 <div>
                                   <div className="font-medium">{fabric.fabric_name}</div>
                                   <div className="text-xs text-gray-500">
-                                    {fabric.color} • {fabric.gsm} GSM • Available: {fabric.available_quantity.toFixed(2)} {fabric.unit}
+                                    {fabric.color} • {fabric.gsm} GSM • {fabricAvailabilitySummaryLine(fabric)}
                                   </div>
                                 </div>
                               </div>
@@ -672,10 +685,10 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                       </div>
                       {fabricUsage.fabric_id && (
                         <div className="text-xs text-gray-600">
-                          Available: {(() => {
-                            const fabric = availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id);
-                            return fabric ? fabric.available_quantity.toFixed(2) : '0';
-                          })()} {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'kgs'}
+                          {(() => {
+                            const fabric = availableFabrics.find((f) => f.fabric_id === fabricUsage.fabric_id);
+                            return fabric ? fabricAvailabilitySummaryLine(fabric) : 'Total: 0 · Reserved: 0 · Available: 0';
+                          })()}
                         </div>
                       )}
                     </div>

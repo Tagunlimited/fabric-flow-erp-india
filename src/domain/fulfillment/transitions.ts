@@ -9,5 +9,6 @@ export function isExecutionFlow(v: string): v is ExecutionFlow {
 export function bomAllowedForLine(flow: ExecutionFlow | null, fulfillment: FulfillmentStatus): boolean {
   if (fulfillment === 'pending_flow') return false;
   if (flow === 'outsource' || flow === 'inventory') return false;
-  return flow === 'stitching' || flow === null;
+  // BOM should be available only after explicit stitching assignment.
+  return flow === 'stitching';
 }

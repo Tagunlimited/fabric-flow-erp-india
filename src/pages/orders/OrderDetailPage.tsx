@@ -1335,9 +1335,14 @@ export default function OrderDetailPage() {
   const handleBackNavigation = () => {
     const from = searchParams.get('from');
     const fromState = (location.state as any)?.from;
+    const returnTo = (location.state as any)?.returnTo as string | undefined;
     // Check if this is a readymade order
     if (order?.order_type === 'readymade') {
       navigate('/orders/readymade', { state: { refreshOrders: true } });
+      return;
+    }
+    if (fromState === 'flow-assignment' || from === 'flow-assignment') {
+      navigate(returnTo || '/procurement/order-flow-assignment', { state: { refreshOrders: true } });
       return;
     }
     if (fromState === 'design') {
@@ -1443,7 +1448,11 @@ export default function OrderDetailPage() {
         navigate('/orders/readymade', { state: { refreshOrders: true } });
       } else {
         const from = searchParams.get('from');
-        if (from === 'production') {
+        const fromState = (location.state as any)?.from;
+        const returnTo = (location.state as any)?.returnTo as string | undefined;
+        if (fromState === 'flow-assignment' || from === 'flow-assignment') {
+          navigate(returnTo || '/procurement/order-flow-assignment', { state: { refreshOrders: true } });
+        } else if (from === 'production') {
           navigate('/production', { state: { refreshOrders: true } });
         } else {
           navigate('/orders', { state: { refreshOrders: true } });

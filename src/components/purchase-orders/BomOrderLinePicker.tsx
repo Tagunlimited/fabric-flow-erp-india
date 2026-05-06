@@ -13,6 +13,7 @@ import {
   orderLineFabricColorGsmSuffix,
   orderLineBomProductColumnLabel,
   orderLineProductDropdownOnly,
+  orderLineEligibleForBom,
 } from './bomOrderLineUtils';
 import './BomLinePicker.css';
 
@@ -90,7 +91,7 @@ export function BomOrderLinePicker({ orderId, onBack }: BomOrderLinePickerProps)
         setOrderNumber((order as any).order_number || '');
         setCustomerName((order as any).customer?.company_name || '');
         const raw = (((order as any).order_items || []) as OrderLine[]).filter(
-          (it: any) => it?.is_deleted !== true
+          (it: any) => it?.is_deleted !== true && orderLineEligibleForBom(it)
         );
         setLines(raw);
 
@@ -148,7 +149,7 @@ export function BomOrderLinePicker({ orderId, onBack }: BomOrderLinePickerProps)
     return (
       <Card>
         <CardContent className="py-8 text-center text-muted-foreground">
-          No products on this order.
+          No stitching-assigned lines found on this order.
           <Button variant="outline" className="mt-4 block mx-auto" onClick={onBack}>
             Back
           </Button>
