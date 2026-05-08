@@ -46,22 +46,20 @@ function warehouseRowMatchesFabricVariant(row: any, fabric: FabricMasterLite, po
 
 /**
  * Whether this inventory row contributes to availability for `fabricId`.
- * Uses direct id / PO fabric_id first, then strict name+color+gsm match (inventory parity).
+ *
+ * Cutting consumption must stay server-authoritative: only include rows that can be
+ * resolved to the exact fabric id via `warehouse_inventory.item_id` or PO-linked
+ * `purchase_order_items.fabric_id`. Variant-only fallback can overstate availability
+ * and cause `consume_fabric_for_cutting` to reject with insufficient inventory.
  */
 function warehouseRowMatchesFabricForCutting(
   row: any,
   fabricId: string,
-  fabric: FabricMasterLite | undefined,
-  poFabricByPoItemId: Map<string, string>,
-  poLineByPoItemId: Map<string, PoLineFabricHint>
+  poFabricByPoItemId: Map<string, string>
 ): boolean {
   const direct =
     resolveWarehouseFabricId({ item_id: row.item_id, grn_item_po_item_id: row?.grn_item?.po_item_id }, poFabricByPoItemId) || '';
-  if (direct === fabricId) return true;
-  if (!fabric) return false;
-  if (!warehouseRowMatchesFabricVariant(row, fabric, poLineByPoItemId)) return false;
-  // Variant match: include when no resolved id, wrong id, or id not tied to PO row (still duplicates master risk is acceptable per single-fabric dialogs).
-  return !direct || direct !== fabricId;
+  return direct === fabricId;
 }
 
 type FabricMasterLite = {
@@ -304,7 +302,7 @@ export async function getFabricAvailabilityByFabricIds(params: {
     const rowIds: string[] = [];
 
     storageRows.forEach((row: any) => {
-      if (!warehouseRowMatchesFabricForCutting(row, fabricId, fabric, poFabricByPoItemId, poLineByPoItemId)) return;
+      if (!warehouseRowMatchesFabricForCutting(row, fabricId, poFabricByPoItemId)) return;
       const rowUnit = String(row.unit || fabric.uom || 'kg');
       if (!unit) unit = rowUnit;
       if (!sameUnitFamily(unit, rowUnit)) return;

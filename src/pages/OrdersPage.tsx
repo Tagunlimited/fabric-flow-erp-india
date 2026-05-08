@@ -108,6 +108,33 @@ const EMPTY_COLUMN_FILTERS: OrdersColumnFilters = {
 
 type OrdersFilterColumnKey = keyof OrdersColumnFilters;
 
+/** Labels for `orders.status` (order_status enum). Keeps Select + filters consistent; unknown keys fall back to {@link formatOrderStatusDisplay}. */
+const ORDER_STATUS_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  confirmed: 'Confirmed',
+  designing_done: 'Designing Done',
+  under_procurement: 'Under Procurement',
+  pending_flow_assignment: 'Pending Flow Assignment',
+  in_production: 'In Production',
+  under_cutting: 'Under Cutting',
+  under_stitching: 'Under Stitching',
+  under_qc: 'Under QC',
+  quality_check: 'Quality Check',
+  ready_for_dispatch: 'Ready for Dispatch',
+  ready_to_ship: 'Ready to Ship',
+  rework: 'Rework',
+  partial_dispatched: 'Partial Dispatched',
+  dispatched: 'Dispatched',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+};
+
+function formatOrderStatusDisplay(status: string | null | undefined): string {
+  const key = String(status || '').trim();
+  if (!key) return 'Unknown';
+  return ORDER_STATUS_LABELS[key] || key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 const COLUMN_FILTER_DIALOG_META: Record<
   OrdersFilterColumnKey,
   { title: string; placeholder: string; description: string }
@@ -1208,23 +1235,25 @@ const OrdersPage = () => {
                             <TableCell>
                               <div className="flex items-center justify-start text-left">
                                 <Select 
-                                  value={order.status} 
+                                  value={ORDER_STATUS_LABELS[String(order.status || '').trim()] ? order.status : undefined}
                                   onValueChange={(newStatus) => handleStatusChange(order.id, newStatus)}
                                 >
                                   <SelectTrigger className="w-56 text-left">
-                                    <SelectValue />
+                                    <SelectValue placeholder={formatOrderStatusDisplay(order.status)} />
                                   </SelectTrigger>
                                   <SelectContent>
                                     <SelectItem value="pending">Pending</SelectItem>
                                     <SelectItem value="confirmed">Confirmed</SelectItem>
                                     <SelectItem value="designing_done">Designing Done</SelectItem>
                                     <SelectItem value="under_procurement">Under Procurement</SelectItem>
+                                    <SelectItem value="pending_flow_assignment">Pending Flow Assignment</SelectItem>
                                     <SelectItem value="in_production">In Production</SelectItem>
                                     <SelectItem value="under_cutting">Under Cutting</SelectItem>
                                     <SelectItem value="under_stitching">Under Stitching</SelectItem>
                                     <SelectItem value="under_qc">Under QC</SelectItem>
                                     <SelectItem value="quality_check">Quality Check</SelectItem>
                                     <SelectItem value="ready_for_dispatch">Ready for Dispatch</SelectItem>
+                                    <SelectItem value="ready_to_ship">Ready to Ship</SelectItem>
                                     <SelectItem value="rework">Rework</SelectItem>
                                     <SelectItem value="partial_dispatched">Partial Dispatched</SelectItem>
                                     <SelectItem value="dispatched">Dispatched</SelectItem>
