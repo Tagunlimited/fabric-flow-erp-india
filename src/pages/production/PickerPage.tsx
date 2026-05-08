@@ -21,6 +21,12 @@ import { useCompanySettings } from "@/hooks/CompanySettingsContext";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizesByMasterOrder, sortSizeDistributionsByMasterOrder, getFallbackSizeOrder } from "@/utils/sizeSorting";
 import { parseLineOrderItemIdFromNotes } from "@/utils/orderBatchAssignmentLine";
+import {
+  assignmentLeftToPickWithLegacyRejected,
+  pickerDisplayPicked,
+  pickerQcReplacementOwed,
+  sumAssignedFromSizeDistributions,
+} from '@/utils/pickerRemaining';
 
 /** Hides itself if URL missing or image fails to load */
 function PickerBatchOrderThumb({ src }: { src?: string | null }) {
@@ -781,17 +787,21 @@ export default function PickerPage() {
         try {
           const { data: oba } = await (supabase as any)
             .from('order_batch_assignments_with_details')
-            .select('assignment_id, batch_id, order_id, total_quantity')
+            .select('assignment_id, batch_id, order_id, total_quantity, size_distributions')
             .in('batch_id', batchIds as any);
           assignmentRows = oba || [];
           orderSet = {}; // Initialize
           assignmentRows.forEach((row: any) => {
             const b = row?.batch_id as string | undefined;
             if (!b) return;
-            qtyByBatch[b] = (qtyByBatch[b] || 0) + Number(row.total_quantity || 0);
+            const assignedLine = Math.max(
+              Number(row.total_quantity || 0),
+              sumAssignedFromSizeDistributions(row.size_distributions)
+            );
+            qtyByBatch[b] = (qtyByBatch[b] || 0) + assignedLine;
             assignmentToBatch[row.assignment_id] = b;
             assignmentToOrder[row.assignment_id] = row.order_id;
-            assignmentQtyById[row.assignment_id] = Number(row.total_quantity || 0);
+            assignmentQtyById[row.assignment_id] = assignedLine;
             assignmentIds.push(row.assignment_id);
             const oid = row?.order_id as string | undefined;
             if (oid) {
@@ -802,22 +812,21 @@ export default function PickerPage() {
           Object.keys(orderSet).forEach(b => { ordersCountByBatch[b] = orderSet[b].size; });
         } catch {}
 
-        // Compute picked totals per batch from size distributions
+        // Picked per assignment: prefer summed size rows; notes only if column sum is zero (never add both).
         if (assignmentIds.length > 0) {
+          const colPickedByAid: Record<string, number> = {};
+          const notePickedByAid: Record<string, number> = {};
           try {
             const { data: pickedRows } = await (supabase as any)
               .from('order_batch_size_distributions')
               .select('order_batch_assignment_id, picked_quantity')
               .in('order_batch_assignment_id', assignmentIds as any);
             (pickedRows || []).forEach((r: any) => {
-              const aid = r?.order_batch_assignment_id as string | undefined; if (!aid) return;
-              const b = assignmentToBatch[aid]; if (!b) return;
-              const pickedQty = Number(r.picked_quantity || 0);
-              pickedByBatch[b] = (pickedByBatch[b] || 0) + pickedQty;
-              pickedByAssignment[aid] = (pickedByAssignment[aid] || 0) + pickedQty;
+              const aid = r?.order_batch_assignment_id as string | undefined;
+              if (!aid) return;
+              colPickedByAid[aid] = (colPickedByAid[aid] || 0) + Number(r.picked_quantity || 0);
             });
           } catch {}
-          // Fallback: add picked from notes JSON if column not present/populated
           try {
             const { data: asn } = await (supabase as any)
               .from('order_batch_assignments')
@@ -828,14 +837,24 @@ export default function PickerPage() {
               try {
                 const parsed = JSON.parse(a.notes);
                 if (parsed && parsed.picked_by_size && typeof parsed.picked_by_size === 'object') {
-                  let sum = 0; for (const v of Object.values(parsed.picked_by_size as Record<string, any>)) sum += Number(v) || 0;
-                  const b = assignmentToBatch[a.id]; if (!b) return;
-                  pickedByBatch[b] = (pickedByBatch[b] || 0) + sum;
-                  pickedByAssignment[a.id] = (pickedByAssignment[a.id] || 0) + sum;
+                  let sum = 0;
+                  for (const v of Object.values(parsed.picked_by_size as Record<string, any>)) sum += Number(v) || 0;
+                  notePickedByAid[a.id] = sum;
                 }
               } catch {}
             });
           } catch {}
+          const uniqueAids = Array.from(new Set(assignmentIds));
+          pickedByAssignment = {};
+          pickedByBatch = {};
+          uniqueAids.forEach((aid) => {
+            const c = colPickedByAid[aid] || 0;
+            const n = notePickedByAid[aid] || 0;
+            const eff = c > 0 ? c : n;
+            pickedByAssignment[aid] = eff;
+            const b = assignmentToBatch[aid];
+            if (b) pickedByBatch[b] = (pickedByBatch[b] || 0) + eff;
+          });
 
           // QC rejections per batch
           try {
@@ -865,9 +884,7 @@ export default function PickerPage() {
               const totalQty = assignmentQtyById[aid] || 0;
               const pickedQty = pickedByAssignment[aid] || 0;
               const rejectedQty = rejectedByAssignment[aid] || 0;
-              const pendingItems = Math.max(0, totalQty - pickedQty);
-              const rejectedNeedingReplacement = pickedQty < totalQty ? rejectedQty : 0;
-              const leftToPick = pendingItems + rejectedNeedingReplacement;
+              const leftToPick = assignmentLeftToPickWithLegacyRejected(totalQty, pickedQty, rejectedQty);
               if (leftToPick <= 0) return;
               if (!pendingOrderIdsByBatch[batchId]) pendingOrderIdsByBatch[batchId] = new Set<string>();
               pendingOrderIdsByBatch[batchId].add(orderId);
@@ -1050,12 +1067,13 @@ export default function PickerPage() {
 
       const assignmentIds = Array.from(new Set((rows || []).map((r: any) => r.assignment_id).filter(Boolean)));
 
-      // Picked totals: try size_distributions.picked_quantity first, then notes JSON fallback
       let pickedByAssignment: Record<string, number> = {};
       let rejectedByAssignment: Record<string, number> = {};
       let rejectedSizesByAssignment: Record<string, { size_name: string; rejected_quantity: number; remarks?: string }[]> = {};
       const notesByAssignmentId: Record<string, string> = {};
       if (assignmentIds.length > 0) {
+        const colPicked: Record<string, number> = {};
+        const notePicked: Record<string, number> = {};
         try {
           const { data: pickedRows } = await (supabase as any)
             .from('order_batch_size_distributions')
@@ -1064,7 +1082,7 @@ export default function PickerPage() {
           (pickedRows || []).forEach((r: any) => {
             const id = r?.order_batch_assignment_id as string | undefined;
             if (!id) return;
-            pickedByAssignment[id] = (pickedByAssignment[id] || 0) + Number(r.picked_quantity || 0);
+            colPicked[id] = (colPicked[id] || 0) + Number(r.picked_quantity || 0);
           });
         } catch {}
         try {
@@ -1081,11 +1099,16 @@ export default function PickerPage() {
               const parsed = JSON.parse(a.notes);
               if (parsed && parsed.picked_by_size && typeof parsed.picked_by_size === 'object') {
                 const sum: number = Object.values(parsed.picked_by_size as Record<string, any>).reduce((acc, v: any) => acc + (Number(v) || 0), 0);
-                pickedByAssignment[a.id] = (pickedByAssignment[a.id] || 0) + sum;
+                notePicked[a.id] = sum;
               }
             } catch {}
           });
         } catch {}
+        Array.from(new Set(assignmentIds)).forEach((id: string) => {
+          const c = colPicked[id] || 0;
+          const n = notePicked[id] || 0;
+          pickedByAssignment[id] = c > 0 ? c : n;
+        });
 
         // Load QC rejections per size
         try {
@@ -1286,6 +1309,10 @@ export default function PickerPage() {
       const enriched = (rows || []).map((r: any) => {
         const dist = Array.isArray(r.size_distributions) ? r.size_distributions : [];
         const pres = resolvePresentationForAssignment(r.assignment_id, r.order_id, dist);
+        const assignedLine = Math.max(
+          Number(r.total_quantity || 0),
+          sumAssignedFromSizeDistributions(dist)
+        );
         return {
         assignment_id: r.assignment_id,
         order_id: r.order_id,
@@ -1295,32 +1322,18 @@ export default function PickerPage() {
         product_line_description: pres.product_line_description,
         size_type_id: pres.size_type_id,
         assignment_date: r.assignment_date,
-        total_quantity: Number(r.total_quantity || 0),
+        total_quantity: assignedLine,
         picked_quantity: Number(pickedByAssignment[r.assignment_id] || 0),
         rejected_quantity: Number(rejectedByAssignment[r.assignment_id] || 0),
         rejected_sizes: rejectedSizesByAssignment[r.assignment_id] || [],
         size_distributions: dist,
       };
       });
-      // Show orders that have work to do: pending items OR rejected items needing replacement
-      // Key insight: If picked >= total, then all assigned items are picked.
-      // If there are rejected items but picked >= total, replacements have already been picked,
-      // so we shouldn't show the card (the rejected items are already replaced).
       const pending = enriched.filter((o: any) => {
         const totalQty = Number(o.total_quantity || 0);
         const picked = Number(o.picked_quantity || 0);
         const rejected = Number(o.rejected_quantity || 0);
-        
-        // Pending items = assigned items not yet picked
-        const pendingItems = Math.max(0, totalQty - picked);
-        
-        // Rejected items that need replacement
-        // BUT: If picked >= total, then all items are picked, including replacements for rejected items
-        // So we don't need to show rejected as needing replacement if picked >= total
-        const rejectedNeedingReplacement = (picked < totalQty) ? rejected : 0;
-        
-        // Show card only if there are pending items OR rejected items needing replacement
-        const remainingToPick = pendingItems + rejectedNeedingReplacement;
+        const remainingToPick = assignmentLeftToPickWithLegacyRejected(totalQty, picked, rejected);
         return remainingToPick > 0;
       });
       setBatchOrders(pending);
@@ -1403,9 +1416,11 @@ export default function PickerPage() {
       const total_quantity = items.reduce((s, i) => s + Number(i.total_quantity || 0), 0);
       const picked_quantity = items.reduce((s, i) => s + Number(i.picked_quantity || 0), 0);
       const rejected_quantity = items.reduce((s, i) => s + Number(i.rejected_quantity || 0), 0);
-      const pendingItems = Math.max(0, total_quantity - picked_quantity);
-      const rejectedNeedingReplacement = picked_quantity < total_quantity ? rejected_quantity : 0;
-      const leftToPick = pendingItems + rejectedNeedingReplacement;
+      const leftToPick = assignmentLeftToPickWithLegacyRejected(
+        total_quantity,
+        picked_quantity,
+        rejected_quantity
+      );
       return {
         order_id,
         order_number: first.order_number,
@@ -1423,6 +1438,8 @@ export default function PickerPage() {
 
   const renderPickerBatchOrderSummaryCard = (s: GroupedBatchOrderSummary, onActivate: () => void) => {
     const leftQuantity = s.leftToPick;
+    const displayPicked = pickerDisplayPicked(s.total_quantity, s.picked_quantity, leftQuantity);
+    const qcReplace = pickerQcReplacementOwed(s.total_quantity, s.picked_quantity, leftQuantity);
     const mergedRejected = mergePickerRejectedSizes(s.assignments);
     return (
       <div
@@ -1467,8 +1484,8 @@ export default function PickerPage() {
             <span className="picker-batch-order-stat">
               <b>{s.total_quantity || 0}</b> total qty
             </span>
-            <span className="picker-batch-order-stat">
-              <b>{s.picked_quantity || 0}</b> picked
+            <span className="picker-batch-order-stat" title="Pieces on bench for this order (after QC replacements owed)">
+              <b>{displayPicked}</b> on bench
             </span>
           </div>
           {s.rejected_quantity > 0 && (
@@ -1482,12 +1499,15 @@ export default function PickerPage() {
                 setRejectedOpen(true);
               }}
             >
-              Rejected · {s.rejected_quantity}
+              QC rejected · {s.rejected_quantity}
+              {qcReplace > 0 ? ` · ${qcReplace} to replace` : ""}
             </button>
           )}
         </div>
         <div
-          className={`picker-batch-order-bottom ${leftQuantity === 0 && (s.total_quantity || 0) > 0 ? "complete" : ""}`}
+          className={`picker-batch-order-bottom ${
+            leftQuantity === 0 && (s.total_quantity || 0) > 0 ? "complete" : leftQuantity > 0 ? "pending" : ""
+          }`}
         >
           {leftQuantity > 0 ? (
             <>Left to pick · {leftQuantity}</>
@@ -1507,10 +1527,10 @@ export default function PickerPage() {
   const renderPickerBatchProductCard = (o: any, onActivate: () => void) => {
     const totalQty = Number(o.total_quantity || 0);
     const picked = Number(o.picked_quantity || 0);
-    const pendingItems = Math.max(0, totalQty - picked);
     const rejected = Number(o.rejected_quantity || 0);
-    const rejectedNeedingReplacement = picked < totalQty ? rejected : 0;
-    const leftQuantity = pendingItems + rejectedNeedingReplacement;
+    const leftQuantity = assignmentLeftToPickWithLegacyRejected(totalQty, picked, rejected);
+    const qcReplace = pickerQcReplacementOwed(totalQty, picked, leftQuantity);
+    const displayPicked = pickerDisplayPicked(totalQty, picked, leftQuantity);
     const distributions = Array.isArray(o.size_distributions) ? o.size_distributions : [];
     const sortedSizes = sortSizeDistributions(distributions, (o as any).size_type_id);
     return (
@@ -1545,8 +1565,8 @@ export default function PickerPage() {
             <span className="picker-batch-order-stat">
               <b>{o.total_quantity || 0}</b> total qty
             </span>
-            <span className="picker-batch-order-stat">
-              <b>{o.picked_quantity || 0}</b> picked
+            <span className="picker-batch-order-stat" title="Pieces on bench toward this assignment (after QC replacements owed)">
+              <b>{displayPicked}</b> on bench
             </span>
           </div>
           {o.rejected_quantity > 0 && (
@@ -1560,16 +1580,22 @@ export default function PickerPage() {
                 setRejectedOpen(true);
               }}
             >
-              Rejected · {o.rejected_quantity}
+              QC rejected · {o.rejected_quantity}
+              {qcReplace > 0 ? ` · ${qcReplace} to replace` : ""}
             </button>
           )}
           {sortedSizes.length > 0 && (
             <div className="picker-batch-order-sizes">
               {sortedSizes.map((sd: any) => {
-                const sizeLeft = (sd.quantity || 0) - (sd.picked_quantity || 0);
+                const assignedQty = Number(sd.assigned_quantity ?? sd.quantity ?? 0);
+                const pickedQty = Number(sd.picked_quantity ?? 0);
+                let sizeLeft = Math.max(0, assignedQty - pickedQty);
+                if (sortedSizes.length === 1 && qcReplace > 0) {
+                  sizeLeft += qcReplace;
+                }
                 return (
                   <span key={String(sd.size_name)} className="picker-batch-order-size-pill">
-                    {sd.size_name}: {sd.quantity || 0} ({sizeLeft} left)
+                    {sd.size_name}: {assignedQty} ({sizeLeft} left)
                   </span>
                 );
               })}
@@ -1577,7 +1603,9 @@ export default function PickerPage() {
           )}
         </div>
         <div
-          className={`picker-batch-order-bottom ${leftQuantity === 0 && totalQty > 0 ? "complete" : ""}`}
+          className={`picker-batch-order-bottom ${
+            leftQuantity === 0 && totalQty > 0 ? "complete" : leftQuantity > 0 ? "pending" : ""
+          }`}
         >
           {leftQuantity > 0 ? (
             <>Left to pick · {leftQuantity}</>
@@ -1605,26 +1633,28 @@ export default function PickerPage() {
     }
     if (batchDrillStep === "orders") {
       return (
-        <div className="picker-batch-order-grid">
-          {groupedBatchOrderSummaries.map((s) =>
-            renderPickerBatchOrderSummaryCard(s, () => {
-              setBatchDrillStep("products");
-              setDrillOrderId(s.order_id);
-              setDrillOrderNumber(s.order_number || "");
-            })
-          )}
+        <div className="w-full min-w-0 max-w-full">
+          <div className="picker-batch-order-grid">
+            {groupedBatchOrderSummaries.map((s) =>
+              renderPickerBatchOrderSummaryCard(s, () => {
+                setBatchDrillStep("products");
+                setDrillOrderId(s.order_id);
+                setDrillOrderNumber(s.order_number || "");
+              })
+            )}
+          </div>
         </div>
       );
     }
     const productsForOrder = batchOrders.filter((o) => o.order_id === drillOrderId);
     return (
-      <>
-        <div className="mb-3 flex flex-wrap items-center gap-2">
+      <div className="w-full min-w-0 max-w-full space-y-3">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="gap-1"
+            className="gap-1 shrink-0"
             onClick={() => {
               setBatchDrillStep("orders");
               setDrillOrderId(null);
@@ -1634,23 +1664,25 @@ export default function PickerPage() {
             <ArrowLeft className="h-4 w-4 shrink-0" />
             All orders
           </Button>
-          <span className="text-sm text-muted-foreground">
+          <span className="text-sm text-muted-foreground min-w-0 break-words">
             Order #{drillOrderNumber}
             {productsForOrder[0]?.customer_name ? ` · ${productsForOrder[0].customer_name}` : ""}
           </span>
         </div>
-        <div className="picker-batch-order-grid">
+        <div
+          className={`picker-batch-order-grid${productsForOrder.length === 1 ? " picker-batch-order-grid--single" : ""}`}
+        >
           {productsForOrder.map((o) =>
             renderPickerBatchProductCard(o, () => openPickerForAssignment(o))
           )}
         </div>
-      </>
+      </div>
     );
   };
 
   return (
     <ErpLayout>
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-4 sm:space-y-6">
+      <div className="w-full min-w-0 max-w-full overflow-x-hidden px-3 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-4 sm:space-y-6">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
             Picker
@@ -1662,7 +1694,7 @@ export default function PickerPage() {
 
         <label
           htmlFor="picker-page-view-switch"
-          className="orders-view-switch"
+          className="orders-view-switch picker-page-view-switch"
           aria-label="Switch between custom and readymade picker views"
         >
           <input
@@ -1869,16 +1901,17 @@ export default function PickerPage() {
           <div className="space-y-4 sm:space-y-6 mt-4 sm:mt-6">
             <Card>
               <CardHeader className="pb-3 sm:pb-6">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
-                    <Shirt className="h-4 w-4 sm:h-5 sm:w-5" />
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between min-w-0">
+                  <CardTitle className="flex items-center gap-2 text-lg sm:text-xl min-w-0 shrink-0">
+                    <Shirt className="h-4 w-4 sm:h-5 sm:w-5 shrink-0" />
                     Readymade Orders
                   </CardTitle>
                   {/* Toggle Button for View Mode */}
-                  <div className="flex items-center gap-2 bg-muted rounded-full p-1">
+                  <div className="flex flex-wrap items-center gap-1 sm:gap-2 bg-muted rounded-full p-1 w-full sm:w-auto min-w-0">
                     <button
+                      type="button"
                       onClick={() => setReadymadeViewMode('order')}
-                      className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                      className={`flex-1 sm:flex-initial min-w-0 px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium transition-all ${
                         readymadeViewMode === 'order'
                           ? 'bg-primary text-primary-foreground shadow-sm'
                           : 'text-muted-foreground hover:text-foreground'
@@ -1887,8 +1920,9 @@ export default function PickerPage() {
                       Order View
                     </button>
                     <button
+                      type="button"
                       onClick={() => setReadymadeViewMode('product')}
-                      className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                      className={`flex-1 sm:flex-initial min-w-0 px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium transition-all ${
                         readymadeViewMode === 'product'
                           ? 'bg-primary text-primary-foreground shadow-sm'
                           : 'text-muted-foreground hover:text-foreground'
@@ -2061,7 +2095,7 @@ export default function PickerPage() {
             }
           }}
         >
-          <DialogContent className="max-w-[95vw] sm:max-w-2xl lg:max-w-4xl xl:max-w-6xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:w-full sm:max-w-2xl lg:max-w-4xl xl:max-w-6xl max-h-[90dvh] overflow-y-auto overflow-x-hidden min-w-0 grid-cols-1 top-[3vh] translate-y-0 sm:top-[50%] sm:translate-y-[-50%] p-4 sm:p-6">
             <DialogHeader>
               <DialogTitle className="text-lg sm:text-xl">
                 {batchDrillStep === "products"
@@ -2075,7 +2109,7 @@ export default function PickerPage() {
 
         {/* Rejected sizes dialog */}
         <Dialog open={rejectedOpen} onOpenChange={(v) => { if (!v) setRejectedOpen(false); }}>
-          <DialogContent className="max-w-[95vw] sm:max-w-md">
+          <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-md max-h-[90dvh] overflow-y-auto overflow-x-hidden min-w-0 top-[3vh] translate-y-0 sm:top-[50%] sm:translate-y-[-50%] p-4 sm:p-6">
             <DialogHeader>
               <DialogTitle className="text-base sm:text-lg">Rejected sizes for order {rejectedOrderNumber}</DialogTitle>
             </DialogHeader>
@@ -2099,7 +2133,7 @@ export default function PickerPage() {
 
         {/* Image Gallery Dialog */}
         <Dialog open={imageGalleryOpen} onOpenChange={setImageGalleryOpen}>
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-4xl max-h-[90dvh] overflow-y-auto overflow-x-hidden min-w-0 top-[3vh] translate-y-0 sm:top-[50%] sm:translate-y-[-50%] p-4 sm:p-6">
             <DialogHeader>
               <DialogTitle>Product Images - {galleryBatchName}</DialogTitle>
             </DialogHeader>
@@ -2131,7 +2165,7 @@ export default function PickerPage() {
 
         {/* Batch-level rejected details dialog */}
         <Dialog open={batchRejectedOpen} onOpenChange={(v) => { if (!v) setBatchRejectedOpen(false); }}>
-          <DialogContent className="max-w-[95vw] sm:max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-lg max-h-[90dvh] overflow-y-auto overflow-x-hidden min-w-0 top-[3vh] translate-y-0 sm:top-[50%] sm:translate-y-[-50%] p-4 sm:p-6">
             <DialogHeader>
               <DialogTitle className="text-base sm:text-lg">Rejected details for {batchRejectedTitle}</DialogTitle>
             </DialogHeader>
@@ -2184,7 +2218,7 @@ export default function PickerPage() {
             setAvailableBins([]);
           }
         }}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-2xl max-h-[90dvh] overflow-y-auto overflow-x-hidden min-w-0 top-[3vh] translate-y-0 sm:top-[50%] sm:translate-y-[-50%] p-4 sm:p-6">
             <DialogHeader>
               <DialogTitle>Select Bin for Picklist</DialogTitle>
               <DialogDescription className="text-sm text-muted-foreground">
@@ -2315,7 +2349,7 @@ export default function PickerPage() {
             setPicklistData({ product: null, order: null, bin: null, binsBySize: null });
           }
         }}>
-          <DialogContent className="max-w-[95vw] sm:max-w-4xl lg:max-w-6xl max-h-[90vh] overflow-y-auto print:max-w-full print:max-h-full print:overflow-visible">
+          <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-4xl lg:max-w-6xl max-h-[90dvh] overflow-y-auto overflow-x-hidden min-w-0 top-[3vh] translate-y-0 sm:top-[50%] sm:translate-y-[-50%] p-4 sm:p-6 print:max-w-full print:max-h-full print:overflow-visible print:static print:translate-none">
             <style>{`
               @media print {
                 body * {
@@ -2567,7 +2601,7 @@ export default function PickerPage() {
 
         {/* Product Detail Dialog */}
         <Dialog open={productDetailDialogOpen} onOpenChange={setProductDetailDialogOpen}>
-          <DialogContent className="max-w-[95vw] sm:max-w-4xl lg:max-w-6xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-4xl lg:max-w-6xl max-h-[90dvh] overflow-y-auto overflow-x-hidden min-w-0 top-[3vh] translate-y-0 sm:top-[50%] sm:translate-y-[-50%] p-4 sm:p-6">
             <DialogHeader>
               <DialogTitle className="text-lg sm:text-xl">
                 {selectedProductDetail?.product_name}

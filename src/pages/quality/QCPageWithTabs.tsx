@@ -12,6 +12,8 @@ import QCReviewDialog from "@/components/quality/QCReviewDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BackButton } from '@/components/common/BackButton';
 import { getOrderItemListThumbnailUrl, getOrderCardPlaceholderSrc } from '@/utils/orderItemImageUtils';
+import { sumAssignedFromSizeDistributions } from '@/utils/pickerRemaining';
+import { orderNeedsQcVerification } from '@/utils/qcOrderFilters';
 
 interface PickedOrderCard {
   order_id: string;
@@ -25,6 +27,8 @@ interface PickedOrderCard {
   rejected_quantity: number; // sum across assignments
   is_fully_qc: boolean; // true if all assignments are fully QC'd
   qc_status: 'pending' | 'partial' | 'completed';
+  /** Unique batch faces for stacked avatars */
+  batch_faces?: Array<{ name: string; avatar?: string | null }>;
 }
 
 export default function QCPageWithTabs() {
@@ -50,7 +54,9 @@ export default function QCPageWithTabs() {
       // Load all batch assignments with quantities and batch leader
       const { data: assignments } = await (supabase as any)
         .from('order_batch_assignments_with_details')
-        .select('assignment_id, order_id, total_quantity, batch_name, batch_leader_name, batch_leader_avatar')
+        .select(
+          'assignment_id, order_id, total_quantity, batch_name, batch_leader_name, batch_leader_avatar, batch_leader_avatar_url, size_distributions'
+        )
         .order('assignment_date', { ascending: false });
 
       const rows = assignments || [];
@@ -58,8 +64,18 @@ export default function QCPageWithTabs() {
       const assignmentIds = rows.map((r: any) => r.assignment_id).filter(Boolean);
       const orderIds = Array.from(new Set(rows.map((r: any) => r.order_id).filter(Boolean)));
 
-      // Sum picked by assignment (column first, notes fallback)
+      const assignmentAssignedById: Record<string, number> = {};
+      rows.forEach((r: any) => {
+        const id = String(r?.assignment_id || '').trim();
+        if (!id) return;
+        const viewTot = Number(r.total_quantity ?? 0) || 0;
+        const fromDist = sumAssignedFromSizeDistributions(r?.size_distributions);
+        assignmentAssignedById[id] = Math.max(viewTot, fromDist);
+      });
+
+      // Picked: sum size rows per assignment; do NOT add assignment notes on top (double-count breaks QC routing).
       let pickedByAssignment: Record<string, number> = {};
+      let pickedFromNotes: Record<string, number> = {};
       if (assignmentIds.length > 0) {
         try {
           const { data: pickedRows } = await (supabase as any)
@@ -84,12 +100,17 @@ export default function QCPageWithTabs() {
               if (parsed && parsed.picked_by_size && typeof parsed.picked_by_size === 'object') {
                 let sum = 0;
                 for (const v of Object.values(parsed.picked_by_size as Record<string, any>)) sum += Number(v) || 0;
-                pickedByAssignment[a.id] = (pickedByAssignment[a.id] || 0) + sum;
+                pickedFromNotes[a.id] = sum;
               }
             } catch {}
           });
         } catch {}
       }
+      assignmentIds.forEach((id: string) => {
+        const col = pickedByAssignment[id] || 0;
+        const note = pickedFromNotes[id] || 0;
+        pickedByAssignment[id] = col > 0 ? col : note;
+      });
 
       // QC approved/rejected by assignment - MORE DETAILED
       let approvedByAssignment: Record<string, number> = {};
@@ -110,14 +131,14 @@ export default function QCPageWithTabs() {
             rejectedByAssignment[id] = (rejectedByAssignment[id] || 0) + Number(q.rejected_quantity || 0);
           });
           
-          // Check if QC is complete for each assignment
+          // Done when bench is full, all assigned approved, and no open rejects (picker ↔ QC loop).
           assignmentIds.forEach((id: string) => {
             const picked = pickedByAssignment[id] || 0;
             const approved = approvedByAssignment[id] || 0;
             const rejected = rejectedByAssignment[id] || 0;
-            
-            // QC is complete if approved + rejected = picked (and picked > 0)
-            qcCompleteByAssignment[id] = picked > 0 && (approved + rejected) === picked;
+            const assigned = assignmentAssignedById[id] || 0;
+            qcCompleteByAssignment[id] =
+              assigned > 0 && picked >= assigned && approved >= assigned && rejected === 0;
           });
           
         } catch {}
@@ -191,11 +212,15 @@ export default function QCPageWithTabs() {
             approved_quantity: 0,
             rejected_quantity: 0,
             is_fully_qc: true,
-            qc_status: 'pending'
+            qc_status: 'pending',
+            batch_faces: [],
           };
         }
         byOrder[key].picked_quantity += picked;
-        byOrder[key].total_quantity += Number(r.total_quantity || 0);
+        const lineAssigned =
+          assignmentAssignedById[String(r.assignment_id)] ??
+          Math.max(Number(r.total_quantity || 0), sumAssignedFromSizeDistributions(r.size_distributions));
+        byOrder[key].total_quantity += lineAssigned;
         byOrder[key].approved_quantity += Number(approvedByAssignment[r.assignment_id] || 0);
         byOrder[key].rejected_quantity += Number(rejectedByAssignment[r.assignment_id] || 0);
         byOrder[key].assignment_ids.push(r.assignment_id);
@@ -206,7 +231,22 @@ export default function QCPageWithTabs() {
           byOrder[key].is_fully_qc = false;
         }
         
-        assignmentMeta[r.assignment_id] = { order_id: oid, order_number: byOrder[key].order_number, batch_name: r.batch_name, picked, batch_leader_name: r.batch_leader_name, batch_leader_avatar: r.batch_leader_avatar };
+        assignmentMeta[r.assignment_id] = {
+          order_id: oid,
+          order_number: byOrder[key].order_number,
+          batch_name: r.batch_name,
+          picked,
+          batch_leader_name: r.batch_leader_name,
+          batch_leader_avatar: r.batch_leader_avatar_url || r.batch_leader_avatar,
+        };
+        const faceName = String(r.batch_leader_name || '').trim();
+        const faceUrl = r.batch_leader_avatar_url || r.batch_leader_avatar || null;
+        if (faceName && byOrder[key].batch_faces) {
+          const seen = new Set(byOrder[key].batch_faces!.map((f) => f.name.toLowerCase()));
+          if (!seen.has(faceName.toLowerCase())) {
+            byOrder[key].batch_faces!.push({ name: faceName, avatar: faceUrl });
+          }
+        }
       });
 
       // Determine QC status for each order
@@ -233,11 +273,19 @@ export default function QCPageWithTabs() {
     const q = search.trim().toLowerCase();
     let filteredOrders = orders;
     
-    // Filter by QC status based on active tab
     if (activeTab === 'pending') {
-      filteredOrders = orders.filter(o => o.qc_status === 'pending');
+      filteredOrders = orders.filter(
+        (o) =>
+          !o.is_fully_qc &&
+          (orderNeedsQcVerification(o) || o.qc_status === 'pending')
+      );
     } else if (activeTab === 'partial') {
-      filteredOrders = orders.filter(o => o.qc_status === 'partial');
+      filteredOrders = orders.filter(
+        (o) =>
+          !o.is_fully_qc &&
+          !orderNeedsQcVerification(o) &&
+          o.qc_status !== 'pending'
+      );
     } else if (activeTab === 'completed') {
       filteredOrders = orders.filter(o => o.qc_status === 'completed');
     }
@@ -255,19 +303,19 @@ export default function QCPageWithTabs() {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'completed': return <CheckCircle className="h-4 w-4 text-green-600" />;
-      case 'partial': return <Clock className="h-4 w-4 text-yellow-600" />;
-      case 'pending': return <AlertTriangle className="h-4 w-4 text-red-600" />;
-      default: return <AlertTriangle className="h-4 w-4 text-gray-600" />;
+      case 'completed': return <CheckCircle className="h-4 w-4 shrink-0 text-emerald-600" />;
+      case 'partial': return <Clock className="h-4 w-4 shrink-0 text-amber-600" />;
+      case 'pending': return <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />;
+      default: return <Clock className="h-4 w-4 shrink-0 text-muted-foreground" />;
     }
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'completed': return 'bg-green-100 text-green-800';
-      case 'partial': return 'bg-yellow-100 text-yellow-800';
-      case 'pending': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
+      case 'completed': return 'border-emerald-200/90 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/35 dark:text-emerald-100';
+      case 'partial': return 'border-amber-200/90 bg-amber-50 text-amber-950 dark:bg-amber-950/35 dark:text-amber-100';
+      case 'pending': return 'border-amber-200/90 bg-amber-50/90 text-amber-950 dark:bg-amber-950/35 dark:text-amber-100';
+      default: return 'border-border bg-muted/50 text-foreground';
     }
   };
 
@@ -291,11 +339,11 @@ export default function QCPageWithTabs() {
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="pending" className="flex items-center gap-2">
               <AlertTriangle className="h-4 w-4" />
-              Pending ({orders.filter(o => o.qc_status === 'pending').length})
+              QC review ({orders.filter(o => !o.is_fully_qc && (orderNeedsQcVerification(o) || o.qc_status === 'pending')).length})
             </TabsTrigger>
             <TabsTrigger value="partial" className="flex items-center gap-2">
               <Clock className="h-4 w-4" />
-              In Progress ({orders.filter(o => o.qc_status === 'partial').length})
+              Rework / pick ({orders.filter(o => !o.is_fully_qc && !orderNeedsQcVerification(o) && o.qc_status !== 'pending').length})
             </TabsTrigger>
             <TabsTrigger value="completed" className="flex items-center gap-2">
               <CheckCircle className="h-4 w-4" />
@@ -311,12 +359,13 @@ export default function QCPageWithTabs() {
                 No {activeTab} orders found.
               </p>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {filtered.map((o) => (
-                  <Card key={o.order_id} className={`border hover:shadow-md transition cursor-pointer ${o.qc_status === 'completed' ? 'opacity-75' : ''}`} onClick={() => {
-                    // Only allow QC for non-completed orders
+                  <Card
+                    key={o.order_id}
+                    className={`group overflow-hidden border border-border/80 bg-card/80 backdrop-blur-sm shadow-sm transition hover:shadow-lg hover:border-primary/25 ${o.qc_status === 'completed' ? 'opacity-[0.92]' : ''}`}
+                    onClick={() => {
                     if (o.qc_status === 'completed') return;
-                    
                     const meta = (window as any).__qcAssignmentMeta as Record<string, { order_id: string; order_number: string; batch_name?: string; picked: number; batch_leader_name?: string; batch_leader_avatar?: string | null }>;
                     const options = o.assignment_ids.map(id => ({ assignment_id: id, batch_name: meta?.[id]?.batch_name, picked: meta?.[id]?.picked || 0, batch_leader_name: meta?.[id]?.batch_leader_name, batch_leader_avatar: meta?.[id]?.batch_leader_avatar }));
                     if (options.length <= 1) {
@@ -326,34 +375,63 @@ export default function QCPageWithTabs() {
                     } else {
                       setSelectAssignmentsForOrder({ order_id: o.order_id, order_number: o.order_number, options });
                     }
-                  }}>
-                    <CardContent className="pt-7">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-start gap-3">
-                          <img src={o.image_url || getOrderCardPlaceholderSrc()} alt={o.order_number} className="w-12 h-12 rounded object-cover border" />
-                          <div>
-                            <div className="font-semibold flex items-center gap-2">
-                              Order #{o.order_number}
-                              {getStatusIcon(o.qc_status)}
-                            </div>
-                            <div className="text-xs text-muted-foreground">{o.customer_name}</div>
-                            <Badge className={`text-xs mt-1 ${getStatusColor(o.qc_status)}`}>
-                              {o.qc_status.charAt(0).toUpperCase() + o.qc_status.slice(1)}
-                            </Badge>
-                          </div>
+                  }}
+                  >
+                    <CardContent className="p-0">
+                      <div className="flex gap-0">
+                        <div className="relative w-[96px] shrink-0 self-stretch min-h-[120px] bg-muted/40">
+                          <img
+                            src={o.image_url || getOrderCardPlaceholderSrc()}
+                            alt=""
+                            className="absolute inset-0 h-full w-full object-cover"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-background/85 via-transparent to-transparent" />
                         </div>
-                        <div className="flex items-center gap-1 flex-wrap justify-end">
-                          <Badge className="bg-green-100 text-green-800">Picked: {o.picked_quantity}</Badge>
-                          <Badge className="bg-blue-100 text-blue-800">Approved: {o.approved_quantity}</Badge>
-                          <Badge className="bg-red-100 text-red-800">Rejected: {o.rejected_quantity}</Badge>
-                          <Badge className="bg-purple-100 text-purple-800">Total: {o.total_quantity}</Badge>
+                        <div className="flex min-w-0 flex-1 flex-col gap-2.5 p-4">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 text-sm font-semibold tracking-tight">
+                                #{o.order_number}
+                                <span aria-hidden>{getStatusIcon(o.qc_status)}</span>
+                              </div>
+                              <p className="truncate text-xs text-muted-foreground">{o.customer_name || '—'}</p>
+                              <Badge className={`mt-2 h-6 rounded-full px-2.5 text-[11px] font-medium ${getStatusColor(o.qc_status)}`}>
+                                {o.qc_status === 'partial' ? 'In progress' : o.qc_status.charAt(0).toUpperCase() + o.qc_status.slice(1)}
+                              </Badge>
+                            </div>
+                            {(o.batch_faces && o.batch_faces.length > 0) && (
+                              <div className="flex shrink-0 -space-x-2 pt-0.5">
+                                {o.batch_faces.slice(0, 4).map((f, idx) => (
+                                  <Avatar key={`${f.name}-${idx}`} className="h-8 w-8 border-2 border-background ring-1 ring-border/80">
+                                    <AvatarImage src={f.avatar || undefined} alt="" />
+                                    <AvatarFallback className="bg-primary/15 text-[10px] font-medium text-primary">
+                                      {f.name.slice(0, 2).toUpperCase()}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
+                            {[
+                              { label: 'Total', val: o.total_quantity, tint: 'bg-violet-500/10 text-violet-800 dark:text-violet-200' },
+                              { label: 'Picked', val: o.picked_quantity, tint: 'bg-amber-500/10 text-amber-900 dark:text-amber-200' },
+                              { label: 'OK', val: o.approved_quantity, tint: 'bg-emerald-500/10 text-emerald-900 dark:text-emerald-200' },
+                              { label: 'Rejected', val: o.rejected_quantity, tint: 'bg-rose-500/10 text-rose-900 dark:text-rose-200' },
+                            ].map((s) => (
+                              <div key={s.label} className={`rounded-lg px-2.5 py-2 text-center ${s.tint}`}>
+                                <div className="text-[10px] font-medium uppercase tracking-wider opacity-80">{s.label}</div>
+                                <div className="text-lg font-semibold tabular-nums leading-tight">{Math.round(Number(s.val) || 0)}</div>
+                              </div>
+                            ))}
+                          </div>
+                          {o.qc_status === 'completed' && (
+                            <div className="rounded-md border border-emerald-200/80 bg-emerald-50/80 px-2.5 py-1.5 text-[11px] text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200">
+                              ✓ QC complete — every batch disposition recorded
+                            </div>
+                          )}
                         </div>
                       </div>
-                      {o.qc_status === 'completed' && (
-                        <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded text-xs text-green-700">
-                          ✓ QC Completed - All batches reviewed
-                        </div>
-                      )}
                     </CardContent>
                   </Card>
                 ))}

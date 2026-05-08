@@ -2,7 +2,8 @@
 
 .picker-tailor-card {
   width: 100%;
-  max-width: 320px;
+  max-width: 100%;
+  min-width: 0;
   margin: 0 auto;
   position: relative;
   border-radius: 26px;
@@ -69,6 +70,7 @@
 
 .picker-tailor-meta {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
   gap: 8px;
@@ -123,7 +125,9 @@
 
 .picker-tailor-products {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 8px;
   min-height: 52px;
   margin-bottom: 14px;
   padding-top: 4px;
@@ -278,24 +282,40 @@
 
 .picker-batch-order-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
+  width: 100%;
+  min-width: 0;
+  justify-items: stretch;
+  box-sizing: border-box;
+}
+
+/* One product: always one full-width column (do not use 2-col / 3-col — avoids a half-width or shrink-wrapped strip). */
+.picker-batch-order-grid--single {
+  width: 100%;
+  max-width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @media (min-width: 640px) {
-  .picker-batch-order-grid {
+  .picker-batch-order-grid:not(.picker-batch-order-grid--single) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (min-width: 1024px) {
-  .picker-batch-order-grid {
+  .picker-batch-order-grid:not(.picker-batch-order-grid--single) {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 .picker-batch-order-card {
   width: 100%;
+  max-width: 100%;
+  justify-self: stretch;
+  box-sizing: border-box;
   position: relative;
   border-radius: 22px;
   overflow: hidden;
@@ -354,6 +374,7 @@
   gap: 12px;
   align-items: flex-start;
   margin-bottom: 12px;
+  min-width: 0;
 }
 
 .picker-batch-order-thumb {
@@ -524,15 +545,54 @@
   bottom: 0;
   padding: 11px 14px;
   text-align: center;
-  font-weight: 800;
+  font-weight: 700;
   font-size: 12px;
+  letter-spacing: 0.02em;
   color: #0b0b0b;
   background: linear-gradient(180deg, #b8ff5a, #7de63b);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
   border-radius: 0 0 22px 22px;
 }
 
+.picker-batch-order-bottom.pending {
+  background: linear-gradient(180deg, #fcd34d, #f59e0b);
+  color: #422006;
+  font-weight: 700;
+}
+
 .picker-batch-order-bottom.complete {
   background: linear-gradient(180deg, #86efac, #4ade80);
   color: #052e16;
+}
+
+/* Picker page: Custom / Readymade switch — full width on narrow screens, no horizontal scroll */
+.picker-page-view-switch {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.picker-page-view-switch > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: center;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+}
+
+@media (min-width: 480px) {
+  .picker-page-view-switch {
+    display: inline-flex;
+    flex-wrap: nowrap;
+    width: auto;
+    max-width: none;
+  }
+
+  .picker-page-view-switch > span {
+    flex: 0 1 auto;
+    white-space: nowrap;
+  }
 }
