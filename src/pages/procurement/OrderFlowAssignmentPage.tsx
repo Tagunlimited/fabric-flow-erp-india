@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ErpLayout } from '@/components/ErpLayout';
 import { BackButton } from '@/components/common/BackButton';
 import { Button } from '@/components/ui/button';
@@ -15,11 +15,12 @@ import { toast } from 'sonner';
 import { assignOrderItemFlows } from '@/api/fulfillment/assignFlows';
 import type { ExecutionFlow } from '@/domain/fulfillment/types';
 import { EXECUTION_FLOWS, executionFlowLabel, fulfillmentStatusLabel } from '@/domain/fulfillment/types';
-import { AlertTriangle, ExternalLink, Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { formatLocaleDateFromApi } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { getOrderItemListThumbnailUrl } from '@/utils/orderItemImageUtils';
 
 type QueueRow = {
   order_id: string;
@@ -37,6 +38,13 @@ type QueueRow = {
   pending_line_count: number | null;
 };
 
+type QueueOrderPreview = {
+  imageUrl: string | null;
+  products: string;
+  fabrics: string;
+  sizes: string;
+};
+
 type OrderLine = {
   id: string;
   quantity: number | null;
@@ -44,7 +52,80 @@ type OrderLine = {
   product_id?: string | null;
   execution_flow?: ExecutionFlow | null;
   fulfillment_status?: string | null;
+  fabric_id?: string | null;
+  color?: string | null;
+  mockup_images?: string[] | null;
+  specifications?: unknown;
+  category_image_url?: string | null;
+  fabric?: {
+    id: string;
+    fabric_name?: string | null;
+    color?: string | null;
+    gsm?: string | number | null;
+  } | null;
 };
+
+function parseOrderLineSpecifications(spec: unknown): Record<string, unknown> {
+  if (spec == null) return {};
+  if (typeof spec === 'string') {
+    try {
+      const o = JSON.parse(spec);
+      return typeof o === 'object' && o !== null ? (o as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof spec === 'object') return spec as Record<string, unknown>;
+  return {};
+}
+
+function lineCardDisplay(
+  line: OrderLine,
+  orderMeta: { order_type?: string | null } | undefined
+): { title: string; subtitleParts: string[]; imageUrl: string | null } {
+  const specs = parseOrderLineSpecifications(line.specifications);
+  const productName = String(specs.product_name || '').trim();
+  const desc = String(line.product_description || '').trim();
+  const title =
+    productName ||
+    desc ||
+    String(line.fabric?.fabric_name || '').trim() ||
+    'Line item';
+  const fabric = String(line.fabric?.fabric_name || '').trim();
+  const color =
+    String(line.color || '').trim() ||
+    String(line.fabric?.color || '').trim() ||
+    String(specs.color || '').trim();
+  const gsmRaw = line.fabric?.gsm;
+  const gsm = gsmRaw !== undefined && gsmRaw !== null && String(gsmRaw).trim() !== '' ? `${String(gsmRaw).trim()} GSM` : '';
+  const subtitleParts = [fabric, color, gsm].filter(Boolean);
+  const imageUrl = getOrderItemListThumbnailUrl(line, orderMeta);
+  return { title, subtitleParts, imageUrl };
+}
+
+function summarizeOrderLineForQueue(
+  line: OrderLine,
+  orderMeta: { order_type?: string | null } | undefined
+): { imageUrl: string | null; product: string; fabric: string; sizeLabels: string[] } {
+  const specs = parseOrderLineSpecifications(line.specifications);
+  const imageUrl = getOrderItemListThumbnailUrl(line, orderMeta);
+  const product =
+    String(specs.product_name || '').trim() ||
+    String(line.product_description || '').trim() ||
+    'Line item';
+  const fabric = String(line.fabric?.fabric_name || '').trim();
+
+  const sizeLabels: string[] = [];
+  const sizesQuantities = specs.sizes_quantities as Record<string, unknown> | undefined;
+  if (sizesQuantities && typeof sizesQuantities === 'object') {
+    for (const [k, v] of Object.entries(sizesQuantities)) {
+      if (Number(v) > 0) sizeLabels.push(k);
+    }
+  }
+  const explicitSize = String(specs.size || '').trim();
+  if (explicitSize) sizeLabels.push(explicitSize);
+  return { imageUrl, product, fabric, sizeLabels };
+}
 
 type WiRow = { id: string; quantity: number; item_name: string | null };
 type SalesManager = { id: string; full_name: string | null; avatar_url?: string | null };
@@ -264,7 +345,6 @@ async function fetchPendingFlowQueueFallback(): Promise<QueueRow[]> {
 
 const OrderFlowAssignmentPage: React.FC = () => {
   const navigate = useNavigate();
-  const location = useLocation();
   const [searchParams] = useSearchParams();
   const orderIdParam = searchParams.get('orderId');
 
@@ -285,17 +365,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [settingsSchemaError, setSettingsSchemaError] = useState<string | null>(null);
   const [queueLoadNotice, setQueueLoadNotice] = useState<string | null>(null);
-
-  const openOrderDetail = useCallback(
-    (orderId: string) => {
-      const qs = location.search || '';
-      const returnTo = `/procurement/order-flow-assignment${qs}`;
-      navigate(`/orders/${orderId}?from=flow-assignment`, {
-        state: { from: 'flow-assignment', returnTo },
-      });
-    },
-    [location.search, navigate]
-  );
+  const [queuePreviewByOrderId, setQueuePreviewByOrderId] = useState<Record<string, QueueOrderPreview>>({});
 
   const isMissingRequireFlowColumn = (e: unknown) => {
     const err = e as { code?: string; message?: string } | null;
@@ -441,12 +511,79 @@ const OrderFlowAssignmentPage: React.FC = () => {
     void loadQueue();
   }, [loadQueue, requireFlag]);
 
+  useEffect(() => {
+    const loadQueuePreview = async () => {
+      const orderIds = queue.map((q) => q.order_id).filter(Boolean);
+      if (!orderIds.length) {
+        setQueuePreviewByOrderId({});
+        return;
+      }
+      const { data, error } = await supabase
+        .from('order_items')
+        .select(
+          `
+          id,
+          order_id,
+          product_description,
+          color,
+          mockup_images,
+          specifications,
+          category_image_url,
+          fabric:fabric_master(id, fabric_name, color, gsm)
+        `
+        )
+        .in('order_id', orderIds as any);
+      if (error) {
+        console.error('Failed to load queue preview lines', error);
+        return;
+      }
+      const byOrder: Record<string, QueueOrderPreview> = {};
+      for (const q of queue) {
+        const lines = ((data || []) as any[]).filter((l) => String(l.order_id) === q.order_id) as OrderLine[];
+        const productSet = new Set<string>();
+        const fabricSet = new Set<string>();
+        const sizeSet = new Set<string>();
+        let imageUrl: string | null = null;
+        for (const line of lines) {
+          const summary = summarizeOrderLineForQueue(line, { order_type: q.order_type });
+          if (!imageUrl && summary.imageUrl) imageUrl = summary.imageUrl;
+          if (summary.product) productSet.add(summary.product);
+          if (summary.fabric) fabricSet.add(summary.fabric);
+          summary.sizeLabels.forEach((s) => sizeSet.add(s));
+        }
+        byOrder[q.order_id] = {
+          imageUrl,
+          products: Array.from(productSet).join(', ') || '—',
+          fabrics: Array.from(fabricSet).join(', ') || '—',
+          sizes: Array.from(sizeSet).join(', ') || '—',
+        };
+      }
+      setQueuePreviewByOrderId(byOrder);
+    };
+    void loadQueuePreview();
+  }, [queue]);
+
   const loadLines = useCallback(async (orderId: string) => {
     setLoadingLines(true);
     try {
       const { data, error } = await supabase
         .from('order_items')
-        .select('id, quantity, product_description, product_id, execution_flow, fulfillment_status')
+        .select(
+          `
+          id,
+          quantity,
+          product_description,
+          product_id,
+          execution_flow,
+          fulfillment_status,
+          fabric_id,
+          color,
+          mockup_images,
+          specifications,
+          category_image_url,
+          fabric:fabric_master(id, fabric_name, color, gsm)
+        `
+        )
         .eq('order_id', orderId);
       if (error) throw error;
       const lines = (data || []) as OrderLine[];
@@ -500,6 +637,11 @@ const OrderFlowAssignmentPage: React.FC = () => {
   };
 
   const pendingLines = useMemo(() => orderLines.filter(isLineAwaitingAssignment), [orderLines]);
+
+  const assignmentDialogOrderMeta = useMemo(() => {
+    const row = queue.find((r) => r.order_id === selectedOrderId);
+    return row ? { order_type: row.order_type } : undefined;
+  }, [queue, selectedOrderId]);
   const applyBulkFlowToAllLines = useCallback(
     (flow: ExecutionFlow) => {
       setChoices((prev) => {
@@ -617,8 +759,17 @@ const OrderFlowAssignmentPage: React.FC = () => {
                     <TableHead className="align-middle min-w-[6.5rem]">
                       <span className="text-xs font-semibold">Order #</span>
                     </TableHead>
-                    <TableHead className="align-middle min-w-[6rem]">
-                      <span className="text-xs font-semibold">Customer</span>
+                    <TableHead className="align-middle min-w-[7rem]">
+                      <span className="text-xs font-semibold">Reference</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[10rem]">
+                      <span className="text-xs font-semibold">Products</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[10rem]">
+                      <span className="text-xs font-semibold">Fabric</span>
+                    </TableHead>
+                    <TableHead className="align-middle min-w-[8rem]">
+                      <span className="text-xs font-semibold">Size</span>
                     </TableHead>
                     <TableHead className="align-middle min-w-[7rem]">
                       <span className="text-xs font-semibold">Sales Mgr.</span>
@@ -652,16 +803,21 @@ const OrderFlowAssignmentPage: React.FC = () => {
                       key={r.order_id}
                       className={selectedOrderId === r.order_id ? 'bg-muted/40' : ''}
                     >
+                      <TableCell className="font-medium">{r.order_number}</TableCell>
                       <TableCell>
-                        <button
-                          type="button"
-                          className="font-medium hover:underline"
-                          onClick={() => openOrderDetail(r.order_id)}
-                        >
-                          {r.order_number}
-                        </button>
+                        {queuePreviewByOrderId[r.order_id]?.imageUrl ? (
+                          <img
+                            src={queuePreviewByOrderId[r.order_id]?.imageUrl || ''}
+                            alt=""
+                            className="h-12 w-12 rounded-md border border-border object-cover bg-muted"
+                          />
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </TableCell>
-                      <TableCell>{r.customer_name || '—'}</TableCell>
+                      <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.products || '—'}</TableCell>
+                      <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.fabrics || '—'}</TableCell>
+                      <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.sizes || '—'}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Avatar className="w-10 h-10">
@@ -737,14 +893,6 @@ const OrderFlowAssignmentPage: React.FC = () => {
               <DialogTitle>Assign execution flows</DialogTitle>
             </DialogHeader>
             <div className="space-y-6">
-              {selectedOrderId && (
-                <div className="flex gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => openOrderDetail(selectedOrderId)}>
-                    <ExternalLink className="h-4 w-4 mr-1" />
-                    Order detail
-                  </Button>
-                </div>
-              )}
               {loadingLines ? (
                 <Loader2 className="h-6 w-6 animate-spin" />
               ) : (
@@ -823,14 +971,28 @@ const OrderFlowAssignmentPage: React.FC = () => {
                       )}
                     </div>
                   )}
-                  {!bulkAssignEnabled && orderLines.map((line) => (
+                  {!bulkAssignEnabled && orderLines.map((line) => {
+                    const { title, subtitleParts, imageUrl } = lineCardDisplay(line, assignmentDialogOrderMeta);
+                    return (
                     <div key={line.id} className="rounded-lg border border-border p-4 space-y-3">
                       <div className="flex flex-wrap justify-between gap-2">
-                        <div>
-                          <p className="font-medium">{line.product_description || 'Line item'}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Qty {line.quantity ?? '—'} · {fulfillmentStatusLabel(line.fulfillment_status as any)}
-                          </p>
+                        <div className="flex gap-3 min-w-0 flex-1">
+                          {imageUrl ? (
+                            <img
+                              src={imageUrl}
+                              alt=""
+                              className="h-12 w-12 shrink-0 rounded-md border border-border object-cover bg-muted"
+                            />
+                          ) : null}
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{title}</p>
+                            <p className="text-xs text-muted-foreground">
+                              Qty {line.quantity ?? '—'} · {fulfillmentStatusLabel(line.fulfillment_status as any)}
+                            </p>
+                            {subtitleParts.length > 0 ? (
+                              <p className="text-xs text-muted-foreground mt-0.5">{subtitleParts.join(' · ')}</p>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                       <RadioGroup
@@ -959,7 +1121,8 @@ const OrderFlowAssignmentPage: React.FC = () => {
                         </div>
                       )}
                     </div>
-                  ))}
+                  );
+                  })}
                   <Button onClick={() => void submitAssignments()} disabled={saving || orderLines.length === 0}>
                     {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save assignments'}
                   </Button>

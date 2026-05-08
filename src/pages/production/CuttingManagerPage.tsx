@@ -364,7 +364,8 @@ const CuttingManagerPage = () => {
         const { data: orderItems, error: orderItemsError } = await supabase
           .from('order_items' as any)
           .select('*')
-          .in('order_id', allOrderIds as any);
+          .in('order_id', allOrderIds as any)
+          .or('execution_flow.eq.stitching,execution_flow.is.null');
 
         if (orderItemsError) {
           console.error('Error fetching order items:', orderItemsError);
@@ -460,7 +461,9 @@ const CuttingManagerPage = () => {
           return 'medium';
         };
 
-        const jobs: CuttingJob[] = (orders || []).map((o: any) => {
+        const jobs: CuttingJob[] = (orders || [])
+          .filter((o: any) => (orderItemsByOrderId[o.id] || []).length > 0)
+          .map((o: any) => {
           const p: any = map[o.id] || {};
           const bom: any = bomByOrder[o.id] || { product_name: undefined, qty: 0 };
           const orderItems = orderItemsByOrderId[o.id] || [];

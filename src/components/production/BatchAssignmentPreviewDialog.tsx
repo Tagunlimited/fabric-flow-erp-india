@@ -68,10 +68,6 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
     const root = printRef.current;
     if (!root) return;
 
-    const styleTags = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
-      .map((el) => el.outerHTML)
-      .join('\n');
-
     const html = `
       <!doctype html>
       <html>
@@ -79,12 +75,33 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
           <title>Stitching job card — thermal</title>
-          ${styleTags}
           <style>
             @page { size: 80mm auto; margin: 0; }
-            html, body { margin: 0; padding: 0; background: #fff; }
+            html, body {
+              margin: 0;
+              padding: 0;
+              background: #fff;
+              width: 80mm;
+              max-width: 80mm;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
             .print-root { margin: 0; padding: 0; }
+            .${THERMAL_ROOT_CLASS} {
+              width: 80mm;
+              max-width: 80mm;
+            }
             .${THERMAL_SLIP_CLASS} {
+              box-sizing: border-box;
+              width: 80mm;
+              max-width: 80mm;
+              margin: 0;
+              padding: 8px 10px 10px;
+              background: #fff;
+              color: #000;
+              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+              font-size: 11px;
+              line-height: 1.45;
               page-break-after: always;
               break-after: page;
             }
@@ -92,10 +109,21 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
               page-break-after: auto;
               break-after: auto;
             }
+            .thermal-sep {
+              border: none;
+              border-top: 1px dashed #000;
+              margin: 8px 0;
+              opacity: 0.85;
+            }
+            .thermal-center { text-align: center; }
+            .thermal-title { font-weight: 700; letter-spacing: 0.02em; font-size: 12px; }
+            .thermal-company { margin-top: 2px; font-size: 10px; }
+            .thermal-section-gap { margin-top: 6px; }
+            .thermal-bold { font-weight: 700; }
           </style>
         </head>
         <body>
-          <div class="print-root">${root.innerHTML}</div>
+          <div class="print-root">${root.outerHTML}</div>
         </body>
       </html>
     `;
@@ -137,7 +165,12 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
       }
     };
 
-    setTimeout(doPrint, 350);
+    const onReady = () => {
+      // Thermal printer drivers can lag while loading iframe styles/content.
+      setTimeout(doPrint, 500);
+    };
+    if (iframe.contentWindow?.document?.readyState === 'complete') onReady();
+    else iframe.onload = onReady;
   }, []);
 
   const handleExportPdf = useCallback(async () => {
@@ -221,6 +254,15 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
             size: 80mm auto;
             margin: 0;
           }
+          html,
+          body {
+            width: 80mm !important;
+            max-width: 80mm !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
           body * {
             visibility: hidden;
           }
@@ -266,13 +308,19 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
                   </div>
                 ) : (
                   slips.map(({ batch, row }, i) => {
-                    const qty = Math.max(0, Number(row.orderQty) || 0);
-                    const sr = snRate(batch);
-                    const or = ofRate(batch);
-                    const snTotal = Math.round(sr * qty * 100) / 100;
-                    const ofTotal = Math.round(or * qty * 100) / 100;
+                    const qtyFromSizes =
+                      (row.sizeBreakdown || []).reduce((s, x) => s + (Number(x.quantity) || 0), 0);
+                    const qty = Math.max(0, Number(row.orderQty) || 0, qtyFromSizes);
+                    const batchSn = snRate(batch);
+                    const batchOf = ofRate(batch);
+                    const inferredSn = qty > 0 ? Number(row.snEarning || 0) / qty : 0;
+                    const inferredOf = qty > 0 ? Number(row.ofEarning || 0) / qty : 0;
+                    const sr = batchSn > 0 ? batchSn : Math.max(0, inferredSn);
+                    const or = batchOf > 0 ? batchOf : Math.max(0, inferredOf);
+                    const snTotal = Math.round((Number(row.snEarning || 0) > 0 ? Number(row.snEarning) : sr * qty) * 100) / 100;
+                    const ofTotal = Math.round((Number(row.ofEarning || 0) > 0 ? Number(row.ofEarning) : or * qty) * 100) / 100;
                     const rateSum = Math.round((sr + or) * 100) / 100;
-                    const lineTotal = Math.round((snTotal + ofTotal) * 100) / 100;
+                    const lineTotal = Math.round((Number(row.lineTotal || 0) > 0 ? Number(row.lineTotal) : snTotal + ofTotal) * 100) / 100;
                     const sizesLine = formatSizesSummary(row.sizeBreakdown);
 
                     return (
@@ -280,7 +328,7 @@ export const BatchAssignmentPreviewDialog: React.FC<BatchAssignmentPreviewDialog
                         key={`${batch.batchName}-${row.orderItemId || row.label}-${i}`}
                         className={THERMAL_SLIP_CLASS}
                       >
-                        <div className="thermal-center thermal-title">STITCHING JOB CARD</div>
+                        <div className="thermal-center thermal-title">TAILOR'S PAYMENT SLIP</div>
                         <div className="thermal-center thermal-company">{escapeHtml(companyName)}</div>
                         <hr className="thermal-sep" />
 
