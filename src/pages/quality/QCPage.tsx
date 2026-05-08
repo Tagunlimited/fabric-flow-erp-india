@@ -10,6 +10,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import QCReviewDialog from "@/components/quality/QCReviewDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getOrderItemListThumbnailUrl, getOrderCardPlaceholderSrc } from '@/utils/orderItemImageUtils';
+import { sumAssignedFromSizeDistributions } from '@/utils/pickerRemaining';
+import { orderNeedsQcVerification } from '@/utils/qcOrderFilters';
 
 interface BatchAvatarInfo {
   avatar_url: string;
@@ -56,13 +58,22 @@ export default function QCPage() {
       // Load all batch assignments with quantities and batch leader
       const { data: assignments } = await (supabase as any)
         .from('order_batch_assignments_with_details')
-        .select('assignment_id, order_id, total_quantity, batch_name, batch_leader_name, batch_leader_avatar, batch_leader_avatar_url, batch_id')
+        .select('assignment_id, order_id, total_quantity, batch_name, batch_leader_name, batch_leader_avatar, batch_leader_avatar_url, batch_id, size_distributions')
         .order('assignment_date', { ascending: false });
 
       const rows = assignments || [];
       if (rows.length === 0) { setOrders([]); return; }
       const assignmentIds = rows.map((r: any) => r.assignment_id).filter(Boolean);
       const orderIds = Array.from(new Set(rows.map((r: any) => r.order_id).filter(Boolean)));
+
+      const assignmentAssignedById: Record<string, number> = {};
+      rows.forEach((r: any) => {
+        const id = String(r?.assignment_id || '').trim();
+        if (!id) return;
+        const viewTot = Number(r.total_quantity ?? 0) || 0;
+        const fromDist = sumAssignedFromSizeDistributions(r?.size_distributions);
+        assignmentAssignedById[id] = Math.max(viewTot, fromDist);
+      });
       
       // Fetch batch leader avatars in bulk from tailors table
       const batchIds = Array.from(new Set(rows.map((r: any) => r.batch_id).filter(Boolean)));
@@ -84,8 +95,9 @@ export default function QCPage() {
         }
       }
 
-      // Sum picked by assignment (column first, notes fallback)
+      // Picked: sum size rows per assignment; do NOT add notes on top of column (double-count).
       let pickedByAssignment: Record<string, number> = {};
+      let pickedFromNotes: Record<string, number> = {};
       if (assignmentIds.length > 0) {
         try {
           const { data: pickedRows } = await (supabase as any)
@@ -112,12 +124,17 @@ export default function QCPage() {
               if (parsed && parsed.picked_by_size && typeof parsed.picked_by_size === 'object') {
                 let sum = 0;
                 for (const v of Object.values(parsed.picked_by_size as Record<string, any>)) sum += Number(v) || 0;
-                pickedByAssignment[a.id] = (pickedByAssignment[a.id] || 0) + sum;
+                pickedFromNotes[a.id] = sum;
               }
             } catch {}
           });
         } catch {}
       }
+      assignmentIds.forEach((id: string) => {
+        const col = pickedByAssignment[id] || 0;
+        const note = pickedFromNotes[id] || 0;
+        pickedByAssignment[id] = col > 0 ? col : note;
+      });
 
       // QC approved/rejected by assignment - MORE DETAILED
       let approvedByAssignment: Record<string, number> = {};
@@ -139,15 +156,14 @@ export default function QCPage() {
             rejectedByAssignment[id] = (rejectedByAssignment[id] || 0) + Number(q.rejected_quantity || 0);
           });
           
-          // Check if QC is complete for each assignment
-          // QC is complete when all picked items have been QC'd: (approved + rejected) === currentPicked
+          // Done when bench is full and every assigned unit is approved; no open QC rejects (picker loop).
           assignmentIds.forEach((id: string) => {
-            const currentPicked = pickedByAssignment[id] || 0;
+            const picked = pickedByAssignment[id] || 0;
             const approved = approvedByAssignment[id] || 0;
             const rejected = rejectedByAssignment[id] || 0;
-            
-            // QC is complete if all picked items have been QC'd
-            qcCompleteByAssignment[id] = currentPicked > 0 && (approved + rejected) === currentPicked;
+            const assigned = assignmentAssignedById[id] || 0;
+            qcCompleteByAssignment[id] =
+              assigned > 0 && picked >= assigned && approved >= assigned && rejected === 0;
           });
           
         } catch {}
@@ -226,21 +242,7 @@ export default function QCPage() {
       rows.forEach((r: any) => {
         const currentPicked = Number(pickedByAssignment[r.assignment_id] || 0);
         if (currentPicked <= 0) return; // exclude not picked
-        
-        // Show orders when there are new picks needing QC OR when there are rejected items waiting for replacement
-        // New picks = currentPicked - (approved + rejected)
-        const approved = Number(approvedByAssignment[r.assignment_id] || 0);
-        const rejected = Number(rejectedByAssignment[r.assignment_id] || 0);
-        const itemsNeedingQC = Math.max(0, currentPicked - (approved + rejected));
-        
-        // Include orders that have:
-        // 1. New picks needing QC verification, OR
-        // 2. Rejected items (even if all current picked items are QC'd, rejected items mean replacements need to be picked and then QC'd)
-        // Skip only if: no new picks AND no rejected items AND all picked items are fully QC'd
-        if (itemsNeedingQC <= 0 && rejected <= 0 && (approved + rejected) === currentPicked) {
-          return; // Skip fully QC'd assignments with no rejected items and no new picks
-        }
-        
+
         const oid = r.order_id as string;
         const key = oid;
         if (!byOrder[key]) {
@@ -261,7 +263,10 @@ export default function QCPage() {
           };
         }
         byOrder[key].picked_quantity += currentPicked;
-        byOrder[key].total_quantity += Number(r.total_quantity || 0);
+        const lineAssigned =
+          assignmentAssignedById[String(r.assignment_id)] ??
+          Math.max(Number(r.total_quantity || 0), sumAssignedFromSizeDistributions(r.size_distributions));
+        byOrder[key].total_quantity += lineAssigned;
         byOrder[key].approved_quantity += Number(approvedByAssignment[r.assignment_id] || 0);
         byOrder[key].rejected_quantity += Number(rejectedByAssignment[r.assignment_id] || 0);
         byOrder[key].assignment_ids.push(r.assignment_id);
@@ -324,11 +329,20 @@ export default function QCPage() {
     const q = search.trim().toLowerCase();
     let filteredOrders = orders;
     
-    // Filter by QC status based on active tab
+    // Pending = QC review queue (new picks + replacement picks) or never started; Partial = rework / awaiting picker.
     if (activeTab === 'pending') {
-      filteredOrders = orders.filter(o => o.qc_status === 'pending');
+      filteredOrders = orders.filter(
+        (o) =>
+          !o.is_fully_qc &&
+          (orderNeedsQcVerification(o) || o.qc_status === 'pending')
+      );
     } else if (activeTab === 'partial') {
-      filteredOrders = orders.filter(o => o.qc_status === 'partial');
+      filteredOrders = orders.filter(
+        (o) =>
+          !o.is_fully_qc &&
+          !orderNeedsQcVerification(o) &&
+          o.qc_status !== 'pending'
+      );
     } else if (activeTab === 'completed') {
       filteredOrders = orders.filter(o => o.qc_status === 'completed');
     }
@@ -398,7 +412,7 @@ export default function QCPage() {
               onClick={() => setActiveTab('pending')}
             >
               <AlertTriangle className="h-4 w-4 shrink-0" />
-              Pending ({orders.filter(o => o.qc_status === 'pending').length})
+              QC review ({orders.filter(o => !o.is_fully_qc && (orderNeedsQcVerification(o) || o.qc_status === 'pending')).length})
             </button>
             <button
               type="button"
@@ -409,7 +423,7 @@ export default function QCPage() {
               onClick={() => setActiveTab('partial')}
             >
               <Clock className="h-4 w-4 shrink-0" />
-              In Progress ({orders.filter(o => o.qc_status === 'partial').length})
+              Rework / pick ({orders.filter(o => !o.is_fully_qc && !orderNeedsQcVerification(o) && o.qc_status !== 'pending').length})
             </button>
             <button
               type="button"

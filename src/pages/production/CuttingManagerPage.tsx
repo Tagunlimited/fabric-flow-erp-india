@@ -47,6 +47,18 @@ import { buildStitchingJobCardDocumentForJob } from '@/utils/stitchingJobCardFro
 import { BatchAssignmentPreviewDialog } from '@/components/production/BatchAssignmentPreviewDialog';
 import { getOrderTotalQuantityFromItems } from '@/utils/orderItemLineQuantity';
 import { selectedColorsDisplayText } from '@/utils/bomSelectedColors';
+import { sumAllCutsInStoredJson } from '@/utils/cutQuantitiesStorage';
+
+/** View/API may expose assignment PK as `id` or `assignment_id`. */
+function batchAssignmentRowId(ba: { id?: string; assignment_id?: string } | null | undefined): string {
+  return String(ba?.id ?? ba?.assignment_id ?? '').trim();
+}
+
+/** Size rows often store `assigned_quantity`; legacy rows use `quantity`. */
+function rawOrderBatchSizeAssignedQty(sd: { assigned_quantity?: unknown; quantity?: unknown }): number {
+  const n = sd?.assigned_quantity ?? sd?.quantity;
+  return Math.max(0, Number(n) || 0);
+}
 
 interface CuttingJob {
   id: string;
@@ -475,6 +487,11 @@ const CuttingManagerPage = () => {
           
           // Get cutting masters for this order
           const cuttingMasters = cuttingMastersByOrder[o.id] || [];
+
+          // cut_quantity column can lag behind cut_quantities_by_size (JSON); progress should match real recorded cuts.
+          const cutFromColumn = Number(p.cut_quantity || 0);
+          const cutFromJson = sumAllCutsInStoredJson(p.cut_quantities_by_size ?? null);
+          const resolvedCutQuantity = Math.max(cutFromColumn, cutFromJson);
           
           // Build the job object with cutting master information
           const job: CuttingJob = {
@@ -490,11 +507,11 @@ const CuttingManagerPage = () => {
               )}` : 
               '-',
             quantity: getOrderTotalQuantityFromItems(orderItems),
-            cutQuantity: Number(p.cut_quantity || 0),
+            cutQuantity: resolvedCutQuantity,
             cutQuantitiesBySize: p.cut_quantities_by_size || {},
             startDate: p.cutting_work_date || '',
             dueDate: o.expected_delivery_date || '',
-            status: Number(p.cut_quantity || 0) > 0 ? 'in_progress' : 'pending',
+            status: resolvedCutQuantity > 0 ? 'in_progress' : 'pending',
             priority: computePriority(o.expected_delivery_date),
             cuttingPattern: '',
             fabricConsumption: 0,
@@ -549,38 +566,63 @@ const CuttingManagerPage = () => {
               .select('*')
               .eq('order_id', job.id as any);
 
-            // Fetch size distributions with picked_quantity for all batch assignments
-            const assignmentIds = (batchAssignments || []).map((ba: any) => ba.id).filter(Boolean);
+            const assignmentIds = (batchAssignments || [])
+              .map((ba: any) => batchAssignmentRowId(ba))
+              .filter(Boolean);
             let sizeDistributionsMap: Record<string, any[]> = {};
-            
+
+            let tableTotalsByAssignmentId: Record<string, number> = {};
+            if (assignmentIds.length > 0) {
+              const { data: obaTotals } = await supabase
+                .from('order_batch_assignments' as any)
+                .select('id, total_quantity')
+                .in('id', assignmentIds as any);
+              (obaTotals || []).forEach((r: any) => {
+                if (r?.id != null) {
+                  tableTotalsByAssignmentId[String(r.id)] = Number(r.total_quantity || 0) || 0;
+                }
+              });
+            }
+
             if (assignmentIds.length > 0) {
               const { data: sizeDistributions } = await supabase
                 .from('order_batch_size_distributions' as any)
-                .select('order_batch_assignment_id, size_name, quantity, picked_quantity')
+                .select('order_batch_assignment_id, size_name, quantity, assigned_quantity, picked_quantity')
                 .in('order_batch_assignment_id', assignmentIds as any);
-              
-              // Group by assignment_id
+
               (sizeDistributions || []).forEach((sd: any) => {
-                const assignmentId = sd.order_batch_assignment_id;
+                const assignmentId = String(sd.order_batch_assignment_id || '').trim();
+                if (!assignmentId) return;
                 if (!sizeDistributionsMap[assignmentId]) {
                   sizeDistributionsMap[assignmentId] = [];
                 }
-                const quantity = Number(sd.quantity || 0);
+                const quantity = rawOrderBatchSizeAssignedQty(sd);
                 const pickedQuantity = Number(sd.picked_quantity || 0);
                 sizeDistributionsMap[assignmentId].push({
                   size_name: sd.size_name,
-                  quantity: quantity,
+                  quantity,
                   picked_quantity: pickedQuantity,
-                  left_quantity: Math.max(0, quantity - pickedQuantity)
+                  left_quantity: Math.max(0, quantity - pickedQuantity),
                 });
               });
             }
 
-            // Enrich batch assignments with size distributions
-            const enrichedBatchAssignments = (batchAssignments || []).map((ba: any) => ({
-              ...ba,
-              size_distributions: sizeDistributionsMap[ba.id] || []
-            }));
+            const enrichedBatchAssignments = (batchAssignments || []).map((ba: any) => {
+              const aid = batchAssignmentRowId(ba);
+              const viewTotal = Number(ba.total_quantity || 0) || 0;
+              const tableTotal = aid ? tableTotalsByAssignmentId[aid] ?? 0 : 0;
+              const fromSizes = (sizeDistributionsMap[aid] || []).reduce(
+                (s, row) => s + Number(row.quantity || 0),
+                0
+              );
+              const mergedTotal = Math.max(viewTotal, tableTotal, fromSizes);
+              return {
+                ...ba,
+                id: aid || ba.id,
+                total_quantity: mergedTotal,
+                size_distributions: sizeDistributionsMap[aid] || [],
+              };
+            });
 
             return {
               ...job,
@@ -648,12 +690,11 @@ const CuttingManagerPage = () => {
   const getTotalAssignedToBatches = (job: CuttingJob) =>
     (job.batchAssignments || []).reduce((sum, assignment) => {
       const directQty = Number(assignment.total_quantity || 0);
-      if (directQty > 0) return sum + directQty;
       const fromSizes = (assignment.size_distributions || []).reduce(
         (sizeSum, row) => sizeSum + Number(row.quantity || 0),
         0
       );
-      return sum + fromSizes;
+      return sum + Math.max(directQty, fromSizes);
     }, 0);
 
   const deriveJobStatus = (job: CuttingJob): CuttingJob['status'] => {
@@ -661,8 +702,9 @@ const CuttingManagerPage = () => {
     const cutQty = Math.max(0, Number(job.cutQuantity || 0));
     const assignedQty = getTotalAssignedToBatches(job);
     const isFullyCut = requiredQty > 0 && cutQty >= requiredQty;
-    const isFullyBatchAssigned = requiredQty > 0 && assignedQty >= requiredQty;
-    if (isFullyCut && isFullyBatchAssigned) return 'completed';
+    // Batches must cover all recorded cuts (not only order qty), otherwise job stays active after partial assign.
+    const allCutPiecesAssigned = cutQty > 0 && assignedQty + 1e-6 >= cutQty;
+    if (isFullyCut && allCutPiecesAssigned) return 'completed';
     if (cutQty > 0 || assignedQty > 0) return 'in_progress';
     return 'pending';
   };
@@ -770,7 +812,7 @@ const CuttingManagerPage = () => {
 
   function getCompletionPercentage(job: CuttingJob) {
     if (!job.quantity) return 0;
-    return Math.round((job.cutQuantity / job.quantity) * 100);
+    return Math.min(100, Math.round((job.cutQuantity / job.quantity) * 100));
   }
 
   const getProgressBarColor = (percentage: number) => {

@@ -7,10 +7,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
+import { computePickedAfterPickerDelta } from "@/utils/pickerRemaining";
 
 interface SizeItem {
   size_name: string;
   quantity: number; // assigned quantity for that size
+  /** Present when data comes from DB / view JSON */
+  assigned_quantity?: number;
 }
 
 interface PickerQuantityDialogProps {
@@ -159,11 +162,21 @@ export default function PickerQuantityDialog({
     }
   }, [isOpen, assignmentId, sizeDistributions]);
 
-  const assignedTotal = useMemo(() => (sizeDistributions || []).reduce((sum, s) => sum + Number(s.quantity || 0), 0), [sizeDistributions]);
+  const assignedTotal = useMemo(
+    () =>
+      (sizeDistributions || []).reduce(
+        (sum, s) => sum + Number(s.quantity ?? s.assigned_quantity ?? 0),
+        0
+      ),
+    [sizeDistributions]
+  );
   const pickedTotal = useMemo(() => Object.values(pickedBySize).reduce((a, b) => a + Number(b || 0), 0), [pickedBySize]);
   const addTotal = useMemo(() => Object.values(addBySize).reduce((a, b) => a + Number(b || 0), 0), [addBySize]);
 
-  const getAssigned = (size: string) => Number((sizeDistributions || []).find(s => s.size_name === size)?.quantity || 0);
+  const getAssigned = (size: string) => {
+    const row = (sizeDistributions || []).find((s) => s.size_name === size);
+    return Number(row?.quantity ?? row?.assigned_quantity ?? 0);
+  };
   const getPicked = (size: string) => Number(pickedBySize[size] || 0);
   const getRejected = (size: string) => Number(rejectedBySize[size] || 0);
   
@@ -209,20 +222,22 @@ export default function PickerQuantityDialog({
   };
 
   const persistToNotes = async () => {
-    // Merge with existing picked values and write back JSON
-    // Key concept: newPickedQuantity = currentPicked - rejected + newPicks
-    // This removes rejected items from count and adds new picks (replacements + pending)
     const merged: Record<string, number> = {};
-    Object.keys(pickedBySize).forEach(size => {
+    const allSizes = new Set<string>([
+      ...Object.keys(pickedBySize),
+      ...Object.keys(addBySize),
+      ...(sizeDistributions || []).map((s) => s.size_name),
+    ]);
+    allSizes.forEach((size) => {
       const currentPicked = Number(pickedBySize[size] || 0);
       const rejected = Number(rejectedBySize[size] || 0);
       const newPicks = Number(addBySize[size] || 0);
-      // Formula: newPicked = currentPicked - rejected + newPicks
-      // This ensures rejected items are replaced, not added on top
-      // Example: picked=40, rejected=5, newPicks=15 → newPicked = 40-5+15 = 50
-      const newPicked = Math.max(0, currentPicked - rejected + newPicks);
       const assigned = getAssigned(size);
-      merged[size] = Math.min(newPicked, assigned);
+      if (newPicks === 0) {
+        merged[size] = currentPicked;
+        return;
+      }
+      merged[size] = computePickedAfterPickerDelta(assigned, currentPicked, rejected, newPicks);
     });
     const payload = { picked_by_size: merged } as any;
     await (supabase as any)
@@ -235,40 +250,144 @@ export default function PickerQuantityDialog({
     try {
       setSaving(true);
       const sizes = Object.keys(addBySize);
-      let columnUpdateWorked = true;
-      try {
-        await Promise.all(sizes.map(async (sizeName) => {
-          const currentPicked = getPicked(sizeName);
-          const rejected = getRejected(sizeName);
-          const newPicks = Number(addBySize[sizeName] || 0);
-          
-          // Formula: newPickedQuantity = currentPicked - rejected + newPicks
-          // This removes rejected items from picked count and adds new picks
-          // Example: picked=40, rejected=5, newPicks=15 → newPicked = 40-5+15 = 50
-          // This correctly handles:
-          // - Rejected items being replaced (subtracted from current, added as new picks)
-          // - Pending items being picked (added as new picks)
-          const newPicked = Math.max(0, currentPicked - rejected + newPicks);
-          
-          // Ensure we don't exceed assigned quantity
-          const assigned = getAssigned(sizeName);
-          const finalPicked = Math.min(newPicked, assigned);
-          
-          await (supabase as any)
+      const upsertErrors: string[] = [];
+
+      const upsertOneSize = async (sizeName: string) => {
+        const currentPicked = getPicked(sizeName);
+        const rejected = getRejected(sizeName);
+        const newPicks = Number(addBySize[sizeName] || 0);
+        if (newPicks === 0) return;
+
+        const assigned = getAssigned(sizeName);
+        const finalPicked = computePickedAfterPickerDelta(assigned, currentPicked, rejected, newPicks);
+
+        // Canonical column is assigned_quantity (not quantity); quantity-only rows break PostgREST with 400.
+        const modernRow = {
+          order_batch_assignment_id: assignmentId,
+          size_name: sizeName,
+          assigned_quantity: assigned,
+          picked_quantity: finalPicked,
+        };
+        const { error: errModern } = await (supabase as any)
+          .from('order_batch_size_distributions')
+          .upsert(modernRow as any, {
+            onConflict: 'order_batch_assignment_id,size_name',
+          } as any);
+
+        if (!errModern) return;
+
+        const msg = String(errModern.message || errModern.details || '');
+        if (/assigned_quantity|column .* does not exist/i.test(msg)) {
+          const legacyRow = {
+            order_batch_assignment_id: assignmentId,
+            size_name: sizeName,
+            quantity: assigned,
+            picked_quantity: finalPicked,
+          };
+          const { error: errLegacy } = await (supabase as any)
             .from('order_batch_size_distributions')
-            .upsert({
-              order_batch_assignment_id: assignmentId,
-              size_name: sizeName,
-              quantity: assigned,
-              picked_quantity: finalPicked
-            } as any, { onConflict: 'order_batch_assignment_id,size_name' } as any);
-        }));
-      } catch (e) {
-        columnUpdateWorked = false;
-      }
-      if (!columnUpdateWorked) {
+            .upsert(legacyRow as any, {
+              onConflict: 'order_batch_assignment_id,size_name',
+            } as any);
+          if (!errLegacy) return;
+          upsertErrors.push(`${sizeName}: ${errLegacy.message || 'upsert failed'}`);
+          return;
+        }
+
+        // No matching UNIQUE for ON CONFLICT (migration not applied): update-or-insert by keys.
+        if (/unique|exclusion constraint|on conflict/i.test(msg)) {
+          const { data: existing } = await (supabase as any)
+            .from('order_batch_size_distributions')
+            .select('id')
+            .eq('order_batch_assignment_id', assignmentId)
+            .eq('size_name', sizeName)
+            .maybeSingle();
+          if (existing?.id) {
+            const { error: uErr } = await (supabase as any)
+              .from('order_batch_size_distributions')
+              .update({
+                assigned_quantity: assigned,
+                picked_quantity: finalPicked,
+                updated_at: new Date().toISOString(),
+              } as any)
+              .eq('id', existing.id);
+            if (!uErr) return;
+            const { error: uErrLegacy } = await (supabase as any)
+              .from('order_batch_size_distributions')
+              .update({
+                quantity: assigned,
+                picked_quantity: finalPicked,
+                updated_at: new Date().toISOString(),
+              } as any)
+              .eq('id', existing.id);
+            if (!uErrLegacy) return;
+            upsertErrors.push(`${sizeName}: ${uErrLegacy.message || 'update failed'}`);
+            return;
+          }
+          const { error: iErr } = await (supabase as any)
+            .from('order_batch_size_distributions')
+            .insert(modernRow as any);
+          if (!iErr) return;
+          const legacyInsert = {
+            order_batch_assignment_id: assignmentId,
+            size_name: sizeName,
+            quantity: assigned,
+            picked_quantity: finalPicked,
+          };
+          const { error: iErr2 } = await (supabase as any)
+            .from('order_batch_size_distributions')
+            .insert(legacyInsert as any);
+          if (!iErr2) return;
+          upsertErrors.push(`${sizeName}: ${iErr2.message || 'insert failed'}`);
+          return;
+        }
+
+        upsertErrors.push(`${sizeName}: ${msg || 'upsert failed'}`);
+      };
+
+      await Promise.all(sizes.map((sizeName) => upsertOneSize(sizeName)));
+
+      const decrementQcRejected = async () => {
+        for (const sizeName of sizes) {
+          const newPicks = Number(addBySize[sizeName] || 0);
+          if (newPicks <= 0) continue;
+          try {
+            const { data: qrow, error: selErr } = await (supabase as any)
+              .from("qc_reviews")
+              .select("id, rejected_quantity")
+              .eq("order_batch_assignment_id", assignmentId)
+              .eq("size_name", sizeName)
+              .maybeSingle();
+            if (selErr || !qrow?.id) continue;
+            const nextR = Math.max(0, Number(qrow.rejected_quantity || 0) - newPicks);
+            const { error: upErr } = await (supabase as any)
+              .from("qc_reviews")
+              .update({ rejected_quantity: nextR } as any)
+              .eq("id", qrow.id);
+            if (upErr) console.warn("qc_reviews rejected update:", sizeName, upErr);
+          } catch (e) {
+            console.warn("decrementQcRejected", sizeName, e);
+          }
+        }
+      };
+
+      if (upsertErrors.length > 0) {
+        console.error('order_batch_size_distributions upsert errors:', upsertErrors);
         await persistToNotes();
+        await decrementQcRejected();
+        toast({
+          title: 'Saved to notes only',
+          description:
+            'Database row update failed (check unique index on assignment + size). Picked totals stored in assignment notes as fallback.',
+          variant: 'destructive',
+        });
+        onSuccess();
+        onClose();
+        return;
       }
+
+      await decrementQcRejected();
+
       toast({ title: 'Saved', description: 'Picked quantities updated.' });
       onSuccess();
       onClose();
@@ -282,7 +401,7 @@ export default function PickerQuantityDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-4xl">
+      <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-4xl max-h-[90dvh] overflow-y-auto overflow-x-hidden min-w-0 top-[3vh] translate-y-0 sm:top-[50%] sm:translate-y-[-50%] p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle>Pick quantities for order {orderNumber}</DialogTitle>
           {productDescription ? (
@@ -307,7 +426,7 @@ export default function PickerQuantityDialog({
             <span>Customer:</span>
             <span className="font-medium text-foreground">{customerName || '-'}</span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge className="bg-blue-100 text-blue-800">Assigned: {assignedTotal}</Badge>
             <Badge className="bg-purple-100 text-purple-800">Picked: {pickedTotal}</Badge>
             {addTotal > 0 && (
@@ -361,9 +480,13 @@ export default function PickerQuantityDialog({
               );
             })}
           </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving || addTotal === 0}>Save</Button>
+          <div className="flex flex-col-reverse sm:flex-row justify-end gap-2">
+            <Button variant="outline" onClick={onClose} disabled={saving} className="w-full sm:w-auto">
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={saving || addTotal === 0} className="w-full sm:w-auto">
+              Save
+            </Button>
           </div>
         </div>
       </DialogContent>

@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
 import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
+import { toast } from "sonner";
 
 interface SizeRow { size_name: string; picked: number; approved: number; rejected: number; remarks?: string; }
 
@@ -69,39 +70,29 @@ export default function QCReviewDialog({ isOpen, onClose, orderId, orderNumber, 
         console.error('Error fetching order item data:', error);
       }
       
-      // For each size, calculate items needing verification
-      // Key concept: itemsNeedingQC = currentPicked - (previousApproved + previousRejected)
-      // This represents NEW picks that haven't been QC'd yet (replacements + pending)
+      // Items still needing QC = physical picked minus already-approved (good) units.
+      // Rejected units were removed from picked_quantity when QC saved — do NOT subtract rejected here
+      // or replacement picks never show (e.g. picked 60, approved 55, rejected 5 → after refill picked 60,
+      // old formula 60-(55+5)=0 blocks second QC pass).
       const base: SizeRow[] = (sizes || []).map((s: any) => {
         const currentPicked = Number(s.picked_quantity || 0);
         const qcData = qcMap.get(s.size_name);
         const previousApproved = qcData?.a || 0;
-        const previousRejected = qcData?.r || 0;
-        
-        // Calculate items needing QC verification
-        // Formula: currentPicked - (previousApproved + previousRejected)
-        // This gives us NEW picks that need QC (could be replacements for rejected + pending items)
-        // Example: 
-        // - Initial: picked=40, approved=35, rejected=5 → itemsNeedingQC = 40 - (35+5) = 0 ✓ (all QC'd)
-        // - After picker picks 15 more: picked=55, approved=35, rejected=5 → itemsNeedingQC = 55 - (35+5) = 15 ✓ (new picks)
-        // - After QC approves 15: picked=55, approved=50, rejected=5 → itemsNeedingQC = 55 - (50+5) = 0 ✓ (all QC'd)
-        const itemsNeedingQC = Math.max(0, currentPicked - (previousApproved + previousRejected));
-        
-        // If there's no QC data yet, all picked items need QC
-        // If there's QC data, show only items needing verification
+
+        const itemsNeedingQC = Math.max(0, currentPicked - previousApproved);
         const needsQC = qcData ? itemsNeedingQC : currentPicked;
-        
+
         return {
           size_name: s.size_name,
-          picked: needsQC, // Show only items needing QC verification
-          approved: 0, // Reset to 0 - represents new approvals in this session
-          rejected: 0, // Reset to 0 - represents new rejections in this session
+          picked: needsQC,
+          approved: 0,
+          rejected: 0,
           remarks: qcData?.m || ''
         };
       });
-      
-      // Sort rows using master order
-      const sortedRows = sortSizeDistributionsByMasterOrder(base, sizeTypeId, sizeTypes);
+
+      const pendingOnly = base.filter((r) => r.picked > 0);
+      const sortedRows = sortSizeDistributionsByMasterOrder(pendingOnly, sizeTypeId, sizeTypes);
       setRows(sortedRows);
     };
     if (isOpen) load();
@@ -216,30 +207,43 @@ export default function QCReviewDialog({ isOpen, onClose, orderId, orderNumber, 
         // - Replacements were approved (making approved = currentPicked)
         // This is valid - rejected is historical, approved is current state
         // But we should ensure approved doesn't exceed currentPicked
+        let effectiveApproved = finalApproved;
         if (finalApproved > currentPicked) {
           console.warn(`QC validation: approved ${finalApproved} exceeds picked ${currentPicked} for ${r.size_name}, adjusting`);
-          const adjustedApproved = currentPicked;
-          return {
-            order_batch_assignment_id: assignmentId,
-            size_name: r.size_name,
-            picked_quantity: currentPicked,
-            approved_quantity: adjustedApproved,
-            rejected_quantity: finalRejected, // Keep historical rejected
-            remarks: r.remarks || null
-          };
+          effectiveApproved = currentPicked;
         }
-        
+
+        const pickedAfterReject = Math.max(0, currentPicked - (r.rejected || 0));
+
         await (supabase as any)
           .from('qc_reviews')
           .upsert({
             order_batch_assignment_id: assignmentId,
             size_name: r.size_name,
-            picked_quantity: currentPicked, // Current total picked quantity (snapshot for reference)
-            approved_quantity: finalApproved, // Cumulative approved across all QC sessions (up to currentPicked)
-            rejected_quantity: finalRejected, // Cumulative rejected (historical - may exceed currentPicked after replacements)
+            picked_quantity: pickedAfterReject,
+            approved_quantity: effectiveApproved,
+            rejected_quantity: finalRejected,
             remarks: r.remarks || null
           } as any, { onConflict: 'order_batch_assignment_id,size_name' } as any);
+
+        // Rejected units leave the bench — reduce picked count so picker can replenish without increasing assigned total.
+        if ((r.rejected || 0) > 0) {
+          await (supabase as any)
+            .from('order_batch_size_distributions')
+            .update({
+              picked_quantity: pickedAfterReject,
+              updated_at: new Date().toISOString(),
+            } as any)
+            .eq('order_batch_assignment_id', assignmentId)
+            .eq('size_name', r.size_name);
+        }
       }));
+      toast.success("QC saved", {
+        description:
+          rows.some((x) => (x.rejected || 0) > 0)
+            ? "Rejected units sent back to picker. Order status set to rework when applicable."
+            : "Units approved. Order moves forward when all assignments are fully approved.",
+      });
       onClose();
     } finally {
       setSaving(false);
@@ -282,6 +286,12 @@ export default function QCReviewDialog({ isOpen, onClose, orderId, orderNumber, 
             
             {/* Right side: Size inputs */}
             <div className="flex-1 min-w-0">
+              {rows.length === 0 ? (
+                <div className="rounded-lg border border-dashed bg-muted/30 px-4 py-10 text-center text-sm text-muted-foreground">
+                  No units waiting for QC on this batch. If you just picked replacements after a rejection, refresh the list
+                  and open again — you should see counts here once picked totals update.
+                </div>
+              ) : null}
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 {rows.map(r => {
                   const remaining = getRemainingFor(r);
@@ -314,7 +324,7 @@ export default function QCReviewDialog({ isOpen, onClose, orderId, orderNumber, 
           
           <div className="flex justify-end gap-2 pt-2 border-t">
             <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving || needsRemarks}>Save</Button>
+            <Button onClick={handleSave} disabled={saving || needsRemarks || rows.length === 0}>Save</Button>
           </div>
         </div>
       </DialogContent>
