@@ -2110,6 +2110,9 @@ const getSelectedFabricVariant = (productIndex: number) => {
                         setOrderDatePopoverOpen(false);
                       }}
                       initialFocus
+                      captionLayout="dropdown-buttons"
+                      fromYear={1940}
+                      toYear={2050}
                     />
                   </PopoverContent>
                 </Popover>
@@ -2143,6 +2146,9 @@ const getSelectedFabricVariant = (productIndex: number) => {
                         setExpectedDeliveryPopoverOpen(false);
                       }}
                       initialFocus
+                      captionLayout="dropdown-buttons"
+                      fromYear={1940}
+                      toYear={2050}
                     />
                   </PopoverContent>
                 </Popover>

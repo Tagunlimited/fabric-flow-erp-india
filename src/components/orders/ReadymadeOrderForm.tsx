@@ -1098,6 +1098,9 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
                     selected={formData.order_date}
                     onSelect={(date) => date && setFormData({ ...formData, order_date: date })}
                     initialFocus
+                    captionLayout="dropdown-buttons"
+                    fromYear={1940}
+                    toYear={2050}
                   />
                 </PopoverContent>
               </Popover>
@@ -1124,6 +1127,9 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
                     selected={formData.expected_delivery_date}
                     onSelect={(date) => date && setFormData({ ...formData, expected_delivery_date: date })}
                     initialFocus
+                    captionLayout="dropdown-buttons"
+                    fromYear={1940}
+                    toYear={2050}
                   />
                 </PopoverContent>
               </Popover>

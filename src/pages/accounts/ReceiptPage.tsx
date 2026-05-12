@@ -1349,7 +1349,14 @@ export default function ReceiptPage() {
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent align="start" className="p-0">
-                    <Calendar mode="single" selected={date} onSelect={(d) => d && setDate(d)} />
+                    <Calendar
+                      mode="single"
+                      selected={date}
+                      onSelect={(d) => d && setDate(d)}
+                      captionLayout="dropdown-buttons"
+                      fromYear={1940}
+                      toYear={2050}
+                    />
                   </PopoverContent>
                 </Popover>
               </div>
@@ -1370,6 +1377,9 @@ export default function ReceiptPage() {
                     selected={creditPaymentDueDate}
                     onSelect={(d) => d && setCreditPaymentDueDate(d)}
                     initialFocus
+                    captionLayout="dropdown-buttons"
+                    fromYear={1940}
+                    toYear={2050}
                   />
                 </PopoverContent>
               </Popover>
@@ -1682,7 +1692,14 @@ export default function ReceiptPage() {
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent align="start" className="p-0">
-                      <Calendar mode="single" selected={editDate} onSelect={(d) => d && setEditDate(d)} />
+                      <Calendar
+                        mode="single"
+                        selected={editDate}
+                        onSelect={(d) => d && setEditDate(d)}
+                        captionLayout="dropdown-buttons"
+                        fromYear={1940}
+                        toYear={2050}
+                      />
                     </PopoverContent>
                   </Popover>
                 </div>
