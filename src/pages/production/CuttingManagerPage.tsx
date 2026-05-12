@@ -54,10 +54,22 @@ function batchAssignmentRowId(ba: { id?: string; assignment_id?: string } | null
   return String(ba?.id ?? ba?.assignment_id ?? '').trim();
 }
 
-/** Size rows often store `assigned_quantity`; legacy rows use `quantity`. */
-function rawOrderBatchSizeAssignedQty(sd: { assigned_quantity?: unknown; quantity?: unknown }): number {
-  const n = sd?.assigned_quantity ?? sd?.quantity;
-  return Math.max(0, Number(n) || 0);
+/**
+ * Pieces allocated on a size row for totals and completion checks.
+ * Prefer max(assigned_quantity, quantity): `assigned_quantity` defaults to 0 in DB, so `??` would ignore legacy `quantity`.
+ * If both are zero but picking was recorded, fall back to picked (stale assignment columns).
+ */
+function effectiveBatchSizeLinePieces(sd: {
+  assigned_quantity?: unknown;
+  quantity?: unknown;
+  picked_quantity?: unknown;
+}): number {
+  const a = Math.max(0, Number(sd?.assigned_quantity) || 0);
+  const q = Math.max(0, Number(sd?.quantity) || 0);
+  const p = Math.max(0, Number(sd?.picked_quantity) || 0);
+  const fromExplicit = Math.max(a, q);
+  if (fromExplicit > 0) return fromExplicit;
+  return p;
 }
 
 interface CuttingJob {
@@ -596,7 +608,7 @@ const CuttingManagerPage = () => {
                 if (!sizeDistributionsMap[assignmentId]) {
                   sizeDistributionsMap[assignmentId] = [];
                 }
-                const quantity = rawOrderBatchSizeAssignedQty(sd);
+                const quantity = effectiveBatchSizeLinePieces(sd);
                 const pickedQuantity = Number(sd.picked_quantity || 0);
                 sizeDistributionsMap[assignmentId].push({
                   size_name: sd.size_name,
@@ -612,7 +624,7 @@ const CuttingManagerPage = () => {
               const viewTotal = Number(ba.total_quantity || 0) || 0;
               const tableTotal = aid ? tableTotalsByAssignmentId[aid] ?? 0 : 0;
               const fromSizes = (sizeDistributionsMap[aid] || []).reduce(
-                (s, row) => s + Number(row.quantity || 0),
+                (s, row) => s + effectiveBatchSizeLinePieces(row),
                 0
               );
               const mergedTotal = Math.max(viewTotal, tableTotal, fromSizes);
@@ -691,7 +703,7 @@ const CuttingManagerPage = () => {
     (job.batchAssignments || []).reduce((sum, assignment) => {
       const directQty = Number(assignment.total_quantity || 0);
       const fromSizes = (assignment.size_distributions || []).reduce(
-        (sizeSum, row) => sizeSum + Number(row.quantity || 0),
+        (sizeSum, row) => sizeSum + effectiveBatchSizeLinePieces(row),
         0
       );
       return sum + Math.max(directQty, fromSizes);
@@ -702,9 +714,11 @@ const CuttingManagerPage = () => {
     const cutQty = Math.max(0, Number(job.cutQuantity || 0));
     const assignedQty = getTotalAssignedToBatches(job);
     const isFullyCut = requiredQty > 0 && cutQty >= requiredQty;
-    // Batches must cover all recorded cuts (not only order qty), otherwise job stays active after partial assign.
-    const allCutPiecesAssigned = cutQty > 0 && assignedQty + 1e-6 >= cutQty;
-    if (isFullyCut && allCutPiecesAssigned) return 'completed';
+    const hasBatchAssignments = (job.batchAssignments || []).length > 0;
+    // Fully cut + at least one tailor batch row + assigned pieces cover all recorded cuts (no partial assign-to-tailor).
+    const allCutPiecesAssignedToTailors =
+      hasBatchAssignments && cutQty > 0 && assignedQty + 1e-6 >= cutQty;
+    if (isFullyCut && allCutPiecesAssignedToTailors) return 'completed';
     if (cutQty > 0 || assignedQty > 0) return 'in_progress';
     return 'pending';
   };

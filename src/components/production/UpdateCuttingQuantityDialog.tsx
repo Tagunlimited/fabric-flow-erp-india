@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { Minus, Plus, Package, Scissors, Droplets } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useSizeTypes } from '@/hooks/useSizeTypes';
@@ -53,6 +54,17 @@ interface AvailableFabric {
 function fabricAvailabilitySummaryLine(f: AvailableFabric): string {
   const u = f.unit;
   return `Total: ${f.gross_quantity.toFixed(2)} ${u} · Reserved: ${f.allocated_quantity.toFixed(2)} ${u} · Available: ${f.available_quantity.toFixed(2)} ${u}`;
+}
+
+/** One-line label for select trigger and dropdown rows (no inventory totals). */
+function fabricShortLabel(f: AvailableFabric): string {
+  const gsmPart = f.gsm ? ` · ${f.gsm} GSM` : '';
+  return `${f.fabric_name}${gsmPart}`;
+}
+
+function fabricTooltipDetailText(f: AvailableFabric): string {
+  const colorLine = [f.color?.trim(), f.gsm ? `${f.gsm} GSM` : null].filter(Boolean).join(' · ');
+  return [f.fabric_name, colorLine].filter(Boolean).join('\n');
 }
 
 interface FabricUsage {
@@ -474,6 +486,11 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
       ? availableFabrics.filter(f => f.fabric_id === selectedLine.fabric_id)
       : availableFabrics;
 
+  const selectedFabricRecord =
+    fabricsForPicker.find((f) => f.fabric_id === fabricUsage.fabric_id) ??
+    availableFabrics.find((f) => f.fabric_id === fabricUsage.fabric_id) ??
+    null;
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -628,32 +645,45 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                           fabric_id: value
                         }))}
                       >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Choose fabric used for cutting" />
+                        <SelectTrigger className="min-w-0 w-full gap-2">
+                          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+                            {selectedFabricRecord && (
+                              <span
+                                className="h-4 w-4 shrink-0 rounded-full border border-gray-300"
+                                style={{ backgroundColor: fabricSwatchCss(selectedFabricRecord) }}
+                                aria-hidden
+                              />
+                            )}
+                            <SelectValue
+                              placeholder="Choose fabric used for cutting"
+                              className="min-w-0 flex-1 truncate text-left [&>span]:block [&>span]:truncate"
+                            >
+                              {selectedFabricRecord ? fabricShortLabel(selectedFabricRecord) : undefined}
+                            </SelectValue>
+                          </div>
                         </SelectTrigger>
                         <SelectContent>
                           {fabricsForPicker.map((fabric) => (
-                            <SelectItem key={fabric.fabric_id} value={fabric.fabric_id}>
-                              <div className="flex items-center space-x-3">
-                                {fabric.image && (
-                                  <img 
-                                    src={fabric.image} 
-                                    alt={fabric.fabric_name}
-                                    className="w-6 h-6 rounded object-cover border"
-                                  />
-                                )}
-                                <div
-                                  className={`shrink-0 rounded-full border border-gray-300 ${fabric.image ? 'w-4 h-4' : 'w-6 h-6'}`}
-                                  style={{ backgroundColor: fabricSwatchCss(fabric) }}
-                                  title={fabric.color || 'Color'}
-                                />
-                                <div>
-                                  <div className="font-medium">{fabric.fabric_name}</div>
-                                  <div className="text-xs text-gray-500">
-                                    {fabric.color} • {fabric.gsm} GSM • {fabricAvailabilitySummaryLine(fabric)}
-                                  </div>
-                                </div>
-                              </div>
+                            <SelectItem
+                              key={fabric.fabric_id}
+                              value={fabric.fabric_id}
+                              textValue={`${fabric.fabric_name} ${fabric.color} ${fabric.gsm} GSM`}
+                            >
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="flex min-w-0 max-w-[min(100%,28rem)] cursor-default items-center gap-2">
+                                    <span
+                                      className="h-4 w-4 shrink-0 rounded-full border border-gray-300"
+                                      style={{ backgroundColor: fabricSwatchCss(fabric) }}
+                                      aria-hidden
+                                    />
+                                    <span className="truncate font-medium">{fabricShortLabel(fabric)}</span>
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent side="right" className="max-w-sm whitespace-pre-line text-left">
+                                  {fabricTooltipDetailText(fabric)}
+                                </TooltipContent>
+                              </Tooltip>
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -683,13 +713,10 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                           {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'kgs'}
                         </span>
                       </div>
-                      {fabricUsage.fabric_id && (
-                        <div className="text-xs text-gray-600">
-                          {(() => {
-                            const fabric = availableFabrics.find((f) => f.fabric_id === fabricUsage.fabric_id);
-                            return fabric ? fabricAvailabilitySummaryLine(fabric) : 'Total: 0 · Reserved: 0 · Available: 0';
-                          })()}
-                        </div>
+                      {fabricUsage.fabric_id && selectedFabricRecord && (
+                        <p className="text-xs text-muted-foreground">
+                          {fabricAvailabilitySummaryLine(selectedFabricRecord)}
+                        </p>
                       )}
                     </div>
                   </div>
