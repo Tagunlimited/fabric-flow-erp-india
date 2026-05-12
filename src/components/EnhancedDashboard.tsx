@@ -3,7 +3,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -31,7 +39,12 @@ import {
   RefreshCw,
   AlertTriangle,
   Layers,
+  CalendarIcon,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
+import type { DateRange as DayPickerDateRange } from "react-day-picker";
 import { supabase } from "@/integrations/supabase/client";
 import { shouldRetryReadWithoutIsDeletedFilter } from "@/lib/supabaseSoftDeleteCompat";
 import {
@@ -40,20 +53,7 @@ import {
   parseOrderItemSpecifications,
 } from "@/utils/priceCalculation";
 import { sumActiveReceiptAmountsForOrder } from "@/utils/orderFinancials";
-import {
-  endOfMonth,
-  endOfWeek,
-  endOfYear,
-  format,
-  parseISO,
-  startOfMonth,
-  startOfWeek,
-  startOfYear,
-  subDays,
-  subMonths,
-  subWeeks,
-  subYears,
-} from "date-fns";
+import { endOfMonth, format, lastDayOfMonth, startOfMonth } from "date-fns";
 import { cn } from "@/lib/utils";
 
 type EnrichedOrder = {
@@ -79,6 +79,20 @@ type SalesPersonRow = {
 };
 
 const CHART_REVENUE = "hsl(214 88% 42%)";
+
+const EXACT_CALENDAR_YEAR_MIN = 1940;
+const EXACT_CALENDAR_YEAR_MAX = 2050;
+const EXACT_CALENDAR_YEAR_OPTIONS = Array.from(
+  { length: EXACT_CALENDAR_YEAR_MAX - EXACT_CALENDAR_YEAR_MIN + 1 },
+  (_, i) => EXACT_CALENDAR_YEAR_MIN + i
+);
+
+/** Same calendar month in a new year; clamps day for short months (e.g. Feb). */
+function exactCalendarMonthInYear(base: Date, year: number): Date {
+  const monthIndex = base.getMonth();
+  const day = Math.min(base.getDate(), lastDayOfMonth(new Date(year, monthIndex, 1)).getDate());
+  return new Date(year, monthIndex, day);
+}
 
 const inr = (n: number) =>
   new Intl.NumberFormat("en-IN", {
@@ -202,78 +216,150 @@ function lineItemQuantity(it: Record<string, unknown>): number {
   return 0;
 }
 
-type DashboardPeriod =
-  | "this_week"
-  | "previous_week"
-  | "this_month"
-  | "previous_month"
-  | "last_30_days"
-  | "this_year"
-  | "previous_year";
+type DashboardFilterMode = "months" | "exact";
 
-type DateRange = {
+type IsoDateRange = {
   startDate: string;
   endDate: string;
 };
-
-const PERIOD_OPTIONS: Array<{ value: DashboardPeriod; label: string }> = [
-  { value: "this_week", label: "This Week" },
-  { value: "previous_week", label: "Previous Week" },
-  { value: "this_month", label: "This Month" },
-  { value: "previous_month", label: "Previous Month" },
-  { value: "last_30_days", label: "Last 30 Days" },
-  { value: "this_year", label: "This Year" },
-  { value: "previous_year", label: "Previous Year" },
-];
 
 function toDateOnly(d: Date): string {
   return format(d, "yyyy-MM-dd");
 }
 
-function getDashboardPeriodRange(period: DashboardPeriod, now = new Date()): DateRange {
-  switch (period) {
-    case "this_week": {
-      const start = startOfWeek(now, { weekStartsOn: 1 });
-      const end = endOfWeek(now, { weekStartsOn: 1 });
-      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
-    }
-    case "previous_week": {
-      const base = subWeeks(now, 1);
-      const start = startOfWeek(base, { weekStartsOn: 1 });
-      const end = endOfWeek(base, { weekStartsOn: 1 });
-      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
-    }
-    case "previous_month": {
-      const base = subMonths(now, 1);
-      const start = startOfMonth(base);
-      const end = endOfMonth(base);
-      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
-    }
-    case "last_30_days": {
-      const start = subDays(now, 29);
-      return { startDate: toDateOnly(start), endDate: toDateOnly(now) };
-    }
-    case "this_year": {
-      const start = startOfYear(now);
-      const end = endOfYear(now);
-      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
-    }
-    case "previous_year": {
-      const base = subYears(now, 1);
-      const start = startOfYear(base);
-      const end = endOfYear(base);
-      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
-    }
-    case "this_month":
-    default: {
-      const start = startOfMonth(now);
-      const end = endOfMonth(now);
-      return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
-    }
-  }
+function monthToIsoRange(month: Date): IsoDateRange {
+  const start = startOfMonth(month);
+  const end = endOfMonth(month);
+  return { startDate: toDateOnly(start), endDate: toDateOnly(end) };
 }
 
-async function loadSalesDashboard(range: DateRange): Promise<{
+function normalizeDayRange(from: Date, to: Date): { from: Date; to: Date } {
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+function dashboardFilterTriggerLabel(
+  mode: DashboardFilterMode,
+  selectedMonth: Date,
+  exact: { from: Date; to: Date }
+): string {
+  if (mode === "months") {
+    return format(selectedMonth, "MMM-yy");
+  }
+  const { from, to } = exact;
+  const sameY = from.getFullYear() === to.getFullYear();
+  const sameM = sameY && from.getMonth() === to.getMonth();
+  if (sameM) {
+    return `${format(from, "d")}–${format(to, "d MMM-yy")}`;
+  }
+  if (sameY) {
+    return `${format(from, "d MMM")}–${format(to, "d MMM-yy")}`;
+  }
+  return `${format(from, "d MMM-yy")}–${format(to, "d MMM-yy")}`;
+}
+
+const MONTH_ABBREVS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+function buildYearSelectOptions(pivotYear: number) {
+  const cy = new Date().getFullYear();
+  const lo = Math.min(cy - 25, pivotYear - 5);
+  const hi = Math.max(cy + 6, pivotYear + 5);
+  const years: number[] = [];
+  for (let y = lo; y <= hi; y++) years.push(y);
+  return years;
+}
+
+function DashboardMonthPicker({
+  year,
+  onYearChange,
+  selectedMonth,
+  onSelectMonth,
+}: {
+  year: number;
+  onYearChange: (y: number) => void;
+  selectedMonth: Date;
+  onSelectMonth: (monthStart: Date) => void;
+}) {
+  const yearOptions = useMemo(() => buildYearSelectOptions(year), [year]);
+  const today = new Date();
+
+  return (
+    <div className="w-[260px] space-y-3 p-3">
+      <div className="flex items-center justify-center gap-1.5">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          aria-label="Previous year"
+          onClick={() => onYearChange(year - 1)}
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <Select value={String(year)} onValueChange={(v) => onYearChange(Number(v))}>
+          <SelectTrigger className="h-8 min-w-0 flex-1 gap-1 font-medium tabular-nums" aria-label="Year">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="max-h-60">
+            {yearOptions.map((y) => (
+              <SelectItem key={y} value={String(y)}>
+                {y}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          aria-label="Next year"
+          onClick={() => onYearChange(year + 1)}
+        >
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="grid grid-cols-3 gap-1.5">
+        {MONTH_ABBREVS.map((label, monthIndex) => {
+          const isSelected =
+            selectedMonth.getFullYear() === year && selectedMonth.getMonth() === monthIndex;
+          const isTodayMonth = today.getFullYear() === year && today.getMonth() === monthIndex;
+          return (
+            <Button
+              key={label}
+              type="button"
+              size="sm"
+              variant={isSelected ? "default" : "outline"}
+              className={cn(
+                "h-9 px-1 text-xs font-medium",
+                !isSelected && isTodayMonth && "border-primary/50 text-primary"
+              )}
+              onClick={() => {
+                onSelectMonth(startOfMonth(new Date(year, monthIndex, 1)));
+              }}
+            >
+              {label}
+            </Button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+async function loadSalesDashboard(range: IsoDateRange): Promise<{
   orders: EnrichedOrder[];
   employees: Record<string, { id: string; full_name: string; avatar_url?: string }>;
   categoryRevenue: CategoryRevenueRow[];
@@ -480,7 +566,19 @@ async function loadSalesDashboard(range: DateRange): Promise<{
 }
 
 export function EnhancedDashboard() {
-  const [selectedPeriod, setSelectedPeriod] = useState<DashboardPeriod>("this_month");
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterMode, setFilterMode] = useState<DashboardFilterMode>("months");
+  const [selectedMonth, setSelectedMonth] = useState(() => startOfMonth(new Date()));
+  const [monthPickerYear, setMonthPickerYear] = useState(() => new Date().getFullYear());
+  const [exactRange, setExactRange] = useState<{ from: Date; to: Date }>(() => ({
+    from: startOfMonth(new Date()),
+    to: endOfMonth(new Date()),
+  }));
+  const [exactRangeDraft, setExactRangeDraft] = useState<DayPickerDateRange | undefined>(() => ({
+    from: startOfMonth(new Date()),
+    to: endOfMonth(new Date()),
+  }));
+  const [exactCalendarMonth, setExactCalendarMonth] = useState(() => startOfMonth(new Date()));
   const [orders, setOrders] = useState<EnrichedOrder[]>([]);
   const [employees, setEmployees] = useState<
     Record<string, { id: string; full_name: string; avatar_url?: string }>
@@ -488,7 +586,25 @@ export function EnhancedDashboard() {
   const [categoryRevenue, setCategoryRevenue] = useState<CategoryRevenueRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const periodRange = useMemo(() => getDashboardPeriodRange(selectedPeriod), [selectedPeriod]);
+
+  const periodRange = useMemo<IsoDateRange>(() => {
+    if (filterMode === "months") {
+      return monthToIsoRange(selectedMonth);
+    }
+    const { from, to } = normalizeDayRange(exactRange.from, exactRange.to);
+    return { startDate: toDateOnly(from), endDate: toDateOnly(to) };
+  }, [filterMode, selectedMonth, exactRange]);
+
+  const filterTriggerLabel = useMemo(
+    () => dashboardFilterTriggerLabel(filterMode, selectedMonth, exactRange),
+    [filterMode, selectedMonth, exactRange]
+  );
+
+  const syncFilterPanels = useCallback(() => {
+    setMonthPickerYear(selectedMonth.getFullYear());
+    setExactCalendarMonth(startOfMonth(exactRange.from));
+    setExactRangeDraft({ from: exactRange.from, to: exactRange.to });
+  }, [selectedMonth, exactRange.from, exactRange.to]);
 
   const refresh = useCallback(async () => {
     try {
@@ -623,21 +739,119 @@ export function EnhancedDashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select
-            value={selectedPeriod}
-            onValueChange={(value: DashboardPeriod) => setSelectedPeriod(value)}
+          <Popover
+            open={filterOpen}
+            onOpenChange={(open) => {
+              setFilterOpen(open);
+              if (open) syncFilterPanels();
+            }}
           >
-            <SelectTrigger className="w-[170px]">
-              <SelectValue placeholder="Select period" />
-            </SelectTrigger>
-            <SelectContent>
-              {PERIOD_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="min-w-[112px] shrink-0 justify-between gap-2 font-normal"
+                aria-expanded={filterOpen}
+                aria-haspopup="dialog"
+              >
+                <span className="flex items-center gap-2">
+                  <CalendarIcon className="h-4 w-4 shrink-0 opacity-70" />
+                  <span className="truncate">{filterTriggerLabel}</span>
+                </span>
+                <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-auto p-0">
+              <div className="flex gap-2 border-b p-3">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={filterMode === "exact" ? "default" : "outline"}
+                  className="flex-1"
+                  onClick={() => {
+                    setFilterMode("exact");
+                    const from = startOfMonth(selectedMonth);
+                    const to = endOfMonth(selectedMonth);
+                    setExactRange({ from, to });
+                    setExactRangeDraft({ from, to });
+                    setExactCalendarMonth(from);
+                  }}
+                >
+                  Exact date
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={filterMode === "months" ? "default" : "outline"}
+                  className="flex-1"
+                  onClick={() => {
+                    setFilterMode("months");
+                    const sm = startOfMonth(exactRange.from);
+                    setSelectedMonth(sm);
+                    setMonthPickerYear(sm.getFullYear());
+                  }}
+                >
+                  Month
+                </Button>
+              </div>
+              {filterMode === "months" ? (
+                <DashboardMonthPicker
+                  year={monthPickerYear}
+                  onYearChange={setMonthPickerYear}
+                  selectedMonth={selectedMonth}
+                  onSelectMonth={(d) => {
+                    setSelectedMonth(d);
+                    setMonthPickerYear(d.getFullYear());
+                    setFilterOpen(false);
+                  }}
+                />
+              ) : (
+                <div className="w-[min(100%,280px)] space-y-2 p-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground shrink-0">Year:</span>
+                    <Select
+                      value={String(exactCalendarMonth.getFullYear())}
+                      onValueChange={(v) => {
+                        const y = Number(v);
+                        setExactCalendarMonth((prev) => exactCalendarMonthInYear(prev, y));
+                      }}
+                    >
+                      <SelectTrigger
+                        className="h-8 min-w-0 flex-1 font-medium tabular-nums"
+                        aria-label="Calendar year"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-60">
+                        {EXACT_CALENDAR_YEAR_OPTIONS.map((y) => (
+                          <SelectItem key={y} value={String(y)}>
+                            {y}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Calendar
+                    mode="range"
+                    captionLayout="buttons"
+                    month={exactCalendarMonth}
+                    onMonthChange={setExactCalendarMonth}
+                    selected={exactRangeDraft}
+                    onSelect={(r) => {
+                      setExactRangeDraft(r);
+                      if (r?.from && r?.to) {
+                        setExactRange(normalizeDayRange(r.from, r.to));
+                      }
+                    }}
+                    numberOfMonths={1}
+                    initialFocus
+                    weekStartsOn={1}
+                  />
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
           <Button variant="outline" size="sm" onClick={() => refresh()} className="shrink-0 gap-2">
             <RefreshCw className="h-4 w-4" />
             Refresh

@@ -130,6 +130,9 @@ const ReportsPage = () => {
                     selected={dateFrom}
                     onSelect={setDateFrom}
                     initialFocus
+                    captionLayout="dropdown-buttons"
+                    fromYear={1940}
+                    toYear={2050}
                   />
                 </PopoverContent>
               </Popover>
@@ -157,6 +160,9 @@ const ReportsPage = () => {
                     selected={dateTo}
                     onSelect={setDateTo}
                     initialFocus
+                    captionLayout="dropdown-buttons"
+                    fromYear={1940}
+                    toYear={2050}
                   />
                 </PopoverContent>
               </Popover>

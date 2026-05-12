@@ -292,6 +292,9 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
                     disabled={(date) => date > new Date() || date < new Date("1900-01-01")}
                     initialFocus
                     className="pointer-events-auto"
+                    captionLayout="dropdown-buttons"
+                    fromYear={1940}
+                    toYear={2050}
                   />
                 </PopoverContent>
               </Popover>
@@ -519,6 +522,9 @@ export function EmployeeForm({ onSuccess, initialData, isEditing = false, employ
                     disabled={(date) => date > new Date()}
                     initialFocus
                     className="pointer-events-auto"
+                    captionLayout="dropdown-buttons"
+                    fromYear={1940}
+                    toYear={2050}
                   />
                 </PopoverContent>
               </Popover>
