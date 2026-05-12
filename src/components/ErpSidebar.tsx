@@ -148,7 +148,7 @@ function buildSidebarItems(currentPath: string, pendingOrdersCount: number = 0):
         { title: "Assign Orders", url: "/production/assign-orders", icon: UserCheck },
         { title: "Cutting Manager", url: "/production/cutting-manager", icon: Scissors },
         { title: "Tailor Management", url: "/production/tailor-management", icon: UsersRound },
-        { title: "Order Completion Report", url: "/production/order-completion-report", icon: ClipboardList }
+        // { title: "Order Completion Report", url: "/production/order-completion-report", icon: ClipboardList }
       ]
     },
     { title: "Quality Check", url: "/quality", icon: CheckCircle,

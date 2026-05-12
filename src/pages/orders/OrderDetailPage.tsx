@@ -56,6 +56,7 @@ import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteC
 import { ProductCustomizationModal } from "@/components/orders/ProductCustomizationModal";
 import { executionFlowLabel, fulfillmentStatusLabel } from '@/domain/fulfillment/types';
 import { CustomizationColorChips } from "@/components/common/CustomizationColorChips";
+import { ImageZoomLightbox } from "@/components/common/ImageZoomLightbox";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1262,6 +1263,11 @@ export default function OrderDetailPage() {
   const [cancellingOrder, setCancellingOrder] = useState(false);
   const [selectedMockupImages, setSelectedMockupImages] = useState<{ [key: number]: number }>({});
   const [selectedReferenceImages, setSelectedReferenceImages] = useState<{ [key: number]: number }>({});
+  const [printingImageZoom, setPrintingImageZoom] = useState<{
+    src: string;
+    alt: string;
+    title: string;
+  } | null>(null);
   const [employees, setEmployees] = useState<SalesManager[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -3285,7 +3291,24 @@ export default function OrderDetailPage() {
                                             <img 
                                               src={customization.selectedAddonImageUrl} 
                                               alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
-                                              className="w-8 h-8 object-cover rounded border shrink-0"
+                                              className={`w-8 h-8 object-cover rounded border shrink-0 ${
+                                                isFromPrintingPage ? 'cursor-pointer hover:ring-2 hover:ring-primary/40' : ''
+                                              }`}
+                                              onClick={
+                                                isFromPrintingPage
+                                                  ? (e) => {
+                                                      e.stopPropagation();
+                                                      setPrintingImageZoom({
+                                                        src: customization.selectedAddonImageUrl,
+                                                        alt:
+                                                          customization.selectedAddonImageAltText ||
+                                                          customization.selectedAddonName ||
+                                                          'Customization',
+                                                        title: 'Customization',
+                                                      });
+                                                    }
+                                                  : undefined
+                                              }
                                               onError={(e) => {
                                                 e.currentTarget.style.display = 'none';
                                               }}
@@ -3553,6 +3576,14 @@ export default function OrderDetailPage() {
                                         alt="Product Mockup"
                                         className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
                                         onClick={() => {
+                                          if (isFromPrintingPage) {
+                                            setPrintingImageZoom({
+                                              src: displayImage,
+                                              alt: 'Product mockup',
+                                              title: 'Product mockup',
+                                            });
+                                            return;
+                                          }
                                           const modal = document.createElement('div');
                                           modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
                                           modal.innerHTML = `
@@ -3780,7 +3811,22 @@ export default function OrderDetailPage() {
                                                   <img 
                                                     src={customization.selectedAddonImageUrl} 
                                                     alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
-                                                    className="w-8 h-8 object-cover rounded border shrink-0"
+                                                    className={`w-8 h-8 object-cover rounded border shrink-0 ${
+                                                      isFromPrintingPage ? 'cursor-pointer hover:ring-2 hover:ring-primary/40' : ''
+                                                    }`}
+                                                    onClick={
+                                                      isFromPrintingPage
+                                                        ? () =>
+                                                            setPrintingImageZoom({
+                                                              src: customization.selectedAddonImageUrl,
+                                                              alt:
+                                                                customization.selectedAddonImageAltText ||
+                                                                customization.selectedAddonName ||
+                                                                'Customization',
+                                                              title: 'Customization',
+                                                            })
+                                                        : undefined
+                                                    }
                                                     onError={(e) => {
                                                       e.currentTarget.style.display = 'none';
                                                     }}
@@ -3880,6 +3926,14 @@ export default function OrderDetailPage() {
                                           className="w-full h-full object-contain bg-background cursor-pointer hover:scale-105 transition-transform duration-300"
                                           onClick={() => {
                                             const currentImage = block.images[block.selected[index] || 0];
+                                            if (isFromPrintingPage && currentImage) {
+                                              setPrintingImageZoom({
+                                                src: currentImage,
+                                                alt: block.title,
+                                                title: block.title,
+                                              });
+                                              return;
+                                            }
                                             const modal = document.createElement('div');
                                             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
                                             modal.innerHTML = `
@@ -3928,7 +3982,14 @@ export default function OrderDetailPage() {
                                                   (block.selected[index] || 0) === idx ? 'ring-2 ring-primary' : ''
                                                 }`}
                                                 onClick={() => {
-                                                  block.setSelected(prev => ({ ...prev, [index]: idx }));
+                                                  block.setSelected((prev) => ({ ...prev, [index]: idx }));
+                                                  if (isFromPrintingPage) {
+                                                    setPrintingImageZoom({
+                                                      src: url,
+                                                      alt: `${block.title} ${idx + 1}`,
+                                                      title: block.title,
+                                                    });
+                                                  }
                                                 }}
                                                 onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                               />
@@ -4031,7 +4092,21 @@ export default function OrderDetailPage() {
                                          <img
                                            src={displayImage}
                                            alt="Product"
-                                           className="w-20 h-20 object-cover rounded"
+                                           className={
+                                             isFromPrintingPage
+                                               ? 'w-20 h-20 object-cover rounded cursor-pointer hover:opacity-90 ring-offset-2 hover:ring-2 hover:ring-primary/40'
+                                               : 'w-20 h-20 object-cover rounded'
+                                           }
+                                           onClick={
+                                             isFromPrintingPage
+                                               ? () =>
+                                                   setPrintingImageZoom({
+                                                     src: displayImage,
+                                                     alt: 'Product mockup',
+                                                     title: 'Order summary',
+                                                   })
+                                               : undefined
+                                           }
                                          />
                                        ) : null;
                                      })()}
@@ -4084,7 +4159,26 @@ export default function OrderDetailPage() {
                                                      <img 
                                                        src={customization.selectedAddonImageUrl} 
                                                        alt={customization.selectedAddonImageAltText || customization.selectedAddonName}
-                                                       className="w-6 h-6 object-cover rounded border shrink-0"
+                                                       className={`w-6 h-6 object-cover rounded border shrink-0 ${
+                                                         isFromPrintingPage
+                                                           ? 'cursor-pointer hover:ring-2 hover:ring-primary/40'
+                                                           : ''
+                                                       }`}
+                                                       onClick={
+                                                         isFromPrintingPage
+                                                           ? (e) => {
+                                                               e.stopPropagation();
+                                                               setPrintingImageZoom({
+                                                                 src: customization.selectedAddonImageUrl,
+                                                                 alt:
+                                                                   customization.selectedAddonImageAltText ||
+                                                                   customization.selectedAddonName ||
+                                                                   'Customization',
+                                                                 title: 'Customization',
+                                                               });
+                                                             }
+                                                           : undefined
+                                                       }
                                                        onError={(e) => {
                                                          e.currentTarget.style.display = 'none';
                                                        }}
@@ -4912,6 +5006,17 @@ export default function OrderDetailPage() {
         </div>
       </div>
 
+      {isFromPrintingPage && (
+        <ImageZoomLightbox
+          open={!!printingImageZoom}
+          onOpenChange={(next) => {
+            if (!next) setPrintingImageZoom(null);
+          }}
+          src={printingImageZoom?.src ?? null}
+          alt={printingImageZoom?.alt}
+          title={printingImageZoom?.title}
+        />
+      )}
     </ErpLayout>
   );
 }
