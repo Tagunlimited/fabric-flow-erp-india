@@ -54,17 +54,22 @@ export default function DispatchQCPage() {
   const generateDispatchNumber = async () => {
     const fy = getFinancialYear(new Date());
     const prefix = `TUC/${fy}/DC/`;
+    // Include soft-deleted rows: UNIQUE still holds their dispatch_number, so skipping them reuses a taken number.
+    // Use max numeric suffix (not latest created_at): highest sequence can belong to an older row.
     const { data, error } = await (supabase as any)
       .from('dispatch_orders')
       .select('dispatch_number')
-      .eq('is_deleted', false)
-      .ilike('dispatch_number', `${prefix}%`)
-      .order('created_at', { ascending: false })
-      .limit(1);
+      .ilike('dispatch_number', `${prefix}%`);
     if (error) throw error;
-    const last = (data?.[0]?.dispatch_number as string | undefined) || '';
-    const match = last.match(/\/(\d{1,})$/);
-    const next = match ? Number.parseInt(match[1], 10) + 1 : 1;
+    const suffixRe = /\/(\d{1,})$/;
+    let maxSeq = 0;
+    for (const row of data || []) {
+      const dn = row?.dispatch_number as string | undefined;
+      if (!dn) continue;
+      const m = dn.match(suffixRe);
+      if (m) maxSeq = Math.max(maxSeq, Number.parseInt(m[1], 10));
+    }
+    const next = maxSeq + 1;
     return `${prefix}${String(next).padStart(4, '0')}`;
   };
   
@@ -624,21 +629,33 @@ export default function DispatchQCPage() {
         ].filter(Boolean).join(', ');
         deliveryAddress = (ord?.delivery_address || customerAddr || '-') as string;
       } catch {}
-      // Create challan (pending dispatch order)
-      const { data: insData, error: insErr } = await (supabase as any)
-        .from('dispatch_orders')
-        .insert({
-          order_id: dispatchTarget.order_id,
-          dispatch_number: dispatchNumber,
-          status: 'pending',
-          courier_name: courierName || null,
-          tracking_number: trackingNumber || null,
-          delivery_address: deliveryAddress
-        } as any)
-        .select('id')
-        .single();
-      if (insErr) throw insErr;
-      const newId = insData?.id as string;
+      // Create challan (pending dispatch order). Retry on unique race on dispatch_number.
+      let newId: string | undefined;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const num =
+          attempt === 0 ? dispatchNumber : await generateDispatchNumber();
+        const { data: insData, error: insErr } = await (supabase as any)
+          .from('dispatch_orders')
+          .insert({
+            order_id: dispatchTarget.order_id,
+            dispatch_number: num,
+            status: 'pending',
+            courier_name: courierName || null,
+            tracking_number: trackingNumber || null,
+            delivery_address: deliveryAddress
+          } as any)
+          .select('id')
+          .single();
+        if (!insErr) {
+          newId = insData?.id as string;
+          break;
+        }
+        const isDup =
+          insErr.code === '23505' &&
+          String(insErr.message || '').includes('dispatch_number');
+        if (!isDup || attempt === 7) throw insErr;
+      }
+      if (!newId) throw new Error('Could not allocate dispatch number');
       // Insert dispatch items per size
       const lines = Object.entries(dispatchQtyBySize)
         .filter(([, qty]) => Number(qty || 0) > 0)

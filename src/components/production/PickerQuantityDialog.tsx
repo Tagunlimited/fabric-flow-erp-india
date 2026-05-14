@@ -258,91 +258,99 @@ export default function PickerQuantityDialog({
         const newPicks = Number(addBySize[sizeName] || 0);
         if (newPicks === 0) return;
 
-        const assigned = getAssigned(sizeName);
-        const finalPicked = computePickedAfterPickerDelta(assigned, currentPicked, rejected, newPicks);
-
-        // Canonical column is assigned_quantity (not quantity); quantity-only rows break PostgREST with 400.
-        const modernRow = {
-          order_batch_assignment_id: assignmentId,
-          size_name: sizeName,
-          assigned_quantity: assigned,
-          picked_quantity: finalPicked,
-        };
-        const { error: errModern } = await (supabase as any)
+        let assignedFromUi = getAssigned(sizeName);
+        const { data: existing, error: selErr } = await (supabase as any)
           .from('order_batch_size_distributions')
-          .upsert(modernRow as any, {
-            onConflict: 'order_batch_assignment_id,size_name',
-          } as any);
+          .select('id, assigned_quantity, quantity, picked_quantity')
+          .eq('order_batch_assignment_id', assignmentId)
+          .eq('size_name', sizeName)
+          .maybeSingle();
 
-        if (!errModern) return;
-
-        const msg = String(errModern.message || errModern.details || '');
-        if (/assigned_quantity|column .* does not exist/i.test(msg)) {
-          const legacyRow = {
-            order_batch_assignment_id: assignmentId,
-            size_name: sizeName,
-            quantity: assigned,
-            picked_quantity: finalPicked,
-          };
-          const { error: errLegacy } = await (supabase as any)
-            .from('order_batch_size_distributions')
-            .upsert(legacyRow as any, {
-              onConflict: 'order_batch_assignment_id,size_name',
-            } as any);
-          if (!errLegacy) return;
-          upsertErrors.push(`${sizeName}: ${errLegacy.message || 'upsert failed'}`);
+        if (selErr) {
+          upsertErrors.push(`${sizeName}: ${selErr.message || 'load row failed'}`);
           return;
         }
 
-        // No matching UNIQUE for ON CONFLICT (migration not applied): update-or-insert by keys.
-        if (/unique|exclusion constraint|on conflict/i.test(msg)) {
-          const { data: existing } = await (supabase as any)
+        const existingAssigned = Math.max(
+          Number((existing as any)?.assigned_quantity ?? 0),
+          Number((existing as any)?.quantity ?? 0)
+        );
+        const assigned = Math.max(assignedFromUi, existingAssigned);
+        const finalPickedRaw = computePickedAfterPickerDelta(
+          assigned,
+          currentPicked,
+          rejected,
+          newPicks
+        );
+        const finalPicked = Math.min(finalPickedRaw, assigned);
+        const now = new Date().toISOString();
+
+        const tryUpdate = async (id: string, patch: Record<string, unknown>) => {
+          return (supabase as any)
             .from('order_batch_size_distributions')
-            .select('id')
-            .eq('order_batch_assignment_id', assignmentId)
-            .eq('size_name', sizeName)
-            .maybeSingle();
-          if (existing?.id) {
-            const { error: uErr } = await (supabase as any)
-              .from('order_batch_size_distributions')
-              .update({
-                assigned_quantity: assigned,
-                picked_quantity: finalPicked,
-                updated_at: new Date().toISOString(),
-              } as any)
-              .eq('id', existing.id);
+            .update(patch)
+            .eq('id', id);
+        };
+
+        if (existing?.id) {
+          const updateAttempts = [
+            {
+              picked_quantity: finalPicked,
+              assigned_quantity: assigned,
+              quantity: assigned,
+              updated_at: now,
+            },
+            { picked_quantity: finalPicked, assigned_quantity: assigned, updated_at: now },
+            { picked_quantity: finalPicked, quantity: assigned, updated_at: now },
+            { picked_quantity: finalPicked, updated_at: now },
+          ];
+          for (const patch of updateAttempts) {
+            const { error: uErr } = await tryUpdate(existing.id as string, patch);
             if (!uErr) return;
-            const { error: uErrLegacy } = await (supabase as any)
-              .from('order_batch_size_distributions')
-              .update({
-                quantity: assigned,
-                picked_quantity: finalPicked,
-                updated_at: new Date().toISOString(),
-              } as any)
-              .eq('id', existing.id);
-            if (!uErrLegacy) return;
-            upsertErrors.push(`${sizeName}: ${uErrLegacy.message || 'update failed'}`);
+            const um = String(uErr.message || uErr.details || '');
+            if (!/column|does not exist|schema cache/i.test(um)) {
+              upsertErrors.push(`${sizeName}: ${um}`);
+              return;
+            }
+          }
+          upsertErrors.push(`${sizeName}: update failed (column mismatch)`);
+          return;
+        }
+
+        const insertAttempts = [
+          {
+            order_batch_assignment_id: assignmentId,
+            size_name: sizeName,
+            picked_quantity: finalPicked,
+            assigned_quantity: assigned,
+            quantity: assigned,
+            updated_at: now,
+          },
+          {
+            order_batch_assignment_id: assignmentId,
+            size_name: sizeName,
+            picked_quantity: finalPicked,
+            assigned_quantity: assigned,
+            updated_at: now,
+          },
+          {
+            order_batch_assignment_id: assignmentId,
+            size_name: sizeName,
+            picked_quantity: finalPicked,
+            quantity: assigned,
+            updated_at: now,
+          },
+        ];
+        for (const row of insertAttempts) {
+          const { error: iErr } = await (supabase as any).from('order_batch_size_distributions').insert(row);
+          if (!iErr) return;
+          const im = String(iErr.message || iErr.details || '');
+          if (!/column|does not exist|schema cache/i.test(im)) {
+            upsertErrors.push(`${sizeName}: ${im}`);
             return;
           }
-          const { error: iErr } = await (supabase as any)
-            .from('order_batch_size_distributions')
-            .insert(modernRow as any);
-          if (!iErr) return;
-          const legacyInsert = {
-            order_batch_assignment_id: assignmentId,
-            size_name: sizeName,
-            quantity: assigned,
-            picked_quantity: finalPicked,
-          };
-          const { error: iErr2 } = await (supabase as any)
-            .from('order_batch_size_distributions')
-            .insert(legacyInsert as any);
-          if (!iErr2) return;
-          upsertErrors.push(`${sizeName}: ${iErr2.message || 'insert failed'}`);
-          return;
         }
-
-        upsertErrors.push(`${sizeName}: ${msg || 'upsert failed'}`);
+        upsertErrors.push(`${sizeName}: insert failed (column mismatch)`);
       };
 
       await Promise.all(sizes.map((sizeName) => upsertOneSize(sizeName)));
