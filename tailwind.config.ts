@@ -81,6 +81,9 @@ export default {
 					DEFAULT: 'hsl(var(--quality))',
 					foreground: 'hsl(var(--quality-foreground))'
 				},
+				brand: {
+					gold: 'hsl(var(--brand-gold))',
+				},
 				sidebar: {
 					DEFAULT: 'hsl(var(--sidebar-background))',
 					foreground: 'hsl(var(--sidebar-foreground))',

@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
 import { computePickedAfterPickerDelta } from "@/utils/pickerRemaining";
+import { insertOrderBatchPickEventRows } from "@/utils/orderBatchPickEvents";
 
 interface SizeItem {
   size_name: string;
@@ -251,6 +252,12 @@ export default function PickerQuantityDialog({
       setSaving(true);
       const sizes = Object.keys(addBySize);
       const upsertErrors: string[] = [];
+      const pickLedgerDeltas: Array<{
+        order_batch_assignment_id: string;
+        size_name: string;
+        quantity_delta: number;
+        source: "picker_dialog";
+      }> = [];
 
       const upsertOneSize = async (sizeName: string) => {
         const currentPicked = getPicked(sizeName);
@@ -260,6 +267,18 @@ export default function PickerQuantityDialog({
 
         const assigned = getAssigned(sizeName);
         const finalPicked = computePickedAfterPickerDelta(assigned, currentPicked, rejected, newPicks);
+        const pickDelta = finalPicked - currentPicked;
+
+        const commitPickLedgerDelta = () => {
+          if (pickDelta !== 0) {
+            pickLedgerDeltas.push({
+              order_batch_assignment_id: assignmentId,
+              size_name: sizeName,
+              quantity_delta: pickDelta,
+              source: "picker_dialog",
+            });
+          }
+        };
 
         // Canonical column is assigned_quantity (not quantity); quantity-only rows break PostgREST with 400.
         const modernRow = {
@@ -274,7 +293,10 @@ export default function PickerQuantityDialog({
             onConflict: 'order_batch_assignment_id,size_name',
           } as any);
 
-        if (!errModern) return;
+        if (!errModern) {
+          commitPickLedgerDelta();
+          return;
+        }
 
         const msg = String(errModern.message || errModern.details || '');
         if (/assigned_quantity|column .* does not exist/i.test(msg)) {
@@ -289,7 +311,10 @@ export default function PickerQuantityDialog({
             .upsert(legacyRow as any, {
               onConflict: 'order_batch_assignment_id,size_name',
             } as any);
-          if (!errLegacy) return;
+          if (!errLegacy) {
+            commitPickLedgerDelta();
+            return;
+          }
           upsertErrors.push(`${sizeName}: ${errLegacy.message || 'upsert failed'}`);
           return;
         }
@@ -311,7 +336,10 @@ export default function PickerQuantityDialog({
                 updated_at: new Date().toISOString(),
               } as any)
               .eq('id', existing.id);
-            if (!uErr) return;
+            if (!uErr) {
+              commitPickLedgerDelta();
+              return;
+            }
             const { error: uErrLegacy } = await (supabase as any)
               .from('order_batch_size_distributions')
               .update({
@@ -320,14 +348,20 @@ export default function PickerQuantityDialog({
                 updated_at: new Date().toISOString(),
               } as any)
               .eq('id', existing.id);
-            if (!uErrLegacy) return;
+            if (!uErrLegacy) {
+              commitPickLedgerDelta();
+              return;
+            }
             upsertErrors.push(`${sizeName}: ${uErrLegacy.message || 'update failed'}`);
             return;
           }
           const { error: iErr } = await (supabase as any)
             .from('order_batch_size_distributions')
             .insert(modernRow as any);
-          if (!iErr) return;
+          if (!iErr) {
+            commitPickLedgerDelta();
+            return;
+          }
           const legacyInsert = {
             order_batch_assignment_id: assignmentId,
             size_name: sizeName,
@@ -337,7 +371,10 @@ export default function PickerQuantityDialog({
           const { error: iErr2 } = await (supabase as any)
             .from('order_batch_size_distributions')
             .insert(legacyInsert as any);
-          if (!iErr2) return;
+          if (!iErr2) {
+            commitPickLedgerDelta();
+            return;
+          }
           upsertErrors.push(`${sizeName}: ${iErr2.message || 'insert failed'}`);
           return;
         }
@@ -387,6 +424,8 @@ export default function PickerQuantityDialog({
       }
 
       await decrementQcRejected();
+
+      await insertOrderBatchPickEventRows(pickLedgerDeltas);
 
       toast({ title: 'Saved', description: 'Picked quantities updated.' });
       onSuccess();

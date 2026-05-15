@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
 import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
+import { insertOrderBatchPickEventRows } from "@/utils/orderBatchPickEvents";
 import { toast } from "sonner";
 
 interface SizeRow { size_name: string; picked: number; approved: number; rejected: number; remarks?: string; }
@@ -161,6 +162,13 @@ export default function QCReviewDialog({ isOpen, onClose, orderId, orderNumber, 
         });
       });
       
+      const qcPickLedger: Array<{
+        order_batch_assignment_id: string;
+        size_name: string;
+        quantity_delta: number;
+        source: "qc_review";
+      }> = [];
+
       // Upsert one row per size - accumulate approved/rejected totals
       // r.approved and r.rejected are the NEW approvals/rejections for items being verified in this session
       // We need to add these to the previous totals to get cumulative approved/rejected
@@ -228,6 +236,15 @@ export default function QCReviewDialog({ isOpen, onClose, orderId, orderNumber, 
 
         // Rejected units leave the bench — reduce picked count so picker can replenish without increasing assigned total.
         if ((r.rejected || 0) > 0) {
+          const pickDelta = pickedAfterReject - currentPicked;
+          if (pickDelta !== 0) {
+            qcPickLedger.push({
+              order_batch_assignment_id: assignmentId,
+              size_name: r.size_name,
+              quantity_delta: pickDelta,
+              source: "qc_review",
+            });
+          }
           await (supabase as any)
             .from('order_batch_size_distributions')
             .update({
@@ -238,6 +255,9 @@ export default function QCReviewDialog({ isOpen, onClose, orderId, orderNumber, 
             .eq('size_name', r.size_name);
         }
       }));
+
+      await insertOrderBatchPickEventRows(qcPickLedger);
+
       toast.success("QC saved", {
         description:
           rows.some((x) => (x.rejected || 0) > 0)
