@@ -15,10 +15,21 @@ import { toast } from 'sonner';
 import { assignOrderItemFlows } from '@/api/fulfillment/assignFlows';
 import type { ExecutionFlow } from '@/domain/fulfillment/types';
 import { EXECUTION_FLOWS, executionFlowLabel, fulfillmentStatusLabel } from '@/domain/fulfillment/types';
+import {
+  InventoryStockMappingPanel,
+  hydrateStockMappings,
+  inventoryPayloadFromMappings,
+  mappingsMatchSizeRows,
+  validateStockMappings,
+  type StockSizeMapping,
+} from '@/components/fulfillment/InventoryStockMappingPanel';
+import { fetchStockProductCatalog, type StockProductRow } from '@/lib/stockFulfillmentCatalog';
+import { chunkArray } from '@/lib/chunkArray';
+import { getOrderLineSizeRows, parseOrderLineSpecifications } from '@/lib/orderLineSizes';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { formatLocaleDateFromApi } from '@/lib/utils';
+import { cn, formatLocaleDateFromApi } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { getOrderItemListThumbnailUrl } from '@/utils/orderItemImageUtils';
 
@@ -48,8 +59,10 @@ type QueueOrderPreview = {
 type OrderLine = {
   id: string;
   quantity: number | null;
+  sizes_quantities?: Record<string, unknown> | null;
   product_description?: string | null;
   product_id?: string | null;
+  size_type_id?: string | null;
   execution_flow?: ExecutionFlow | null;
   fulfillment_status?: string | null;
   fabric_id?: string | null;
@@ -64,20 +77,6 @@ type OrderLine = {
     gsm?: string | number | null;
   } | null;
 };
-
-function parseOrderLineSpecifications(spec: unknown): Record<string, unknown> {
-  if (spec == null) return {};
-  if (typeof spec === 'string') {
-    try {
-      const o = JSON.parse(spec);
-      return typeof o === 'object' && o !== null ? (o as Record<string, unknown>) : {};
-    } catch {
-      return {};
-    }
-  }
-  if (typeof spec === 'object') return spec as Record<string, unknown>;
-  return {};
-}
 
 function lineCardDisplay(
   line: OrderLine,
@@ -116,7 +115,9 @@ function summarizeOrderLineForQueue(
   const fabric = String(line.fabric?.fabric_name || '').trim();
 
   const sizeLabels: string[] = [];
-  const sizesQuantities = specs.sizes_quantities as Record<string, unknown> | undefined;
+  const sizesQuantities =
+    (line.sizes_quantities as Record<string, unknown> | undefined) ||
+    (specs.sizes_quantities as Record<string, unknown> | undefined);
   if (sizesQuantities && typeof sizesQuantities === 'object') {
     for (const [k, v] of Object.entries(sizesQuantities)) {
       if (Number(v) > 0) sizeLabels.push(k);
@@ -127,8 +128,13 @@ function summarizeOrderLineForQueue(
   return { imageUrl, product, fabric, sizeLabels };
 }
 
-type WiRow = { id: string; quantity: number; item_name: string | null };
 type SalesManager = { id: string; full_name: string | null; avatar_url?: string | null };
+type SizeTypeRow = {
+  id: string;
+  size_name: string;
+  available_sizes: string[];
+  size_order?: Record<string, number>;
+};
 
 function isLineAwaitingAssignment(line: OrderLine): boolean {
   return line.fulfillment_status === 'pending_flow' || !line.execution_flow;
@@ -160,12 +166,6 @@ const FLOW_CARD_META: Record<
     badgeClass: 'bg-emerald-600/15 text-emerald-700',
   },
 };
-
-function chunkArray<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
 
 /** PostgREST 404 / schema cache when the queue view was missing or not exposed to the API. */
 function isPendingFlowViewMissing(e: unknown): boolean {
@@ -360,8 +360,10 @@ const OrderFlowAssignmentPage: React.FC = () => {
   const [choices, setChoices] = useState<Record<string, ExecutionFlow>>({});
   const [bulkAssignEnabled, setBulkAssignEnabled] = useState(false);
   const [bulkFlowChoice, setBulkFlowChoice] = useState<ExecutionFlow>('stitching');
-  const [invPick, setInvPick] = useState<Record<string, { wiId: string; qty: string }[]>>({});
-  const [wiOptions, setWiOptions] = useState<Record<string, WiRow[]>>({});
+  const [stockMappings, setStockMappings] = useState<Record<string, StockSizeMapping[]>>({});
+  const [stockCatalog, setStockCatalog] = useState<StockProductRow[]>([]);
+  const [stockCatalogLoading, setStockCatalogLoading] = useState(false);
+  const [sizeTypes, setSizeTypes] = useState<SizeTypeRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [settingsSchemaError, setSettingsSchemaError] = useState<string | null>(null);
   const [queueLoadNotice, setQueueLoadNotice] = useState<string | null>(null);
@@ -572,8 +574,10 @@ const OrderFlowAssignmentPage: React.FC = () => {
           `
           id,
           quantity,
+          sizes_quantities,
           product_description,
           product_id,
+          size_type_id,
           execution_flow,
           fulfillment_status,
           fabric_id,
@@ -593,7 +597,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
         next[l.id] = (l.execution_flow as ExecutionFlow) || 'stitching';
       }
       setChoices(next);
-      setInvPick({});
+      setStockMappings({});
     } catch (e) {
       console.error(e);
       toast.error('Failed to load order lines');
@@ -612,31 +616,60 @@ const OrderFlowAssignmentPage: React.FC = () => {
     else {
       setOrderLines([]);
       setChoices({});
+      setStockMappings({});
     }
   }, [selectedOrderId, loadLines]);
 
-  const loadWiForLine = async (line: OrderLine) => {
-    const pid = line.product_id;
-    if (!pid) {
-      toast.error('This line has no product_id; inventory path needs a product.');
-      return;
-    }
-    const { data, error } = await supabase
-      .from('warehouse_inventory')
-      .select('id, quantity, item_name')
-      .eq('item_type', 'PRODUCT')
-      .eq('item_id', pid)
-      .in('status', ['IN_STORAGE', 'READY_TO_DISPATCH'] as any)
-      .limit(50);
-    if (error) {
-      console.error(error);
-      toast.error('Failed to load warehouse stock');
-      return;
-    }
-    setWiOptions((prev) => ({ ...prev, [line.id]: (data as WiRow[]) || [] }));
-  };
+  useEffect(() => {
+    if (!selectedOrderId) return;
+    let cancelled = false;
+    const loadCatalog = async () => {
+      setStockCatalogLoading(true);
+      try {
+        const [catalog, sizeTypeRes] = await Promise.all([
+          fetchStockProductCatalog(),
+          supabase.from('size_types').select('id, size_name, available_sizes, size_order'),
+        ]);
+        if (cancelled) return;
+        setStockCatalog(catalog);
+        if (!sizeTypeRes.error) {
+          setSizeTypes((sizeTypeRes.data as SizeTypeRow[]) || []);
+        }
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) toast.error('Failed to load stock product catalog');
+      } finally {
+        if (!cancelled) setStockCatalogLoading(false);
+      }
+    };
+    void loadCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedOrderId]);
+
+  const ensureStockMappingsForLine = useCallback((line: OrderLine) => {
+    setStockMappings((prev) => {
+      const specs = parseOrderLineSpecifications(line.specifications);
+      const sizeRows = getOrderLineSizeRows(specs, line.quantity, line.sizes_quantities);
+      const existing = prev[line.id];
+      if (existing && mappingsMatchSizeRows(existing, sizeRows)) return prev;
+      return { ...prev, [line.id]: hydrateStockMappings(sizeRows, line.specifications) };
+    });
+  }, []);
+
+  const handleStockMappingsChange = useCallback((lineId: string, mappings: StockSizeMapping[]) => {
+    setStockMappings((prev) => ({ ...prev, [lineId]: mappings }));
+  }, []);
 
   const pendingLines = useMemo(() => orderLines.filter(isLineAwaitingAssignment), [orderLines]);
+
+  useEffect(() => {
+    for (const line of pendingLines) {
+      const flow = bulkAssignEnabled ? bulkFlowChoice : choices[line.id];
+      if (flow === 'inventory') ensureStockMappingsForLine(line);
+    }
+  }, [pendingLines, choices, bulkAssignEnabled, bulkFlowChoice, ensureStockMappingsForLine]);
 
   const assignmentDialogOrderMeta = useMemo(() => {
     const row = queue.find((r) => r.order_id === selectedOrderId);
@@ -653,6 +686,33 @@ const OrderFlowAssignmentPage: React.FC = () => {
     [orderLines]
   );
 
+  const syncOrderItemProductForInventory = async (lineId: string, mappings: StockSizeMapping[]) => {
+    const productIds = [...new Set(mappings.map((m) => m.productMasterId).filter(Boolean))];
+    const product_id = productIds.length === 1 ? productIds[0]! : null;
+    const { error } = await supabase.from('order_items').update({ product_id } as any).eq('id', lineId);
+    if (error) throw error;
+  };
+
+  const persistStockFulfillmentSpecs = async (line: OrderLine, mappings: StockSizeMapping[]) => {
+    const specs = parseOrderLineSpecifications(line.specifications);
+    const stock_fulfillment = {
+      mapped_at: new Date().toISOString(),
+      by_size: mappings
+        .filter((m) => m.productMasterId && m.wiId)
+        .map((m) => ({
+          order_size: m.orderSize,
+          product_master_id: m.productMasterId,
+          warehouse_inventory_id: m.wiId,
+          quantity: Number(m.qty),
+        })),
+    };
+    const { error } = await supabase
+      .from('order_items')
+      .update({ specifications: { ...specs, stock_fulfillment } } as any)
+      .eq('id', line.id);
+    if (error) console.warn('Could not save stock_fulfillment on order line specs', error);
+  };
+
   const submitAssignments = async () => {
     if (!selectedOrderId) return;
     const linesToSave = orderLines.filter(isLineAwaitingAssignment);
@@ -660,20 +720,43 @@ const OrderFlowAssignmentPage: React.FC = () => {
       toast.info('No lines are pending flow assignment on this order.');
       return;
     }
+
+    for (const l of linesToSave) {
+      const flow = bulkAssignEnabled ? bulkFlowChoice : choices[l.id] || 'stitching';
+      if (flow !== 'inventory') continue;
+      const mappings = stockMappings[l.id] || [];
+      const err = validateStockMappings(mappings);
+      if (err) {
+        toast.error(err);
+        return;
+      }
+    }
+
     setSaving(true);
     try {
+      for (const l of linesToSave) {
+        const flow = bulkAssignEnabled ? bulkFlowChoice : choices[l.id] || 'stitching';
+        if (flow === 'inventory') {
+          await syncOrderItemProductForInventory(l.id, stockMappings[l.id] || []);
+        }
+      }
+
       const assignments = linesToSave.map((l) => {
         const flow = bulkAssignEnabled ? bulkFlowChoice : choices[l.id] || 'stitching';
         const base: any = { order_item_id: l.id, execution_flow: flow };
         if (flow === 'inventory') {
-          const rows = invPick[l.id] || [];
-          base.inventory = rows
-            .filter((r) => r.wiId && Number(r.qty) > 0)
-            .map((r) => ({ warehouse_inventory_id: r.wiId, quantity: Number(r.qty) }));
+          base.inventory = inventoryPayloadFromMappings(stockMappings[l.id] || []);
         }
         return base;
       });
       await assignOrderItemFlows(selectedOrderId, assignments);
+
+      await Promise.all(
+        linesToSave
+          .filter((l) => (bulkAssignEnabled ? bulkFlowChoice : choices[l.id]) === 'inventory')
+          .map((l) => persistStockFulfillmentSpecs(l, stockMappings[l.id] || []))
+      );
+
       toast.success('Execution flows saved');
       await loadQueue();
       await loadLines(selectedOrderId);
@@ -716,24 +799,23 @@ const OrderFlowAssignmentPage: React.FC = () => {
         )}
 
         <Card>
-          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle className="text-base">Require flow assignment (orders)</CardTitle>
+          <CardContent className="pt-6">
             {flagLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center space-x-2">
                 <Switch
                   checked={requireFlag}
                   onCheckedChange={(v) => void saveFlag(v)}
                   id="req-flow"
                   disabled={!!settingsSchemaError}
                 />
-                <Label htmlFor="req-flow" className="text-sm font-normal cursor-pointer">
-                  When enabled, receipt sets order lines to pending assignment
+                <Label htmlFor="req-flow" className="cursor-pointer">
+                  Important
                 </Label>
               </div>
             )}
-          </CardHeader>
+          </CardContent>
         </Card>
 
         <Card>
@@ -792,16 +874,17 @@ const OrderFlowAssignmentPage: React.FC = () => {
                     <TableHead className="align-middle min-w-[5.5rem]">
                       <span className="text-xs font-semibold">Balance</span>
                     </TableHead>
-                    <TableHead className="align-middle w-[1%] whitespace-nowrap">
-                      <span className="text-xs font-semibold">Actions</span>
-                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {queue.map((r) => (
                     <TableRow
                       key={r.order_id}
-                      className={selectedOrderId === r.order_id ? 'bg-muted/40' : ''}
+                      className={cn(
+                        'cursor-pointer',
+                        selectedOrderId === r.order_id && 'bg-muted/40'
+                      )}
+                      onClick={() => setSelectedOrderId(r.order_id)}
                     >
                       <TableCell className="font-medium">{r.order_number}</TableCell>
                       <TableCell>
@@ -864,20 +947,6 @@ const OrderFlowAssignmentPage: React.FC = () => {
                       </TableCell>
                       <TableCell>₹{Number(r.final_amount ?? 0).toFixed(2)}</TableCell>
                       <TableCell>₹{Number(r.balance_amount ?? 0).toFixed(2)}</TableCell>
-                      <TableCell>
-                        <div className="flex space-x-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedOrderId(r.order_id);
-                            }}
-                          >
-                            Assign flows
-                          </Button>
-                        </div>
-                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -888,7 +957,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
         </Card>
 
         <Dialog open={!!selectedOrderId} onOpenChange={(open) => !open && setSelectedOrderId(null)}>
-          <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+          <DialogContent className="max-w-5xl max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Assign execution flows</DialogTitle>
             </DialogHeader>
@@ -925,6 +994,9 @@ const OrderFlowAssignmentPage: React.FC = () => {
                             const flow = v as ExecutionFlow;
                             setBulkFlowChoice(flow);
                             applyBulkFlowToAllLines(flow);
+                            if (flow === 'inventory') {
+                              for (const line of pendingLines) ensureStockMappingsForLine(line);
+                            }
                           }}
                           className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
                         >
@@ -971,7 +1043,17 @@ const OrderFlowAssignmentPage: React.FC = () => {
                       )}
                     </div>
                   )}
-                  {!bulkAssignEnabled && orderLines.map((line) => {
+                  {pendingLines.map((line) => {
+                    const effectiveFlow = bulkAssignEnabled ? bulkFlowChoice : choices[line.id] || 'stitching';
+                    const specs = parseOrderLineSpecifications(line.specifications);
+                    const sizeRows = getOrderLineSizeRows(specs, line.quantity, line.sizes_quantities);
+                    const lineStockMappings = (() => {
+                      const existing = stockMappings[line.id];
+                      if (existing && mappingsMatchSizeRows(existing, sizeRows)) return existing;
+                      return hydrateStockMappings(sizeRows, line.specifications);
+                    })();
+                    const sizeTypeId =
+                      line.size_type_id || (specs.size_type_id as string | undefined) || null;
                     const { title, subtitleParts, imageUrl } = lineCardDisplay(line, assignmentDialogOrderMeta);
                     return (
                     <div key={line.id} className="rounded-lg border border-border p-4 space-y-3">
@@ -995,18 +1077,13 @@ const OrderFlowAssignmentPage: React.FC = () => {
                           </div>
                         </div>
                       </div>
+                      {!bulkAssignEnabled ? (
                       <RadioGroup
                         value={choices[line.id] || 'stitching'}
                         onValueChange={(v) => {
                           const flow = v as ExecutionFlow;
                           setChoices((c) => ({ ...c, [line.id]: flow }));
-                          if (flow === 'inventory') {
-                            setInvPick((p) => ({
-                              ...p,
-                              [line.id]: p[line.id]?.length ? p[line.id]! : [{ wiId: '', qty: String(line.quantity ?? '') }],
-                            }));
-                            void loadWiForLine(line);
-                          }
+                          if (flow === 'inventory') ensureStockMappingsForLine(line);
                         }}
                         className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
                       >
@@ -1052,59 +1129,24 @@ const OrderFlowAssignmentPage: React.FC = () => {
                           </Label>
                         ))}
                       </RadioGroup>
-                      {choices[line.id] === 'inventory' && (
-                        <div className="space-y-2 pl-1 border-l-2 border-muted ml-1">
-                          <p className="text-sm text-muted-foreground">Reserve stock (warehouse rows for this product)</p>
-                          {(invPick[line.id] || [{ wiId: '', qty: '' }]).map((row, idx) => (
-                            <div key={idx} className="flex flex-wrap gap-2 items-end">
-                              <div className="space-y-1">
-                                <Label className="text-xs">Bin stock</Label>
-                                <select
-                                  className="flex h-9 w-56 rounded-md border border-input bg-background px-2 text-sm"
-                                  value={row.wiId}
-                                  onChange={(e) => {
-                                    const next = [...(invPick[line.id] || [{ wiId: '', qty: '' }])];
-                                    next[idx] = { ...next[idx], wiId: e.target.value };
-                                    setInvPick((p) => ({ ...p, [line.id]: next }));
-                                  }}
-                                >
-                                  <option value="">Select row…</option>
-                                  {(wiOptions[line.id] || []).map((w) => (
-                                    <option key={w.id} value={w.id}>
-                                      {w.item_name || w.id} — {w.quantity} pcs
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                              <div className="space-y-1">
-                                <Label className="text-xs">Qty</Label>
-                                <Input
-                                  className="h-9 w-24"
-                                  value={row.qty}
-                                  onChange={(e) => {
-                                    const next = [...(invPick[line.id] || [{ wiId: '', qty: '' }])];
-                                    next[idx] = { ...next[idx], qty: e.target.value };
-                                    setInvPick((p) => ({ ...p, [line.id]: next }));
-                                  }}
-                                />
-                              </div>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="mb-0.5"
-                                onClick={() => {
-                                  const next = [...(invPick[line.id] || [{ wiId: '', qty: '' }]), { wiId: '', qty: '' }];
-                                  setInvPick((p) => ({ ...p, [line.id]: next }));
-                                }}
-                              >
-                                Add row
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Flow for all lines: <span className="font-medium">{executionFlowLabel(effectiveFlow)}</span>
+                        </p>
                       )}
-                      {choices[line.id] === 'outsource' && (
+                      {effectiveFlow === 'inventory' ? (
+                        <InventoryStockMappingPanel
+                          lineId={line.id}
+                          sizeRows={sizeRows}
+                          sizeTypeId={sizeTypeId}
+                          sizeTypes={sizeTypes}
+                          catalog={stockCatalog}
+                          catalogLoading={stockCatalogLoading}
+                          mappings={lineStockMappings}
+                          onChange={handleStockMappingsChange}
+                        />
+                      ) : null}
+                      {!bulkAssignEnabled && choices[line.id] === 'outsource' && (
                         <div className="text-sm">
                           <Button
                             type="button"

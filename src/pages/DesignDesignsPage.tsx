@@ -9,7 +9,7 @@ import { ShoppingCart, Eye, Package, Clock, CheckCircle, Filter, FileImage, X } 
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useOrdersWithReceipts } from "@/hooks/useOrdersWithReceipts";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
+import { fetchOrderItemsByOrderIds } from "@/lib/fetchOrderItemsBulk";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -50,9 +50,11 @@ interface Order {
 const DesignDesignsPage = () => {
   const navigate = useNavigate();
   const { config: company } = useCompanySettings();
-  const { orders: ordersWithReceipts, loading: ordersLoading, refetch } = useOrdersWithReceipts<Order>();
+  const { orders: ordersWithReceipts, loading: ordersLoading, error: ordersError, refetch } =
+    useOrdersWithReceipts<Order>();
   const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const pageLoading = ordersLoading || itemsLoading;
   const [activeTab, setActiveTab] = useState<"pending" | "completed">("pending");
   const [sortBy, setSortBy] = useState<string>("date_desc");
   const [columnFilters, setColumnFilters] = useState({
@@ -68,50 +70,48 @@ const DesignDesignsPage = () => {
   const printRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (ordersLoading) return;
+
     const fetchOrdersWithItems = async () => {
       if (ordersWithReceipts.length === 0) {
         setOrders([]);
-        setLoading(false);
         return;
       }
 
+      setItemsLoading(true);
       try {
-        setLoading(true);
-        const orderIds = ordersWithReceipts.map(o => o.id);
-
-        const { data: orderItems, error: itemsError } = await supabase
-          .from('order_items')
-          .select('id, order_id, specifications, mockup_images, category_image_url')
-          .eq('is_deleted', false)
-          .in('order_id', orderIds);
+        const orderIds = ordersWithReceipts.map((o) => o.id);
+        const { data: orderItems, error: itemsError } = await fetchOrderItemsByOrderIds(
+          orderIds,
+          'id, order_id, specifications, mockup_images, category_image_url'
+        );
 
         if (itemsError) throw itemsError;
 
-        const itemsByOrderId: { [key: string]: any[] } = {};
-        (orderItems || []).forEach((item: any) => {
-          if (!itemsByOrderId[item.order_id]) {
-            itemsByOrderId[item.order_id] = [];
-          }
-          itemsByOrderId[item.order_id].push(item);
-        });
+        const itemsByOrderId: Record<string, any[]> = {};
+        for (const item of orderItems) {
+          const oid = String(item.order_id || '');
+          if (!oid) continue;
+          if (!itemsByOrderId[oid]) itemsByOrderId[oid] = [];
+          itemsByOrderId[oid].push(item);
+        }
 
-        const enrichedOrders = ordersWithReceipts.map(order => ({
-          ...order,
-          order_items: itemsByOrderId[order.id] || []
-        }));
-
-        setOrders(enrichedOrders);
+        setOrders(
+          ordersWithReceipts.map((order) => ({
+            ...order,
+            order_items: itemsByOrderId[order.id] || [],
+          }))
+        );
       } catch (error) {
         console.error('Error fetching order items:', error);
+        toast.error('Failed to load order line items');
         setOrders(ordersWithReceipts);
       } finally {
-        setLoading(false);
+        setItemsLoading(false);
       }
     };
 
-    if (!ordersLoading) {
-      fetchOrdersWithItems();
-    }
+    void fetchOrdersWithItems();
   }, [ordersWithReceipts, ordersLoading]);
 
   const fetchOrders = async () => { await refetch(); };
@@ -226,9 +226,7 @@ const DesignDesignsPage = () => {
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold">
-                  {orders.filter(o => o.status === 'pending').length}
-                </span>
+                <span className="text-2xl font-bold">{pendingOrders.length}</span>
                 <Clock className="w-5 h-5 text-yellow-700" />
               </div>
             </CardContent>
@@ -295,6 +293,12 @@ const DesignDesignsPage = () => {
             </div>
           </div>
 
+          {ordersError && (
+            <p className="text-sm text-destructive rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
+              {ordersError}
+            </p>
+          )}
+
           {activeTab === "pending" && (
         <Card>
           <CardHeader>
@@ -325,7 +329,7 @@ const DesignDesignsPage = () => {
             </div>
           </CardHeader>
           <CardContent className="p-2 sm:p-4">
-            {loading ? (
+            {pageLoading ? (
               <div className="flex items-center justify-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
               </div>
@@ -414,7 +418,7 @@ const DesignDesignsPage = () => {
                     ))}
                   </TableBody>
                 </Table>
-                    {filteredOrders.length === 0 && !loading && (
+                    {filteredOrders.length === 0 && !pageLoading && (
                       <div className="text-center py-8 text-muted-foreground">
                         No pending orders found
                       </div>
@@ -455,7 +459,7 @@ const DesignDesignsPage = () => {
                 </div>
               </CardHeader>
               <CardContent className="p-2 sm:p-4">
-                {loading ? (
+                {pageLoading ? (
                   <div className="flex items-center justify-center py-8">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
                   </div>
@@ -584,7 +588,7 @@ const DesignDesignsPage = () => {
                         ))}
                       </TableBody>
                     </Table>
-                    {filteredOrders.length === 0 && !loading && (
+                    {filteredOrders.length === 0 && !pageLoading && (
                       <div className="text-center py-8 text-muted-foreground">
                         No completed orders found
                       </div>
