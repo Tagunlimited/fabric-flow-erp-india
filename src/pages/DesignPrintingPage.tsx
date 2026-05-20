@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { cn } from '@/lib/utils';
+import { cn, formatLocaleDateFromApi } from '@/lib/utils';
 import {
   getDesignOrderStatusColor,
   getOrderMockupPreviewUrls,
@@ -27,6 +27,7 @@ interface Order {
   id: string;
   order_number: string;
   order_date: string;
+  expected_delivery_date?: string | null;
   customer_id: string;
   customer: {
     company_name: string;
@@ -389,6 +390,7 @@ const DesignPrintingPage = () => {
                             </Button>
                           </div>
                         </TableHead>
+                        <TableHead>Exp. delivery</TableHead>
                         <TableHead>
                           <div className="flex items-center justify-between gap-0.5">
                             <span>Status</span>
@@ -414,11 +416,20 @@ const DesignPrintingPage = () => {
                             <TableCell className="font-medium">{order.order_number}</TableCell>
                             <TableCell>{order.customer?.company_name}</TableCell>
                             <TableCell>
-                              {new Date(order.order_date).toLocaleDateString('en-GB', {
+                              {formatLocaleDateFromApi(order.order_date, 'en-GB', {
                                 day: '2-digit',
                                 month: 'short',
-                                year: '2-digit'
+                                year: '2-digit',
                               })}
+                            </TableCell>
+                            <TableCell>
+                              {order.expected_delivery_date
+                                ? formatLocaleDateFromApi(order.expected_delivery_date, 'en-GB', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    year: '2-digit',
+                                  })
+                                : 'N/A'}
                             </TableCell>
                             <TableCell>
                               <Badge className={getDesignOrderStatusColor(order.status)}>

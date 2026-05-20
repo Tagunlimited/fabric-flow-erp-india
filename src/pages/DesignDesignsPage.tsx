@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useCompanySettings } from '@/hooks/CompanySettingsContext';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { cn } from '@/lib/utils';
+import { cn, formatLocaleDateFromApi } from '@/lib/utils';
 import {
   getOrderMockupPreviewUrls,
   hasBranding,
@@ -29,6 +29,7 @@ interface Order {
   id: string;
   order_number: string;
   order_date: string;
+  expected_delivery_date?: string | null;
   customer_id: string;
   customer: {
     company_name: string;
@@ -362,6 +363,7 @@ const DesignDesignsPage = () => {
                           </Button>
                         </div>
                       </TableHead>
+                      <TableHead>Exp. delivery</TableHead>
                       <TableHead>
                         <div className="flex items-center justify-between gap-0.5">
                           <span>Status</span>
@@ -387,11 +389,20 @@ const DesignDesignsPage = () => {
                         <TableCell className="font-medium">{order.order_number}</TableCell>
                         <TableCell>{order.customer?.company_name}</TableCell>
                         <TableCell>
-                          {new Date(order.order_date).toLocaleDateString('en-GB', {
+                          {formatLocaleDateFromApi(order.order_date, 'en-GB', {
                             day: '2-digit',
                             month: 'short',
-                            year: '2-digit'
+                            year: '2-digit',
                           })}
+                        </TableCell>
+                        <TableCell>
+                          {order.expected_delivery_date
+                            ? formatLocaleDateFromApi(order.expected_delivery_date, 'en-GB', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: '2-digit',
+                              })
+                            : 'N/A'}
                         </TableCell>
                         <TableCell>
                           <Badge className={getDesignOrderStatusColor(order.status)}>
@@ -492,6 +503,7 @@ const DesignDesignsPage = () => {
                               </Button>
                             </div>
                           </TableHead>
+                          <TableHead>Exp. delivery</TableHead>
                           <TableHead>
                             <div className="flex items-center justify-between gap-0.5">
                               <span>Status</span>
@@ -518,11 +530,20 @@ const DesignDesignsPage = () => {
                             <TableCell className="font-medium">{order.order_number}</TableCell>
                             <TableCell>{order.customer?.company_name}</TableCell>
                             <TableCell>
-                              {new Date(order.order_date).toLocaleDateString('en-GB', {
+                              {formatLocaleDateFromApi(order.order_date, 'en-GB', {
                                 day: '2-digit',
                                 month: 'short',
-                                year: '2-digit'
+                                year: '2-digit',
                               })}
+                            </TableCell>
+                            <TableCell>
+                              {order.expected_delivery_date
+                                ? formatLocaleDateFromApi(order.expected_delivery_date, 'en-GB', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    year: '2-digit',
+                                  })
+                                : 'N/A'}
                             </TableCell>
                             <TableCell>
                               <Badge className={getDesignOrderStatusColor(order.status)}>
