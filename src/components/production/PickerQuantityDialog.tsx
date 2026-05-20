@@ -319,9 +319,22 @@ export default function PickerQuantityDialog({
           return;
         }
 
-        // No matching UNIQUE for ON CONFLICT (migration not applied): update-or-insert by keys.
-        if (/unique|exclusion constraint|on conflict/i.test(msg)) {
-          const { data: existing } = await (supabase as any)
+        const existingAssigned = Math.max(
+          Number((existing as any)?.assigned_quantity ?? 0),
+          Number((existing as any)?.quantity ?? 0)
+        );
+        const assigned = Math.max(assignedFromUi, existingAssigned);
+        const finalPickedRaw = computePickedAfterPickerDelta(
+          assigned,
+          currentPicked,
+          rejected,
+          newPicks
+        );
+        const finalPicked = Math.min(finalPickedRaw, assigned);
+        const now = new Date().toISOString();
+
+        const tryUpdate = async (id: string, patch: Record<string, unknown>) => {
+          return (supabase as any)
             .from('order_batch_size_distributions')
             .select('id')
             .eq('order_batch_assignment_id', assignmentId)
@@ -365,7 +378,14 @@ export default function PickerQuantityDialog({
           const legacyInsert = {
             order_batch_assignment_id: assignmentId,
             size_name: sizeName,
+            picked_quantity: finalPicked,
+            assigned_quantity: assigned,
             quantity: assigned,
+            updated_at: now,
+          },
+          {
+            order_batch_assignment_id: assignmentId,
+            size_name: sizeName,
             picked_quantity: finalPicked,
           };
           const { error: iErr2 } = await (supabase as any)
@@ -378,8 +398,7 @@ export default function PickerQuantityDialog({
           upsertErrors.push(`${sizeName}: ${iErr2.message || 'insert failed'}`);
           return;
         }
-
-        upsertErrors.push(`${sizeName}: ${msg || 'upsert failed'}`);
+        upsertErrors.push(`${sizeName}: insert failed (column mismatch)`);
       };
 
       await Promise.all(sizes.map((sizeName) => upsertOneSize(sizeName)));
