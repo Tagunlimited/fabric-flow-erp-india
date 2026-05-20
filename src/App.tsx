@@ -67,6 +67,7 @@ import { GRNList } from "./components/goods-receipt-notes/GRNList";
 import { GRNForm } from "./components/goods-receipt-notes/GRNForm";
 import CompanyConfigPage from "./pages/admin/CompanyConfigPage";
 import ReportsPage from "./pages/reports/ReportsPage";
+import TailorPaymentReportPage from "./pages/reports/TailorPaymentReportPage";
 import TutorialsPage from "./pages/TutorialsPage";
 import PeoplePage from "./pages/PeoplePage";
 import EmployeesPage from "./pages/people/EmployeesPage";
@@ -588,6 +589,13 @@ const App = () => {
                   <ProtectedRouteWithCompanySettings>
                     <ErpLayout>
                       <ReportsPage />
+                    </ErpLayout>
+                  </ProtectedRouteWithCompanySettings>
+                } />
+                <Route path="/reports/tailor-payments" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <ErpLayout>
+                      <TailorPaymentReportPage />
                     </ErpLayout>
                   </ProtectedRouteWithCompanySettings>
                 } />

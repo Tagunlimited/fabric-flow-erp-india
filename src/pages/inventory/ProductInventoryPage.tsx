@@ -981,16 +981,8 @@ const ProductInventoryPage: React.FC<ProductInventoryPageProps> = ({ embedded = 
         <Dialog open={imageGalleryOpen} onOpenChange={setImageGalleryOpen}>
           <DialogContent className="max-w-4xl max-h-[90vh] p-0">
             <DialogHeader className="px-6 pt-6 pb-4">
-              <DialogTitle className="flex items-center justify-between">
-                <span>{selectedProduct?.name || 'Product Images'}</span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setImageGalleryOpen(false)}
-                  className="h-6 w-6"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
+              <DialogTitle className="pr-8">
+                {selectedProduct?.name || 'Product Images'}
               </DialogTitle>
             </DialogHeader>
             {selectedProduct && (() => {

@@ -250,6 +250,59 @@ function colCellIncludes(filterRaw: string, cellHaystack: string): boolean {
   return cellHaystack.toLowerCase().includes(f);
 }
 
+const ORDERS_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+const FILTER_FETCH_CAP = 500;
+
+function sortOrdersPageList(list: Order[], sortBy: string): Order[] {
+  return [...list].sort((a, b) => {
+    if (sortBy === 'date_asc') {
+      return (
+        (parseBusinessDateLocal(a.order_date)?.getTime() ?? new Date(a.order_date).getTime()) -
+        (parseBusinessDateLocal(b.order_date)?.getTime() ?? new Date(b.order_date).getTime())
+      );
+    }
+    if (sortBy === 'date_desc') {
+      return (
+        (parseBusinessDateLocal(b.order_date)?.getTime() ?? new Date(b.order_date).getTime()) -
+        (parseBusinessDateLocal(a.order_date)?.getTime() ?? new Date(a.order_date).getTime())
+      );
+    }
+    if (sortBy === 'amount_asc') {
+      return (a.final_amount || 0) - (b.final_amount || 0);
+    }
+    if (sortBy === 'amount_desc') {
+      return (b.final_amount || 0) - (a.final_amount || 0);
+    }
+    return 0;
+  });
+}
+
+function applyOrdersTabFilter<T extends { eq: (col: string, val: string) => T; neq: (col: string, val: string) => T }>(
+  query: T,
+  tab: string
+): T {
+  if (tab === 'completed') {
+    return query.eq('status', 'completed');
+  }
+  return query.neq('status', 'completed');
+}
+
+function applyOrdersSort<T extends { order: (col: string, opts: { ascending: boolean }) => T }>(
+  query: T,
+  sortBy: string
+): T {
+  switch (sortBy) {
+    case 'date_asc':
+      return query.order('created_at', { ascending: true });
+    case 'amount_desc':
+      return query.order('final_amount', { ascending: false });
+    case 'amount_asc':
+      return query.order('final_amount', { ascending: true });
+    default:
+      return query.order('created_at', { ascending: false });
+  }
+}
+
 function orderMatchesColumnFilters(
   order: Order,
   f: OrdersColumnFilters,
@@ -326,7 +379,6 @@ function OrderColumnFilterTrigger({
 }
 
 const OrdersPage = () => {
-  const ORDERS_PAGE_SIZE = 100;
   const navigate = useNavigate();
   const location = useLocation();
   const [orders, setOrders] = useState<Order[]>([]);
@@ -343,18 +395,37 @@ const OrdersPage = () => {
   const [sortBy, setSortBy] = useState<string>("date_desc");
   const [loggedInSalesManagerFilterValue, setLoggedInSalesManagerFilterValue] = useState<string>("");
   const [prefillFromManualQuotationId, setPrefillFromManualQuotationId] = useState<string | null>(null);
-  const [ordersLimit, setOrdersLimit] = useState<number>(ORDERS_PAGE_SIZE);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [totalOrders, setTotalOrders] = useState(0);
+  const [tabCounts, setTabCounts] = useState({ pending: 0, completed: 0 });
 
   const hasActiveColumnFilters = Object.values(columnFilters).some((v) => v.trim().length > 0);
+  const columnFiltersKey = JSON.stringify(columnFilters);
+  const totalPages = Math.max(1, Math.ceil(totalOrders / pageSize));
+  const safePage = Math.min(page, totalPages);
 
   const filterDialogMeta = filterDialogColumn ? COLUMN_FILTER_DIALOG_META[filterDialogColumn] : null;
 
-  // Only refresh on tab change, not on visibility changes or focus
   useEffect(() => {
-    if (activeTab === "list" || activeTab === "completed") {
+    setPage(1);
+  }, [activeTab, pageSize, sortBy, columnFiltersKey]);
+
+  useEffect(() => {
+    if (activeTab === 'list' || activeTab === 'completed') {
       fetchOrders();
     }
-  }, [activeTab]);
+  }, [activeTab, page, pageSize, sortBy, columnFiltersKey]);
+
+  useEffect(() => {
+    void fetchTabCounts();
+  }, []);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   // Handle navigation state to refresh orders when returning from order detail
   useEffect(() => {
@@ -446,39 +517,96 @@ const OrdersPage = () => {
     setColumnFilters((p) => ({ ...p, sales_manager: marker }));
   };
 
+  const fetchTabCounts = async () => {
+    try {
+      const buildCountQuery = () =>
+        supabase
+          .from('orders')
+          .select('*', { count: 'exact', head: true })
+          .or('order_type.is.null,order_type.eq.custom');
+
+      let pendingQuery = applyOrdersTabFilter(buildCountQuery(), 'list');
+      let completedQuery = applyOrdersTabFilter(buildCountQuery(), 'completed');
+      pendingQuery = pendingQuery.eq('is_deleted', false);
+      completedQuery = completedQuery.eq('is_deleted', false);
+
+      let [pendingRes, completedRes] = await Promise.all([pendingQuery, completedQuery]);
+
+      if (pendingRes.error && shouldRetryReadWithoutIsDeletedFilter(pendingRes.error)) {
+        pendingRes = await applyOrdersTabFilter(buildCountQuery(), 'list');
+      }
+      if (completedRes.error && shouldRetryReadWithoutIsDeletedFilter(completedRes.error)) {
+        completedRes = await applyOrdersTabFilter(buildCountQuery(), 'completed');
+      }
+
+      setTabCounts({
+        pending: pendingRes.count ?? 0,
+        completed: completedRes.count ?? 0,
+      });
+    } catch {
+      /* non-blocking */
+    }
+  };
+
   const fetchOrders = async (forceRefresh = false) => {
     try {
       setLoading(true);
-      
-      // Clear orders state first if force refresh
+
       if (forceRefresh) {
         setOrders([]);
         setOrdersWithCuttingMaster(new Set());
         setSalesManagers({});
       }
-      
-      // Fetch only custom orders (exclude readymade orders)
-      const buildOrdersQuery = () =>
-        supabase
-          .from('orders')
-          .select(`
-            *,
-            customer:customers(company_name)
-          `)
-          .or('order_type.is.null,order_type.eq.custom')
-          .range(0, Math.max(ordersLimit - 1, 0))
-          .order('created_at', { ascending: false });
 
-      let { data, error } = await measureAsync('OrdersPage.fetchOrders.baseOrders', async () =>
-        buildOrdersQuery().eq('is_deleted', false)
-      );
-      if (error && shouldRetryReadWithoutIsDeletedFilter(error)) {
-        const retry = await measureAsync('OrdersPage.fetchOrders.baseOrders.retry', async () =>
-          buildOrdersQuery()
-        );
-        if (retry.error) throw retry.error;
-        data = retry.data;
-      }
+      const useServerPagination = !hasActiveColumnFilters;
+      const listTab = activeTab === 'completed' ? 'completed' : 'list';
+      const customerJoin = columnFilters.customer.trim()
+        ? 'customer:customers!inner(company_name)'
+        : 'customer:customers(company_name)';
+
+      const buildOrdersQuery = (withCount: boolean) => {
+        let q = supabase
+          .from('orders')
+          .select(`*, ${customerJoin}`, withCount ? { count: 'exact' } : undefined)
+          .or('order_type.is.null,order_type.eq.custom');
+
+        q = applyOrdersTabFilter(q, listTab);
+        q = applyOrdersSort(q, sortBy);
+
+        if (columnFilters.order_number.trim()) {
+          q = q.ilike('order_number', `%${columnFilters.order_number.trim()}%`);
+        }
+        if (columnFilters.sales_manager.trim()) {
+          q = q.ilike('sales_manager', `%${columnFilters.sales_manager.trim()}%`);
+        }
+        if (columnFilters.status.trim()) {
+          const statusNeedle = columnFilters.status.trim().replace(/\s+/g, '_');
+          q = q.ilike('status', `%${statusNeedle}%`);
+        }
+        if (columnFilters.customer.trim()) {
+          q = q.ilike('customers.company_name', `%${columnFilters.customer.trim()}%`);
+        }
+
+        if (useServerPagination) {
+          const from = (page - 1) * pageSize;
+          const to = from + pageSize - 1;
+          q = q.range(from, to);
+        } else {
+          q = q.range(0, FILTER_FETCH_CAP - 1);
+        }
+
+        return q;
+      };
+
+      const runOrdersQuery = async () => {
+        let result = await buildOrdersQuery(true).eq('is_deleted', false);
+        if (result.error && shouldRetryReadWithoutIsDeletedFilter(result.error)) {
+          result = await buildOrdersQuery(true);
+        }
+        return result;
+      };
+
+      let { data, error, count } = await measureAsync('OrdersPage.fetchOrders.baseOrders', runOrdersQuery);
       if (error) throw error;
 
       const orderIds = (data || []).map((o) => o.id).filter(Boolean);
@@ -637,7 +765,7 @@ const OrdersPage = () => {
       const { byOrderId: receiptsByOrderId, byOrderNumber: receiptsByOrderNumber } =
         buildActiveReceiptTotalLookup(activeReceiptRows);
 
-      const ordersWithCalculatedAmounts = measureAsync('OrdersPage.fetchOrders.compute', async () =>
+      let enrichedOrders = await measureAsync('OrdersPage.fetchOrders.compute', async () =>
         (data || []).map((order: any) => {
           const orderId = String(order.id || '');
           const orderNumber = String(order.order_number || '').trim();
@@ -669,12 +797,12 @@ const OrdersPage = () => {
         })
       );
       
-      // Fetch sales managers if there are orders with sales_manager field
+      let managersMap = salesManagers;
       if (data && data.length > 0) {
         const salesManagerIds = data
-          .map(order => order.sales_manager)
+          .map((order) => order.sales_manager)
           .filter(Boolean)
-          .filter((value, index, self) => self.indexOf(value) === index); // Remove duplicates
+          .filter((value, index, self) => self.indexOf(value) === index);
 
         if (salesManagerIds.length > 0) {
           const { data: employeesData, error: employeesError } = await supabase
@@ -683,16 +811,32 @@ const OrdersPage = () => {
             .in('id', salesManagerIds);
 
           if (!employeesError && employeesData) {
-            const managersMap = employeesData.reduce((acc, emp) => {
-              acc[emp.id] = emp;
-              return acc;
-            }, {} as { [key: string]: { id: string; full_name: string; avatar_url?: string } });
+            managersMap = employeesData.reduce(
+              (acc, emp) => {
+                acc[emp.id] = emp;
+                return acc;
+              },
+              {} as { [key: string]: { id: string; full_name: string; avatar_url?: string } }
+            );
             setSalesManagers(managersMap);
           }
         }
       }
-      
-      setOrders(await ordersWithCalculatedAmounts);
+
+      if (hasActiveColumnFilters) {
+        enrichedOrders = enrichedOrders.filter((order) =>
+          orderMatchesColumnFilters(order, columnFilters, managersMap)
+        );
+        enrichedOrders = sortOrdersPageList(enrichedOrders, sortBy);
+        setTotalOrders(enrichedOrders.length);
+        const from = (page - 1) * pageSize;
+        enrichedOrders = enrichedOrders.slice(from, from + pageSize);
+      } else {
+        setTotalOrders(count ?? enrichedOrders.length);
+        void fetchTabCounts();
+      }
+
+      setOrders(enrichedOrders);
       setOrdersWithCuttingMaster(ordersWithCuttingMasterSet);
     } catch (error) {
       console.error('Error fetching orders:', error);
@@ -818,50 +962,10 @@ const OrdersPage = () => {
     }
   };
 
-  const filteredOrders = useMemo(() => {
-    const searched = orders.filter((order) => orderMatchesColumnFilters(order, columnFilters, salesManagers));
-    return [...searched].sort((a, b) => {
-      if (sortBy === "date_asc") {
-        return (
-          (parseBusinessDateLocal(a.order_date)?.getTime() ?? new Date(a.order_date).getTime()) -
-          (parseBusinessDateLocal(b.order_date)?.getTime() ?? new Date(b.order_date).getTime())
-        );
-      }
-      if (sortBy === "date_desc") {
-        return (
-          (parseBusinessDateLocal(b.order_date)?.getTime() ?? new Date(b.order_date).getTime()) -
-          (parseBusinessDateLocal(a.order_date)?.getTime() ?? new Date(a.order_date).getTime())
-        );
-      }
-      if (sortBy === "amount_asc") {
-        return (a.final_amount || 0) - (b.final_amount || 0);
-      }
-      if (sortBy === "amount_desc") {
-        return (b.final_amount || 0) - (a.final_amount || 0);
-      }
-      return 0;
-    });
-  }, [orders, columnFilters, sortBy, salesManagers]);
-
-  const pendingOrders = useMemo(
-    () => filteredOrders.filter((order) => String(order.status).toLowerCase() !== 'completed'),
-    [filteredOrders]
-  );
-
-  const completedOrders = useMemo(
-    () => filteredOrders.filter((order) => String(order.status).toLowerCase() === 'completed'),
-    [filteredOrders]
-  );
-
-  const activeOrders = activeTab === 'completed' ? completedOrders : pendingOrders;
-  const pendingOrdersTotal = useMemo(
-    () => orders.filter((order) => String(order.status).toLowerCase() !== 'completed').length,
-    [orders]
-  );
-  const completedOrdersTotal = useMemo(
-    () => orders.filter((order) => String(order.status).toLowerCase() === 'completed').length,
-    [orders]
-  );
+  const activeOrders = orders;
+  const pendingOrdersTotal = hasActiveColumnFilters && activeTab === 'list' ? totalOrders : tabCounts.pending;
+  const completedOrdersTotal =
+    hasActiveColumnFilters && activeTab === 'completed' ? totalOrders : tabCounts.completed;
   /** Actionable snapshot from the same orders loaded for the list (lines + receipts + charges when available). */
   const ordersPageSnapshot = useMemo(() => {
     const open = orders.filter((o) => isOpenOrderStatus(o.status));
@@ -884,13 +988,11 @@ const OrdersPage = () => {
       (s, o) => s + Number(o.calculatedBalance ?? o.balance_amount ?? 0),
       0
     );
-    const completedLoaded = orders.filter((o) => String(o.status).toLowerCase() === 'completed').length;
     return {
       openCount: open.length,
       pipelineValue,
       balanceDueOpen,
       overdueOpenCount: overdueOpen.length,
-      completedLoaded,
     };
   }, [orders]);
 
@@ -910,9 +1012,6 @@ const OrdersPage = () => {
           <Card className="shadow-erp-md bg-blue-100 text-blue-900">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium opacity-90">Open orders</CardTitle>
-              <p className="text-xs font-normal opacity-80 leading-snug">
-                Not completed or cancelled — work still in flight.
-              </p>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between gap-2">
@@ -925,9 +1024,6 @@ const OrdersPage = () => {
           <Card className="shadow-erp-md bg-violet-100 text-violet-900">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium opacity-90">Pipeline value</CardTitle>
-              <p className="text-xs font-normal opacity-80 leading-snug">
-                Booked value on open orders (lines + GST + charges when loaded).
-              </p>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between gap-2">
@@ -945,9 +1041,6 @@ const OrdersPage = () => {
           <Card className="shadow-erp-md bg-amber-100 text-amber-950">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium opacity-90">Balance due (open)</CardTitle>
-              <p className="text-xs font-normal opacity-80 leading-snug">
-                Outstanding on open orders after matched receipts.
-              </p>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between gap-2">
@@ -965,9 +1058,6 @@ const OrdersPage = () => {
           <Card className="shadow-erp-md bg-rose-100 text-rose-950">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium opacity-90">Past expected delivery</CardTitle>
-              <p className="text-xs font-normal opacity-80 leading-snug">
-                Open orders whose EDD is before today — needs attention.
-              </p>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between gap-2">
@@ -980,40 +1070,37 @@ const OrdersPage = () => {
           </Card>
         </div>
         <p className="text-xs text-muted-foreground -mt-2">
-          Figures reflect the orders currently loaded for this page (newest first, up to {ordersLimit} rows).
-          Completed count in tabs: {ordersPageSnapshot.completedLoaded} completed in this load.
+          Summary cards reflect orders on the current table page only. Database totals: {tabCounts.pending}{' '}
+          pending · {tabCounts.completed} completed.
+          {hasActiveColumnFilters
+            ? ' Column filters search up to 500 matching orders, then paginate results.'
+            : ''}
         </p>
 
         <div className="space-y-6">
-          <div className="flex justify-between items-center">
-            <div
-              className="orders-view-switch"
-              aria-label="Switch between pending orders and completed orders"
-              role="tablist"
+          <div
+            className="orders-view-switch"
+            aria-label="Switch between pending orders and completed orders"
+            role="tablist"
+          >
+            <button
+              type="button"
+              className={cn("orders-view-switch-tab", activeTab === "list" && "is-active")}
+              onClick={() => setActiveTab("list")}
+              role="tab"
+              aria-selected={activeTab === "list"}
             >
-              <button
-                type="button"
-                className={cn("orders-view-switch-tab", activeTab === "list" && "is-active")}
-                onClick={() => setActiveTab("list")}
-                role="tab"
-                aria-selected={activeTab === "list"}
-              >
-                Pending Orders
-              </button>
-              <button
-                type="button"
-                className={cn("orders-view-switch-tab", activeTab === "completed" && "is-active")}
-                onClick={() => setActiveTab("completed")}
-                role="tab"
-                aria-selected={activeTab === "completed"}
-              >
-                Completed
-              </button>
-            </div>
-            <Button onClick={() => setActiveTab("create")}>
-              <Plus className="w-4 h-4 mr-2" />
-              Create Order
-            </Button>
+              Pending Orders
+            </button>
+            <button
+              type="button"
+              className={cn("orders-view-switch-tab", activeTab === "completed" && "is-active")}
+              onClick={() => setActiveTab("completed")}
+              role="tab"
+              aria-selected={activeTab === "completed"}
+            >
+              Completed
+            </button>
           </div>
 
           {(activeTab === "list" || activeTab === "completed") && (
@@ -1072,19 +1159,6 @@ const OrdersPage = () => {
                       <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                       Force Refresh
                     </Button>
-                    {orders.length >= ordersLimit && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          setOrdersLimit((prev) => prev + ORDERS_PAGE_SIZE);
-                          setTimeout(() => fetchOrders(true), 0);
-                        }}
-                        disabled={loading}
-                      >
-                        Load More
-                      </Button>
-                    )}
                     <Button variant="outline" size="sm" onClick={handleRestoreByOrderNumber}>
                       Restore Order
                     </Button>
@@ -1356,6 +1430,60 @@ const OrdersPage = () => {
                         )}
                       </TableBody>
                     </Table>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pt-4 mt-4 border-t">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Rows per page</span>
+                        <Select
+                          value={String(pageSize)}
+                          onValueChange={(value) => setPageSize(Number(value))}
+                        >
+                          <SelectTrigger className="h-8 w-[4.5rem]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ORDERS_PAGE_SIZE_OPTIONS.map((size) => (
+                              <SelectItem key={size} value={String(size)}>
+                                {size}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <span className="text-xs text-muted-foreground">
+                          Showing{' '}
+                          <span className="font-medium text-foreground">
+                            {totalOrders === 0 ? 0 : (safePage - 1) * pageSize + 1}–
+                            {Math.min(safePage * pageSize, totalOrders)}
+                          </span>{' '}
+                          of <span className="font-medium text-foreground">{totalOrders}</span>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs"
+                          disabled={safePage <= 1 || loading}
+                          onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        >
+                          Previous
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                          Page <span className="font-medium text-foreground">{safePage}</span> /{' '}
+                          {totalPages}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs"
+                          disabled={safePage >= totalPages || loading}
+                          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </CardContent>

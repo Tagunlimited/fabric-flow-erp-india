@@ -9,12 +9,13 @@ import { ShoppingCart, Eye, CheckCircle, Filter, X, Printer, FileImage } from "l
 import { useState, useEffect, useMemo } from "react";
 import { useOrdersWithReceipts } from "@/hooks/useOrdersWithReceipts";
 import { useNavigate, useLocation } from "react-router-dom";
+import { fetchOrderItemsByOrderIds } from "@/lib/fetchOrderItemsBulk";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { cn } from '@/lib/utils';
+import { cn, formatLocaleDateFromApi } from '@/lib/utils';
 import {
   getDesignOrderStatusColor,
   getOrderMockupPreviewUrls,
@@ -26,6 +27,7 @@ interface Order {
   id: string;
   order_number: string;
   order_date: string;
+  expected_delivery_date?: string | null;
   customer_id: string;
   customer: {
     company_name: string;
@@ -95,9 +97,11 @@ const isReadymadeOrder = (order: Order): boolean => {
 const DesignPrintingPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { orders: ordersWithReceipts, loading: ordersLoading, refetch } = useOrdersWithReceipts<Order>();
+  const { orders: ordersWithReceipts, loading: ordersLoading, error: ordersError, refetch } =
+    useOrdersWithReceipts<Order>();
   const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const pageLoading = ordersLoading || itemsLoading;
   const [activeTab, setActiveTab] = useState<"pending" | "completed">("pending");
   const [sortBy, setSortBy] = useState<string>("date_desc");
   const [columnFilters, setColumnFilters] = useState({
@@ -117,50 +121,48 @@ const DesignPrintingPage = () => {
   }, [location.state]);
 
   useEffect(() => {
+    if (ordersLoading) return;
+
     const fetchOrdersWithItems = async () => {
       if (ordersWithReceipts.length === 0) {
         setOrders([]);
-        setLoading(false);
         return;
       }
 
+      setItemsLoading(true);
       try {
-        setLoading(true);
-        const orderIds = ordersWithReceipts.map(o => o.id);
-
-        const { data: orderItems, error: itemsError } = await supabase
-          .from('order_items')
-          .select('id, order_id, specifications, mockup_images, category_image_url')
-          .eq('is_deleted', false)
-          .in('order_id', orderIds);
+        const orderIds = ordersWithReceipts.map((o) => o.id);
+        const { data: orderItems, error: itemsError } = await fetchOrderItemsByOrderIds(
+          orderIds,
+          'id, order_id, specifications, mockup_images, category_image_url'
+        );
 
         if (itemsError) throw itemsError;
 
-        const itemsByOrderId: { [key: string]: unknown[] } = {};
-        (orderItems || []).forEach((item: any) => {
-          if (!itemsByOrderId[item.order_id]) {
-            itemsByOrderId[item.order_id] = [];
-          }
-          itemsByOrderId[item.order_id].push(item);
-        });
+        const itemsByOrderId: Record<string, unknown[]> = {};
+        for (const item of orderItems) {
+          const oid = String((item as { order_id?: string }).order_id || '');
+          if (!oid) continue;
+          if (!itemsByOrderId[oid]) itemsByOrderId[oid] = [];
+          itemsByOrderId[oid].push(item);
+        }
 
-        const enrichedOrders = ordersWithReceipts.map((order: any) => ({
-          ...order,
-          order_items: itemsByOrderId[order.id] || []
-        }));
-
-        setOrders(enrichedOrders);
+        setOrders(
+          ordersWithReceipts.map((order) => ({
+            ...order,
+            order_items: (itemsByOrderId[order.id] || []) as Order['order_items'],
+          }))
+        );
       } catch (error) {
         console.error('Error fetching order items:', error);
-        setOrders(ordersWithReceipts as Order[]);
+        toast.error('Failed to load order line items');
+        setOrders(ordersWithReceipts);
       } finally {
-        setLoading(false);
+        setItemsLoading(false);
       }
     };
 
-    if (!ordersLoading) {
-      fetchOrdersWithItems();
-    }
+    void fetchOrdersWithItems();
   }, [ordersWithReceipts, ordersLoading]);
 
   const fetchOrders = async () => { await refetch(); };
@@ -318,6 +320,12 @@ const DesignPrintingPage = () => {
             </div>
           </div>
 
+          {ordersError && (
+            <p className="text-sm text-destructive rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
+              {ordersError}
+            </p>
+          )}
+
           <Card>
             <CardHeader>
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
@@ -349,7 +357,7 @@ const DesignPrintingPage = () => {
               </div>
             </CardHeader>
             <CardContent className="p-2 sm:p-4">
-              {loading ? (
+              {pageLoading ? (
                 <div className="flex items-center justify-center py-8">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
                 </div>
@@ -382,6 +390,7 @@ const DesignPrintingPage = () => {
                             </Button>
                           </div>
                         </TableHead>
+                        <TableHead>Exp. delivery</TableHead>
                         <TableHead>
                           <div className="flex items-center justify-between gap-0.5">
                             <span>Status</span>
@@ -407,11 +416,20 @@ const DesignPrintingPage = () => {
                             <TableCell className="font-medium">{order.order_number}</TableCell>
                             <TableCell>{order.customer?.company_name}</TableCell>
                             <TableCell>
-                              {new Date(order.order_date).toLocaleDateString('en-GB', {
+                              {formatLocaleDateFromApi(order.order_date, 'en-GB', {
                                 day: '2-digit',
                                 month: 'short',
-                                year: '2-digit'
+                                year: '2-digit',
                               })}
+                            </TableCell>
+                            <TableCell>
+                              {order.expected_delivery_date
+                                ? formatLocaleDateFromApi(order.expected_delivery_date, 'en-GB', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    year: '2-digit',
+                                  })
+                                : 'N/A'}
                             </TableCell>
                             <TableCell>
                               <Badge className={getDesignOrderStatusColor(order.status)}>
@@ -492,7 +510,7 @@ const DesignPrintingPage = () => {
                       })}
                     </TableBody>
                   </Table>
-                  {filteredOrders.length === 0 && !loading && (
+                  {filteredOrders.length === 0 && !pageLoading && (
                     <div className="text-center py-8 text-muted-foreground">
                       {activeTab === "pending"
                         ? 'No orders waiting for printing. Complete design work on the Designs tab first.'
