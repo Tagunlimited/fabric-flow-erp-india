@@ -46,20 +46,22 @@ function warehouseRowMatchesFabricVariant(row: any, fabric: FabricMasterLite, po
 
 /**
  * Whether this inventory row contributes to availability for `fabricId`.
- *
- * Cutting consumption must stay server-authoritative: only include rows that can be
- * resolved to the exact fabric id via `warehouse_inventory.item_id` or PO-linked
- * `purchase_order_items.fabric_id`. Variant-only fallback can overstate availability
- * and cause `consume_fabric_for_cutting` to reject with insufficient inventory.
+ * Prefer item_id / PO fabric_id; fall back to name+color+gsm when GRN rows lack item_id.
  */
 function warehouseRowMatchesFabricForCutting(
   row: any,
   fabricId: string,
-  poFabricByPoItemId: Map<string, string>
+  poFabricByPoItemId: Map<string, string>,
+  fabric?: FabricMasterLite | null,
+  poLineByPoItemId?: Map<string, PoLineFabricHint>
 ): boolean {
   const direct =
     resolveWarehouseFabricId({ item_id: row.item_id, grn_item_po_item_id: row?.grn_item?.po_item_id }, poFabricByPoItemId) || '';
-  return direct === fabricId;
+  if (direct === fabricId) return true;
+  if (fabric && poLineByPoItemId && warehouseRowMatchesFabricVariant(row, fabric, poLineByPoItemId)) {
+    return true;
+  }
+  return false;
 }
 
 type FabricMasterLite = {
@@ -120,6 +122,51 @@ export function variantLikelyMatches(
   const colorOk = !colorA || !colorB || colorA === colorB;
   const gsmOk = !gsmA || !gsmB || gsmA === gsmB;
   return colorOk && gsmOk;
+}
+
+/** Set warehouse_inventory.item_id on rows the UI counts so consume_fabric_for_cutting can deduct. */
+async function patchWarehouseRowsForFabricCutting(
+  storageRows: any[],
+  fabricIds: string[],
+  poFabricByPoItemId: Map<string, string>,
+  poLineByPoItemId: Map<string, PoLineFabricHint>,
+  fabricById: Map<string, FabricMasterLite>
+): Promise<void> {
+  const patchByRowId = new Map<string, string>();
+  fabricIds.forEach((fabricId) => {
+    const fabric = fabricById.get(fabricId);
+    if (!fabric) return;
+    storageRows.forEach((row: any) => {
+      if (!warehouseRowMatchesFabricForCutting(row, fabricId, poFabricByPoItemId, fabric, poLineByPoItemId)) return;
+      if (String(row.item_id || '') === fabricId) return;
+      patchByRowId.set(String(row.id), fabricId);
+    });
+  });
+  if (patchByRowId.size === 0) return;
+
+  const results = await Promise.all(
+    [...patchByRowId.entries()].map(([rowId, fabricId]) =>
+      supabase.from('warehouse_inventory').update({ item_id: fabricId } as any).eq('id', rowId as any)
+    )
+  );
+  results.forEach((res, idx) => {
+    if (res.error) {
+      const [rowId, fabricId] = [...patchByRowId.entries()][idx];
+      console.warn('[patchWarehouseRowsForFabricCutting] failed', rowId, fabricId, res.error);
+    }
+  });
+  patchByRowId.forEach((fabricId, rowId) => {
+    const row = storageRows.find((r: any) => String(r.id) === rowId);
+    if (row) row.item_id = fabricId;
+  });
+}
+
+/** Link GRN warehouse rows to fabric_master before cutting save (client + server must agree). */
+export async function syncWarehouseFabricItemIdsForCutting(
+  fabricIds: string[],
+  currentOrderId?: string | null
+): Promise<void> {
+  await getFabricAvailabilityByFabricIds({ fabricIds, currentOrderId });
 }
 
 export async function getFabricAvailabilityByFabricIds(params: {
@@ -293,6 +340,8 @@ export async function getFabricAvailabilityByFabricIds(params: {
 
   const fabricById = fabricByIdForDiag;
 
+  await patchWarehouseRowsForFabricCutting(storageRows, fabricIds, poFabricByPoItemId, poLineByPoItemId, fabricById);
+
   const out: Record<string, FabricAvailabilityResult> = {};
   fabricIds.forEach((fabricId) => {
     const fabric = fabricById.get(fabricId) || { id: fabricId };
@@ -302,7 +351,7 @@ export async function getFabricAvailabilityByFabricIds(params: {
     const rowIds: string[] = [];
 
     storageRows.forEach((row: any) => {
-      if (!warehouseRowMatchesFabricForCutting(row, fabricId, poFabricByPoItemId)) return;
+      if (!warehouseRowMatchesFabricForCutting(row, fabricId, poFabricByPoItemId, fabric, poLineByPoItemId)) return;
       const rowUnit = String(row.unit || fabric.uom || 'kg');
       if (!unit) unit = rowUnit;
       if (!sameUnitFamily(unit, rowUnit)) return;

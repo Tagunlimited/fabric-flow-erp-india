@@ -21,7 +21,10 @@ import { sizesFromOrderItem } from '@/utils/sizesFromOrderItem';
 import { getOrderItemLineQuantity } from '@/utils/orderItemLineQuantity';
 import { resolveSwatchHex } from '@/lib/grnColorSwatch';
 import { normalizeUnit, sameUnitFamily } from '@/utils/fabricInventoryIdentity';
-import { getFabricAvailabilityByFabricIds } from '@/utils/fabricAvailability';
+import {
+  getFabricAvailabilityByFabricIds,
+  syncWarehouseFabricItemIdsForCutting,
+} from '@/utils/fabricAvailability';
 import '@/components/purchase-orders/BomLinePicker.css';
 
 function fabricSwatchCss(fabric: { color?: string | null; hex?: string | null } | null | undefined): string {
@@ -432,6 +435,19 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
         if (selectedFabric && !sameUnitFamily(requestedUnit, selectedFabric.unit)) {
           throw new Error(`Unit mismatch for selected fabric. Expected ${selectedFabric.unit}, got ${requestedUnit}.`);
         }
+
+        await syncWarehouseFabricItemIdsForCutting([fabricUsage.fabric_id], jobId);
+        const freshAvailability = await getFabricAvailabilityByFabricIds({
+          fabricIds: [fabricUsage.fabric_id],
+          currentOrderId: jobId,
+        });
+        const serverNet = Number(freshAvailability[fabricUsage.fabric_id]?.available_quantity ?? 0);
+        if (fabricUsage.used_quantity > serverNet + 1e-6) {
+          throw new Error(
+            `Insufficient fabric inventory. required=${fabricUsage.used_quantity}, available=${serverNet.toFixed(2)}`
+          );
+        }
+
         const { data: rpcResult, error: rpcError } = await supabase.rpc('consume_fabric_for_cutting' as any, {
           p_order_id: jobId,
           p_order_number: orderNumber || null,
