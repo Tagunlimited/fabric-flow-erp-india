@@ -22,6 +22,8 @@ export function assignmentLeftToPickWithLegacyRejected(
   const p = Math.max(0, pickedTotal);
   const r = Math.max(0, qcRejectedTotal || 0);
   if (gap > 0) return gap;
+  // QC reject logged but no assigned tally on assignment (missing size rows)
+  if (r > 0 && t === 0) return r;
   if (t > 0 && p >= t && r > 0) return r;
   return 0;
 }

@@ -1,9 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
@@ -16,7 +14,6 @@ import {
   Download,
   Truck,
   Filter,
-  Columns3,
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
@@ -368,15 +365,6 @@ const COLUMN_CONFIG_BY_ID: Record<StorageInventoryColumnId, StorageInventoryColu
     {} as Record<StorageInventoryColumnId, StorageInventoryColumnConfig>
   );
 
-const DEFAULT_STORAGE_INVENTORY_VISIBILITY: Record<StorageInventoryColumnId, boolean> =
-  STORAGE_INVENTORY_COLUMNS.reduce(
-    (acc, c) => {
-      acc[c.id] = true;
-      return acc;
-    },
-    {} as Record<StorageInventoryColumnId, boolean>
-  );
-
 const DEFAULT_STORAGE_INVENTORY_WIDTHS: Record<StorageInventoryColumnId, number> = {
   name: 240,
   type: 112,
@@ -399,7 +387,6 @@ function storageInventoryTablePrefsKey(itemType: 'FABRIC' | 'ITEM' | 'PRODUCT' |
 }
 
 interface StoredStorageInventoryTablePrefs {
-  visibility?: Partial<Record<StorageInventoryColumnId, boolean>>;
   widths?: Partial<Record<StorageInventoryColumnId, number>>;
 }
 
@@ -410,7 +397,13 @@ function readStorageInventoryTablePrefs(
   try {
     const raw = localStorage.getItem(storageInventoryTablePrefsKey(itemType));
     if (!raw) return null;
-    return JSON.parse(raw) as StoredStorageInventoryTablePrefs;
+    const parsed = JSON.parse(raw) as StoredStorageInventoryTablePrefs & {
+      visibility?: unknown;
+    };
+    if (parsed.visibility != null) {
+      writeStorageInventoryTablePrefs(itemType, { widths: parsed.widths });
+    }
+    return { widths: parsed.widths };
   } catch {
     return null;
   }
@@ -425,12 +418,6 @@ function writeStorageInventoryTablePrefs(
   } catch {
     // ignore quota / private mode
   }
-}
-
-function mergeStorageInventoryVisibility(
-  partial: Partial<Record<StorageInventoryColumnId, boolean>> | undefined
-): Record<StorageInventoryColumnId, boolean> {
-  return { ...DEFAULT_STORAGE_INVENTORY_VISIBILITY, ...partial };
 }
 
 function mergeStorageInventoryWidths(
@@ -513,10 +500,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
     status: '',
   });
   const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
-  const [columnsPickerOpen, setColumnsPickerOpen] = useState(false);
-  const [columnVisibility, setColumnVisibility] = useState<Record<StorageInventoryColumnId, boolean>>(() =>
-    mergeStorageInventoryVisibility(readStorageInventoryTablePrefs(itemType)?.visibility)
-  );
   const [columnWidths, setColumnWidths] = useState<Record<StorageInventoryColumnId, number>>(() =>
     mergeStorageInventoryWidths(readStorageInventoryTablePrefs(itemType)?.widths)
   );
@@ -525,7 +508,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
   useEffect(() => {
     skipNextTablePrefsPersist.current = true;
     const stored = readStorageInventoryTablePrefs(itemType);
-    setColumnVisibility(mergeStorageInventoryVisibility(stored?.visibility));
     setColumnWidths(mergeStorageInventoryWidths(stored?.widths));
   }, [itemType]);
 
@@ -534,16 +516,10 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
       skipNextTablePrefsPersist.current = false;
       return;
     }
-    writeStorageInventoryTablePrefs(itemType, {
-      visibility: columnVisibility,
-      widths: columnWidths,
-    });
-  }, [itemType, columnVisibility, columnWidths]);
+    writeStorageInventoryTablePrefs(itemType, { widths: columnWidths });
+  }, [itemType, columnWidths]);
 
-  const visibleColumnIds = useMemo(
-    () => STORAGE_INVENTORY_COLUMN_ORDER.filter((id) => columnVisibility[id]),
-    [columnVisibility]
-  );
+  const visibleColumnIds = STORAGE_INVENTORY_COLUMN_ORDER;
 
   const bumpColumnWidth = useCallback((id: StorageInventoryColumnId, delta: number) => {
     setColumnWidths((prev) => {
@@ -561,21 +537,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
     }),
     [columnWidths]
   );
-
-  const setColumnShown = useCallback((id: StorageInventoryColumnId, shown: boolean) => {
-    if (COLUMN_CONFIG_BY_ID[id]?.required && !shown) return;
-    setColumnVisibility((prev) => {
-      const next = { ...prev, [id]: shown };
-      const count = STORAGE_INVENTORY_COLUMN_ORDER.filter((c) => next[c]).length;
-      if (count < 1) return prev;
-      return next;
-    });
-  }, []);
-
-  const resetTableLayout = useCallback(() => {
-    setColumnVisibility({ ...DEFAULT_STORAGE_INVENTORY_VISIBILITY });
-    setColumnWidths({ ...DEFAULT_STORAGE_INVENTORY_WIDTHS });
-  }, []);
 
   const loadInventory = async () => {
     try {
@@ -1561,23 +1522,12 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
       </div>
 
       <div>
-        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h3 className="text-lg font-semibold leading-7 tracking-tight text-[#101828]">Inventory Items</h3>
-            <p className="text-sm text-[#6a7282]">
-              Showing {filteredInventoryGroups.length} of {inventoryGroupsAll.length} items
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 shrink-0 gap-2 rounded-lg border-black/10 bg-white text-[#0a0a0a] hover:bg-[#fafafa]"
-            onClick={() => setColumnsPickerOpen(true)}
-          >
-            <Columns3 className="h-4 w-4" />
-            Columns
-          </Button>
+        <div className="mb-3">
+          <h3 className="text-lg font-semibold leading-7 tracking-tight text-[#101828]">Inventory Items</h3>
+          <p className="text-sm text-[#6a7282]">
+            Showing {filteredInventoryGroups.length} of {inventoryGroupsAll.length} items — scroll horizontally to see
+            all columns
+          </p>
         </div>
         <div className="overflow-x-auto rounded-[14px] border border-[#e5e7eb] bg-white">
           <Table className="table-fixed min-w-max">
@@ -2149,44 +2099,6 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                 </DialogContent>
               </Dialog>
             )}
-            <Dialog open={columnsPickerOpen} onOpenChange={setColumnsPickerOpen}>
-              <DialogContent className="sm:max-w-md">
-                <DialogHeader>
-                  <DialogTitle>Table columns</DialogTitle>
-                  <DialogDescription>
-                    Choose which columns to show. Drag the edge of a column header to change width. Your choices are
-                    saved in this browser.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="max-h-[min(400px,60vh)] space-y-3 overflow-y-auto pr-1">
-                  {STORAGE_INVENTORY_COLUMNS.map((c) => (
-                    <div key={c.id} className="flex items-center gap-3">
-                      <Checkbox
-                        id={`inv-col-${c.id}`}
-                        checked={columnVisibility[c.id]}
-                        disabled={!!c.required}
-                        onCheckedChange={(v) => setColumnShown(c.id, v === true)}
-                      />
-                      <Label
-                        htmlFor={`inv-col-${c.id}`}
-                        className={cn('flex-1 cursor-pointer text-sm font-normal leading-snug', c.required && 'text-muted-foreground')}
-                      >
-                        {c.label}
-                        {c.required ? ' (always shown)' : ''}
-                      </Label>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex justify-end gap-2 border-t border-[#e5e7eb] pt-4">
-                  <Button type="button" variant="outline" onClick={resetTableLayout}>
-                    Reset layout
-                  </Button>
-                  <Button type="button" onClick={() => setColumnsPickerOpen(false)}>
-                    Done
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
             <Dialog open={!!filterDialogColumn} onOpenChange={(open) => !open && setFilterDialogColumn(null)}>
               <DialogContent className="sm:max-w-md">
                 <DialogHeader>

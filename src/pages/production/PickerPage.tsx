@@ -54,6 +54,7 @@ interface TailorListItem {
   assigned_quantity: number;
   picked_quantity: number;
   rejected_quantity?: number;
+  pending_quantity?: number;
   batch_id?: string | null;
   is_batch_leader?: boolean | null;
   order_images?: string[];
@@ -152,6 +153,108 @@ function mergePickerRejectedSizes(
     }
   }
   return Array.from(map.values());
+}
+
+type BatchAssignmentRow = {
+  assignment_id: string;
+  batch_id: string;
+  order_id: string;
+  total_quantity: number;
+  size_distributions: any[];
+};
+
+function normalizeSizeDistributionsFromDb(raw: unknown): any[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((d: any) => {
+    const assigned = Number(d?.assigned_quantity ?? d?.quantity ?? d?.assignedQuantity ?? 0);
+    return {
+      ...d,
+      size_name: d?.size_name,
+      quantity: assigned,
+      assigned_quantity: assigned,
+      picked_quantity: Number(d?.picked_quantity ?? 0),
+      rejected_quantity: Number(d?.rejected_quantity ?? 0),
+    };
+  });
+}
+
+/** View-first; falls back to base tables when the details view is missing or blocked. */
+async function fetchBatchAssignmentRows(batchIds: string[]): Promise<BatchAssignmentRow[]> {
+  if (!batchIds.length) return [];
+
+  const { data: viewRows, error: viewError } = await (supabase as any)
+    .from('order_batch_assignments_with_details')
+    .select('assignment_id, batch_id, order_id, total_quantity, size_distributions')
+    .in('batch_id', batchIds as any);
+
+  if (!viewError && (viewRows || []).length > 0) {
+    return (viewRows as any[]).map((row: any) => {
+      const dist = normalizeSizeDistributionsFromDb(row.size_distributions);
+      const assignedLine = Math.max(
+        Number(row.total_quantity || 0),
+        sumAssignedFromSizeDistributions(dist)
+      );
+      return {
+        assignment_id: String(row.assignment_id || row.id),
+        batch_id: row.batch_id,
+        order_id: row.order_id,
+        total_quantity: assignedLine,
+        size_distributions: dist,
+      };
+    });
+  }
+
+  if (viewError) {
+    console.warn('[Picker] order_batch_assignments_with_details unavailable, using fallback', viewError);
+  }
+
+  const { data: assignments, error: assignError } = await (supabase as any)
+    .from('order_batch_assignments')
+    .select(
+      `
+      id,
+      order_id,
+      batch_id,
+      total_quantity,
+      order_batch_size_distributions (
+        size_name,
+        quantity,
+        assigned_quantity,
+        picked_quantity,
+        rejected_quantity
+      )
+    `
+    )
+    .in('batch_id', batchIds as any);
+
+  if (assignError) {
+    console.error('[Picker] order_batch_assignments fallback failed', assignError);
+    return [];
+  }
+
+  return (assignments || []).map((oba: any) => {
+    const dist = normalizeSizeDistributionsFromDb(oba.order_batch_size_distributions);
+    const assignedLine = Math.max(
+      Number(oba.total_quantity || 0),
+      sumAssignedFromSizeDistributions(dist)
+    );
+    return {
+      assignment_id: String(oba.id),
+      batch_id: oba.batch_id,
+      order_id: oba.order_id,
+      total_quantity: assignedLine,
+      size_distributions: dist,
+    };
+  });
+}
+
+function batchPendingLeft(t: TailorListItem): number {
+  if (typeof t.pending_quantity === 'number') return t.pending_quantity;
+  return assignmentLeftToPickWithLegacyRejected(
+    t.assigned_quantity || 0,
+    t.picked_quantity || 0,
+    t.rejected_quantity || 0
+  );
 }
 
 export default function PickerPage() {
@@ -779,17 +882,14 @@ export default function PickerPage() {
       let assignmentToBatch: Record<string, string> = {};
       let assignmentToOrder: Record<string, string> = {};
       let assignmentQtyById: Record<string, number> = {};
+      let pendingQtyByBatch: Record<string, number> = {};
       let assignmentIds: string[] = [];
       let orderSet: Record<string, Set<string>> = {}; // Declare outside try-catch
       let orderImagesByBatch: Record<string, string[]> = {}; // Declare outside try-catch
       let assignmentRows: any[] = [];
       if (batchIds.length > 0) {
         try {
-          const { data: oba } = await (supabase as any)
-            .from('order_batch_assignments_with_details')
-            .select('assignment_id, batch_id, order_id, total_quantity, size_distributions')
-            .in('batch_id', batchIds as any);
-          assignmentRows = oba || [];
+          assignmentRows = await fetchBatchAssignmentRows(batchIds);
           orderSet = {}; // Initialize
           assignmentRows.forEach((row: any) => {
             const b = row?.batch_id as string | undefined;
@@ -810,7 +910,23 @@ export default function PickerPage() {
             }
           });
           Object.keys(orderSet).forEach(b => { ordersCountByBatch[b] = orderSet[b].size; });
-        } catch {}
+        } catch (err) {
+          console.error('[Picker] failed to load batch assignments', err);
+        }
+
+        const recomputePendingByBatch = () => {
+          pendingQtyByBatch = {};
+          assignmentRows.forEach((row: any) => {
+            const b = row?.batch_id as string | undefined;
+            const aid = row?.assignment_id as string | undefined;
+            if (!b || !aid) return;
+            const assignedLine = assignmentQtyById[aid] ?? 0;
+            const picked = pickedByAssignment[aid] || 0;
+            const rejected = rejectedByAssignment[aid] || 0;
+            const left = assignmentLeftToPickWithLegacyRejected(assignedLine, picked, rejected);
+            if (left > 0) pendingQtyByBatch[b] = (pendingQtyByBatch[b] || 0) + left;
+          });
+        };
 
         // Picked per assignment: prefer summed size rows; notes only if column sum is zero (never add both).
         if (assignmentIds.length > 0) {
@@ -856,6 +972,8 @@ export default function PickerPage() {
             if (b) pickedByBatch[b] = (pickedByBatch[b] || 0) + eff;
           });
 
+          recomputePendingByBatch();
+
           // QC rejections per batch
           try {
             const { data: qcRows } = await (supabase as any)
@@ -870,6 +988,7 @@ export default function PickerPage() {
               rejectedByAssignment[aid] = (rejectedByAssignment[aid] || 0) + rejectedQty;
             });
           } catch {}
+          recomputePendingByBatch();
         }
 
         // Product thumbnails per order: include only orders with pending qty in this batch.
@@ -984,6 +1103,7 @@ export default function PickerPage() {
         assigned_quantity: qtyByBatch[b.id] || 0,
         picked_quantity: pickedByBatch[b.id] || 0, // Show actual picked quantity without subtracting rejected
         rejected_quantity: rejectedByBatch[b.id] || 0,
+        pending_quantity: pendingQtyByBatch[b.id] || 0,
         batch_id: b.id,
         is_batch_leader: true,
         order_images: orderImagesByBatch[b.id] || [],
@@ -1059,13 +1179,17 @@ export default function PickerPage() {
     setActiveBatchId(batchId);
     setLoadingBatchOrders(true);
     try {
-      const { data: rows } = await (supabase as any)
-        .from('order_batch_assignments_with_details')
-        .select('assignment_id, order_id, assignment_date, total_quantity, size_distributions, batch_name')
-        .eq('batch_id', batchId)
-        .order('assignment_date', { ascending: false });
+      const assignmentRows = await fetchBatchAssignmentRows([batchId]);
+      const rows = assignmentRows.map((r) => ({
+        assignment_id: r.assignment_id,
+        order_id: r.order_id,
+        total_quantity: r.total_quantity,
+        size_distributions: r.size_distributions,
+        assignment_date: null,
+        batch_name: null,
+      }));
 
-      const assignmentIds = Array.from(new Set((rows || []).map((r: any) => r.assignment_id).filter(Boolean)));
+      const assignmentIds = Array.from(new Set(rows.map((r: any) => r.assignment_id).filter(Boolean)));
 
       let pickedByAssignment: Record<string, number> = {};
       let rejectedByAssignment: Record<string, number> = {};
@@ -1329,13 +1453,14 @@ export default function PickerPage() {
         size_distributions: dist,
       };
       });
-      const pending = enriched.filter((o: any) => {
+      const enrichedWithLeft = enriched.map((o: any) => {
         const totalQty = Number(o.total_quantity || 0);
         const picked = Number(o.picked_quantity || 0);
         const rejected = Number(o.rejected_quantity || 0);
         const remainingToPick = assignmentLeftToPickWithLegacyRejected(totalQty, picked, rejected);
-        return remainingToPick > 0;
+        return { ...o, remaining_to_pick: remainingToPick };
       });
+      const pending = enrichedWithLeft.filter((o: any) => Number(o.remaining_to_pick || 0) > 0);
       setBatchOrders(pending);
       const drill = batchDrillRef.current;
       if (drill.step === "products" && drill.orderId) {
@@ -1394,6 +1519,11 @@ export default function PickerPage() {
     if (!q) return tailors;
     return tailors.filter(t => t.full_name.toLowerCase().includes(q));
   }, [tailorSearch, tailors]);
+
+  const pendingTailorBatches = useMemo(
+    () => filteredTailors.filter((t) => batchPendingLeft(t) > 0),
+    [filteredTailors]
+  );
 
   const groupedBatchOrderSummaries = useMemo((): GroupedBatchOrderSummary[] => {
     const byOrder = new Map<string, any[]>();
@@ -1627,8 +1757,14 @@ export default function PickerPage() {
       return <p className="text-sm sm:text-base text-muted-foreground">Loading...</p>;
     }
     if (batchOrders.length === 0) {
+      const activeBatch = tailors.find((t) => t.id === activeBatchId);
+      const pendingOnCard = activeBatch ? batchPendingLeft(activeBatch) : 0;
       return (
-        <p className="text-sm sm:text-base text-muted-foreground">No pending orders for this batch.</p>
+        <p className="text-sm sm:text-base text-muted-foreground">
+          {pendingOnCard > 0
+            ? 'Pending work exists on this batch but no order lines matched. Refresh the page, or re-save batch assignments from Cutting Manager with cut quantities by size.'
+            : 'No pending orders for this batch.'}
+        </p>
       );
     }
     if (batchDrillStep === "orders") {
@@ -1740,14 +1876,22 @@ export default function PickerPage() {
                 {loadingTailors ? (
                   <p className="text-sm sm:text-base text-muted-foreground">Loading tailors...</p>
                 ) : filteredTailors.length === 0 ? (
-                  <p className="text-sm sm:text-base text-muted-foreground">No tailors found.</p>
-                ) : (
+                  <p className="text-sm sm:text-base text-muted-foreground">
+                    {tailors.length === 0
+                      ? 'No active batches found. Create batches in Tailor Management and assign orders from Cutting Manager.'
+                      : 'No batches match your search.'}
+                  </p>
+                ) : pendingTailorBatches.length === 0 ? (
+                  <p className="text-sm sm:text-base text-muted-foreground">
+                    All {filteredTailors.length} batch{filteredTailors.length === 1 ? '' : 'es'} are fully picked.
+                    Open a batch below if you need to review completed work.
+                  </p>
+                ) : null}
+                {filteredTailors.length > 0 && (
                   <>
                   <div className="picker-tailor-grid">
-                    {filteredTailors
-                      .filter((t) => Math.max(0, (t.assigned_quantity || 0) - (t.picked_quantity || 0)) > 0)
-                      .map((t) => {
-                      const pendingQty = Math.max(0, (t.assigned_quantity || 0) - (t.picked_quantity || 0));
+                    {(pendingTailorBatches.length > 0 ? pendingTailorBatches : filteredTailors).map((t) => {
+                      const pendingQty = batchPendingLeft(t);
                       const imgs = t.order_images || [];
                       return (
                         <div

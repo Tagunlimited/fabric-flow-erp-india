@@ -873,7 +873,7 @@ const GRNForm = () => {
   }, []);
 
   // Update inventory when GRN is approved
-  const updateInventory = useCallback(async (approvedItems: any[]) => {
+  const updateInventory = useCallback(async (approvedItems: any[]): Promise<boolean> => {
     try {
       console.log('Updating inventory for approved items:', approvedItems);
       
@@ -893,8 +893,10 @@ const GRNForm = () => {
 
       if (!storageBins || storageBins.length === 0) {
         console.warn('No storage bins found. Please create storage bins in Warehouse Master.');
-        toast.error('No storage bins found. Please create storage bins in Warehouse Master.');
-        return;
+        toast.error(
+          'No STORAGE bin found in Warehouse Master. GRN is approved but stock was not placed — create at least one active Storage bin, then save the GRN again or re-approve.'
+        );
+        return false;
       }
 
       const defaultBin = (storageBins as any)?.[0];
@@ -902,14 +904,23 @@ const GRNForm = () => {
       
       for (const item of approvedItems) {
         if (item.quality_status === 'approved' && item.approved_quantity > 0) {
-          // Only update master table inventory if item_id exists
-          if (item.item_id && item.item_type === 'fabric') {
+          let inventoryItemId = resolveInventoryItemId(item);
+          if (!inventoryItemId && item.po_item_id) {
+            const { data: poLine } = await supabase
+              .from('purchase_order_items')
+              .select('fabric_id')
+              .eq('id', item.po_item_id as any)
+              .maybeSingle();
+            inventoryItemId = String((poLine as any)?.fabric_id || '').trim() || null;
+          }
+          // Only update master table inventory if fabric/item id resolved
+          if (inventoryItemId && item.item_type === 'fabric') {
             try {
               // Get current fabric inventory
               const { data: fabricData, error: fetchError } = await supabase
                 .from('fabric_master')
                 .select('inventory')
-                .eq('id', item.item_id)
+                .eq('id', inventoryItemId)
                 .single();
 
               if (fetchError) {
@@ -925,7 +936,7 @@ const GRNForm = () => {
                   .update({
                     inventory: newInventory
                   } as any)
-                  .eq('id', item.item_id as any);
+                  .eq('id', inventoryItemId as any);
 
                 if (fabricError) {
                   console.error('Error updating fabric inventory:', fabricError);
@@ -938,13 +949,13 @@ const GRNForm = () => {
               console.error('Error processing fabric inventory update:', error);
               console.log('Continuing with warehouse inventory insertion...');
             }
-          } else if (item.item_id && (item.item_type === 'item' || item.item_type === 'product')) {
+          } else if (inventoryItemId && (item.item_type === 'item' || item.item_type === 'product')) {
             try {
               // Get current item inventory
               const { data: itemData, error: fetchError } = await supabase
                 .from('item_master')
                 .select('current_stock')
-                .eq('id', item.item_id)
+                .eq('id', inventoryItemId)
                 .single();
 
               if (fetchError) {
@@ -960,7 +971,7 @@ const GRNForm = () => {
                   .update({
                     current_stock: newStock
                   } as any)
-                  .eq('id', item.item_id as any);
+                  .eq('id', inventoryItemId as any);
 
                 if (itemError) {
                   console.error('Error updating item inventory:', itemError);
@@ -992,12 +1003,12 @@ const GRNForm = () => {
             // - Same unit
             let existingInventory: any = null;
             
-            if (item.item_id) {
+            if (inventoryItemId) {
               // First try to find by item_id
               const { data: existingByItemId, error: findError1 } = await supabase
                 .from('warehouse_inventory')
                 .select('*')
-                .eq('item_id', item.item_id)
+                .eq('item_id', inventoryItemId)
                 .eq('bin_id', defaultBin?.id)
                 .eq('status', 'IN_STORAGE')
                 .eq('item_type', itemType)
@@ -1077,10 +1088,10 @@ const GRNForm = () => {
             } else {
               // Insert new inventory entry
               const insertData: any = {
-                grn_id: grn.id,
+                grn_id: item.grn_id || grn.id,
                 grn_item_id: item.id,
                 item_type: itemType,
-                item_id: item.item_id || null,
+                item_id: inventoryItemId || null,
                 item_name: item.item_name,
                 item_code: itemCode,
                 quantity: item.approved_quantity,
@@ -1152,12 +1163,56 @@ const GRNForm = () => {
       }
       
       toast.success('Inventory updated successfully for approved items');
+      return true;
     } catch (error) {
       console.error('Error updating inventory:', error);
       toast.error('Failed to update inventory');
       throw error;
     }
   }, [grn.id, grn.grn_number]);
+
+  /** Persist line-level received/approved qty and quality before master approval (DB trigger reads grn_items). */
+  const persistGrnItemsToDb = useCallback(async () => {
+    for (const item of grnItems) {
+      if (!item.id) continue;
+      const receivedQty = Number(item.received_quantity || 0);
+      const approvedQty =
+        item.quality_status === 'approved'
+          ? Number(item.approved_quantity || receivedQty || 0)
+          : Number(item.approved_quantity || 0);
+      const rejectedQty =
+        item.quality_status === 'rejected' || item.quality_status === 'damaged'
+          ? Number(item.rejected_quantity || receivedQty || 0)
+          : Number(item.rejected_quantity || 0);
+
+      const inventoryItemId = resolveInventoryItemId(item);
+
+      const payload: Record<string, unknown> = {
+        item_id: inventoryItemId || item.item_id || null,
+        received_quantity: receivedQty,
+        approved_quantity: approvedQty,
+        rejected_quantity: rejectedQty,
+        quality_status: item.quality_status,
+        batch_number: item.batch_number,
+        expiry_date: item.expiry_date,
+        condition_notes: item.condition_notes,
+        inspection_notes: item.inspection_notes,
+        fabric_color: item.fabric_color,
+        selected_colors: normalizeSelectedColors(item.selected_colors),
+        fabric_gsm: item.fabric_gsm,
+        fabric_name: item.fabric_name,
+        item_color: item.item_color,
+      };
+
+      let { error } = await supabase.from('grn_items').update(payload as any).eq('id', item.id as any);
+      if (error?.message?.toLowerCase().includes('selected_colors')) {
+        const { selected_colors: _sc, ...compat } = payload;
+        const retry = await supabase.from('grn_items').update(compat as any).eq('id', item.id as any);
+        error = retry.error;
+      }
+      if (error) throw error;
+    }
+  }, [grnItems]);
 
   // Update GRN master status
   const updateGrnStatus = useCallback(async (newStatus: string) => {
@@ -1211,6 +1266,10 @@ const GRNForm = () => {
         }
       }
 
+      if (newStatus === 'approved' || newStatus === 'partially_approved') {
+        await persistGrnItemsToDb();
+      }
+
       const updateData: any = {
         status: newStatus,
         updated_at: new Date().toISOString()
@@ -1261,12 +1320,20 @@ const GRNForm = () => {
             const missing = approvedItems.filter(i => i.id && !existingSet.has(i.id));
 
             if (missing.length > 0) {
-              await updateInventory(missing);
+              const placed = await updateInventory(missing);
+              if (!placed) {
+                toast.error(
+                  'GRN approved but warehouse stock was not created. Add a Storage bin under Masters → Warehouses, then click Save on this GRN.'
+                );
+              }
             }
             // Notify warehouse views to refresh
             try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
           } catch (e) {
             console.warn('Skipping client-side inventory insert; DB trigger should handle it.', e);
+            toast.error(
+              'GRN approved but inventory update failed. Check browser console, ensure a Storage bin exists, then Save this GRN again.'
+            );
             try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
           }
         }
@@ -1285,7 +1352,7 @@ const GRNForm = () => {
       console.error('Error updating GRN status:', error);
       toast.error('Failed to update GRN status');
     }
-  }, [grn.id, grn.status, grnItems, user?.id, updateInventory]);
+  }, [grn.id, grn.status, grnItems, user?.id, updateInventory, persistGrnItemsToDb]);
 
   // Calculate totals
   const totals = useMemo(() => {
@@ -1437,7 +1504,12 @@ const GRNForm = () => {
         }
 
         if (insertedItems && insertedItems.length > 0) {
-          await updateInventory(insertedItems as any[]);
+          const placed = await updateInventory(insertedItems as any[]);
+          if (!placed) {
+            toast.error(
+              'GRN saved but warehouse stock was not placed. Create an active Storage bin in Warehouse Master, then open this GRN and Save again.'
+            );
+          }
           try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
         }
 
@@ -1597,7 +1669,12 @@ const GRNForm = () => {
           .eq('grn_id', id as any);
 
         if (latestItems && latestItems.length > 0) {
-          await updateInventory(latestItems as any[]);
+          const placed = await updateInventory(latestItems as any[]);
+          if (!placed) {
+            toast.error(
+              'GRN saved but warehouse stock was not placed. Create an active Storage bin in Warehouse Master, then Save this GRN again.'
+            );
+          }
           try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
         }
 
@@ -1869,7 +1946,7 @@ const GRNForm = () => {
               {(grn.status === 'approved' || grn.status === 'rejected' || grn.status === 'partially_approved') && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span>GRN is {grn.status.replace('_', ' ')} and items have been moved to receiving zone</span>
+                  <span>GRN is {grn.status.replace('_', ' ')} — approved stock should appear in Inventory Dashboard (Storage zone)</span>
                 </div>
               )}
             </div>

@@ -50,6 +50,13 @@ export default function PickerQuantityDialog({
   const [addBySize, setAddBySize] = useState<Record<string, number>>({}); // increment to add
   const [saving, setSaving] = useState(false);
   const [sizeTypeId, setSizeTypeId] = useState<string | null>(null);
+  const [loadedSizeDistributions, setLoadedSizeDistributions] = useState<SizeItem[]>([]);
+  const [loadingSizes, setLoadingSizes] = useState(false);
+
+  const effectiveSizeDistributions = useMemo(() => {
+    if (sizeDistributions?.length) return sizeDistributions;
+    return loadedSizeDistributions;
+  }, [sizeDistributions, loadedSizeDistributions]);
 
   // Fetch size_type_id from assignment/order when dialog opens (skipped when picker passes resolved line)
   useEffect(() => {
@@ -95,11 +102,51 @@ export default function PickerQuantityDialog({
     fetchSizeTypeId();
   }, [isOpen, assignmentId, preferredSizeTypeId]);
 
+  useEffect(() => {
+    if (!isOpen || !assignmentId) return;
+    if (sizeDistributions?.length) {
+      setLoadedSizeDistributions([]);
+      return;
+    }
+    let cancelled = false;
+    const loadSizes = async () => {
+      setLoadingSizes(true);
+      try {
+        const { data, error } = await (supabase as any)
+          .from('order_batch_size_distributions')
+          .select('size_name, quantity, assigned_quantity, picked_quantity')
+          .eq('order_batch_assignment_id', assignmentId);
+        if (cancelled) return;
+        if (error) throw error;
+        const mapped = (data || [])
+          .map((row: any) => {
+            const assigned = Number(row.assigned_quantity ?? row.quantity ?? 0);
+            return {
+              size_name: String(row.size_name || '').trim(),
+              quantity: assigned,
+              assigned_quantity: assigned,
+            };
+          })
+          .filter((row: SizeItem) => row.size_name && row.quantity > 0);
+        setLoadedSizeDistributions(mapped);
+      } catch (e) {
+        console.error('[PickerQuantityDialog] load sizes failed', e);
+        if (!cancelled) setLoadedSizeDistributions([]);
+      } finally {
+        if (!cancelled) setLoadingSizes(false);
+      }
+    };
+    void loadSizes();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, assignmentId, sizeDistributions]);
+
   // Sort size distributions using master order
   const sortedSizeDistributions = useMemo(() => {
-    if (!sizeDistributions || sizeDistributions.length === 0) return [];
-    return sortSizeDistributionsByMasterOrder(sizeDistributions, sizeTypeId, sizeTypes);
-  }, [sizeDistributions, sizeTypeId, sizeTypes]);
+    if (!effectiveSizeDistributions || effectiveSizeDistributions.length === 0) return [];
+    return sortSizeDistributionsByMasterOrder(effectiveSizeDistributions, sizeTypeId, sizeTypes);
+  }, [effectiveSizeDistributions, sizeTypeId, sizeTypes]);
 
   useEffect(() => {
     const loadPicked = async () => {
@@ -155,27 +202,27 @@ export default function PickerQuantityDialog({
       setRejectedBySize(rejectedMap);
       // Reset increments to 0 on open
       const zeros: Record<string, number> = {};
-      (sizeDistributions || []).forEach(s => { zeros[s.size_name] = 0; });
+      (effectiveSizeDistributions || []).forEach(s => { zeros[s.size_name] = 0; });
       setAddBySize(zeros);
     };
     if (isOpen && assignmentId) {
       loadPicked();
     }
-  }, [isOpen, assignmentId, sizeDistributions]);
+  }, [isOpen, assignmentId, effectiveSizeDistributions]);
 
   const assignedTotal = useMemo(
     () =>
-      (sizeDistributions || []).reduce(
+      (effectiveSizeDistributions || []).reduce(
         (sum, s) => sum + Number(s.quantity ?? s.assigned_quantity ?? 0),
         0
       ),
-    [sizeDistributions]
+    [effectiveSizeDistributions]
   );
   const pickedTotal = useMemo(() => Object.values(pickedBySize).reduce((a, b) => a + Number(b || 0), 0), [pickedBySize]);
   const addTotal = useMemo(() => Object.values(addBySize).reduce((a, b) => a + Number(b || 0), 0), [addBySize]);
 
   const getAssigned = (size: string) => {
-    const row = (sizeDistributions || []).find((s) => s.size_name === size);
+    const row = (effectiveSizeDistributions || []).find((s) => s.size_name === size);
     return Number(row?.quantity ?? row?.assigned_quantity ?? 0);
   };
   const getPicked = (size: string) => Number(pickedBySize[size] || 0);
@@ -227,7 +274,7 @@ export default function PickerQuantityDialog({
     const allSizes = new Set<string>([
       ...Object.keys(pickedBySize),
       ...Object.keys(addBySize),
-      ...(sizeDistributions || []).map((s) => s.size_name),
+      ...(effectiveSizeDistributions || []).map((s) => s.size_name),
     ]);
     allSizes.forEach((size) => {
       const currentPicked = Number(pickedBySize[size] || 0);
@@ -412,6 +459,14 @@ export default function PickerQuantityDialog({
               <Badge className="bg-green-100 text-green-800">Add now: {addTotal}</Badge>
             )}
           </div>
+          {loadingSizes ? (
+            <p className="text-sm text-muted-foreground">Loading sizes for this assignment…</p>
+          ) : sortedSizeDistributions.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No size breakdown on this assignment. Re-assign the order to a batch from Cutting Manager with cut
+              quantities by size.
+            </p>
+          ) : null}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {sortedSizeDistributions.map((s) => {
               const assigned = getAssigned(s.size_name);
