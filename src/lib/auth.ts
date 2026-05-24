@@ -23,6 +23,89 @@ export interface UserProfile {
   updated_at: string;
 }
 
+/** Known bootstrap admin — used when profile row is slow or missing. */
+export const PRECONFIGURED_ADMIN_EMAIL = 'ecom@tagunlimitedclothing.com';
+
+export function isPreConfiguredAdminEmail(email: string | null | undefined): boolean {
+  return email === PRECONFIGURED_ADMIN_EMAIL;
+}
+
+/** Client-side profile placeholder until `profiles` loads (does not write to DB). */
+export function buildFallbackUserProfile(
+  userId: string,
+  email: string,
+  fullName?: string
+): UserProfile {
+  return {
+    id: userId,
+    user_id: userId,
+    email,
+    full_name: fullName || email.split('@')[0] || 'User',
+    role: isPreConfiguredAdminEmail(email) ? 'admin' : 'user',
+    status: 'active',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+const PROFILE_QUERY_TIMEOUT_MS = 8000;
+const PROFILE_CACHE_KEY = 'erp_user_profile_cache_v1';
+const PROFILE_CACHE_TTL_MS = 30 * 60 * 1000;
+const PROFILE_CACHE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function readCachedUserProfile(
+  userId: string,
+  allowStale = false
+): UserProfile | null {
+  try {
+    const raw = sessionStorage.getItem(PROFILE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      userId: string;
+      profile: UserProfile;
+      timestamp: number;
+    };
+    if (parsed.userId !== userId) return null;
+    const age = Date.now() - parsed.timestamp;
+    if (age > PROFILE_CACHE_TTL_MS && !(allowStale && age < PROFILE_CACHE_STALE_MS)) {
+      return null;
+    }
+    return parsed.profile;
+  } catch {
+    return null;
+  }
+}
+
+export function writeCachedUserProfile(userId: string, profile: UserProfile) {
+  try {
+    sessionStorage.setItem(
+      PROFILE_CACHE_KEY,
+      JSON.stringify({ userId, profile, timestamp: Date.now() })
+    );
+  } catch {
+    // non-blocking
+  }
+}
+
+export function clearCachedUserProfile() {
+  try {
+    sessionStorage.removeItem(PROFILE_CACHE_KEY);
+  } catch {
+    // non-blocking
+  }
+}
+
+function isLikelyNetworkError(message: string | undefined): boolean {
+  const m = (message || '').toLowerCase();
+  return (
+    m.includes('failed to fetch') ||
+    m.includes('networkerror') ||
+    m.includes('network request failed') ||
+    m.includes('err_connection') ||
+    m.includes('load failed')
+  );
+}
+
 export const authService = {
   // Sign up new user
   async signUp(email: string, password: string, name: string) {
@@ -75,7 +158,7 @@ export const authService = {
       const queryTimeout = new Promise<{ data: null, error: { message: string, code?: string } }>((resolve) => {
         setTimeout(() => {
           resolve({ data: null, error: { message: 'Query timeout', code: 'TIMEOUT' } });
-        }, 2500); // 2.5 seconds timeout for the query itself
+        }, PROFILE_QUERY_TIMEOUT_MS);
       });
       
       const result = await Promise.race([queryPromise, queryTimeout]);
@@ -105,8 +188,17 @@ export const authService = {
       if (error) {
         // Handle query timeout - return null to allow fallback profile
         if (error.code === 'TIMEOUT' || error.message?.includes('timeout') || error.message?.includes('Query timeout')) {
-          console.log('ℹ️ Profile query timed out - will use fallback profile');
-          return null; // Return null to trigger fallback
+          console.warn(
+            'ℹ️ Profile query timed out (server slow or unreachable). Using cache/fallback if available.'
+          );
+          return null;
+        }
+
+        if (isLikelyNetworkError(error.message)) {
+          console.warn(
+            'ℹ️ Cannot reach Supabase (network). Check Wi‑Fi/VPN/firewall or project status — using cache/fallback.'
+          );
+          return null;
         }
         
         // PGRST116 = "No rows found" - this is normal if profile doesn't exist
@@ -147,14 +239,22 @@ export const authService = {
       // Missing profile is handled by caller; do not auto-create here to avoid role/status drift.
       if (!data) return null;
       
-      console.log('Profile fetched successfully:', data);
-      return data;
+      writeCachedUserProfile(userId, data as UserProfile);
+      return data as UserProfile;
     } catch (error: any) {
-      console.warn(`Profile fetch failed (attempt ${retryCount + 1}):`, error?.message || 'Unknown error');
-      
-      // Retry on network errors or first attempt
+      const msg = error?.message || 'Unknown error';
+      if (isLikelyNetworkError(msg)) {
+        console.warn(
+          `Profile fetch failed (attempt ${retryCount + 1}): network — cannot reach Supabase.`,
+          msg
+        );
+      } else {
+        console.warn(`Profile fetch failed (attempt ${retryCount + 1}):`, msg);
+      }
+
       if (retryCount < maxRetries && (
-        error?.message?.includes('network') || 
+        isLikelyNetworkError(msg) ||
+        error?.message?.includes('network') ||
         error?.message?.includes('timeout') ||
         error?.message?.includes('fetch') ||
         retryCount === 0

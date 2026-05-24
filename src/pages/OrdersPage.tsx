@@ -214,7 +214,8 @@ function buildNumberSearchText(n: number | undefined | null): string {
 
 function buildStatusSearchText(status: string | undefined): string {
   if (!status) return '';
-  return [status, status.replace(/_/g, ' '), status.replace(/_/g, '-')]
+  const label = ORDER_STATUS_LABELS[status] || formatOrderStatusDisplay(status);
+  return [status, label, status.replace(/_/g, ' '), status.replace(/_/g, '-')]
     .join(' ')
     .toLowerCase();
 }
@@ -560,32 +561,17 @@ const OrdersPage = () => {
 
       const useServerPagination = !hasActiveColumnFilters;
       const listTab = activeTab === 'completed' ? 'completed' : 'list';
-      const customerJoin = columnFilters.customer.trim()
-        ? 'customer:customers!inner(company_name)'
-        : 'customer:customers(company_name)';
 
       const buildOrdersQuery = (withCount: boolean) => {
         let q = supabase
           .from('orders')
-          .select(`*, ${customerJoin}`, withCount ? { count: 'exact' } : undefined)
+          .select('*, customer:customers(company_name)', withCount ? { count: 'exact' } : undefined)
           .or('order_type.is.null,order_type.eq.custom');
 
         q = applyOrdersTabFilter(q, listTab);
         q = applyOrdersSort(q, sortBy);
 
-        if (columnFilters.order_number.trim()) {
-          q = q.ilike('order_number', `%${columnFilters.order_number.trim()}%`);
-        }
-        if (columnFilters.sales_manager.trim()) {
-          q = q.ilike('sales_manager', `%${columnFilters.sales_manager.trim()}%`);
-        }
-        if (columnFilters.status.trim()) {
-          const statusNeedle = columnFilters.status.trim().replace(/\s+/g, '_');
-          q = q.ilike('status', `%${statusNeedle}%`);
-        }
-        if (columnFilters.customer.trim()) {
-          q = q.ilike('customers.company_name', `%${columnFilters.customer.trim()}%`);
-        }
+        // Column filters (incl. sales manager by display name) run client-side on up to FILTER_FETCH_CAP rows.
 
         if (useServerPagination) {
           const from = (page - 1) * pageSize;
@@ -1265,9 +1251,9 @@ const OrdersPage = () => {
                         {activeOrders.length === 0 ? (
                           <TableRow className="hover:bg-transparent">
                             <TableCell colSpan={9} className="text-center text-muted-foreground py-10">
-                              {orders.length === 0
-                                ? 'No orders yet.'
-                                : `No ${activeTab === "completed" ? 'completed' : 'pending'} orders match the column filters. Adjust filters or clear them to see all rows.`}
+                              {hasActiveColumnFilters
+                                ? `No ${activeTab === "completed" ? 'completed' : 'pending'} orders match the column filters. Adjust filters or clear them to see all rows.`
+                                : 'No orders yet.'}
                             </TableCell>
                           </TableRow>
                         ) : (

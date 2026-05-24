@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { isPreConfiguredAdminEmail } from '@/lib/auth';
 
 export interface SidebarItem {
   id: string;
@@ -26,7 +27,7 @@ const SIDEBAR_CACHE_TTL_MS = 5 * 60 * 1000;
 const sharedPermissionsCache = new Map<string, { timestamp: number; data: SidebarPermissions }>();
 const sharedPermissionsInflight = new Map<string, Promise<SidebarPermissions>>();
 const SIDEBAR_PERMISSIONS_SESSION_KEY = 'sidebar_permissions_cache_v1';
-const SIDEBAR_FETCH_TIMEOUT_MS = 4000;
+const SIDEBAR_FETCH_TIMEOUT_MS = 6000;
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs = SIDEBAR_FETCH_TIMEOUT_MS): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -170,13 +171,22 @@ export function useSidebarPermissions() {
     };
 
     const runFetch = async (): Promise<SidebarPermissions> => {
+      const adminSidebarPermissions = (): SidebarPermissions => ({
+        items: [],
+        loading: false,
+        error: null,
+        permissionsSetup: false,
+        isAdmin: true,
+      });
 
     try {
       setPermissions(prev => ({ ...prev, loading: true, error: null }));
 
-      // Check for pre-configured admin email first
-      const isPreConfiguredAdmin = user?.email === 'ecom@tagunlimitedclothing.com';
-      
+      // Pre-configured admin: skip Supabase (avoids timeout when profiles is slow)
+      if (isPreConfiguredAdminEmail(user?.email)) {
+        return finalizePermissions(adminSidebarPermissions());
+      }
+
       // Get user's profile to determine their role
       // Use maybeSingle() to avoid errors when profile doesn't exist
       const { data: profile, error: profileError } = await withTimeout(
@@ -189,12 +199,9 @@ export function useSidebarPermissions() {
 
       // Check if user is admin by profile role
       const isAdminByProfile = (profile as any)?.role === 'admin';
-      
-      // Determine if user is admin (either pre-configured or by profile)
-      const isAdminUser = isPreConfiguredAdmin || isAdminByProfile;
+      const isAdminUser = isAdminByProfile;
 
-      // Only log error if not a pre-configured admin and it's a real error (not just "not found")
-      if (profileError && !isPreConfiguredAdmin && profileError.code !== 'PGRST116') {
+      if (profileError && profileError.code !== 'PGRST116') {
         // PGRST116 is "not found" which is okay - user might not have profile yet
         console.error('Error fetching user profile:', profileError);
         setPermissions(prev => ({ 
@@ -214,7 +221,7 @@ export function useSidebarPermissions() {
       }
 
       // If profile read times out/hangs, fail open for navigation to avoid app lock.
-      if (!profile && !profileError && !isPreConfiguredAdmin) {
+      if (!profile && !profileError) {
         const timeoutFallback: SidebarPermissions = {
           items: [],
           loading: false,
@@ -584,6 +591,9 @@ export function useSidebarPermissions() {
 
     } catch (error) {
       console.error('Error in useSidebarPermissions:', error);
+      if (isPreConfiguredAdminEmail(user?.email)) {
+        return finalizePermissions(adminSidebarPermissions());
+      }
       const failedPermissions: SidebarPermissions = {
         items: [],
         loading: false,
