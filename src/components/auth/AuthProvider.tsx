@@ -1,7 +1,14 @@
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
-import { authService, UserProfile } from '@/lib/auth';
+import {
+  authService,
+  buildFallbackUserProfile,
+  clearCachedUserProfile,
+  readCachedUserProfile,
+  writeCachedUserProfile,
+  UserProfile,
+} from '@/lib/auth';
 import { toast } from 'sonner';
 
 interface AuthContextType {
@@ -58,9 +65,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setProfileLoading(false);
     lastKnownGoodSessionAtRef.current = 0;
     transientSessionFailureCountRef.current = 0;
+    clearCachedUserProfile();
   };
 
-  const refreshProfile = async (retryCount = 0, userId?: string, skipSessionCheck = false): Promise<void> => {
+  const refreshProfile = async (
+    retryCount = 0,
+    userId?: string,
+    skipSessionCheck = false,
+    emailHint?: string
+  ): Promise<void> => {
     console.log('🔄 refreshProfile called:', { retryCount, userId, currentUserId: user?.id, skipSessionCheck });
     // Use provided userId or fall back to user state
     const targetUserId = userId || user?.id;
@@ -70,6 +83,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (!targetUserId) {
       console.warn('⚠️ No targetUserId, cannot fetch profile');
       return;
+    }
+
+    const cachedProfile = readCachedUserProfile(targetUserId);
+    if (cachedProfile && retryCount === 0 && !profileRef.current) {
+      setProfile(cachedProfile);
+      profileRef.current = cachedProfile;
     }
 
     // FIX 1 — prevent infinite retry loops
@@ -97,27 +116,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
     // Global timeout to ensure we always exit - 5 seconds max (reduced from 15)
     const globalTimeout = setTimeout(() => {
       if (profileFetchInProgressRef.current) {
-        console.warn('⚠️ Profile fetch exceeded 5 seconds, forcing exit and using fallback');
+        console.warn('⚠️ Profile fetch exceeded 8 seconds, forcing exit and using fallback');
         profileFetchInProgressRef.current = false;
         setProfileLoading(false);
         // Create fallback profile to prevent infinite loading
         if (!profileRef.current) {
-          const fallbackProfile = {
-            id: targetUserId,
-            user_id: targetUserId,
-            full_name: 'User',
-            email: '',
-            role: 'user',
-            status: 'active',
-            avatar_url: undefined,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          };
-          setProfile(fallbackProfile as any);
-          profileRef.current = fallbackProfile as any;
+          const email = user?.id === targetUserId ? user.email ?? '' : '';
+          const fallbackProfile = buildFallbackUserProfile(targetUserId, email);
+          setProfile(fallbackProfile);
+          profileRef.current = fallbackProfile;
         }
       }
-    }, 5000); // Reduced to 5 seconds
+    }, 8000);
     
     try {
       // Skip session check if we know we have a valid session (e.g., from SIGNED_IN event)
@@ -223,15 +233,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
         console.log('⏭️ Skipping getUser() call - using provided userId directly (skipSessionCheck=true)');
       }
       
-      // Add timeout to prevent hanging - 3 seconds max
-      // Pass skipSessionCheck to getUserProfile to avoid redundant session checks
+      // Slightly longer than auth.ts query timeout so a slow success can win the race
       let timeoutId: NodeJS.Timeout | null = null;
       const profilePromise = authService.getUserProfile(actualUserId, 0, skipSessionCheck);
       const timeoutPromise = new Promise<null>((resolve) => {
         timeoutId = setTimeout(() => {
-          console.warn('⚠️ Profile fetch timeout after 3 seconds - using fallback');
+          console.warn('⚠️ Profile fetch timeout after 9s - using cache/fallback');
           resolve(null);
-        }, 3000);
+        }, 9000);
       });
       
       const userProfile = await Promise.race([profilePromise, timeoutPromise]);
@@ -264,47 +273,47 @@ export function AuthProvider({ children }: AuthProviderProps) {
         });
         console.log('📸 Avatar URL in profile:', userProfile.avatar_url);
         setProfile(userProfile);
-        profileRef.current = userProfile; // Update ref
-        // Success - reset flag in finally
+        profileRef.current = userProfile;
+        writeCachedUserProfile(actualUserId, userProfile);
       } else {
-        console.warn('⚠️ getUserProfile returned null or timed out');
-        
-        // If no profile exists, create a fallback immediately to unblock the app
+        const staleCache = readCachedUserProfile(actualUserId, true);
+        if (staleCache && !profileRef.current) {
+          setProfile(staleCache);
+          profileRef.current = staleCache;
+          return;
+        }
+
         if (!profileRef.current) {
+          console.warn('⚠️ getUserProfile returned null or timed out');
           console.log('🔄 Creating fallback profile to unblock app...');
           try {
             // Get user data - use currentSessionUser if available, otherwise fetch or use user state
             let userData = currentSessionUser;
             if (!userData) {
-              // If skipSessionCheck=true, we might not have currentSessionUser
-              // Try to get from user state first, then fetch if needed
               if (user?.id === actualUserId) {
-                // Use user state if it matches
                 userData = user as any;
+              } else if (emailHint) {
+                userData = {
+                  id: actualUserId,
+                  email: emailHint,
+                  user_metadata: {},
+                } as any;
               } else {
-                // Fetch user data
                 const { data: { user: fetchedUser } } = await supabase.auth.getUser();
                 userData = fetchedUser;
               }
             }
             
             if (userData) {
-              // Create fallback profile immediately (don't wait for DB)
-              const fallbackProfile = {
-                id: actualUserId,
-                user_id: actualUserId,
-                email: userData.email || '',
-                full_name: userData.user_metadata?.name || userData.email?.split('@')[0] || 'User',
-                role: 'user',
-                status: 'active',
-                avatar_url: undefined,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-              };
-              
+              const fallbackProfile = buildFallbackUserProfile(
+                actualUserId,
+                userData.email || '',
+                userData.user_metadata?.name || userData.email?.split('@')[0] || 'User'
+              );
+
               console.log('✅ Setting fallback profile to unblock app:', fallbackProfile);
-              setProfile(fallbackProfile as any);
-              profileRef.current = fallbackProfile as any;
+              setProfile(fallbackProfile);
+              profileRef.current = fallbackProfile;
               
               // Important safety: do not write role/status from client-side auth fallback.
               // Only attempt to re-fetch an existing DB profile in background.
@@ -317,8 +326,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
                   .then(({ data: existingProfile, error: fetchError }) => {
                     if (!fetchError && existingProfile) {
                       console.log('✅ Found existing profile in DB:', existingProfile);
-                      setProfile(existingProfile as any);
-                      profileRef.current = existingProfile as any;
+                      const p = existingProfile as UserProfile;
+                      setProfile(p);
+                      profileRef.current = p;
+                      writeCachedUserProfile(actualUserId, p);
                       return;
                     }
                     if (userData.email) {
@@ -330,8 +341,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
                         .then(({ data: emailProfile, error: emailError }) => {
                           if (!emailError && emailProfile) {
                             console.log('✅ Found existing profile in DB by email:', emailProfile);
-                            setProfile(emailProfile as any);
-                            profileRef.current = emailProfile as any;
+                            const p = emailProfile as UserProfile;
+                            setProfile(p);
+                            profileRef.current = p;
+                            writeCachedUserProfile(actualUserId, p);
                           }
                         });
                     }
@@ -344,20 +357,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
           } catch (err) {
             console.warn('⚠️ Error creating fallback profile:', err);
             // Still create a minimal fallback
-            const minimalFallback = {
-              id: actualUserId,
-              user_id: actualUserId,
-              email: '',
-              full_name: 'User',
-              role: 'user',
-              status: 'active',
-              avatar_url: undefined,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            };
-            console.log('✅ Setting minimal fallback profile:', minimalFallback);
-            setProfile(minimalFallback as any);
-            profileRef.current = minimalFallback as any;
+            const minimalFallback = buildFallbackUserProfile(actualUserId, '', 'User');
+            setProfile(minimalFallback);
+            profileRef.current = minimalFallback;
           }
         } else {
           console.log('✅ Preserving existing profile data:', profileRef.current);
@@ -503,13 +505,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     // On page refresh, React remounts the component, so refs are reset
     // But we need to ensure authInitializedRef starts as false
     authInitializedRef.current = false;
-    profileRef.current = null; // Also reset profile ref on mount
-    profileFetchInProgressRef.current = false; // Reset fetch flag
-    
+    profileFetchInProgressRef.current = false;
+
     console.log('🚀 AuthProvider: Starting initialization...');
 
-    // Lightweight bootstrap: try one fast session read so login page
-    // doesn't wait entirely on auth listener timing.
     const bootstrapSession = async () => {
       try {
         const sessionPromise = supabase.auth.getSession();
@@ -522,16 +521,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
           lastKnownGoodSessionAtRef.current = Date.now();
           transientSessionFailureCountRef.current = 0;
           const currentUserId = session.user.id;
+          const cached = readCachedUserProfile(currentUserId, true);
+          if (cached) {
+            profileRef.current = cached;
+            setProfile(cached);
+          }
           if (lastUserIdRef.current !== currentUserId) {
             lastUserIdRef.current = currentUserId;
             setUser(session.user);
           }
-          if (!profileRef.current && !profileFetchInProgressRef.current) {
-            refreshProfile(0, currentUserId, true).catch((err) => {
+          if (!profileFetchInProgressRef.current) {
+            refreshProfile(0, currentUserId, true, session.user.email ?? undefined).catch((err) => {
               console.warn('⚠️ Bootstrap profile fetch failed (non-blocking):', err);
             });
           }
           authInitializedRef.current = true;
+        } else {
+          profileRef.current = null;
         }
       } catch (error) {
         console.warn('⚠️ Bootstrap session check failed (non-blocking):', error);
@@ -635,7 +641,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // Fetch profile on SIGNED_IN when user changed or no profile is available.
         console.log('📞 Calling refreshProfile from SIGNED_IN with userId:', session.user.id);
         // Don't await - let it run in background, clear loading immediately
-        refreshProfile(0, session.user.id, true).catch(err => {
+        refreshProfile(0, session.user.id, true, session.user.email ?? undefined).catch(err => {
           console.warn('⚠️ Profile fetch error (non-blocking):', err);
         });
         
@@ -675,7 +681,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           // Fetch profile in background if not already loaded (non-blocking)
           if (!profileRef.current) {
             console.log('🔄 INITIAL_SESSION: Profile is null, fetching in background...');
-            refreshProfile(0, session.user.id, true).catch(err => {
+            refreshProfile(0, session.user.id, true, session.user.email ?? undefined).catch(err => {
               console.warn('⚠️ Profile fetch error (non-blocking):', err);
             });
           }
@@ -685,7 +691,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           // Page refresh scenario: same user, but profile is null
           console.log('🔄 INITIAL_SESSION: Same user, profile null - fetching in background...');
           authInitializedRef.current = true;
-          refreshProfile(0, session.user.id, true).catch(err => {
+          refreshProfile(0, session.user.id, true, session.user.email ?? undefined).catch(err => {
             console.warn('⚠️ Profile fetch error (non-blocking):', err);
           });
           // Clear loading immediately - don't wait for profile
