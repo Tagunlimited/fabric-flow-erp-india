@@ -60,6 +60,8 @@ export type LineAssignmentSavePayload = {
     | 'legacy_per_line_pdf';
 };
 
+export type BatchAssignmentSaveMode = 'replace_line' | 'append_line';
+
 interface DistributeQuantityDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -88,6 +90,13 @@ interface DistributeQuantityDialogProps {
   assignmentSessionMode?: 'continue_wizard' | 'this_line_only' | null;
   /** Notifies parent how the save fits the wizard / session. */
   onLineAssignmentSaved?: (payload: LineAssignmentSavePayload) => void;
+  /**
+   * replace_line: delete existing line assignments then insert (first assign / full replace).
+   * append_line: keep existing rows; insert only this session (Add More Batches).
+   */
+  saveMode?: BatchAssignmentSaveMode;
+  /** Per-size totals already in DB for this line (used for append validation). */
+  existingAssignedBySize?: Record<string, number>;
 }
 
 export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> = ({
@@ -108,6 +117,8 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
   onRequestFullOrderJobCard,
   assignmentSessionMode = null,
   onLineAssignmentSaved,
+  saveMode = 'replace_line',
+  existingAssignedBySize = {},
 }) => {
   const selectedLine =
     (selectedOrderItemId && orderItems?.find((i: any) => i.id === selectedOrderItemId)) ||
@@ -202,19 +213,31 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
   const validateDistribution = () => {
     let hasAssignedAny = false;
     for (const size of filteredOrderSizes) {
-      const totalAssigned = Object.values(batchQuantities).reduce((sum, perBatch) => {
+      const newAssign = Object.values(batchQuantities).reduce((sum, perBatch) => {
         return sum + (Number(perBatch?.[size.size_name]) || 0);
       }, 0);
-      const available = Number(size.total_quantity) || 0;
-      if (totalAssigned > available) {
+      const remaining = Number(size.total_quantity) || 0;
+      const existing = Number(existingAssignedBySize?.[size.size_name]) || 0;
+      const cutQty = remaining + existing;
+
+      if (saveMode === 'append_line') {
+        if (existing + newAssign > cutQty) {
+          toast({
+            title: 'Validation Error',
+            description: `Size ${size.size_name}: cannot assign ${newAssign} more (${existing} already assigned, cut ${cutQty})`,
+            variant: 'destructive',
+          });
+          return false;
+        }
+      } else if (newAssign > remaining) {
         toast({
-          title: "Validation Error",
-          description: `Size ${size.size_name} exceeds available quantity (${totalAssigned}/${available})`,
-          variant: "destructive",
+          title: 'Validation Error',
+          description: `Size ${size.size_name} exceeds available quantity (${newAssign}/${remaining})`,
+          variant: 'destructive',
         });
         return false;
       }
-      if (totalAssigned > 0) hasAssignedAny = true;
+      if (newAssign > 0) hasAssignedAny = true;
     }
     if (!hasAssignedAny) {
       toast({
@@ -468,46 +491,48 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
         throw tableError;
       }
 
-      // For multi-line orders, replace assignments only for the current line.
-      // We persist line context in notes as: [line:<order_item_id>]
+      // For multi-line orders, line context in notes: [line:<order_item_id>]
       const lineTag = selectedOrderItemId ? `[line:${selectedOrderItemId}]` : null;
-      console.log('Deleting existing assignments for order/line:', { orderId, lineTag });
-      let deleteError: any = null;
-      if (lineTag) {
-        const { data: existingLineAssignments, error: fetchExistingError } = await supabase
-          .from('order_batch_assignments')
-          .select('id')
-          .eq('order_id', orderId as any)
-          .like('notes', `%${lineTag}%`);
-        if (fetchExistingError) throw fetchExistingError;
-        const lineAssignmentIds = (existingLineAssignments || []).map((r: any) => r.id).filter(Boolean);
-        if (lineAssignmentIds.length > 0) {
-          const { error: deleteSizeError } = await supabase
-            .from('order_batch_size_distributions')
-            .delete()
-            .in('order_batch_assignment_id', lineAssignmentIds as any);
-          if (deleteSizeError) throw deleteSizeError;
+      if (saveMode === 'replace_line') {
+        console.log('Deleting existing assignments for order/line:', { orderId, lineTag });
+        let deleteError: any = null;
+        if (lineTag) {
+          const { data: existingLineAssignments, error: fetchExistingError } = await supabase
+            .from('order_batch_assignments')
+            .select('id')
+            .eq('order_id', orderId as any)
+            .like('notes', `%${lineTag}%`);
+          if (fetchExistingError) throw fetchExistingError;
+          const lineAssignmentIds = (existingLineAssignments || []).map((r: any) => r.id).filter(Boolean);
+          if (lineAssignmentIds.length > 0) {
+            const { error: deleteSizeError } = await supabase
+              .from('order_batch_size_distributions')
+              .delete()
+              .in('order_batch_assignment_id', lineAssignmentIds as any);
+            if (deleteSizeError) throw deleteSizeError;
 
-          const { error: deleteLineAssignmentsError } = await supabase
+            const { error: deleteLineAssignmentsError } = await supabase
+              .from('order_batch_assignments')
+              .delete()
+              .in('id', lineAssignmentIds as any);
+            deleteError = deleteLineAssignmentsError;
+          }
+        } else {
+          const { error } = await supabase
             .from('order_batch_assignments')
             .delete()
-            .in('id', lineAssignmentIds as any);
-          deleteError = deleteLineAssignmentsError;
+            .eq('order_id', orderId as any);
+          deleteError = error;
         }
-      } else {
-        // Legacy/single-line behavior
-        const { error } = await supabase
-          .from('order_batch_assignments')
-          .delete()
-          .eq('order_id', orderId as any);
-        deleteError = error;
-      }
 
-      if (deleteError) {
-        console.error('Delete error:', deleteError);
-        throw deleteError;
+        if (deleteError) {
+          console.error('Delete error:', deleteError);
+          throw deleteError;
+        }
+        console.log('Existing assignments deleted successfully');
+      } else {
+        console.log('Append mode: keeping existing line assignments', { orderId, lineTag });
       }
-      console.log('Existing assignments deleted successfully');
 
       // Insert new assignments
       for (const batchId of selectedBatchIds) {
@@ -590,7 +615,10 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
 
       toast({
         title: 'Success',
-        description: `Batch assignments saved for order ${orderNumber}`,
+        description:
+          saveMode === 'append_line'
+            ? `Added batch assignments for order ${orderNumber} (previous batches kept)`
+            : `Batch assignments saved for order ${orderNumber}`,
       });
 
       const persistCb = onAssignmentsSaved ?? onSuccess;
@@ -691,6 +719,11 @@ export const DistributeQuantityDialog: React.FC<DistributeQuantityDialogProps> =
           <DialogTitle>Distribute Quantity to Batches</DialogTitle>
           <DialogDescription>
             Assign size-wise quantities to selected batches for order {orderNumber}
+            {saveMode === 'append_line' && (
+              <span className="mt-1 block text-amber-700">
+                Adding to existing assignments (will not remove previous batches)
+              </span>
+            )}
           </DialogDescription>
         </DialogHeader>
 
