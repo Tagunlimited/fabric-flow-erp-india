@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -8,32 +8,21 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Pencil, Trash2, X, Download, Upload, Settings, GripVertical, Filter } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Download, Upload, Settings, GripVertical, Filter, FileSpreadsheet } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import * as XLSX from 'xlsx';
+import {
+  FABRIC_MASTER_PAGE_SIZE_OPTIONS,
+  fetchAllFabricMasterMatchingFilters,
+  fetchDistinctFabricTypes,
+  fetchFabricMasterPage,
+  type FabricMasterListFilters,
+  type FabricMasterRow,
+} from '@/lib/fabricMasterQueries';
+import { chunkArray } from '@/lib/chunkArray';
 
-interface FabricMaster {
-  id?: string;
-  fabric_code: string;
-  fabric_description?: string;
-  fabric_name: string;
-  fabric_for_supplier?: string;
-  type?: string;
-  color?: string;
-  hex?: string;
-  gsm?: string;
-  uom?: string;
-  rate?: number;
-  hsn_code?: string;
-  gst?: number;
-  image?: string;
-  inventory?: number;
-  supplier1?: string;
-  supplier2?: string;
-  status?: string;
-  created_at?: string;
-  updated_at?: string;
-}
+type FabricMaster = FabricMasterRow;
 
 const DEFAULT_FABRIC: FabricMaster = {
   fabric_code: '',
@@ -73,6 +62,83 @@ const BULK_TEMPLATE_HEADERS = [
   'supplier1',
   'supplier2'
 ];
+
+const EXPORT_HEADERS = [...BULK_TEMPLATE_HEADERS, 'status'];
+
+function fabricToExportRow(fabric: FabricMaster): (string | number)[] {
+  return [
+    fabric.fabric_code || '',
+    fabric.fabric_description || '',
+    fabric.fabric_name || '',
+    fabric.fabric_for_supplier || '',
+    fabric.type || '',
+    fabric.color || '',
+    fabric.hex || '',
+    fabric.gsm || '',
+    fabric.uom || '',
+    fabric.rate ?? '',
+    fabric.hsn_code || '',
+    fabric.gst ?? '',
+    fabric.image || '',
+    fabric.inventory ?? 0,
+    fabric.supplier1 || '',
+    fabric.supplier2 || '',
+    fabric.status || '',
+  ];
+}
+
+function escapeCsvCell(cell: string | number): string {
+  const cellStr = String(cell ?? '');
+  if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+    return `"${cellStr.replace(/"/g, '""')}"`;
+  }
+  return cellStr;
+}
+
+/** Minimal RFC-style CSV row parser (handles quoted fields). */
+function parseCsvRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (inQuotes) {
+      if (char === '"' && next === '"') {
+        field += '"';
+        i += 1;
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        field += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+    } else if (char === ',') {
+      row.push(field);
+      field = '';
+    } else if (char === '\n') {
+      row.push(field);
+      field = '';
+      if (row.some((cell) => cell.trim() !== '')) rows.push(row);
+      row = [];
+    } else if (char !== '\r') {
+      field += char;
+    }
+  }
+
+  row.push(field);
+  if (row.some((cell) => cell.trim() !== '')) rows.push(row);
+  return rows;
+}
+
+const BULK_INSERT_BATCH_SIZE = 100;
 
 export function FabricManagerNew() {
   const [fabrics, setFabrics] = useState<FabricMaster[]>([]);
@@ -121,144 +187,63 @@ export function FabricManagerNew() {
     status: '',
   });
   const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [totalCount, setTotalCount] = useState(0);
+  const [fabricTypes, setFabricTypes] = useState<string[]>([]);
 
-  // Fetch fabrics from fabric_master table with inventory totals
-  const fetchFabrics = async () => {
+  const listFilters: FabricMasterListFilters = useMemo(
+    () => ({
+      search: searchTerm,
+      filterType,
+      columnFilters,
+    }),
+    [searchTerm, filterType, columnFilters]
+  );
+
+  const columnFiltersKey = JSON.stringify(columnFilters);
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
+
+  const fetchFabricsPage = useCallback(async () => {
     try {
       setLoading(true);
-      
-      // Fetch fabrics
-      const { data: fabricsData, error: fabricsError } = await supabase
-        .from('fabric_master')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (fabricsError) throw fabricsError;
-
-      // Fetch warehouse inventory to calculate totals
-      const [warehouseInventoryResult, fabricInventoryResult, grnFabricDetailsResult] = await Promise.all([
-        supabase
-          .from('warehouse_inventory')
-          .select(`
-            quantity,
-            grn_item:grn_item_id (
-              fabric_name,
-              item_name,
-              item_type
-            )
-          `),
-        supabase
-          .from('fabric_inventory')
-          .select(`
-            fabric_id,
-            quantity
-          `),
-        supabase
-          .from('grn_items_fabric_details')
-          .select(`
-            fabric_id,
-            approved_quantity,
-            grn_item:grn_item_id (
-              warehouse_inventory (
-                quantity
-              )
-            )
-          `)
-      ]);
-
-      const { data: warehouseInventoryData, error: warehouseInventoryError } = warehouseInventoryResult;
-      const { data: fabricInventoryData, error: fabricInventoryError } = fabricInventoryResult;
-      const { data: grnFabricDetailsData, error: grnFabricDetailsError } = grnFabricDetailsResult;
-
-      if (warehouseInventoryError) {
-        console.warn('Could not fetch warehouse inventory data:', warehouseInventoryError);
-      }
-      if (fabricInventoryError) {
-        console.warn('Could not fetch fabric inventory data:', fabricInventoryError);
-      }
-      if (grnFabricDetailsError) {
-        console.warn('Could not fetch GRN fabric details data:', grnFabricDetailsError);
-      }
-
-      // Calculate total inventory for each fabric
-      const inventoryTotals: { [key: string]: number } = {};
-      
-      // Add fabric inventory data (direct fabric_id matches)
-      if (fabricInventoryData) {
-        (fabricInventoryData as any[]).forEach(item => {
-          if (item.fabric_id && item.quantity) {
-            inventoryTotals[item.fabric_id] = (inventoryTotals[item.fabric_id] || 0) + item.quantity;
-          }
-        });
-      }
-
-      // Add GRN fabric details data (direct fabric_id matches)
-      if (grnFabricDetailsData) {
-        (grnFabricDetailsData as any[]).forEach(item => {
-          if (item.fabric_id && item.approved_quantity) {
-            inventoryTotals[item.fabric_id] = (inventoryTotals[item.fabric_id] || 0) + item.approved_quantity;
-          }
-        });
-      }
-
-      // Add warehouse inventory data (name-based matching)
-      if (warehouseInventoryData) {
-        console.log('Processing warehouse inventory for name-based matching...');
-        (warehouseInventoryData as any[]).forEach(item => {
-          const fabricName = item.grn_item?.fabric_name;
-          const itemName = item.grn_item?.item_name;
-          const itemType = item.grn_item?.item_type;
-          
-          if (item.quantity && (fabricName || (itemType === 'fabric' && itemName))) {
-            // Try to match by fabric name first
-            let matchingFabric = null;
-            if (fabricName) {
-              matchingFabric = (fabricsData as any[]).find(fabric => 
-                fabric.fabric_name?.toLowerCase() === fabricName.toLowerCase()
-              );
-            }
-            
-            // If no match by fabric name, try by item name for fabric type
-            if (!matchingFabric && itemType === 'fabric' && itemName) {
-              matchingFabric = (fabricsData as any[]).find(fabric => 
-                fabric.fabric_name?.toLowerCase() === itemName.toLowerCase()
-              );
-            }
-            
-            if (matchingFabric) {
-              inventoryTotals[matchingFabric.id] = (inventoryTotals[matchingFabric.id] || 0) + item.quantity;
-              console.log(`Matched fabric: ${fabricName || itemName} -> ${matchingFabric.fabric_name} (ID: ${matchingFabric.id}) - Qty: ${item.quantity}`);
-            } else {
-              console.log(`No fabric match found for: ${fabricName || itemName} (Type: ${itemType})`);
-            }
-          }
-        });
-      }
-
-      console.log('Final inventory totals calculated:', inventoryTotals);
-      console.log('Warehouse inventory data:', warehouseInventoryData);
-      console.log('Fabric inventory data:', fabricInventoryData);
-      console.log('GRN fabric details data:', grnFabricDetailsData);
-
-      // Merge fabrics with inventory totals
-      const fabricsWithInventory = (fabricsData as any[]).map(fabric => ({
-        ...fabric,
-        inventory: inventoryTotals[fabric.id] || 0
-      }));
-
-      console.log('Final fabrics data with inventory:', fabricsWithInventory);
-      setFabrics(fabricsWithInventory);
+      const { rows, total } = await fetchFabricMasterPage({
+        page,
+        pageSize,
+        filters: listFilters,
+      });
+      setFabrics(rows);
+      setTotalCount(total);
     } catch (error) {
       console.error('Error fetching fabrics:', error);
       toast.error('Failed to fetch fabrics');
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, pageSize, listFilters]);
 
   useEffect(() => {
-    fetchFabrics();
+    void fetchDistinctFabricTypes()
+      .then(setFabricTypes)
+      .catch((error) => console.warn('Could not load fabric types:', error));
   }, []);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm, filterType, pageSize, columnFiltersKey]);
+
+  useEffect(() => {
+    void fetchFabricsPage();
+  }, [fetchFabricsPage]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   // Handle form submit (add/edit fabric)
   const handleSubmit = async (e: React.FormEvent) => {
@@ -362,7 +347,8 @@ export function FabricManagerNew() {
 
       setDialogOpen(false);
       resetForm();
-      fetchFabrics();
+      void fetchFabricsPage();
+      void fetchDistinctFabricTypes().then(setFabricTypes).catch(() => undefined);
     } catch (error) {
       console.error('Error saving fabric:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
@@ -379,29 +365,38 @@ export function FabricManagerNew() {
 
     try {
       const fileText = await bulkFile.text();
-      const dataRows = fileText.split('\n').filter(row => row.trim());
-      const headers = dataRows.shift()?.split(',') || [];
+      const parsedRows = parseCsvRows(fileText);
+      if (parsedRows.length < 2) {
+        throw new Error('CSV file is empty or has no data rows');
+      }
 
-      // Validate required columns
+      const headers = parsedRows[0].map((h) => h.trim());
+      const dataRows = parsedRows.slice(1);
+
       const requiredColumns = ['fabric_code', 'fabric_name'];
-      const missingColumns = requiredColumns.filter(col => !headers.includes(col));
-      
+      const missingColumns = requiredColumns.filter((col) => !headers.includes(col));
       if (missingColumns.length > 0) {
         throw new Error(`Missing required columns: ${missingColumns.join(', ')}`);
       }
 
-      const fabricsToInsert = [];
+      const fabricsToInsert: FabricMaster[] = [];
+      const seenCodes = new Set<string>();
+      let duplicateRowsInFile = 0;
 
-      for (const row of dataRows) {
-        const cols = row.split(',');
+      for (const cols of dataRows) {
         const get = (key: string) => cols[headers.indexOf(key)]?.trim() || '';
-        
         const fabricCode = get('fabric_code');
         const fabricName = get('fabric_name');
-        
         if (!fabricCode || !fabricName) continue;
 
-        const fabric: FabricMaster = {
+        const normalizedCode = fabricCode.toUpperCase();
+        if (seenCodes.has(normalizedCode)) {
+          duplicateRowsInFile += 1;
+          continue;
+        }
+        seenCodes.add(normalizedCode);
+
+        fabricsToInsert.push({
           fabric_code: fabricCode,
           fabric_description: get('fabric_description'),
           fabric_name: fabricName,
@@ -413,32 +408,72 @@ export function FabricManagerNew() {
           uom: get('uom') || 'meters',
           rate: Number(get('rate')) || 0,
           hsn_code: get('hsn_code'),
-          gst: Number(get('gst')) || 18.00,
+          gst: Number(get('gst')) || 18.0,
           image: get('image'),
           inventory: Number(get('inventory')) || 0,
           supplier1: get('supplier1'),
           supplier2: get('supplier2'),
-          status: 'active'
-        };
-
-        fabricsToInsert.push(fabric);
+          status: 'active',
+        });
       }
 
-      if (fabricsToInsert.length > 0) {
-        const { error } = await supabase
+      if (fabricsToInsert.length === 0) {
+        throw new Error('No valid fabric rows found. Each row needs fabric_code and fabric_name.');
+      }
+
+      const existingCodes = new Set<string>();
+      const codes = fabricsToInsert.map((f) => f.fabric_code);
+      for (const codeChunk of chunkArray(codes, 200)) {
+        const { data, error } = await supabase
           .from('fabric_master')
-          .insert(fabricsToInsert);
-
+          .select('fabric_code')
+          .in('fabric_code', codeChunk);
         if (error) throw error;
+        (data || []).forEach((row: { fabric_code: string }) => {
+          existingCodes.add(row.fabric_code);
+        });
       }
 
-      toast.success(`Bulk upload completed! ${fabricsToInsert.length} fabrics added.`);
+      const newFabrics = fabricsToInsert.filter((f) => !existingCodes.has(f.fabric_code));
+      const skippedExisting = fabricsToInsert.length - newFabrics.length;
+
+      if (newFabrics.length === 0) {
+        throw new Error(
+          `All ${fabricsToInsert.length} fabric_code values already exist in Fabric Master. No new rows were added.`
+        );
+      }
+
+      for (const batch of chunkArray(newFabrics, BULK_INSERT_BATCH_SIZE)) {
+        const { error } = await supabase.from('fabric_master').insert(batch);
+        if (error) {
+          if (error.code === '23505' || (error as { status?: number }).status === 409) {
+            throw new Error(
+              `Duplicate fabric_code detected during upload (${error.message}). Some codes may already exist — remove duplicates from the CSV and try again.`
+            );
+          }
+          throw error;
+        }
+      }
+
+      const parts = [`${newFabrics.length} fabric(s) added`];
+      if (skippedExisting > 0) parts.push(`${skippedExisting} skipped (already in database)`);
+      if (duplicateRowsInFile > 0) parts.push(`${duplicateRowsInFile} duplicate row(s) in file ignored`);
+      toast.success(`Bulk upload completed! ${parts.join(', ')}.`);
+
       setBulkDialogOpen(false);
+      setBulkFile(null);
       resetForm();
-      fetchFabrics();
+      void fetchFabricsPage();
+      void fetchDistinctFabricTypes().then(setFabricTypes).catch(() => undefined);
     } catch (err) {
       console.error('Bulk upload error:', err);
-      toast.error(err instanceof Error ? err.message : 'Bulk upload failed');
+      const message =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'object' && err !== null && 'message' in err
+            ? String((err as { message: unknown }).message)
+            : 'Bulk upload failed';
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -471,7 +506,8 @@ export function FabricManagerNew() {
 
       if (error) throw error;
       toast.success('Fabric deleted successfully');
-      fetchFabrics();
+      void fetchFabricsPage();
+      void fetchDistinctFabricTypes().then(setFabricTypes).catch(() => undefined);
     } catch (error) {
       console.error('Error deleting fabric:', error);
       toast.error('Failed to delete fabric');
@@ -487,6 +523,66 @@ export function FabricManagerNew() {
       setFabricImagePreview(URL.createObjectURL(file));
     } else {
       setFabricImagePreview(null);
+    }
+  };
+
+  const handleExportCSV = async () => {
+    try {
+      setExportLoading(true);
+      toast.info('Preparing export… this may take a moment for large catalogs.');
+      const exportRows = await fetchAllFabricMasterMatchingFilters(listFilters);
+      if (exportRows.length === 0) {
+        toast.error('No fabrics to export');
+        return;
+      }
+
+      const csvContent = [
+        EXPORT_HEADERS.join(','),
+        ...exportRows.map((fabric) =>
+          fabricToExportRow(fabric).map(escapeCsvCell).join(',')
+        ),
+      ].join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `fabric_master_export_${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`${exportRows.length} fabrics exported to CSV`);
+    } catch (error) {
+      console.error('Export CSV error:', error);
+      toast.error('Failed to export fabrics to CSV');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    try {
+      setExportLoading(true);
+      toast.info('Preparing export… this may take a moment for large catalogs.');
+      const exportRows = await fetchAllFabricMasterMatchingFilters(listFilters);
+      if (exportRows.length === 0) {
+        toast.error('No fabrics to export');
+        return;
+      }
+
+      const data = [
+        EXPORT_HEADERS,
+        ...exportRows.map((fabric) => fabricToExportRow(fabric)),
+      ];
+      const worksheet = XLSX.utils.aoa_to_sheet(data);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Fabric Master');
+      XLSX.writeFile(workbook, `fabric_master_export_${new Date().toISOString().split('T')[0]}.xlsx`);
+      toast.success(`${exportRows.length} fabrics exported to Excel`);
+    } catch (error) {
+      console.error('Export Excel error:', error);
+      toast.error('Failed to export fabrics to Excel');
+    } finally {
+      setExportLoading(false);
     }
   };
 
@@ -534,34 +630,6 @@ export function FabricManagerNew() {
     setColumnWidths(defaultWidths);
     localStorage.setItem('fabric-table-column-widths', JSON.stringify(defaultWidths));
   };
-
-  // Filter fabrics based on search and type
-  const filteredFabrics = fabrics.filter(fabric => {
-    const matchesSearch = 
-      fabric.fabric_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      fabric.fabric_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      fabric.color?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      fabric.type?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      fabric.fabric_for_supplier?.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesType = filterType === 'all' || fabric.type === filterType;
-    
-    return matchesSearch && matchesType;
-  });
-  const includesFilter = (value: unknown, filterValue: string) =>
-    filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
-  const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
-  const displayFabrics = filteredFabrics.filter((fabric) => {
-    return includesFilter(`${fabric.fabric_name} ${fabric.fabric_description || ''}`, columnFilters.fabric_details)
-      && includesFilter(fabric.fabric_for_supplier, columnFilters.fabric_for_supplier)
-      && includesFilter(`${fabric.color || ''} ${fabric.hex || ''}`, columnFilters.color)
-      && includesFilter(fabric.gsm, columnFilters.gsm)
-      && includesFilter(`₹${fabric.rate ?? ''}`, columnFilters.rate)
-      && includesFilter(`${fabric.inventory || 0} ${fabric.uom || ''}`, columnFilters.inventory)
-      && includesFilter(fabric.status, columnFilters.status);
-  });
-
-  const uniqueTypes = [...new Set(fabrics.map(f => f.type).filter(Boolean))];
 
   return (
     <div className="space-y-6">
@@ -850,6 +918,26 @@ export function FabricManagerNew() {
             </DialogContent>
           </Dialog>
 
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCSV}
+            disabled={exportLoading || totalCount === 0}
+            className="flex items-center gap-2"
+          >
+            <Download className="w-4 h-4" />
+            {exportLoading ? 'Exporting...' : 'Export CSV'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportExcel}
+            disabled={exportLoading || totalCount === 0}
+            className="flex items-center gap-2"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            {exportLoading ? 'Exporting...' : 'Export Excel'}
+          </Button>
           <Button 
             onClick={() => setBulkDialogOpen(true)} 
             variant="outline" 
@@ -877,7 +965,7 @@ export function FabricManagerNew() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Types</SelectItem>
-            {uniqueTypes.map(type => (
+            {fabricTypes.map(type => (
               <SelectItem key={type} value={type}>{type}</SelectItem>
             ))}
           </SelectContent>
@@ -1038,14 +1126,16 @@ export function FabricManagerNew() {
       {/* Fabrics Table */}
       <Card className="shadow-sm">
         <CardHeader className="bg-gradient-to-r from-primary/5 to-primary/10">
-          <CardTitle className="text-lg">Fabric Master ({displayFabrics.length} fabrics)</CardTitle>
+          <CardTitle className="text-lg">
+            Fabric Master ({totalCount.toLocaleString()} fabrics)
+          </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {loading && !fabrics.length ? (
             <div className="flex justify-center items-center h-64">
               <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary" />
             </div>
-          ) : displayFabrics.length === 0 ? (
+          ) : fabrics.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-muted-foreground">No fabrics found</p>
               <Button 
@@ -1071,7 +1161,7 @@ export function FabricManagerNew() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {displayFabrics.map((fabric) => (
+                  {fabrics.map((fabric) => (
                     <TableRow key={fabric.id}>
                       <TableCell>
                         <div className="flex items-center gap-2">
@@ -1179,6 +1269,59 @@ export function FabricManagerNew() {
                   ))}
                 </TableBody>
               </Table>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-4 py-4 border-t">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Rows per page</span>
+                  <Select
+                    value={String(pageSize)}
+                    onValueChange={(value) => setPageSize(Number(value))}
+                  >
+                    <SelectTrigger className="h-8 w-[4.5rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {FABRIC_MASTER_PAGE_SIZE_OPTIONS.map((size) => (
+                        <SelectItem key={size} value={String(size)}>
+                          {size}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">
+                    Showing{' '}
+                    <span className="font-medium text-foreground">
+                      {totalCount === 0 ? 0 : (safePage - 1) * pageSize + 1}–
+                      {Math.min(safePage * pageSize, totalCount)}
+                    </span>{' '}
+                    of <span className="font-medium text-foreground">{totalCount.toLocaleString()}</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={safePage <= 1 || loading}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Page <span className="font-medium text-foreground">{safePage}</span> / {totalPages}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={safePage >= totalPages || loading}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
         </CardContent>
