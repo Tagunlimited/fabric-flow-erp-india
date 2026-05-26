@@ -152,6 +152,21 @@ interface CuttingJob {
   };
 }
 
+function parseIsoDateSafe(value?: string | null): number {
+  if (!value) return 0;
+  const t = new Date(value).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function pickBestOrderAssignmentRow(existing: any, candidate: any): any {
+  if (!existing) return candidate;
+  const existingTs = parseIsoDateSafe(existing.cutting_work_date);
+  const candidateTs = parseIsoDateSafe(candidate?.cutting_work_date);
+  if (candidateTs > existingTs) return candidate;
+  if (!existing.cutting_master_id && candidate?.cutting_master_id) return candidate;
+  return existing;
+}
+
 
 const CuttingManagerPage = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -316,14 +331,36 @@ const CuttingManagerPage = () => {
           `)
           .not('cutting_master_id', 'is', null);
         const map: Record<string, any> = {};
-        (rows || []).forEach((r: any) => { if (r?.order_id) map[r.order_id] = r; });
+        (rows || []).forEach((r: any) => {
+          if (!r?.order_id) return;
+          const key = String(r.order_id);
+          const current = map[key];
+          const rowCutFromColumn = Math.max(0, Number(r.cut_quantity || 0));
+          const rowCutFromJson = sumAllCutsInStoredJson(r.cut_quantities_by_size ?? null);
+          const rowResolvedCut = Math.max(rowCutFromColumn, rowCutFromJson);
+          const existingResolvedCut = Math.max(
+            Math.max(0, Number(current?.cut_quantity || 0)),
+            sumAllCutsInStoredJson(current?.cut_quantities_by_size ?? null)
+          );
+
+          const bestRow = pickBestOrderAssignmentRow(current, r);
+          map[key] = {
+            ...bestRow,
+            // Prevent a stale/lower duplicate row from forcing a fully cut order back to pending.
+            cut_quantity: Math.max(existingResolvedCut, rowResolvedCut),
+            cut_quantities_by_size:
+              rowCutFromJson >= sumAllCutsInStoredJson(current?.cut_quantities_by_size ?? null)
+                ? r.cut_quantities_by_size
+                : current?.cut_quantities_by_size,
+          };
+        });
         const orderIds: string[] = Object.keys(map);
         
         // Also fetch order IDs from order_cutting_assignments for multiple cutting masters
         const { data: cuttingAssignmentsRows } = await supabase
           .from('order_cutting_assignments' as any)
           .select('order_id')
-          .in('order_id', orderIds.length > 0 ? orderIds : ['00000000-0000-0000-0000-000000000000'] as any);
+          .not('order_id', 'is', null);
         const cuttingAssignmentOrderIds = Array.from(new Set((cuttingAssignmentsRows || []).map((r: any) => r.order_id).filter(Boolean)));
         const allOrderIds = Array.from(new Set([...orderIds, ...cuttingAssignmentOrderIds]));
         

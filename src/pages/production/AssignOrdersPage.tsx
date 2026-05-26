@@ -555,10 +555,33 @@ const AssignOrdersPage = () => {
 
         // 4) Build assignments from orders + grouped BOMs
         const mapStatusToAssignment = (orderStatus: string): OrderAssignment['status'] => {
-          if (orderStatus === 'pending' || orderStatus === 'confirmed') return 'pending';
-          if (orderStatus === 'in_production' || orderStatus === 'quality_check') return 'in_progress';
-          if (orderStatus === 'completed') return 'completed';
-          return 'pending';
+          const normalized = String(orderStatus || '').trim().toLowerCase();
+          if (!normalized) return 'pending';
+
+          if (normalized === 'completed' || normalized === 'dispatched') {
+            return 'completed';
+          }
+
+          if (
+            normalized === 'assigned' ||
+            normalized === 'under_cutting' ||
+            normalized === 'under_stitching' ||
+            normalized === 'under_qc' ||
+            normalized === 'in_production' ||
+            normalized === 'quality_check'
+          ) {
+            return 'in_progress';
+          }
+
+          if (
+            normalized === 'pending' ||
+            normalized === 'confirmed' ||
+            normalized === 'pending_flow_assignment'
+          ) {
+            return 'pending';
+          }
+
+          return 'in_progress';
         };
 
         const computePriority = (dueDateStr?: string | null): OrderAssignment['priority'] => {

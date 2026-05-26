@@ -15,6 +15,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import {
   DistributeQuantityDialog,
+  type BatchAssignmentSaveMode,
   type LineAssignmentSavePayload,
 } from './DistributeQuantityDialog';
 import type { BatchAssignmentDocumentData } from '@/utils/batchAssignmentDocument';
@@ -102,6 +103,9 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
   const [selectedOrderItemId, setSelectedOrderItemId] = useState<string | null>(null);
   const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set());
   const [showDistributeDialog, setShowDistributeDialog] = useState(false);
+  const [existingAssignedBySizeForLine, setExistingAssignedBySizeForLine] = useState<
+    Record<string, number>
+  >({});
   const [distributeSessionMode, setDistributeSessionMode] = useState<
     'continue_wizard' | 'this_line_only'
   >('continue_wizard');
@@ -113,6 +117,26 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
     () => orderItems.map((i: any) => i.id).filter(Boolean) as string[],
     [orderItems]
   );
+
+  const distributeSaveMode = useMemo((): BatchAssignmentSaveMode => {
+    const hasDbAssigned = Object.values(existingAssignedBySizeForLine).some((q) => Number(q) > 0);
+    if (hasDbAssigned) return 'append_line';
+
+    if (selectedOrderItemId) {
+      const lineTag = `[line:${selectedOrderItemId}]`;
+      if (existingAssignments.some((a) => a.notes?.includes(lineTag))) {
+        return 'append_line';
+      }
+    } else if (existingAssignments.length > 0) {
+      return 'append_line';
+    }
+
+    return 'replace_line';
+  }, [existingAssignedBySizeForLine, existingAssignments, selectedOrderItemId]);
+
+  useEffect(() => {
+    if (!isOpen) setExistingAssignedBySizeForLine({});
+  }, [isOpen]);
 
   const lineEligible = useCallback(
     (itemId: string) =>
@@ -373,6 +397,7 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
           } catch (assignedLoadError) {
             console.error('Failed loading already-assigned quantities by size:', assignedLoadError);
           }
+          if (!cancelled) setExistingAssignedBySizeForLine(alreadyAssignedBySize);
 
           sizesData = Object.entries(cutBySize).map(([size_name, cutQty]) => ({
             size_name,
@@ -808,6 +833,8 @@ export const MultipleBatchAssignmentDialog: React.FC<MultipleBatchAssignmentDial
           onJobCardDocumentReady={onJobCardDocumentReady}
           onRequestFullOrderJobCard={onRequestFullOrderJobCard}
           assignmentSessionMode={orderItems.length > 1 ? distributeSessionMode : null}
+          saveMode={distributeSaveMode}
+          existingAssignedBySize={existingAssignedBySizeForLine}
         />
       )}
     </>
