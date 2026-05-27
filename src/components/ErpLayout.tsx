@@ -90,7 +90,10 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
 
   const headerDepartment = (profile?.department || linkedEmployee?.department || '').trim();
   const headerTitleOrRole = linkedEmployee?.designation?.trim() || displayRole;
-  const disableHeaderAutoHide = location.pathname.startsWith('/reports');
+  const disableHeaderAutoHide =
+    location.pathname.startsWith('/reports') ||
+    location.pathname.startsWith('/warehouse/inventory') ||
+    location.pathname.startsWith('/inventory');
 
   // Handle floating header
   useEffect(() => {
@@ -258,14 +261,19 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
         onCollapsedChange={setSidebarCollapsed}
       />
       {/* Main content area with left margin to account for fixed sidebar */}
-      <div className={cn(
-        "transition-all duration-300 flex flex-col min-w-0 min-h-screen",
-        sidebarCollapsed ? "lg:ml-16" : "lg:ml-64"
-      )}>
-        {/* Floating Header - Only spans the main content area */}
-        <header className={`sticky top-0 z-50 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b transition-transform duration-300 ${
-          isHeaderVisible ? 'translate-y-0' : '-translate-y-full'
-        }`}>
+      <div
+        className={cn(
+          'transition-all duration-300 flex h-[100dvh] max-h-[100dvh] min-w-0 flex-col overflow-hidden',
+          sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
+        )}
+      >
+        {/* Header stays fixed; main content scrolls below */}
+        <header
+          className={cn(
+            'sticky top-0 z-50 shrink-0 border-b bg-background/95 backdrop-blur transition-transform duration-300 supports-[backdrop-filter]:bg-background/60',
+            isHeaderVisible ? 'translate-y-0' : '-translate-y-full'
+          )}
+        >
           <div className="flex items-center justify-between px-2 sm:px-6 py-2 sm:py-4 w-full">
             {/* Left: Logo and App Name */}
             <div className="flex items-center space-x-2">
@@ -431,10 +439,12 @@ export function ErpLayout({ children, fullPage = false }: ErpLayoutProps) {
           </div>
         </header>
         {/* Main Content with proper spacing - no padding in fullPage mode to use full space */}
-        <main className={cn(
-          "flex-1 w-full overflow-x-auto overflow-y-auto",
-          fullPage ? "p-0" : "px-2 sm:px-6 py-4 sm:py-6"
-        )}>
+        <main
+          className={cn(
+            'min-h-0 flex-1 w-full overflow-x-auto overflow-y-auto',
+            fullPage ? 'p-0' : 'px-2 sm:px-6 py-4 sm:py-6'
+          )}
+        >
           {children}
         </main>
       </div>

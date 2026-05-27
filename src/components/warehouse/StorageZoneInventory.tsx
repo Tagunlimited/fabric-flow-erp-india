@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
   Archive,
   Package,
@@ -100,6 +100,11 @@ function flattenWarehouseInventoryIds(rows: WarehouseInventoryRow[]): string[] {
     for (const id of arr) ids.add(id);
   }
   return Array.from(ids);
+}
+
+/** Hide warehouse rows with no stock in bin (0 qty lines). */
+function hasPositiveWarehouseQuantity(item: WarehouseInventory): boolean {
+  return Number(item.quantity || 0) > 0;
 }
 
 /** `children` should be sorted newest `moved_to_storage_date` first. */
@@ -293,8 +298,11 @@ function buildInventoryDisplayFields(item: WarehouseInventory): InventoryDisplay
     displaySize = '-';
   }
 
+  const normalizedImage =
+    displayImage && String(displayImage).trim() ? String(displayImage).trim() : undefined;
+
   return {
-    displayImage,
+    displayImage: normalizedImage,
     displayName,
     displayType,
     displayFabric,
@@ -380,6 +388,14 @@ const DEFAULT_STORAGE_INVENTORY_WIDTHS: Record<StorageInventoryColumnId, number>
   actions: 200,
 };
 
+const STORAGE_INVENTORY_TABLE_MIN_WIDTH = STORAGE_INVENTORY_COLUMN_ORDER.reduce(
+  (sum, id) => sum + DEFAULT_STORAGE_INVENTORY_WIDTHS[id],
+  0
+);
+
+const MIN_STORED_WIDTH_KEYS = 3;
+const MIN_STORED_WIDTH_SUM = 800;
+
 const STORAGE_TABLE_PREFS_PREFIX = 'fabric-flow.storage-zone-inventory.table';
 
 function storageInventoryTablePrefsKey(itemType: 'FABRIC' | 'ITEM' | 'PRODUCT' | undefined): string {
@@ -420,14 +436,33 @@ function writeStorageInventoryTablePrefs(
   }
 }
 
+function isCorruptStorageInventoryWidths(
+  partial: Partial<Record<StorageInventoryColumnId, number>> | undefined
+): boolean {
+  if (!partial) return false;
+  const keys = Object.keys(partial).filter((k) =>
+    STORAGE_INVENTORY_COLUMN_ORDER.includes(k as StorageInventoryColumnId)
+  );
+  if (keys.length < MIN_STORED_WIDTH_KEYS) return true;
+  let sum = 0;
+  for (const key of keys) {
+    const w = partial[key as StorageInventoryColumnId];
+    if (typeof w !== 'number' || !Number.isFinite(w) || w <= 0) return true;
+    sum += w;
+  }
+  return sum < MIN_STORED_WIDTH_SUM;
+}
+
 function mergeStorageInventoryWidths(
   partial: Partial<Record<StorageInventoryColumnId, number>> | undefined
 ): Record<StorageInventoryColumnId, number> {
+  if (!partial || isCorruptStorageInventoryWidths(partial)) {
+    return { ...DEFAULT_STORAGE_INVENTORY_WIDTHS };
+  }
   const out = { ...DEFAULT_STORAGE_INVENTORY_WIDTHS };
-  if (!partial) return out;
   for (const col of STORAGE_INVENTORY_COLUMN_ORDER) {
     const w = partial[col];
-    if (typeof w === 'number' && Number.isFinite(w)) {
+    if (typeof w === 'number' && Number.isFinite(w) && w > 0) {
       out[col] = Math.min(560, Math.max(48, Math.round(w)));
     }
   }
@@ -788,10 +823,13 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
       console.log('🔍 [StorageZone] Final inventory:', processedInventory.length);
       
       const inventoryWithAllocations = await attachAllocationData(processedInventory as any);
+      const visibleInventory = (inventoryWithAllocations as WarehouseInventory[]).filter(
+        hasPositiveWarehouseQuantity
+      );
 
-      setInventory(inventoryWithAllocations as any);
+      setInventory(visibleInventory as any);
 
-      const summaries = createBinSummaries(inventoryWithAllocations as any);
+      const summaries = createBinSummaries(visibleInventory as any);
       setBinSummaries(summaries);
     } catch (error) {
       console.error('Error loading storage inventory:', error);
@@ -1003,8 +1041,10 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
     const map = new Map<string, InventorySummaryDetail>();
 
     inventory.forEach((item) => {
-      const key = summarizeInventoryKey(item);
       const qty = Number(item.quantity || 0);
+      if (qty <= 0) return;
+
+      const key = summarizeInventoryKey(item);
       const reserved = Number((item as any).allocated_quantity || 0);
       const available = Math.max(qty - reserved, 0);
       const binCode = item.bin?.bin_code || 'Unknown Bin';
@@ -1064,6 +1104,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
     const map = new Map<string, WarehouseInventoryRow[]>();
     for (const raw of inventory) {
       const item = raw as WarehouseInventoryRow;
+      if (!hasPositiveWarehouseQuantity(item)) continue;
       const key = summarizeInventoryKey(item);
       const arr = map.get(key);
       if (!arr) map.set(key, [item]);
@@ -1525,12 +1566,14 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
         <div className="mb-3">
           <h3 className="text-lg font-semibold leading-7 tracking-tight text-[#101828]">Inventory Items</h3>
           <p className="text-sm text-[#6a7282]">
-            Showing {filteredInventoryGroups.length} of {inventoryGroupsAll.length} items — scroll horizontally to see
-            all columns
+            Showing {filteredInventoryGroups.length} of {inventoryGroupsAll.length} items
           </p>
         </div>
         <div className="overflow-x-auto rounded-[14px] border border-[#e5e7eb] bg-white">
-          <Table className="table-fixed min-w-max">
+          <table
+            className="w-full caption-bottom text-sm"
+            style={{ minWidth: STORAGE_INVENTORY_TABLE_MIN_WIDTH }}
+          >
               <TableHeader>
                 <TableRow className="border-b border-black/10 bg-[#f9fafb] hover:bg-[#f9fafb]">
                   {visibleColumnIds.map((colId) => {
@@ -1628,16 +1671,10 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                                         alt=""
                                         className="h-10 w-10 shrink-0 rounded-md border border-[#e5e7eb] object-cover"
                                         onError={(e) => {
-                                          const img = e.currentTarget as HTMLImageElement;
-                                          img.style.display = 'none';
+                                          e.currentTarget.style.display = 'none';
                                         }}
                                       />
-                                    ) : (
-                                      <div
-                                        className="h-10 w-10 shrink-0 rounded-md border border-dashed border-[#e5e7eb] bg-[#f9fafb]"
-                                        aria-hidden
-                                      />
-                                    )}
+                                    ) : null}
                                     <span className="truncate text-sm font-medium text-[#101828]">
                                       {disp.displayName || '—'}
                                     </span>
@@ -1808,7 +1845,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
 
                   const childRows =
                     multi && expanded
-                      ? group.children.map((child) => {
+                      ? group.children.filter(hasPositiveWarehouseQuantity).map((child) => {
                           const allocatedQuantity = Number((child as any).allocated_quantity || 0);
                           const availableQuantity = Math.max(
                             Number(child.quantity || 0) - allocatedQuantity,
@@ -1958,7 +1995,7 @@ export const StorageZoneInventory: React.FC<StorageZoneInventoryProps> = ({
                   return [parentRow, ...childRows];
                 })}
               </TableBody>
-            </Table>
+            </table>
             {filteredInventoryGroups.length === 0 && (
               <div className="border-t border-[#e5e7eb] px-4 py-12 text-center">
                 <Archive className="mx-auto mb-4 h-12 w-12 text-[#6a7282]" />

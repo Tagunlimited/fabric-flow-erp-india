@@ -6,10 +6,14 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, RefreshCw, Eye, Edit, Trash2, Package, CheckCircle, XCircle, AlertCircle, Filter } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { format } from 'date-fns';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
+import '@/pages/OrdersPageViewSwitch.css';
+
+export type GrnListTab = 'pending' | 'completed';
 
 type GRN = {
   id: string;
@@ -28,6 +32,12 @@ type GRN = {
   supplier_name?: string;
   supplier_code?: string;
 };
+
+const GRN_COMPLETED_STATUSES = new Set<GRN['status']>(['approved', 'rejected']);
+
+export function isGrnListCompleted(status: GRN['status']): boolean {
+  return GRN_COMPLETED_STATUSES.has(status);
+}
 
 // Memoized row component for better performance
 const GRNRow = memo(function GRNRow({ 
@@ -140,6 +150,8 @@ const GRNRow = memo(function GRNRow({
 
 const GRNList = memo(function GRNList() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const listTab: GrnListTab = searchParams.get('tab') === 'completed' ? 'completed' : 'pending';
   const [loading, setLoading] = useState(true);
   const [grns, setGrns] = useState<GRN[]>([]);
   const [search, setSearch] = useState('');
@@ -205,8 +217,31 @@ const GRNList = memo(function GRNList() {
   const includesFilter = (value: unknown, filterValue: string) =>
     filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
 
+  const pendingGRNs = useMemo(
+    () => grns.filter((grn) => !isGrnListCompleted(grn.status)),
+    [grns]
+  );
+  const completedGRNs = useMemo(
+    () => grns.filter((grn) => isGrnListCompleted(grn.status)),
+    [grns]
+  );
+
+  const setListTab = useCallback(
+    (next: GrnListTab) => {
+      setStatusFilter('all');
+      if (next === 'pending') {
+        setSearchParams({}, { replace: true });
+      } else {
+        setSearchParams({ tab: 'completed' }, { replace: true });
+      }
+    },
+    [setSearchParams]
+  );
+
+  const tabGRNs = listTab === 'completed' ? completedGRNs : pendingGRNs;
+
   const filteredGRNs = useMemo(() => {
-    return grns.filter((grn) => {
+    return tabGRNs.filter((grn) => {
       const text = `${grn.grn_number} ${grn.po_number || ''} ${grn.supplier_name || ''} ${grn.supplier_code || ''}`.toLowerCase();
       const matchesSearch = !search || text.includes(search.toLowerCase());
       const matchesStatus = statusFilter === 'all' || grn.status === statusFilter;
@@ -225,7 +260,7 @@ const GRNList = memo(function GRNList() {
 
       return matchesSearch && matchesStatus && matchesColumns;
     });
-  }, [grns, search, statusFilter, columnFilters]);
+  }, [tabGRNs, search, statusFilter, columnFilters]);
   const hasActiveColumnFilters = Object.values(columnFilters).some((value) => value.trim() !== '');
 
   const handleDelete = useCallback(async (id: string) => {
@@ -288,6 +323,31 @@ const GRNList = memo(function GRNList() {
             <Plus className="w-4 h-4 mr-2" /> New GRN
           </Button>
         </div>
+      </div>
+
+      <div
+        className="orders-view-switch w-fit"
+        role="tablist"
+        aria-label="GRN list view"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={listTab === 'pending'}
+          className={cn('orders-view-switch-tab', listTab === 'pending' && 'is-active')}
+          onClick={() => setListTab('pending')}
+        >
+          Pending ({pendingGRNs.length})
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={listTab === 'completed'}
+          className={cn('orders-view-switch-tab', listTab === 'completed' && 'is-active')}
+          onClick={() => setListTab('completed')}
+        >
+          Completed ({completedGRNs.length})
+        </button>
       </div>
 
       {/* Status Overview Cards */}
@@ -388,12 +448,19 @@ const GRNList = memo(function GRNList() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="draft">Draft</SelectItem>
-                <SelectItem value="received">Received</SelectItem>
-                <SelectItem value="under_inspection">Under Inspection</SelectItem>
-                <SelectItem value="approved">Approved</SelectItem>
-                <SelectItem value="rejected">Rejected</SelectItem>
-                <SelectItem value="partially_approved">Partially Approved</SelectItem>
+                {listTab === 'pending' ? (
+                  <>
+                    <SelectItem value="draft">Draft</SelectItem>
+                    <SelectItem value="received">Received</SelectItem>
+                    <SelectItem value="under_inspection">Under Inspection</SelectItem>
+                    <SelectItem value="partially_approved">Partially Approved</SelectItem>
+                  </>
+                ) : (
+                  <>
+                    <SelectItem value="approved">Approved</SelectItem>
+                    <SelectItem value="rejected">Rejected</SelectItem>
+                  </>
+                )}
               </SelectContent>
             </Select>
             {hasActiveColumnFilters && (
@@ -420,12 +487,26 @@ const GRNList = memo(function GRNList() {
       {/* GRN Table */}
       <Card>
         <CardHeader>
-          <CardTitle>All GRNs ({filteredGRNs.length})</CardTitle>
+          <CardTitle>
+            {listTab === 'completed' ? 'Completed' : 'Pending'} GRNs ({filteredGRNs.length})
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+            </div>
+          ) : filteredGRNs.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
+              <Package className="mb-3 h-10 w-10 opacity-40" />
+              <p className="font-medium text-foreground">
+                No {listTab === 'completed' ? 'completed' : 'pending'} GRNs
+              </p>
+              <p className="mt-1 text-sm">
+                {listTab === 'completed'
+                  ? 'Fully approved or rejected GRNs appear here.'
+                  : 'GRNs in progress (draft, received, inspection, partial approval) appear here.'}
+              </p>
             </div>
           ) : (
             <div className="overflow-x-auto">

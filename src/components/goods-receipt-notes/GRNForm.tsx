@@ -124,6 +124,57 @@ const resolveInventoryItemId = (item: any): string | null => {
   return String(item.item_id || '').trim() || null;
 };
 
+function computeGrnMasterTotalsFromItems(items: GRNItem[]) {
+  const approvedLines = items.filter((i) => i.quality_status === 'approved');
+  const rejectedLines = items.filter(
+    (i) => i.quality_status === 'rejected' || i.quality_status === 'damaged'
+  );
+  return {
+    total_items_received: items.length,
+    total_items_approved: approvedLines.length,
+    total_items_rejected: rejectedLines.length,
+    total_amount_received: items.reduce((sum, i) => sum + Number(i.line_total || 0), 0),
+    total_amount_approved: approvedLines.reduce((sum, i) => sum + Number(i.line_total || 0), 0),
+  };
+}
+
+function deriveGrnHeaderStatus(
+  items: GRNItem[],
+  fallback: GRN['status'] = 'under_inspection'
+): GRN['status'] {
+  if (items.length === 0) return fallback;
+  const approved = items.filter((i) => i.quality_status === 'approved').length;
+  const rejected = items.filter(
+    (i) => i.quality_status === 'rejected' || i.quality_status === 'damaged'
+  ).length;
+  const pending = items.filter((i) => i.quality_status === 'pending').length;
+  if (approved === items.length) return 'approved';
+  if (rejected === items.length) return 'rejected';
+  if (approved > 0 && (pending > 0 || rejected > 0)) return 'partially_approved';
+  return fallback;
+}
+
+function allGrnLinesApproved(items: GRNItem[]): boolean {
+  return items.length > 0 && items.every((i) => i.quality_status === 'approved');
+}
+
+function someGrnLineApproved(items: GRNItem[]): boolean {
+  return items.some((i) => i.quality_status === 'approved');
+}
+
+function buildGrnItemLineQuantities(item: GRNItem) {
+  const receivedQty = Number(item.received_quantity || 0);
+  const approvedQty =
+    item.quality_status === 'approved'
+      ? Number(item.approved_quantity || receivedQty || 0)
+      : Number(item.approved_quantity || 0);
+  const rejectedQty =
+    item.quality_status === 'rejected' || item.quality_status === 'damaged'
+      ? Number(item.rejected_quantity || receivedQty || 0)
+      : Number(item.rejected_quantity || 0);
+  return { receivedQty, approvedQty, rejectedQty };
+}
+
 const GRNForm = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -1175,15 +1226,7 @@ const GRNForm = () => {
   const persistGrnItemsToDb = useCallback(async () => {
     for (const item of grnItems) {
       if (!item.id) continue;
-      const receivedQty = Number(item.received_quantity || 0);
-      const approvedQty =
-        item.quality_status === 'approved'
-          ? Number(item.approved_quantity || receivedQty || 0)
-          : Number(item.approved_quantity || 0);
-      const rejectedQty =
-        item.quality_status === 'rejected' || item.quality_status === 'damaged'
-          ? Number(item.rejected_quantity || receivedQty || 0)
-          : Number(item.rejected_quantity || 0);
+      const { receivedQty, approvedQty, rejectedQty } = buildGrnItemLineQuantities(item);
 
       const inventoryItemId = resolveInventoryItemId(item);
 
@@ -1192,6 +1235,9 @@ const GRNForm = () => {
         received_quantity: receivedQty,
         approved_quantity: approvedQty,
         rejected_quantity: rejectedQty,
+        total_price: item.total_price,
+        gst_amount: item.gst_amount,
+        line_total: item.line_total,
         quality_status: item.quality_status,
         batch_number: item.batch_number,
         expiry_date: item.expiry_date,
@@ -1237,7 +1283,7 @@ const GRNForm = () => {
       const currentStatus = grn.status || 'draft';
       const validTransitions: Record<string, string[]> = {
         'draft': ['received'],
-        'received': ['under_inspection', 'approved', 'rejected'],
+        'received': ['under_inspection', 'rejected'],
         'under_inspection': ['approved', 'rejected', 'partially_approved'],
         'approved': [], // Final status
         'rejected': [], // Final status
@@ -1249,11 +1295,29 @@ const GRNForm = () => {
         return;
       }
 
-      // Additional validation for specific statuses
-      if (newStatus === 'approved' || newStatus === 'partially_approved') {
-        const hasApprovedItems = grnItems.some(item => item.quality_status === 'approved');
-        if (!hasApprovedItems) {
-          toast.error('Cannot approve GRN without any approved items');
+      if (newStatus === 'approved') {
+        if (!allGrnLinesApproved(grnItems)) {
+          const approvedCount = grnItems.filter((i) => i.quality_status === 'approved').length;
+          toast.error(
+            `Cannot fully approve GRN: ${approvedCount}/${grnItems.length} lines approved. Approve every line or use Partial Approval.`
+          );
+          return;
+        }
+      }
+
+      if (newStatus === 'partially_approved') {
+        if (!someGrnLineApproved(grnItems)) {
+          toast.error('Cannot partially approve GRN without any approved items');
+          return;
+        }
+        const hasPendingOrRejected = grnItems.some(
+          (item) =>
+            item.quality_status === 'pending' ||
+            item.quality_status === 'rejected' ||
+            item.quality_status === 'damaged'
+        );
+        if (!hasPendingOrRejected) {
+          toast.error('All lines are already approved. Use Approve GRN for full approval.');
           return;
         }
       }
@@ -1270,9 +1334,12 @@ const GRNForm = () => {
         await persistGrnItemsToDb();
       }
 
+      const headerTotals = computeGrnMasterTotalsFromItems(grnItems);
+
       const updateData: any = {
         status: newStatus,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        ...headerTotals,
       };
 
       // Set additional fields based on status
@@ -1282,7 +1349,7 @@ const GRNForm = () => {
       } else if (newStatus === 'under_inspection') {
         updateData.quality_inspector = user?.id;
         updateData.inspection_date = new Date().toISOString();
-      } else if (newStatus === 'approved' || newStatus === 'rejected') {
+      } else if (newStatus === 'approved' || newStatus === 'rejected' || newStatus === 'partially_approved') {
         updateData.approved_by = user?.id;
         updateData.approved_at = new Date().toISOString();
       }
@@ -1302,7 +1369,7 @@ const GRNForm = () => {
         throw error;
       }
       
-      setGrn(prev => ({ ...prev, ...updateData }));
+      setGrn((prev) => ({ ...prev, ...updateData, ...headerTotals }));
       
       // Update inventory when GRN is approved or partially approved
       if (newStatus === 'approved' || newStatus === 'partially_approved') {
@@ -1365,15 +1432,22 @@ const GRNForm = () => {
       .filter(item => item.quality_status === 'approved')
       .reduce((sum, item) => sum + item.line_total, 0);
 
+    const approvedLines = grnItems.filter((i) => i.quality_status === 'approved').length;
+
     return {
       totalItems,
       totalReceived,
       totalApproved,
       totalRejected,
       totalAmount,
-      approvedAmount
+      approvedAmount,
+      approvedLines,
     };
   }, [grnItems]);
+
+  const canEditLineQuality =
+    !isNew &&
+    (isEdit || ['received', 'under_inspection', 'partially_approved'].includes(grn.status || ''));
 
   // Derived filtered items for quick find and pending focus
   const filteredItems = useMemo(() => {
@@ -1391,11 +1465,13 @@ const GRNForm = () => {
       list = list.filter(i => i.quality_status === 'pending');
     }
     // Keep fabrics first for visual grouping
-    return [...list].sort((a, b) => {
-      if (a.item_type === 'fabric' && b.item_type !== 'fabric') return -1;
-      if (a.item_type !== 'fabric' && b.item_type === 'fabric') return 1;
-      return 0;
-    });
+    return [...list]
+      .sort((a, b) => {
+        if (a.item_type === 'fabric' && b.item_type !== 'fabric') return -1;
+        if (a.item_type !== 'fabric' && b.item_type === 'fabric') return 1;
+        return 0;
+      })
+      .map((item) => ({ item, index: grnItems.indexOf(item) }));
   }, [grnItems, itemSearch, showOnlyPending]);
 
   // Save GRN
@@ -1526,9 +1602,12 @@ const GRNForm = () => {
         toast.success('GRN saved, marked as received, and inventory added');
         navigate(`/procurement/grn/${(grnData as any).id}`);
       } else {
-        // Update existing GRN
-        console.log('Updating GRN with data:', grn);
-        console.log('GRN totals:', totals);
+        // Update existing GRN — persist line QC as-is; do not force full approval
+        await persistGrnItemsToDb();
+
+        const headerTotals = computeGrnMasterTotalsFromItems(grnItems);
+        const preservedStatus = grn.status || 'received';
+
         const { error: grnError } = await supabase
           .from('grn_master')
           .update({
@@ -1538,18 +1617,13 @@ const GRNForm = () => {
             received_date: grn.received_date || nowIso,
             received_by: grn.received_by || user?.id,
             received_at_location: grn.received_at_location,
-            status: 'approved',
-            total_items_received: totals.totalItems,
-            total_items_approved: finalizedItems.length,
-            total_items_rejected: 0,
-            total_amount_received: totals.totalAmount,
-            total_amount_approved: totals.totalAmount,
+            status: preservedStatus,
+            ...headerTotals,
             quality_inspector: grn.quality_inspector,
             inspection_date: grn.inspection_date,
             inspection_notes: grn.inspection_notes,
-            approved_by: user?.id,
-            approved_at: nowIso,
-            rejection_reason: grn.rejection_reason
+            rejection_reason: grn.rejection_reason,
+            updated_at: nowIso,
           } as any)
           .eq('id', id as any);
 
@@ -1558,136 +1632,106 @@ const GRNForm = () => {
           throw grnError;
         }
 
-        // Update GRN items
-        for (const item of finalizedItems) {
-          if (item.id) {
-            // Update existing item
-            const { error } = await supabase
-              .from('grn_items')
-              .update({
-                ...item,
-                approved_quantity: Number(item.received_quantity || 0),
-                rejected_quantity: 0,
-                quality_status: 'approved',
-                // Ensure fabric details are included in update
-                fabric_color: item.fabric_color,
-                selected_colors: normalizeSelectedColors(item.selected_colors),
-                fabric_gsm: item.fabric_gsm,
-                fabric_name: item.fabric_name,
-                item_color: item.item_color
-              } as any)
-              .eq('id', item.id as any);
-            if (error && isMissingSelectedColorsColumn(error)) {
-              const { selected_colors, ...compatUpdate }: any = {
-                ...item,
-                approved_quantity: Number(item.received_quantity || 0),
-                rejected_quantity: 0,
-                quality_status: 'approved',
-                fabric_color: item.fabric_color,
-                selected_colors: normalizeSelectedColors(item.selected_colors),
-                fabric_gsm: item.fabric_gsm,
-                fabric_name: item.fabric_name,
-                item_color: item.item_color
-              };
-              const retry = await supabase
-                .from('grn_items')
-                .update(compatUpdate as any)
-                .eq('id', item.id as any);
-              if (retry.error) throw retry.error;
-            } else if (error) throw error;
-          } else {
-            // Insert new item
-            let { error } = await supabase
-              .from('grn_items')
-              .insert({ 
-                grn_id: id,
-                po_item_id: item.po_item_id,
-                item_type: item.item_type,
-                item_id: resolveInventoryItemId(item),
-                item_name: item.item_name,
-                item_image_url: item.item_image_url,
-                ordered_quantity: item.ordered_quantity,
-                received_quantity: item.received_quantity,
-                approved_quantity: Number(item.received_quantity || 0),
-                rejected_quantity: 0,
-                unit_of_measure: item.unit_of_measure,
-                unit_price: item.unit_price,
-                total_price: item.total_price,
-                gst_rate: item.gst_rate,
-                gst_amount: item.gst_amount,
-                line_total: item.line_total,
-                quality_status: 'approved',
-                batch_number: item.batch_number,
-                expiry_date: item.expiry_date,
-                condition_notes: item.condition_notes,
-                inspection_notes: item.inspection_notes,
-                // Ensure fabric details are included in insert
-                fabric_color: item.fabric_color,
-                selected_colors: normalizeSelectedColors(item.selected_colors),
-                fabric_gsm: item.fabric_gsm,
-                fabric_name: item.fabric_name,
-                item_color: item.item_color
-              } as any);
-            if (error && isMissingSelectedColorsColumn(error)) {
-              const compatInsert: any = {
-                grn_id: id,
-                po_item_id: item.po_item_id,
-                item_type: item.item_type,
-                item_id: resolveInventoryItemId(item),
-                item_name: item.item_name,
-                item_image_url: item.item_image_url,
-                ordered_quantity: item.ordered_quantity,
-                received_quantity: item.received_quantity,
-                approved_quantity: Number(item.received_quantity || 0),
-                rejected_quantity: 0,
-                unit_of_measure: item.unit_of_measure,
-                unit_price: item.unit_price,
-                total_price: item.total_price,
-                gst_rate: item.gst_rate,
-                gst_amount: item.gst_amount,
-                line_total: item.line_total,
-                quality_status: 'approved',
-                batch_number: item.batch_number,
-                expiry_date: item.expiry_date,
-                condition_notes: item.condition_notes,
-                inspection_notes: item.inspection_notes,
-                fabric_color: item.fabric_color,
-                fabric_gsm: item.fabric_gsm,
-                fabric_name: item.fabric_name,
-                item_color: item.item_color
-              };
-              const retry = await supabase.from('grn_items').insert(compatInsert as any);
-              error = retry.error;
+        // Insert any new lines added in edit mode (keep their quality_status)
+        for (const item of grnItems) {
+          if (item.id) continue;
+          const { receivedQty, approvedQty, rejectedQty } = buildGrnItemLineQuantities(item);
+          let { error } = await supabase.from('grn_items').insert({
+            grn_id: id,
+            po_item_id: item.po_item_id,
+            item_type: item.item_type,
+            item_id: resolveInventoryItemId(item),
+            item_name: item.item_name,
+            item_image_url: item.item_image_url,
+            ordered_quantity: item.ordered_quantity,
+            received_quantity: receivedQty,
+            approved_quantity: approvedQty,
+            rejected_quantity: rejectedQty,
+            unit_of_measure: item.unit_of_measure,
+            unit_price: item.unit_price,
+            total_price: item.total_price,
+            gst_rate: item.gst_rate,
+            gst_amount: item.gst_amount,
+            line_total: item.line_total,
+            quality_status: item.quality_status,
+            batch_number: item.batch_number,
+            expiry_date: item.expiry_date,
+            condition_notes: item.condition_notes,
+            inspection_notes: item.inspection_notes,
+            fabric_color: item.fabric_color,
+            selected_colors: normalizeSelectedColors(item.selected_colors),
+            fabric_gsm: item.fabric_gsm,
+            fabric_name: item.fabric_name,
+            item_color: item.item_color,
+          } as any);
+          if (error && isMissingSelectedColorsColumn(error)) {
+            const retry = await supabase.from('grn_items').insert({
+              grn_id: id,
+              po_item_id: item.po_item_id,
+              item_type: item.item_type,
+              item_id: resolveInventoryItemId(item),
+              item_name: item.item_name,
+              item_image_url: item.item_image_url,
+              ordered_quantity: item.ordered_quantity,
+              received_quantity: receivedQty,
+              approved_quantity: approvedQty,
+              rejected_quantity: rejectedQty,
+              unit_of_measure: item.unit_of_measure,
+              unit_price: item.unit_price,
+              total_price: item.total_price,
+              gst_rate: item.gst_rate,
+              gst_amount: item.gst_amount,
+              line_total: item.line_total,
+              quality_status: item.quality_status,
+              batch_number: item.batch_number,
+              expiry_date: item.expiry_date,
+              condition_notes: item.condition_notes,
+              inspection_notes: item.inspection_notes,
+              fabric_color: item.fabric_color,
+              fabric_gsm: item.fabric_gsm,
+              fabric_name: item.fabric_name,
+              item_color: item.item_color,
+            } as any);
+            error = retry.error;
+          }
+          if (error) throw error;
+        }
+
+        const approvedItems = grnItems.filter(
+          (item) => item.quality_status === 'approved' && item.approved_quantity > 0
+        );
+        if (approvedItems.length > 0 && approvedItems.every((i) => i.id)) {
+          const { data: existingInventory } = await supabase
+            .from('warehouse_inventory')
+            .select('grn_item_id')
+            .in('grn_item_id', approvedItems.map((i) => i.id as any));
+
+          const existingSet = new Set((existingInventory || []).map((r: any) => r.grn_item_id));
+          const missing = approvedItems.filter((i) => i.id && !existingSet.has(i.id));
+          if (missing.length > 0) {
+            const placed = await updateInventory(missing);
+            if (!placed) {
+              toast.error(
+                'GRN saved but warehouse stock was not placed for new approvals. Create an active Storage bin, then use Approve GRN or Partial Approval.'
+              );
             }
-            if (error) throw error;
           }
+          try {
+            window.dispatchEvent(new CustomEvent('warehouse-inventory-updated'));
+          } catch {}
         }
 
-        const { data: latestItems } = await supabase
-          .from('grn_items')
-          .select('*')
-          .eq('grn_id', id as any);
-
-        if (latestItems && latestItems.length > 0) {
-          const placed = await updateInventory(latestItems as any[]);
-          if (!placed) {
-            toast.error(
-              'GRN saved but warehouse stock was not placed. Create an active Storage bin in Warehouse Master, then Save this GRN again.'
-            );
-          }
-          try { window.dispatchEvent(new CustomEvent('warehouse-inventory-updated')); } catch {}
-        }
-
-        setGrn(prev => ({
+        setGrn((prev) => ({
           ...prev,
-          status: 'approved',
+          ...headerTotals,
+          status: preservedStatus,
           received_date: prev.received_date || nowIso,
           received_by: prev.received_by || user?.id,
-          approved_by: user?.id,
-          approved_at: nowIso
         }));
-        setGrnItems(finalizedItems);
-        toast.success('GRN saved, marked as received, and inventory added');
+        toast.success(
+          'GRN saved. Line quality and quantities updated — use Approve GRN or Partial Approval when inspection is complete.'
+        );
+        navigate(`/procurement/grn/${id}`, { replace: true });
       }
     } catch (error: any) {
       console.error('Error saving GRN:', error);
@@ -1701,7 +1745,7 @@ const GRNForm = () => {
     } finally {
       setSaving(false);
     }
-  }, [grn, grnItems, totals, isNew, id, navigate, updateInventory, user?.id]);
+  }, [grn, grnItems, totals, isNew, id, navigate, updateInventory, user?.id, persistGrnItemsToDb]);
 
   // Status badge component for GRN items
   const StatusBadge = ({ status }: { status: GRNItem['quality_status'] }) => {
@@ -1869,25 +1913,14 @@ const GRNForm = () => {
               )}
               
               {grn.status === 'received' && (
-                <>
-                  <Button 
-                    onClick={() => updateGrnStatus('under_inspection')} 
-                    variant="outline"
-                    className="bg-yellow-50 hover:bg-yellow-100 text-yellow-700 border-yellow-200"
-                  >
-                    <AlertCircle className="w-4 h-4 mr-2" />
-                    Move to Inspection
-                  </Button>
-                  <Button 
-                    onClick={() => updateGrnStatus('approved')} 
-                    variant="outline"
-                    className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
-                    disabled={!grnItems.some(item => item.quality_status === 'approved')}
-                  >
-                    <CheckCircle className="w-4 h-4 mr-2" />
-                    Approve GRN
-                  </Button>
-                </>
+                <Button 
+                  onClick={() => updateGrnStatus('under_inspection')} 
+                  variant="outline"
+                  className="bg-yellow-50 hover:bg-yellow-100 text-yellow-700 border-yellow-200"
+                >
+                  <AlertCircle className="w-4 h-4 mr-2" />
+                  Move to Inspection
+                </Button>
               )}
               
               {grn.status === 'under_inspection' && (
@@ -1896,7 +1929,7 @@ const GRNForm = () => {
                     onClick={() => updateGrnStatus('approved')} 
                     variant="outline"
                     className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
-                    disabled={!grnItems.some(item => item.quality_status === 'approved')}
+                    disabled={!allGrnLinesApproved(grnItems)}
                   >
                     <CheckCircle className="w-4 h-4 mr-2" />
                     Approve GRN
@@ -1905,7 +1938,7 @@ const GRNForm = () => {
                     onClick={() => updateGrnStatus('partially_approved')} 
                     variant="outline"
                     className="bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200"
-                    disabled={!grnItems.some(item => item.quality_status === 'approved')}
+                    disabled={!someGrnLineApproved(grnItems)}
                   >
                     <AlertCircle className="w-4 h-4 mr-2" />
                     Partial Approval
@@ -1928,6 +1961,7 @@ const GRNForm = () => {
                     onClick={() => updateGrnStatus('approved')} 
                     variant="outline"
                     className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+                    disabled={!allGrnLinesApproved(grnItems)}
                   >
                     <CheckCircle className="w-4 h-4 mr-2" />
                     Full Approval
@@ -1957,7 +1991,10 @@ const GRNForm = () => {
                 <strong>Current Status:</strong> {grn.status?.replace('_', ' ').toUpperCase()}
               </div>
               <div className="text-sm text-muted-foreground mt-1">
-                <strong>Approved Items:</strong> {grnItems.filter(item => item.quality_status === 'approved').length} / {grnItems.length}
+                <strong>Approved lines:</strong> {totals.approvedLines} / {grnItems.length}
+              </div>
+              <div className="text-sm text-muted-foreground mt-1">
+                <strong>Approved units:</strong> {totals.totalApproved} / {totals.totalReceived} received
               </div>
               {grn.status === 'approved' && (
                 <div className="text-sm text-green-600 mt-1">
@@ -2146,6 +2183,10 @@ const GRNForm = () => {
         )}
 
         {/* Summary Cards */}
+        <p className="text-sm text-muted-foreground mb-2">
+          Approved lines: {totals.approvedLines} / {totals.totalItems} · Approved units: {totals.totalApproved} /{' '}
+          {totals.totalReceived} received
+        </p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Card className="border-l-4 border-l-blue-500">
             <CardContent className="p-6">
@@ -2237,10 +2278,11 @@ const GRNForm = () => {
               </div>
             ) : (
               <div className="space-y-6">
-                {filteredItems.map((item, index) => {
+                {filteredItems.map(({ item, index: itemIndex }) => {
+                  if (itemIndex < 0) return null;
                   const { label: colorLabel, swatchHex } = getGrnItemColorDisplay(item);
                   return (
-                  <Card key={index} className="border border-gray-200 hover:border-gray-300 transition-colors">
+                  <Card key={item.id || `${item.po_item_id}-${itemIndex}`} className="border border-gray-200 hover:border-gray-300 transition-colors">
                     <CardContent className="p-6">
                       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                         {/* Item Image and Basic Info */}
@@ -2310,7 +2352,7 @@ const GRNForm = () => {
                               <Input
                                 type="number"
                                 value={item.received_quantity}
-                                onChange={(e) => updateReceivedQuantity(index, parseFloat(e.target.value) || 0)}
+                                onChange={(e) => updateReceivedQuantity(itemIndex, parseFloat(e.target.value) || 0)}
                                 disabled={!isEdit}
                                 className="text-center font-semibold"
                                 min="0"
@@ -2354,8 +2396,8 @@ const GRNForm = () => {
                               <Button
                                 variant={item.quality_status === 'approved' ? 'default' : 'outline'}
                                 size="sm"
-                                onClick={() => updateQualityStatus(index, 'approved')}
-                                disabled={!isEdit}
+                                onClick={() => updateQualityStatus(itemIndex, 'approved')}
+                                disabled={!canEditLineQuality}
                                 className="h-8 px-2"
                               >
                                 <CheckCircle className="w-3 h-3" />
@@ -2363,8 +2405,8 @@ const GRNForm = () => {
                               <Button
                                 variant={item.quality_status === 'rejected' ? 'destructive' : 'outline'}
                                 size="sm"
-                                onClick={() => updateQualityStatus(index, 'rejected')}
-                                disabled={!isEdit}
+                                onClick={() => updateQualityStatus(itemIndex, 'rejected')}
+                                disabled={!canEditLineQuality}
                                 className="h-8 px-2"
                               >
                                 <XCircle className="w-3 h-3" />
@@ -2372,8 +2414,8 @@ const GRNForm = () => {
                               <Button
                                 variant={item.quality_status === 'damaged' ? 'destructive' : 'outline'}
                                 size="sm"
-                                onClick={() => updateQualityStatus(index, 'damaged')}
-                                disabled={!isEdit}
+                                onClick={() => updateQualityStatus(itemIndex, 'damaged')}
+                                disabled={!canEditLineQuality}
                                 className="h-8 px-2"
                               >
                                 <AlertCircle className="w-3 h-3" />
@@ -2392,7 +2434,7 @@ const GRNForm = () => {
                               value={item.batch_number || ''}
                               onChange={(e) => {
                                 const updated = [...grnItems];
-                                updated[index].batch_number = e.target.value;
+                                updated[itemIndex].batch_number = e.target.value;
                                 setGrnItems(updated);
                               }}
                               disabled={!isEdit}
@@ -2407,7 +2449,7 @@ const GRNForm = () => {
                               value={item.expiry_date || ''}
                               onChange={(e) => {
                                 const updated = [...grnItems];
-                                updated[index].expiry_date = e.target.value;
+                                updated[itemIndex].expiry_date = e.target.value;
                                 setGrnItems(updated);
                               }}
                               disabled={!isEdit}
@@ -2420,7 +2462,7 @@ const GRNForm = () => {
                               value={item.condition_notes || ''}
                               onChange={(e) => {
                                 const updated = [...grnItems];
-                                updated[index].condition_notes = e.target.value;
+                                updated[itemIndex].condition_notes = e.target.value;
                                 setGrnItems(updated);
                               }}
                               disabled={!isEdit}
@@ -2435,7 +2477,7 @@ const GRNForm = () => {
                             value={item.inspection_notes || ''}
                             onChange={(e) => {
                               const updated = [...grnItems];
-                              updated[index].inspection_notes = e.target.value;
+                              updated[itemIndex].inspection_notes = e.target.value;
                               setGrnItems(updated);
                             }}
                             disabled={!isEdit}
