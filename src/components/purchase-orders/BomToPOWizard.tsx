@@ -11,7 +11,7 @@ import { POReviewStep } from './POReviewStep';
 import { trackBomPOItems, validateOrderQuantities } from '@/services/bomPOTracking';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { normalizeSelectedColors } from '@/utils/bomSelectedColors';
+import { poLineColorPayload } from '@/utils/purchaseOrderColor';
 
 interface BomToPOWizardProps {
   bomId: string;
@@ -154,6 +154,16 @@ export function BomToPOWizard({
             
             // Determine item type based on category
             const itemType = bomItem?.category === 'Fabric' ? 'fabric' : 'item';
+            const colorFields = poLineColorPayload(
+              {
+                item_type: itemType,
+                selected_colors: bomItem?.selected_colors,
+                fabric_color: bomItem?.fabric_color,
+                item_color: bomItem?.item_attributes?.color,
+                notes: item.remarks,
+              },
+              bomItem?.item_attributes?.color
+            );
             
             // Base item data
             const baseItem = {
@@ -164,45 +174,43 @@ export function BomToPOWizard({
               item_image_url: bomItem?.image_url || null,
               quantity: item.quantity,
               unit_of_measure: bomItem?.unit_of_measure || 'pcs',
-              selected_colors: normalizeSelectedColors((bomItem as any)?.selected_colors),
+              selected_colors: colorFields.selected_colors,
+              item_color: colorFields.item_color,
               notes: item.remarks || null
             };
             
             // Add fabric-specific attributes if it's a fabric item
             if (itemType === 'fabric' && bomItem) {
-              // Store fabric details in dedicated columns
               const fabricDetails = [
                 bomItem.fabric_name,
-                bomItem.fabric_color,
+                colorFields.fabric_color,
                 bomItem.fabric_gsm
               ].filter(Boolean).join(' - ');
               
               return {
                 ...baseItem,
-                // Store in dedicated columns for proper data persistence
                 fabric_name: bomItem.fabric_name || '',
-                fabric_color: bomItem.fabric_color || '',
+                fabric_color: colorFields.fabric_color || '',
                 fabric_gsm: bomItem.fabric_gsm || '',
-                // Keep item_name as fabric name for display
                 item_name: bomItem.fabric_name || item.itemName,
-                // Store full details in notes as backup
-                notes: (item.remarks || '') + (fabricDetails ? ` | Fabric: ${fabricDetails}` : '')
+                notes: [item.remarks, fabricDetails ? `Fabric: ${fabricDetails}` : '']
+                  .filter(Boolean)
+                  .join(' | ') || null
               };
             }
             
             // Add item-specific attributes if it's a regular item
             if (itemType === 'item' && bomItem?.item_attributes) {
-              // Store item details in notes field since additional columns don't exist
               const itemDetails = [
                 bomItem.item_attributes.description,
                 bomItem.item_attributes.size,
-                bomItem.item_attributes.color,
+                colorFields.item_color || bomItem.item_attributes.color,
                 bomItem.item_attributes.material
               ].filter(Boolean).join(' | ');
               
               return {
                 ...baseItem,
-                notes: (item.remarks || '') + (itemDetails ? ` | ${itemDetails}` : '')
+                notes: [item.remarks, itemDetails].filter(Boolean).join(' | ') || null
               };
             }
             
@@ -351,6 +359,7 @@ export function BomToPOWizard({
           {currentStep === 3 && (
             <POReviewStep
               poGroups={poGroups}
+              bomItems={bomItems}
               onEdit={() => goToStep(2)}
               onCreatePOs={handleCreatePOs}
               isCreating={isCreating}

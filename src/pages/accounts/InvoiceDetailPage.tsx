@@ -20,6 +20,10 @@ import {
 } from '@/components/accounts/OrderSummaryPrintLine';
 import { usePrintDocumentTitle } from '@/hooks/usePrintDocumentTitle';
 import {
+  generateInvoiceNumber,
+  insertInvoiceWithGeneratedNumber,
+} from '@/lib/generateInvoiceNumber';
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -108,29 +112,6 @@ export default function InvoiceDetailPage() {
   useEffect(() => {
     if (id) fetchData(id);
   }, [id]);
-
-  const getFinancialYear = (date: Date) => {
-    const startYear = date.getMonth() < 3 ? date.getFullYear() - 1 : date.getFullYear();
-    const endYearShort = String(startYear + 1).slice(-2);
-    return `${startYear}-${endYearShort}`;
-  };
-
-  const generateInvoiceNumber = async () => {
-    const fy = getFinancialYear(new Date());
-    const prefix = `TUC/${fy}/TI/`;
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('invoice_number')
-      .eq('is_deleted', false)
-      .ilike('invoice_number', `${prefix}%`)
-      .order('created_at', { ascending: false })
-      .limit(1);
-    if (error) throw error;
-    const last = data?.[0]?.invoice_number as string | undefined;
-    const match = last?.match(/\/(\d{1,})$/);
-    const next = match ? Number.parseInt(match[1], 10) + 1 : 1;
-    return `${prefix}${String(next).padStart(4, '0')}`;
-  };
 
   const fetchData = async (id: string) => {
     try {
@@ -375,26 +356,27 @@ export default function InvoiceDetailPage() {
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + 30);
 
-      // Create invoice
-      const { data: invoiceData, error: invoiceError } = await supabase
-        .from('invoices')
-        .insert({
-          invoice_number: invoiceNumber,
+      const invoiceDate = new Date().toISOString().split('T')[0];
+      const dueDateStr = dueDate.toISOString().split('T')[0];
+      const taxAmount = (order.final_amount * (order.gst_rate || 18)) / 100;
+
+      const { data: invoiceData, error: invoiceError } = await insertInvoiceWithGeneratedNumber(
+        (nextInvoiceNumber) => ({
+          invoice_number: nextInvoiceNumber,
           order_id: order.id,
           customer_id: customer.id,
-          invoice_date: new Date().toISOString().split('T')[0],
-          due_date: dueDate.toISOString().split('T')[0],
+          invoice_date: invoiceDate,
+          due_date: dueDateStr,
           subtotal: order.final_amount,
-          tax_amount: (order.final_amount * (order.gst_rate || 18)) / 100,
-          total_amount: order.final_amount + (order.final_amount * (order.gst_rate || 18)) / 100,
+          tax_amount: taxAmount,
+          total_amount: order.final_amount + taxAmount,
           status: 'draft',
           notes: `Invoice for dispatched order ${order.order_number}`,
           terms_and_conditions: 'Payment due within 30 days',
-        } as any)
-        .select()
-        .single();
+        })
+      );
 
-      if (invoiceError) {
+      if (invoiceError || !invoiceData) {
         console.error('Error creating invoice:', invoiceError);
         toast.error('Failed to create invoice');
         return;
@@ -496,10 +478,11 @@ export default function InvoiceDetailPage() {
 
         {/* Print View - Full width for A4 */}
         <div
+          id="invoice-print"
           ref={printRef}
-          className="bg-white p-8 w-full max-w-[210mm] mx-auto print:max-w-none print:w-full print:mx-0 print:m-0 print:px-[16mm] print:py-[12mm]"
+          className="invoice-print bg-white p-8 w-full max-w-[210mm] mx-auto print:max-w-none print:w-full print:mx-0 print:m-0 print:px-[16mm] print:py-[12mm]"
         >
-          <div className="w-full max-w-4xl mx-auto print:max-w-none print:mx-0 print:w-full print:p-0">
+          <div className="invoice-print-content w-full max-w-4xl mx-auto print:max-w-none print:mx-0 print:w-full print:p-0">
                 {/* Company Header - Compact left-aligned */}
                 <div className="flex items-start gap-3 mb-3 pb-2 border-b-2 border-gray-300">
                   {/* Company Logo */}

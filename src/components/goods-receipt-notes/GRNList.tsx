@@ -27,16 +27,20 @@ type GRN = {
   total_items_approved: number;
   total_items_rejected: number;
   created_at: string;
+  line_quality_statuses?: string[];
   // Joined data
   po_number?: string;
   supplier_name?: string;
   supplier_code?: string;
 };
 
-const GRN_COMPLETED_STATUSES = new Set<GRN['status']>(['approved', 'rejected']);
+import { isGrnWorkflowComplete } from '@/utils/grnStatus';
 
-export function isGrnListCompleted(status: GRN['status']): boolean {
-  return GRN_COMPLETED_STATUSES.has(status);
+export function isGrnListCompleted(
+  status: GRN['status'],
+  lines?: Array<{ quality_status?: string | null }>
+): boolean {
+  return isGrnWorkflowComplete(status, lines);
 }
 
 // Memoized row component for better performance
@@ -176,7 +180,8 @@ const GRNList = memo(function GRNList() {
         .select(`
           *,
           purchase_orders!grn_master_po_id_fkey(po_number),
-          supplier_master!grn_master_supplier_id_fkey(supplier_name, supplier_code)
+          supplier_master!grn_master_supplier_id_fkey(supplier_name, supplier_code),
+          grn_items(quality_status)
         `)
         .order('created_at', { ascending: false });
       
@@ -184,6 +189,7 @@ const GRNList = memo(function GRNList() {
 
       // Process the joined data
       const processedGRNs: GRN[] = (grnData || []).map((grn: any) => {
+        const lineRows = (grn.grn_items || []) as Array<{ quality_status?: string | null }>;
         return {
           id: grn.id,
           grn_number: grn.grn_number,
@@ -196,6 +202,7 @@ const GRNList = memo(function GRNList() {
           total_items_approved: grn.total_items_approved || 0,
           total_items_rejected: grn.total_items_rejected || 0,
           created_at: grn.created_at,
+          line_quality_statuses: lineRows.map((r) => String(r?.quality_status || '')),
           po_number: grn.purchase_orders?.po_number,
           supplier_name: grn.supplier_master?.supplier_name,
           supplier_code: grn.supplier_master?.supplier_code
@@ -218,11 +225,23 @@ const GRNList = memo(function GRNList() {
     filterValue.trim() === '' || String(value ?? '').toLowerCase().includes(filterValue.trim().toLowerCase());
 
   const pendingGRNs = useMemo(
-    () => grns.filter((grn) => !isGrnListCompleted(grn.status)),
+    () =>
+      grns.filter((grn) =>
+        !isGrnListCompleted(
+          grn.status,
+          (grn.line_quality_statuses || []).map((s) => ({ quality_status: s }))
+        )
+      ),
     [grns]
   );
   const completedGRNs = useMemo(
-    () => grns.filter((grn) => isGrnListCompleted(grn.status)),
+    () =>
+      grns.filter((grn) =>
+        isGrnListCompleted(
+          grn.status,
+          (grn.line_quality_statuses || []).map((s) => ({ quality_status: s }))
+        )
+      ),
     [grns]
   );
 

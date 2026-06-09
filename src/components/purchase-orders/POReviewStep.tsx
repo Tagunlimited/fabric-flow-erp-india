@@ -12,9 +12,12 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { POGroup } from '@/hooks/useBomPOWizard';
+import { BomItemOrderStatus } from '@/services/bomPOTracking';
+import { resolvePoLineColor } from '@/utils/purchaseOrderColor';
 
 interface POReviewStepProps {
   poGroups: POGroup[];
+  bomItems?: BomItemOrderStatus[];
   onEdit: () => void;
   onCreatePOs: () => void;
   isCreating: boolean;
@@ -23,12 +26,28 @@ interface POReviewStepProps {
 
 export function POReviewStep({
   poGroups,
+  bomItems = [],
   onEdit,
   onCreatePOs,
   isCreating,
   errors
 }: POReviewStepProps) {
   const totalItems = poGroups.reduce((sum, group) => sum + group.items.length, 0);
+  const bomItemById = new Map(bomItems.map((row) => [row.bom_item_id, row]));
+
+  const colorForAssignment = (bomItemId: string): string => {
+    const bomItem = bomItemById.get(bomItemId);
+    if (!bomItem) return '—';
+    return resolvePoLineColor(
+      {
+        item_type: bomItem.category === 'Fabric' ? 'fabric' : 'item',
+        selected_colors: bomItem.selected_colors,
+        fabric_color: bomItem.fabric_color,
+        item_color: bomItem.item_attributes?.color,
+      },
+      bomItem.item_attributes?.color
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -139,6 +158,7 @@ export function POReviewStep({
                       <thead>
                         <tr className="border-b">
                           <th className="text-left py-2 font-medium">Item</th>
+                          <th className="text-left py-2 font-medium">Color</th>
                           <th className="text-right py-2 font-medium">Quantity</th>
                         </tr>
                       </thead>
@@ -154,6 +174,9 @@ export function POReviewStep({
                                   </p>
                                 )}
                               </div>
+                            </td>
+                            <td className="py-3 text-sm text-muted-foreground">
+                              {colorForAssignment(item.bomItemId)}
                             </td>
                             <td className="py-3 text-right">
                               <Badge variant="outline">{item.quantity}</Badge>

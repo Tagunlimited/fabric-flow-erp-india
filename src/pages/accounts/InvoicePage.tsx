@@ -23,6 +23,7 @@ import { Input } from '@/components/ui/input';
 import '../OrdersPageViewSwitch.css';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 import { cn } from '@/lib/utils';
+import { insertInvoiceWithGeneratedNumber } from '@/lib/generateInvoiceNumber';
 import { Filter } from 'lucide-react';
 import { measureAsync } from '@/lib/perf';
 
@@ -369,30 +370,6 @@ export default function InvoicePage() {
     }
   };
 
-  const getFinancialYear = (date: Date) => {
-    const startYear = date.getMonth() < 3 ? date.getFullYear() - 1 : date.getFullYear();
-    const endYearShort = String(startYear + 1).slice(-2);
-    return `${startYear}-${endYearShort}`;
-  };
-
-  const generateInvoiceNumber = async () => {
-    const fy = getFinancialYear(new Date());
-    const prefix = `TUC/${fy}/TI/`;
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('invoice_number')
-      .eq('is_deleted', false)
-      .ilike('invoice_number', `${prefix}%`)
-      .order('created_at', { ascending: false })
-      .limit(1);
-
-    if (error) throw error;
-    const last = data?.[0]?.invoice_number as string | undefined;
-    const match = last?.match(/\/(\d{1,})$/);
-    const next = match ? Number.parseInt(match[1], 10) + 1 : 1;
-    return `${prefix}${String(next).padStart(4, '0')}`;
-  };
-
   const handleCreateInvoice = async (order: Order) => {
     try {
       setCreatingInvoice(order.id);
@@ -401,29 +378,27 @@ export default function InvoicePage() {
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + 30);
 
-      // Generate invoice number: TUC/YYYY-YY/TI/0001
-      const invoiceNumber = await generateInvoiceNumber();
+      const invoiceDate = new Date().toISOString().split('T')[0];
+      const dueDateStr = dueDate.toISOString().split('T')[0];
+      const taxAmount = (order.final_amount * 18) / 100;
 
-      // Create invoice
-      const { data: invoiceData, error: invoiceError } = await supabase
-        .from('invoices')
-        .insert({
+      const { data: invoiceData, error: invoiceError } = await insertInvoiceWithGeneratedNumber(
+        (invoiceNumber) => ({
           invoice_number: invoiceNumber,
           order_id: order.id,
           customer_id: order.customer_id,
-          invoice_date: new Date().toISOString().split('T')[0],
-          due_date: dueDate.toISOString().split('T')[0],
+          invoice_date: invoiceDate,
+          due_date: dueDateStr,
           subtotal: order.final_amount,
-          tax_amount: (order.final_amount * 18) / 100, // Default 18% tax
-          total_amount: order.final_amount + (order.final_amount * 18) / 100,
+          tax_amount: taxAmount,
+          total_amount: order.final_amount + taxAmount,
           status: 'draft',
           notes: `Invoice for dispatched order ${order.order_number}`,
           terms_and_conditions: 'Payment due within 30 days',
-        } as any)
-        .select()
-        .single();
+        })
+      );
 
-      if (invoiceError) {
+      if (invoiceError || !invoiceData) {
         console.error('Error creating invoice:', invoiceError);
         toast.error('Failed to create invoice');
         return;

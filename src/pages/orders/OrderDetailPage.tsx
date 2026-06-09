@@ -2883,16 +2883,28 @@ export default function OrderDetailPage() {
                 Create Receipt
               </Button>
 
-              {order.status === 'pending_flow_assignment' && (
-                <Button
-                  variant="default"
-                  onClick={() =>
-                    navigate(`/procurement/order-flow-assignment?orderId=${encodeURIComponent(order.id)}`)
-                  }
-                >
-                  Assign line flows
-                </Button>
-              )}
+              {company?.require_order_flow_assignment &&
+                (order.status === 'pending_flow_assignment' ||
+                  (orderItems.length > 0 &&
+                    orderItems.every((item) => item.execution_flow) &&
+                    !orderItems.some(
+                      (item) => item.fulfillment_status === 'pending_flow' || !item.execution_flow
+                    ))) && (
+                  <Button
+                    variant="default"
+                    onClick={() =>
+                      navigate(
+                        `/procurement/order-flow-assignment?orderId=${encodeURIComponent(order.id)}${
+                          order.status === 'pending_flow_assignment' ? '' : '&tab=assigned'
+                        }`
+                      )
+                    }
+                  >
+                    {order.status === 'pending_flow_assignment'
+                      ? 'Assign line flows'
+                      : 'View / re-assign line flows'}
+                  </Button>
+                )}
               
               {order.status !== 'completed' && order.status !== 'cancelled' && (
                 <Button 

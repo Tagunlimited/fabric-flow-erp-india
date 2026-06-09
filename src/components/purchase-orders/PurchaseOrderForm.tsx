@@ -23,6 +23,11 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { PendingItem, PendingItemGroup, getPendingItemPlaceholder, usePendingPoItems } from '@/hooks/usePendingPoItems';
 import { normalizeSelectedColors, selectedColorsDisplayText, type BomSelectedColor } from '@/utils/bomSelectedColors';
 import {
+  poLineColorPayload,
+  resolvePoLineColor,
+  resolvePoLineScalarColor,
+} from '@/utils/purchaseOrderColor';
+import {
   getBomLinePoQuantity,
   remainingQtyForNewPurchaseOrderLine,
 } from '@/components/purchase-orders/bomOrderLineUtils';
@@ -33,6 +38,10 @@ import {
 } from '@/components/purchase-orders/bomInventoryAllocation';
 import { BomAllocateStockDialog } from '@/components/purchase-orders/BomAllocateStockDialog';
 import { getBomItemOrderStatus } from '@/services/bomPOTracking';
+import {
+  purchaseOrderLineItemDisplayName,
+  resolveFabricForSupplierName,
+} from '@/utils/poFabricDisplay';
 
 type CompanySettings = {
   company_name: string;
@@ -581,6 +590,19 @@ export function PurchaseOrderForm() {
     return map;
   }, [itemOptions]);
 
+  const lineColorDisplay = useCallback(
+    (line: {
+      item_type?: string | null;
+      item_id?: string | null;
+      selected_colors?: unknown;
+      fabric_color?: string | null;
+      item_color?: string | null;
+      notes?: string | null;
+    }) =>
+      resolvePoLineColor(line, line.item_id ? itemColorMap.get(line.item_id) || null : null),
+    [itemColorMap]
+  );
+
   const manualItems = useMemo(() => items.filter(item => !item.bom_item_id), [items]);
   const manualFabricItems = useMemo(
     () => manualItems.filter(item => item.item_type === 'fabric'),
@@ -635,6 +657,7 @@ export function PurchaseOrderForm() {
         item.bom_item_id != null && String(item.bom_item_id).trim() !== ''
           ? String(item.bom_item_id)
           : '';
+      const masterColor = item.item_id ? itemColorMap.get(item.item_id) || null : null;
       // BOM-backed lines must not merge: same fabric on two BOMs would otherwise sum quantities (wrong).
       const identityKey = bomItemId
         ? ['bom_item', bomItemId].join('|')
@@ -650,10 +673,31 @@ export function PurchaseOrderForm() {
           : [
               'item',
               norm(item.item_id || item.item_name),
+              norm(
+                resolvePoLineScalarColor(
+                  {
+                    item_type: item.item_type,
+                    selected_colors: item.selected_colors,
+                    fabric_color: item.fabric_color,
+                    item_color: item.item_color,
+                    notes: item.notes,
+                  },
+                  masterColor
+                )
+              ),
               norm(unit)
             ].join('|');
 
-      const resolvedColor = item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null);
+      const colorFields = poLineColorPayload(
+        {
+          item_type: item.item_type,
+          selected_colors: item.selected_colors,
+          fabric_color: item.fabric_color,
+          item_color: item.item_color,
+          notes: item.notes,
+        },
+        masterColor
+      );
       const existing = grouped.get(identityKey);
       if (existing) {
         existing.total_quantity += qty;
@@ -663,17 +707,18 @@ export function PurchaseOrderForm() {
         if (item.notes) {
           existing.remarks.add(item.notes);
         }
-        if (!existing.item_color && resolvedColor) {
-          existing.item_color = resolvedColor;
+        if (!existing.item_color && colorFields.item_color) {
+          existing.item_color = colorFields.item_color;
         }
-        if (!existing.fabric_color && item.fabric_color) {
-          existing.fabric_color = item.fabric_color;
+        if (!existing.fabric_color && colorFields.fabric_color) {
+          existing.fabric_color = colorFields.fabric_color;
         }
-        if ((!existing.selected_colors || existing.selected_colors.length === 0) && item.selected_colors) {
-          existing.selected_colors = normalizeSelectedColors(item.selected_colors);
+        if ((!existing.selected_colors || existing.selected_colors.length === 0) && colorFields.selected_colors.length > 0) {
+          existing.selected_colors = colorFields.selected_colors;
         }
-        if (!existing.fabric_for_supplier && item.fabric_for_supplier) {
-          existing.fabric_for_supplier = item.fabric_for_supplier;
+        const resolvedSupplier = resolveFabricForSupplierName(item, fabricOptions);
+        if (!existing.fabric_for_supplier && (item.fabric_for_supplier || resolvedSupplier)) {
+          existing.fabric_for_supplier = item.fabric_for_supplier || resolvedSupplier;
         }
         if (!existing.item_id && item.item_id) {
           existing.item_id = item.item_id;
@@ -696,11 +741,12 @@ export function PurchaseOrderForm() {
           total_quantity: qty,
           item_image_url: item.item_image_url,
           fabric_name: item.fabric_name,
-          fabric_for_supplier: item.fabric_for_supplier || null,
-          fabric_color: item.fabric_color,
-          selected_colors: normalizeSelectedColors(item.selected_colors),
+          fabric_for_supplier:
+            item.fabric_for_supplier || resolveFabricForSupplierName(item, fabricOptions) || null,
+          fabric_color: colorFields.fabric_color || item.fabric_color,
+          selected_colors: colorFields.selected_colors,
           fabric_gsm: item.fabric_gsm,
-          item_color: resolvedColor,
+          item_color: colorFields.item_color,
           remarks: remarksSet
         });
       }
@@ -710,7 +756,7 @@ export function PurchaseOrderForm() {
       ...entry,
       remarks: Array.from(entry.remarks).filter(Boolean).join(' | ')
     }));
-  }, [items]);
+  }, [items, fabricOptions, itemColorMap]);
 
   useEffect(() => {
     if (pendingError) {
@@ -980,7 +1026,18 @@ export function PurchaseOrderForm() {
                           if (isFabric) {
                             const stockRow = poBomStockByItemId.get(item.bom_item_id);
                             const fabricLabel =
-                              item.fabric_for_supplier || item.fabric_name || item.item_name || '—';
+                              resolveFabricForSupplierName(
+                                {
+                                  item_type: 'fabric',
+                                  fabric_for_supplier: item.fabric_for_supplier,
+                                  fabric_id: item.fabric_id,
+                                  fabric_name: item.fabric_name,
+                                  fabric_color: item.fabric_color,
+                                  fabric_gsm: item.fabric_gsm,
+                                  item_name: item.item_name,
+                                },
+                                fabricOptions
+                              ) || '—';
                             const canAllocateFabric =
                               !!stockRow &&
                               stockRow.remainingToPurchase > 0 &&
@@ -1005,10 +1062,14 @@ export function PurchaseOrderForm() {
                                   />
                                 </TableCell>
                                 <TableCell className="font-medium">
-                                  {item.fabric_for_supplier || item.fabric_name || item.item_name || 'N/A'}
+                                  {fabricLabel}
                                 </TableCell>
                                 <TableCell>
-                                  {selectedColorsDisplayText((item as any).selected_colors, item.fabric_color ?? 'N/A')}
+                                  {lineColorDisplay({
+                                    item_type: 'fabric',
+                                    selected_colors: (item as any).selected_colors,
+                                    fabric_color: item.fabric_color,
+                                  })}
                                 </TableCell>
                                 <TableCell>{item.fabric_gsm ? `${item.fabric_gsm} GSM` : 'N/A'}</TableCell>
                                 <TableCell className="text-right text-sm">
@@ -1119,10 +1180,12 @@ export function PurchaseOrderForm() {
                                 </div>
                               </TableCell>
                               <TableCell className="w-[10%]">
-                                {selectedColorsDisplayText(
-                                  (item as any).selected_colors,
-                                  item.fabric_color || item.item_color || '-'
-                                )}
+                                {lineColorDisplay({
+                                  item_type: item.item_type || 'item',
+                                  selected_colors: (item as any).selected_colors,
+                                  fabric_color: item.fabric_color,
+                                  item_color: item.item_color,
+                                })}
                               </TableCell>
                               <TableCell className="w-[8%] text-right whitespace-nowrap tabular-nums">
                                 {formatQuantity(item.qty_total)} {item.unit || ''}
@@ -1473,6 +1536,11 @@ export function PurchaseOrderForm() {
             originalImageUrl: item.item_image_url
           });
           
+          const selected_colors = normalizeSelectedColors((item as any).selected_colors);
+          const colorLabel = selected_colors
+            .map((c) => c.colorName?.trim())
+            .filter(Boolean)
+            .join(', ');
           return {
             item_type: 'item',
             item_id: item.item_id || '',
@@ -1484,7 +1552,8 @@ export function PurchaseOrderForm() {
             bom_qty_total: Number(item.qty_total ?? item.quantity ?? 0) || undefined,
             unit_of_measure: item.unit_of_measure || 'pcs',
             item_category: itemOption?.item_type || item.item_category || null,
-            selected_colors: normalizeSelectedColors((item as any).selected_colors),
+            selected_colors,
+            item_color: colorLabel || itemOption?.color || null,
             itemSelections: item.itemSelections || []
           };
         }
@@ -1569,6 +1638,11 @@ export function PurchaseOrderForm() {
         // Determine the best image URL to use
         const bestImageUrl = item.item_image_url || itemOption?.image_url || fabricOption?.image_url || null;
         
+        const normalizedColors = normalizeSelectedColors(item.selected_colors);
+        const colorFromSelection = normalizedColors
+          .map((c) => c.colorName?.trim())
+          .filter(Boolean)
+          .join(', ');
         return {
           ...item,
           // Ensure item_id is resolved from options if missing (prevents NOT NULL violations)
@@ -1576,7 +1650,13 @@ export function PurchaseOrderForm() {
           // Enrich with data from options if available and not already set
           item_image_url: bestImageUrl,
           item_category: item.item_category || itemOption?.item_type || itemOption?.type || 'Not specified',
-          item_color: item.item_color || itemOption?.color || null,
+          selected_colors:
+            normalizedColors.length > 0
+              ? normalizedColors
+              : item.item_color
+                ? [{ colorId: null, colorName: item.item_color, hex: null }]
+                : [],
+          item_color: item.item_color || colorFromSelection || itemOption?.color || null,
           // Also update fabric-specific fields if this is a fabric item
           ...(item.item_type === 'fabric' && {
             fabric_color: item.fabric_color || fabricOption?.color || 'N/A',
@@ -1703,6 +1783,7 @@ export function PurchaseOrderForm() {
       const aggregatedItems = aggregatedSelectedItems.length > 0 ? aggregatedSelectedItems : items.map(item => ({
         key: item.id || item.item_id || item.item_name,
         item_name: item.item_name,
+        fabric_name: item.fabric_name,
         remarks: [item.remarks, item.notes].filter(Boolean).join(' | '),
         item_type: item.item_type,
         item_id: item.item_id || null,
@@ -1710,7 +1791,7 @@ export function PurchaseOrderForm() {
         fabric_color: item.fabric_color,
         selected_colors: normalizeSelectedColors(item.selected_colors),
         fabric_gsm: item.fabric_gsm,
-        fabric_for_supplier: item.fabric_for_supplier || null,
+        fabric_for_supplier: item.fabric_for_supplier || resolveFabricForSupplierName(item, fabricOptions) || null,
         item_color: item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null),
         quantity: item.quantity,
         unit_of_measure: item.unit_of_measure
@@ -1720,17 +1801,14 @@ export function PurchaseOrderForm() {
         // Debug logging for fabric items
         console.log('PDF - Aggregated item data:', item);
         
-        // For fabric items, use fabric_for_supplier if available, otherwise use item_name
-        const displayName = item.item_type === 'fabric' && item.fabric_for_supplier 
-          ? item.fabric_for_supplier 
-          : (item.item_name || 'N/A');
+        const displayName = purchaseOrderLineItemDisplayName(item, fabricOptions);
         
         return `
         <tr>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
           <td>${displayName}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
-          <td>${selectedColorsDisplayText(item.selected_colors, item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A'))}</td>
+          <td>${lineColorDisplay({ ...item, notes: (item as { notes?: string }).notes || item.remarks })}</td>
           <td style="text-align: right;">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
           <td>${item.remarks || '-'}</td>
@@ -1903,6 +1981,7 @@ export function PurchaseOrderForm() {
       const aggregatedItems = aggregatedSelectedItems.length > 0 ? aggregatedSelectedItems : items.map(item => ({
         key: item.id || item.item_id || item.item_name,
         item_name: item.item_name,
+        fabric_name: item.fabric_name,
         remarks: [item.remarks, item.notes].filter(Boolean).join(' | '),
         item_type: item.item_type,
         item_id: item.item_id || null,
@@ -1910,7 +1989,7 @@ export function PurchaseOrderForm() {
         fabric_color: item.fabric_color,
         selected_colors: normalizeSelectedColors(item.selected_colors),
         fabric_gsm: item.fabric_gsm,
-        fabric_for_supplier: item.fabric_for_supplier || null,
+        fabric_for_supplier: item.fabric_for_supplier || resolveFabricForSupplierName(item, fabricOptions) || null,
         item_color: item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null),
         quantity: item.quantity,
         unit_of_measure: item.unit_of_measure
@@ -1920,17 +1999,14 @@ export function PurchaseOrderForm() {
         // Debug logging for fabric items
         console.log('Print - Aggregated item data:', item);
         
-        // For fabric items, use fabric_for_supplier if available, otherwise use item_name
-        const displayName = item.item_type === 'fabric' && item.fabric_for_supplier 
-          ? item.fabric_for_supplier 
-          : (item.item_name || 'N/A');
+        const displayName = purchaseOrderLineItemDisplayName(item, fabricOptions);
         
         return `
         <tr>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
           <td>${displayName}</td>
           <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
-          <td>${selectedColorsDisplayText(item.selected_colors, item.item_type === 'fabric' ? (item.fabric_color || 'N/A') : (item.item_color || 'N/A'))}</td>
+          <td>${lineColorDisplay({ ...item, notes: (item as { notes?: string }).notes || item.remarks })}</td>
           <td class="number-cell">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
           <td>${item.remarks || '-'}</td>
@@ -2446,9 +2522,13 @@ export function PurchaseOrderForm() {
       if (fabricItems.length > 0) {
         try {
           // Try to fetch by item_id first (if it exists and is a fabric_id)
-          const fabricIds = fabricItems
-            .map(item => item.item_id)
-            .filter(Boolean);
+          const fabricIds = [
+            ...new Set(
+              fabricItems.flatMap((item) =>
+                [(item as { fabric_id?: string | null }).fabric_id, item.item_id].filter(Boolean)
+              )
+            ),
+          ];
           
           if (fabricIds.length > 0) {
             const { data: fabricsDataById, error: fabricsErrorById } = await supabase
@@ -2510,17 +2590,85 @@ export function PurchaseOrderForm() {
         }
       }
 
+      const itemMasterColorMap = new Map<string, string>();
+      const itemIdsForColor = [
+        ...new Set(
+          (lineItems || [])
+            .filter((row) => row.item_type !== 'fabric' && row.item_id)
+            .map((row) => String(row.item_id))
+        ),
+      ];
+      if (itemIdsForColor.length > 0) {
+        try {
+          const { data: masterRows } = await supabase
+            .from('item_master')
+            .select('id, color')
+            .in('id', itemIdsForColor as any);
+          for (const row of masterRows || []) {
+            const color = (row as { color?: string | null }).color;
+            if (color?.trim()) itemMasterColorMap.set(String(row.id), color.trim());
+          }
+        } catch (masterColorError) {
+          console.warn('Failed to load item_master colors for PO', masterColorError);
+        }
+      }
+
+      const bomLineColorById = new Map<string, { selected_colors?: unknown; fabric_color?: string | null }>();
+      const bomItemIdsForColor = [
+        ...new Set(
+          (lineItems || [])
+            .map((row) => {
+              const tracking = trackingMap.get(row.id);
+              return tracking?.bom_item_id || (row as { bom_item_id?: string | null }).bom_item_id || null;
+            })
+            .filter(Boolean)
+            .map(String)
+        ),
+      ];
+      if (bomItemIdsForColor.length > 0) {
+        try {
+          const { data: bomLines } = await supabase
+            .from('bom_record_items')
+            .select('id, selected_colors, fabric_color')
+            .in('id', bomItemIdsForColor as any);
+          for (const row of bomLines || []) {
+            bomLineColorById.set(String((row as { id: string }).id), row as any);
+          }
+        } catch (bomColorError) {
+          console.warn('Failed to load BOM line colors for PO', bomColorError);
+        }
+      }
+
       const processedItems = (lineItems || []).map(item => {
         const tracking = trackingMap.get(item.id);
         const bomRecord = tracking?.bom_record_items;
+        const bomItemId = tracking?.bom_item_id || (item as { bom_item_id?: string | null }).bom_item_id;
+        const bomLine = bomItemId ? bomLineColorById.get(String(bomItemId)) : null;
+        const masterColor = item.item_id ? itemMasterColorMap.get(String(item.item_id)) || null : null;
+        const colorFields = poLineColorPayload(
+          {
+            item_type: item.item_type,
+            selected_colors:
+              (item as any).selected_colors ||
+              (bomRecord as any)?.selected_colors ||
+              bomLine?.selected_colors,
+            fabric_color: item.fabric_color || bomRecord?.fabric_color || bomLine?.fabric_color || null,
+            item_color: item.item_color || null,
+            notes: item.notes,
+          },
+          masterColor
+        );
         
         // Get fabric_for_supplier - try by item_id first, then by fabric details
         let fabricForSupplier = null;
         if (item.item_type === 'fabric') {
-          if (item.item_id && fabricForSupplierMap.has(item.item_id)) {
+          const fabricId = (item as { fabric_id?: string | null }).fabric_id || item.item_id;
+          if (fabricId && fabricForSupplierMap.has(fabricId)) {
+            fabricForSupplier = fabricForSupplierMap.get(fabricId);
+          } else if (item.item_id && fabricForSupplierMap.has(item.item_id)) {
             fabricForSupplier = fabricForSupplierMap.get(item.item_id);
           } else if (item.fabric_name) {
-            const key = `${item.fabric_name || ''}|${item.fabric_color || ''}|${item.fabric_gsm || ''}`;
+            const key = `${item.fabric_name || ''}|${colorFields.fabric_color || ''}|${item.fabric_gsm || ''}`;
             fabricForSupplier = fabricForSupplierMap.get(key) || null;
           }
         }
@@ -2531,10 +2679,10 @@ export function PurchaseOrderForm() {
           // Map fabric-specific fields from database or BOM linkage
           fabric_name: item.fabric_name || bomRecord?.fabric_name || null,
           fabric_for_supplier: fabricForSupplier || null,
-          fabric_color: item.fabric_color || bomRecord?.fabric_color || null,
-          selected_colors: normalizeSelectedColors((item as any).selected_colors || (bomRecord as any)?.selected_colors),
+          fabric_color: colorFields.fabric_color,
+          selected_colors: colorFields.selected_colors,
           fabric_gsm: item.fabric_gsm || bomRecord?.fabric_gsm || null,
-          item_color: item.item_color || null,
+          item_color: colorFields.item_color,
           item_image_url: item.item_image_url || bomRecord?.item_image_url || null,
           // Ensure proper field mapping
           type: item.item_type || 'item',
@@ -2769,26 +2917,42 @@ export function PurchaseOrderForm() {
       }
 
       // Insert line items
-      const lineItemsData = itemsWithTotals.map(item => ({
+      const lineItemsData = itemsWithTotals.map(item => {
+        const supplierFabricName =
+          item.item_type === 'fabric'
+            ? resolveFabricForSupplierName(item, fabricOptions)
+            : null;
+        const masterColor = item.item_id ? itemColorMap.get(item.item_id) || null : null;
+        const colorFields = poLineColorPayload(item, masterColor);
+        return {
         po_id: poId, // Changed from purchase_order_id to po_id
         item_type: item.type || item.item_type || 'item', // Use correct field name with fallback
         item_id: item.item_id || null,
-        item_name: item.item_name,
+        item_name:
+          item.item_type === 'fabric' && supplierFabricName
+            ? supplierFabricName
+            : item.item_name,
         item_image_url: item.item_image_url,
         quantity: item.quantity,
         unit_of_measure: item.unit_of_measure,
         remarks: item.remarks,
         sales_order_item_id: item.sales_order_item_id || null,
-        selected_colors: normalizeSelectedColors(item.selected_colors),
+        selected_colors: colorFields.selected_colors,
+        item_color: colorFields.item_color,
         // Add fabric-specific fields for fabric items
         ...(item.item_type === 'fabric' && {
           fabric_name: item.fabric_name || null,
-          fabric_color: item.fabric_color || null,
+          fabric_color: colorFields.fabric_color,
           fabric_gsm: item.fabric_gsm || null,
           // Only set fabric_id when it exists in `fabrics`; otherwise keep null.
-          fabric_id: item.item_id && validFabricIds.has(String(item.item_id)) ? item.item_id : null
+          fabric_id:
+            (item.fabric_id && validFabricIds.has(String(item.fabric_id))
+              ? item.fabric_id
+              : null) ||
+            (item.item_id && validFabricIds.has(String(item.item_id)) ? item.item_id : null)
         })
-      }));
+      };
+      });
 
       console.log('Line items data being saved:', lineItemsData);
       console.log('First item type:', lineItemsData[0]?.item_type);
@@ -2815,6 +2979,11 @@ export function PurchaseOrderForm() {
             .select('id');
           insertedItems = retryRes.data;
           itemsError = retryRes.error;
+          if (!itemsError) {
+            toast.warning(
+              'PO colors migration is missing in database. Run migration 20260426201000_add_selected_colors_to_po_and_grn_items.sql — item colors were not saved.'
+            );
+          }
         }
       }
 
@@ -2850,6 +3019,14 @@ export function PurchaseOrderForm() {
         if (trackingInsertError) throw trackingInsertError;
       }
 
+      setItems((prev) =>
+        prev.map((item) => {
+          if (item.item_type !== 'fabric') return item;
+          const supplierName = resolveFabricForSupplierName(item, fabricOptions);
+          if (!supplierName) return item;
+          return { ...item, fabric_for_supplier: supplierName, item_name: supplierName };
+        })
+      );
       setPo(prev => ({ ...prev, id: poId || undefined, po_number: poNumber }));
       setSavedPoNumber(poNumber || '');
       setPostSaveDialogOpen(true);
@@ -2910,12 +3087,14 @@ export function PurchaseOrderForm() {
                       <div className="col-span-4">
                         <Label className="text-sm font-medium">Fabric (for supplier)</Label>
                         <div className="text-sm font-medium">
-                          {it.fabric_for_supplier || it.fabric_name || it.item_name || 'N/A'}
+                          {purchaseOrderLineItemDisplayName(it, fabricOptions)}
                         </div>
                       </div>
                       <div className="col-span-2">
                         <Label className="text-sm font-medium">Color</Label>
-                        <div className="text-sm">{it.fabric_color || 'N/A'}</div>
+                        <div className="text-sm">
+                          {resolvePoLineColor(it, it.item_id ? itemColorMap.get(it.item_id) || null : null)}
+                        </div>
                       </div>
                       <div className="col-span-2">
                         <Label className="text-sm font-medium">GSM</Label>
@@ -3416,28 +3595,24 @@ export function PurchaseOrderForm() {
                         ) : null}
                         <div>
                           <div className="text-lg font-semibold">
-                            {item.item_type?.toLowerCase() === 'fabric' && item.fabric_for_supplier
-                              ? item.fabric_for_supplier
-                              : item.item_name}
+                            {purchaseOrderLineItemDisplayName(item, fabricOptions)}
                           </div>
                           <div className="text-xs uppercase tracking-wide text-muted-foreground">
                             {item.item_type}
                           </div>
-                          {item.item_type?.toLowerCase() === 'fabric' ? (
+                          {lineColorDisplay({ ...item, notes: (item as { notes?: string }).notes || item.remarks }) !== 'N/A' ? (
                             <div className="text-xs text-muted-foreground">
                               {[
-                                selectedColorsDisplayText(item.selected_colors, item.fabric_color),
-                                item.fabric_gsm ? `${item.fabric_gsm} GSM` : null,
+                                lineColorDisplay({
+                                  ...item,
+                                  notes: (item as { notes?: string }).notes || item.remarks,
+                                }),
+                                item.item_type?.toLowerCase() === 'fabric' && item.fabric_gsm
+                                  ? `${item.fabric_gsm} GSM`
+                                  : null,
                               ]
                                 .filter(Boolean)
                                 .join(' • ')}
-                            </div>
-                          ) : (selectedColorsDisplayText(item.selected_colors, item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null) || '').trim() !== 'N/A') ? (
-                            <div className="text-xs text-muted-foreground">
-                              {selectedColorsDisplayText(
-                                item.selected_colors,
-                                item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null) || ''
-                              )}
                             </div>
                           ) : null}
                         </div>

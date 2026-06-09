@@ -31,7 +31,15 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn, formatLocaleDateFromApi } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
 import { getOrderItemListThumbnailUrl } from '@/utils/orderItemImageUtils';
+import {
+  isLineAwaitingAssignment,
+  isLineReassignable,
+  reassignBlockMessage,
+} from '@/domain/fulfillment/reassign';
+import type { AssignOrderItemFlowsMode } from '@/api/fulfillment/assignFlows';
 
 type QueueRow = {
   order_id: string;
@@ -46,8 +54,14 @@ type QueueRow = {
   customer_id: string | null;
   customer_name: string | null;
   line_count: number | null;
-  pending_line_count: number | null;
+  pending_line_count?: number | null;
+  assigned_line_count?: number | null;
+  flow_summary?: string | null;
+  can_reassign?: boolean | null;
+  reassign_block_reason?: string | null;
 };
+
+type QueueTab = 'awaiting' | 'assigned';
 
 type QueueOrderPreview = {
   imageUrl: string | null;
@@ -114,17 +128,9 @@ function summarizeOrderLineForQueue(
     'Line item';
   const fabric = String(line.fabric?.fabric_name || '').trim();
 
-  const sizeLabels: string[] = [];
-  const sizesQuantities =
-    (line.sizes_quantities as Record<string, unknown> | undefined) ||
-    (specs.sizes_quantities as Record<string, unknown> | undefined);
-  if (sizesQuantities && typeof sizesQuantities === 'object') {
-    for (const [k, v] of Object.entries(sizesQuantities)) {
-      if (Number(v) > 0) sizeLabels.push(k);
-    }
-  }
-  const explicitSize = String(specs.size || '').trim();
-  if (explicitSize) sizeLabels.push(explicitSize);
+  const sizeLabels = getOrderLineSizeRows(specs, line.quantity, line.sizes_quantities)
+    .filter((r) => r.qty > 0)
+    .map((r) => r.size);
   return { imageUrl, product, fabric, sizeLabels };
 }
 
@@ -136,9 +142,6 @@ type SizeTypeRow = {
   size_order?: Record<string, number>;
 };
 
-function isLineAwaitingAssignment(line: OrderLine): boolean {
-  return line.fulfillment_status === 'pending_flow' || !line.execution_flow;
-}
 const ORDER_NUMBER_PATTERN = /^(TUC|RMO)\/\d{2}-\d{2}\/\d+$/;
 const FLOW_CARD_META: Record<
   ExecutionFlow,
@@ -343,13 +346,348 @@ async function fetchPendingFlowQueueFallback(): Promise<QueueRow[]> {
   return rows;
 }
 
+function isAssignedFlowViewMissing(e: unknown): boolean {
+  const err = e as { code?: string; message?: string; status?: number; statusCode?: number; details?: string } | null;
+  const status = (err as { status?: number; statusCode?: number })?.status ?? (err as { statusCode?: number })?.statusCode;
+  if (status === 404) return true;
+  const blob = `${String(err?.message || '')} ${String(err?.details || '')}`.toLowerCase();
+  if (err?.code === '42P01' || err?.code === 'PGRST205') return true;
+  if (blob.includes('v_orders_flow_assigned')) {
+    return (
+      blob.includes('schema cache') ||
+      blob.includes('does not exist') ||
+      blob.includes('could not find') ||
+      blob.includes('not found')
+    );
+  }
+  const msg = String(err?.message || '').trim();
+  if (status === 404 && (msg === '' || /^not found\.?$/i.test(msg))) return true;
+  return false;
+}
+
+function flowSummaryFromLines(lines: { execution_flow?: string | null }[]): string {
+  const counts = new Map<string, number>();
+  for (const l of lines) {
+    const f = String(l.execution_flow || '').trim();
+    if (!f) continue;
+    counts.set(f, (counts.get(f) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([f, n]) => `${f}: ${n}`)
+    .join(', ');
+}
+
+async function fetchAssignedFlowQueueFallback(): Promise<QueueRow[]> {
+  const { data: cs, error: csErr } = await supabase
+    .from('company_settings')
+    .select('require_order_flow_assignment')
+    .limit(1)
+    .maybeSingle();
+  if (csErr || !(cs as { require_order_flow_assignment?: boolean })?.require_order_flow_assignment) {
+    return [];
+  }
+
+  const { data: orders, error: oErr } = await supabase
+    .from('orders')
+    .select(
+      'id, order_number, order_date, expected_delivery_date, order_type, status, sales_manager, final_amount, balance_amount, customer_id, is_deleted, customer:customers(company_name)'
+    )
+    .not('status', 'eq', 'cancelled');
+  if (oErr || !orders?.length) return [];
+
+  const openOrders = (orders as any[]).filter((o) => !o?.is_deleted);
+  if (!openOrders.length) return [];
+
+  const byId = new Set<string>();
+  for (const batch of chunkArray(
+    openOrders.map((o) => o.id as string),
+    80
+  )) {
+    const { data: rec } = await supabase
+      .from('receipts')
+      .select('reference_id, reference_type')
+      .in('reference_id', batch);
+    for (const r of rec || []) {
+      const row = r as { reference_id?: string; reference_type?: string | null };
+      if (row.reference_id && String(row.reference_type || '').toLowerCase() === 'order') {
+        byId.add(String(row.reference_id));
+      }
+    }
+  }
+
+  const distinctNumbers = [
+    ...new Set(
+      openOrders
+        .map((o) => o.order_number)
+        .filter((n): n is string => Boolean(n && ORDER_NUMBER_PATTERN.test(String(n))))
+    ),
+  ];
+  const byNumber = new Set<string>();
+  for (const batch of chunkArray(distinctNumbers, 80)) {
+    if (!batch.length) continue;
+    const { data: rec } = await supabase
+      .from('receipts')
+      .select('reference_number')
+      .is('reference_id', null)
+      .eq('reference_type', 'order')
+      .in('reference_number', batch);
+    for (const r of rec || []) {
+      const n = (r as { reference_number?: string }).reference_number;
+      if (n) byNumber.add(String(n));
+    }
+  }
+
+  const withReceipt = openOrders.filter(
+    (o) => byId.has(String(o.id)) || (o.order_number && byNumber.has(String(o.order_number)))
+  );
+  if (!withReceipt.length) return [];
+
+  const orderIds = withReceipt.map((o) => String(o.id));
+  const { data: lineRows } = await supabase
+    .from('order_items')
+    .select('order_id, execution_flow, fulfillment_status')
+    .in('order_id', orderIds);
+
+  const linesByOrder = new Map<string, { execution_flow?: string | null; fulfillment_status?: string | null }[]>();
+  for (const row of lineRows || []) {
+    const oid = String((row as { order_id: string }).order_id);
+    const list = linesByOrder.get(oid) || [];
+    list.push(row as { execution_flow?: string | null; fulfillment_status?: string | null });
+    linesByOrder.set(oid, list);
+  }
+
+  const { data: bomRows } = await supabase.from('bom_records').select('order_id').in('order_id', orderIds);
+  const ordersWithBom = new Set((bomRows || []).map((r: any) => String(r.order_id)));
+
+  const { data: poRows } = await supabase.from('purchase_orders').select('sales_order_id').in('sales_order_id', orderIds);
+  const ordersWithPo = new Set((poRows || []).map((r: any) => String(r.sales_order_id)).filter(Boolean));
+
+  const rows: QueueRow[] = [];
+  for (const o of withReceipt) {
+    const oid = String(o.id);
+    const lines = linesByOrder.get(oid) || [];
+    if (!lines.length) continue;
+    const hasPending = lines.some(
+      (l) => l.fulfillment_status === 'pending_flow' || !l.execution_flow
+    );
+    const assignedCount = lines.filter((l) => l.execution_flow).length;
+    if (hasPending || assignedCount === 0) continue;
+
+    const allFlowAssigned = lines.every((l) => l.fulfillment_status === 'flow_assigned');
+    let canReassign = allFlowAssigned && !ordersWithBom.has(oid) && !ordersWithPo.has(oid);
+    let blockReason: string | null = null;
+    if (!allFlowAssigned) {
+      blockReason = 'One or more lines are not in flow_assigned state';
+      canReassign = false;
+    } else if (ordersWithBom.has(oid)) {
+      blockReason = 'BOM already created for this order';
+      canReassign = false;
+    } else if (ordersWithPo.has(oid)) {
+      blockReason = 'Purchase order already linked to this order';
+      canReassign = false;
+    }
+
+    rows.push({
+      order_id: o.id,
+      order_number: o.order_number,
+      order_date: o.order_date ?? null,
+      expected_delivery_date: o.expected_delivery_date ?? null,
+      order_type: o.order_type ?? null,
+      order_status: o.status ?? null,
+      sales_manager: o.sales_manager ?? null,
+      final_amount: o.final_amount ?? null,
+      balance_amount: o.balance_amount ?? null,
+      customer_id: o.customer_id ?? null,
+      customer_name: o.customer?.company_name ?? null,
+      line_count: lines.length,
+      assigned_line_count: assignedCount,
+      flow_summary: flowSummaryFromLines(lines),
+      can_reassign: canReassign,
+      reassign_block_reason: blockReason,
+    });
+  }
+
+  rows.sort((a, b) => {
+    const ta = new Date(a.order_date || 0).getTime();
+    const tb = new Date(b.order_date || 0).getTime();
+    return tb - ta;
+  });
+  return rows;
+}
+
+type OrderFlowQueueTableProps = {
+  rows: QueueRow[];
+  variant: QueueTab;
+  selectedOrderId: string | null;
+  onSelect: (orderId: string) => void;
+  queuePreviewByOrderId: Record<string, QueueOrderPreview>;
+  salesManagers: Record<string, SalesManager>;
+};
+
+function OrderFlowQueueTable({
+  rows,
+  variant,
+  selectedOrderId,
+  onSelect,
+  queuePreviewByOrderId,
+  salesManagers,
+}: OrderFlowQueueTableProps) {
+  return (
+    <div className="overflow-x-auto">
+      <Table className="min-w-[720px]">
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="align-middle min-w-[6.5rem]">
+              <span className="text-xs font-semibold">Order #</span>
+            </TableHead>
+            <TableHead className="align-middle min-w-[7rem]">
+              <span className="text-xs font-semibold">Reference</span>
+            </TableHead>
+            <TableHead className="align-middle min-w-[10rem]">
+              <span className="text-xs font-semibold">Products</span>
+            </TableHead>
+            <TableHead className="align-middle min-w-[10rem]">
+              <span className="text-xs font-semibold">Fabric</span>
+            </TableHead>
+            <TableHead className="align-middle min-w-[8rem]">
+              <span className="text-xs font-semibold">Size</span>
+            </TableHead>
+            <TableHead className="align-middle min-w-[7rem]">
+              <span className="text-xs font-semibold">Sales Mgr.</span>
+            </TableHead>
+            <TableHead className="align-middle min-w-[6.5rem]">
+              <span className="text-xs font-semibold">Order date</span>
+            </TableHead>
+            <TableHead className="align-middle min-w-[6.5rem]">
+              <span className="text-xs font-semibold">Exp. delivery</span>
+            </TableHead>
+            <TableHead className="align-middle min-w-[14rem] w-56 text-left">
+              <span className="text-xs font-semibold">Status</span>
+            </TableHead>
+            <TableHead className="align-middle min-w-[6rem]">
+              <span className="text-xs font-semibold">{variant === 'awaiting' ? 'Pending' : 'Flows'}</span>
+            </TableHead>
+            {variant === 'assigned' ? (
+              <TableHead className="align-middle min-w-[7rem]">
+                <span className="text-xs font-semibold">Re-assign</span>
+              </TableHead>
+            ) : null}
+            <TableHead className="align-middle min-w-[5.5rem]">
+              <span className="text-xs font-semibold">Amount</span>
+            </TableHead>
+            <TableHead className="align-middle min-w-[5.5rem]">
+              <span className="text-xs font-semibold">Balance</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((r) => (
+            <TableRow
+              key={r.order_id}
+              className={cn('cursor-pointer', selectedOrderId === r.order_id && 'bg-muted/40')}
+              onClick={() => onSelect(r.order_id)}
+            >
+              <TableCell className="font-medium">{r.order_number}</TableCell>
+              <TableCell>
+                {queuePreviewByOrderId[r.order_id]?.imageUrl ? (
+                  <img
+                    src={queuePreviewByOrderId[r.order_id]?.imageUrl || ''}
+                    alt=""
+                    className="h-12 w-12 rounded-md border border-border object-cover bg-muted"
+                  />
+                ) : (
+                  <span className="text-xs text-muted-foreground">—</span>
+                )}
+              </TableCell>
+              <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.products || '—'}</TableCell>
+              <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.fabrics || '—'}</TableCell>
+              <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.sizes || '—'}</TableCell>
+              <TableCell>
+                <div className="flex items-center gap-2">
+                  <Avatar className="w-10 h-10">
+                    <AvatarImage
+                      src={r.sales_manager ? salesManagers[r.sales_manager]?.avatar_url ?? undefined : undefined}
+                      alt={r.sales_manager ? salesManagers[r.sales_manager]?.full_name ?? 'Sales manager' : 'Sales manager'}
+                    />
+                    <AvatarFallback className="text-xs">
+                      {(r.sales_manager ? salesManagers[r.sales_manager]?.full_name : '')
+                        ?.split(' ')
+                        .map((n) => n[0])
+                        .join('')
+                        .toUpperCase() || 'SM'}
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className="text-sm">{(r.sales_manager && salesManagers[r.sales_manager]?.full_name) || 'N/A'}</span>
+                </div>
+              </TableCell>
+              <TableCell>
+                {r.order_date
+                  ? formatLocaleDateFromApi(r.order_date, 'en-GB', {
+                      day: '2-digit',
+                      month: 'short',
+                      year: '2-digit',
+                    })
+                  : 'N/A'}
+              </TableCell>
+              <TableCell>
+                {r.expected_delivery_date
+                  ? formatLocaleDateFromApi(r.expected_delivery_date, 'en-GB', {
+                      day: '2-digit',
+                      month: 'short',
+                      year: '2-digit',
+                    })
+                  : 'N/A'}
+              </TableCell>
+              <TableCell>
+                <div className="text-sm">{r.order_status || 'pending'}</div>
+              </TableCell>
+              <TableCell>
+                {variant === 'awaiting' ? (
+                  <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+                    {r.pending_line_count ?? 0}/{r.line_count ?? 0}
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">{r.flow_summary || '—'}</span>
+                )}
+              </TableCell>
+              {variant === 'assigned' ? (
+                <TableCell>
+                  {r.can_reassign ? (
+                    <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200">
+                      Available
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="bg-slate-50 text-slate-600 border-slate-200">
+                      Locked
+                    </Badge>
+                  )}
+                </TableCell>
+              ) : null}
+              <TableCell>₹{Number(r.final_amount ?? 0).toFixed(2)}</TableCell>
+              <TableCell>₹{Number(r.balance_amount ?? 0).toFixed(2)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
 const OrderFlowAssignmentPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const orderIdParam = searchParams.get('orderId');
 
+  const [activeTab, setActiveTab] = useState<QueueTab>(
+    searchParams.get('tab') === 'assigned' ? 'assigned' : 'awaiting'
+  );
   const [loadingQueue, setLoadingQueue] = useState(true);
   const [queue, setQueue] = useState<QueueRow[]>([]);
+  const [loadingAssignedQueue, setLoadingAssignedQueue] = useState(true);
+  const [assignedQueue, setAssignedQueue] = useState<QueueRow[]>([]);
+  const [assignedQueueLoadNotice, setAssignedQueueLoadNotice] = useState<string | null>(null);
+  const [assignedReassignFilterActive, setAssignedReassignFilterActive] = useState(true);
   const [salesManagers, setSalesManagers] = useState<Record<string, SalesManager>>({});
   const [requireFlag, setRequireFlag] = useState(false);
   const [flagLoading, setFlagLoading] = useState(true);
@@ -420,7 +758,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
       setSettingsSchemaError(null);
       setRequireFlag(next);
       toast.success(next ? 'Flow assignment gate enabled' : 'Flow assignment gate disabled');
-      await loadQueue();
+      await Promise.all([loadQueue(), loadAssignedQueue()]);
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || 'Failed to update setting');
@@ -505,6 +843,68 @@ const OrderFlowAssignmentPage: React.FC = () => {
     }
   }, []);
 
+  const hydrateSalesManagers = useCallback(async (rows: QueueRow[]) => {
+    const managerIds = [...new Set(rows.map((r) => r.sales_manager).filter(Boolean))] as string[];
+    if (!managerIds.length) {
+      setSalesManagers({});
+      return;
+    }
+    const { data: empRows } = await supabase
+      .from('employees')
+      .select('id, full_name, avatar_url')
+      .in('id', managerIds);
+    const map: Record<string, SalesManager> = {};
+    for (const emp of empRows || []) {
+      map[String((emp as any).id)] = {
+        id: String((emp as any).id),
+        full_name: (emp as any).full_name ?? null,
+        avatar_url: (emp as any).avatar_url ?? null,
+      };
+    }
+    setSalesManagers(map);
+  }, []);
+
+  const loadAssignedQueue = useCallback(async () => {
+    setLoadingAssignedQueue(true);
+    setAssignedQueueLoadNotice(null);
+    try {
+      const { data, error } = await supabase
+        .from('v_orders_flow_assigned' as any)
+        .select('*')
+        .order('order_date', { ascending: false });
+      if (!error) {
+        const rows = (data as QueueRow[]) || [];
+        setAssignedQueue(rows);
+        await hydrateSalesManagers(rows);
+        return;
+      }
+
+      if (isAssignedFlowViewMissing(error)) {
+        const rows = await fetchAssignedFlowQueueFallback();
+        if (rows.length > 0) {
+          console.warn('v_orders_flow_assigned query failed; using client fallback', error);
+          setAssignedQueue(rows);
+          await hydrateSalesManagers(rows);
+          setAssignedQueueLoadNotice(
+            'The database view v_orders_flow_assigned is missing or not in the API schema. Showing the assigned queue via a temporary client query. Apply migration 20260529120000_order_flow_assigned_queue.sql, then reload the PostgREST schema in the Supabase dashboard.'
+          );
+          return;
+        }
+        setAssignedQueue([]);
+        setAssignedQueueLoadNotice(
+          'The database view v_orders_flow_assigned is missing or not in the API schema. Apply migration 20260529120000_order_flow_assigned_queue.sql, then reload the PostgREST schema in the Supabase dashboard.'
+        );
+        return;
+      }
+      throw error;
+    } catch (e) {
+      console.error(e);
+      setAssignedQueue([]);
+    } finally {
+      setLoadingAssignedQueue(false);
+    }
+  }, [hydrateSalesManagers]);
+
   useEffect(() => {
     void loadFlag();
   }, [loadFlag]);
@@ -514,8 +914,35 @@ const OrderFlowAssignmentPage: React.FC = () => {
   }, [loadQueue, requireFlag]);
 
   useEffect(() => {
+    void loadAssignedQueue();
+  }, [loadAssignedQueue, requireFlag]);
+
+  useEffect(() => {
+    if (!orderIdParam || loadingQueue || loadingAssignedQueue) return;
+    if (queue.some((q) => q.order_id === orderIdParam)) {
+      setActiveTab('awaiting');
+      setSelectedOrderId(orderIdParam);
+      return;
+    }
+    if (assignedQueue.some((q) => q.order_id === orderIdParam)) {
+      setActiveTab('assigned');
+      setSelectedOrderId(orderIdParam);
+    }
+  }, [orderIdParam, queue, assignedQueue, loadingQueue, loadingAssignedQueue]);
+
+  const assignmentMode: AssignOrderItemFlowsMode = activeTab === 'assigned' ? 'reassign' : 'assign';
+  const filteredAssignedQueue = useMemo(
+    () =>
+      assignedReassignFilterActive ? assignedQueue.filter((r) => r.can_reassign) : assignedQueue,
+    [assignedQueue, assignedReassignFilterActive]
+  );
+  const selectedAssignedRow = assignedQueue.find((r) => r.order_id === selectedOrderId);
+  const selectedCanReassign = assignmentMode === 'reassign' && !!selectedAssignedRow?.can_reassign;
+  const reassignBlockReason = reassignBlockMessage(selectedAssignedRow?.reassign_block_reason);
+
+  useEffect(() => {
     const loadQueuePreview = async () => {
-      const orderIds = queue.map((q) => q.order_id).filter(Boolean);
+      const orderIds = [...new Set([...queue, ...assignedQueue].map((q) => q.order_id).filter(Boolean))];
       if (!orderIds.length) {
         setQueuePreviewByOrderId({});
         return;
@@ -526,6 +953,8 @@ const OrderFlowAssignmentPage: React.FC = () => {
           `
           id,
           order_id,
+          quantity,
+          sizes_quantities,
           product_description,
           color,
           mockup_images,
@@ -540,7 +969,8 @@ const OrderFlowAssignmentPage: React.FC = () => {
         return;
       }
       const byOrder: Record<string, QueueOrderPreview> = {};
-      for (const q of queue) {
+      const previewOrders = [...queue, ...assignedQueue];
+      for (const q of previewOrders) {
         const lines = ((data || []) as any[]).filter((l) => String(l.order_id) === q.order_id) as OrderLine[];
         const productSet = new Set<string>();
         const fabricSet = new Set<string>();
@@ -563,7 +993,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
       setQueuePreviewByOrderId(byOrder);
     };
     void loadQueuePreview();
-  }, [queue]);
+  }, [queue, assignedQueue]);
 
   const loadLines = useCallback(async (orderId: string) => {
     setLoadingLines(true);
@@ -593,11 +1023,17 @@ const OrderFlowAssignmentPage: React.FC = () => {
       const lines = (data || []) as OrderLine[];
       setOrderLines(lines);
       const next: Record<string, ExecutionFlow> = {};
+      const stockNext: Record<string, StockSizeMapping[]> = {};
       for (const l of lines) {
         next[l.id] = (l.execution_flow as ExecutionFlow) || 'stitching';
+        if (l.execution_flow === 'inventory') {
+          const specs = parseOrderLineSpecifications(l.specifications);
+          const sizeRows = getOrderLineSizeRows(specs, l.quantity, l.sizes_quantities);
+          stockNext[l.id] = hydrateStockMappings(sizeRows, l.specifications);
+        }
       }
       setChoices(next);
-      setStockMappings({});
+      setStockMappings(stockNext);
     } catch (e) {
       console.error(e);
       toast.error('Failed to load order lines');
@@ -663,18 +1099,27 @@ const OrderFlowAssignmentPage: React.FC = () => {
   }, []);
 
   const pendingLines = useMemo(() => orderLines.filter(isLineAwaitingAssignment), [orderLines]);
+  const dialogLines = assignmentMode === 'assign' ? pendingLines : orderLines;
+  const dialogReadOnly = assignmentMode === 'reassign' && !selectedCanReassign;
 
   useEffect(() => {
-    for (const line of pendingLines) {
+    if (assignmentMode !== 'assign' || !selectedOrderId || loadingLines || saving) return;
+    if (orderLines.length > 0 && pendingLines.length === 0) {
+      setSelectedOrderId(null);
+    }
+  }, [assignmentMode, selectedOrderId, loadingLines, saving, orderLines.length, pendingLines.length]);
+
+  useEffect(() => {
+    for (const line of dialogLines) {
       const flow = bulkAssignEnabled ? bulkFlowChoice : choices[line.id];
       if (flow === 'inventory') ensureStockMappingsForLine(line);
     }
-  }, [pendingLines, choices, bulkAssignEnabled, bulkFlowChoice, ensureStockMappingsForLine]);
+  }, [dialogLines, choices, bulkAssignEnabled, bulkFlowChoice, ensureStockMappingsForLine]);
 
   const assignmentDialogOrderMeta = useMemo(() => {
-    const row = queue.find((r) => r.order_id === selectedOrderId);
+    const row = [...queue, ...assignedQueue].find((r) => r.order_id === selectedOrderId);
     return row ? { order_type: row.order_type } : undefined;
-  }, [queue, selectedOrderId]);
+  }, [queue, assignedQueue, selectedOrderId]);
   const applyBulkFlowToAllLines = useCallback(
     (flow: ExecutionFlow) => {
       setChoices((prev) => {
@@ -714,10 +1159,13 @@ const OrderFlowAssignmentPage: React.FC = () => {
   };
 
   const submitAssignments = async () => {
-    if (!selectedOrderId) return;
-    const linesToSave = orderLines.filter(isLineAwaitingAssignment);
+    if (!selectedOrderId || dialogReadOnly) return;
+    const linesToSave =
+      assignmentMode === 'assign'
+        ? orderLines.filter(isLineAwaitingAssignment)
+        : orderLines.filter(isLineReassignable);
     if (linesToSave.length === 0) {
-      toast.info('No lines are pending flow assignment on this order.');
+      if (assignmentMode === 'assign') setSelectedOrderId(null);
       return;
     }
 
@@ -749,7 +1197,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
         }
         return base;
       });
-      await assignOrderItemFlows(selectedOrderId, assignments);
+      await assignOrderItemFlows(selectedOrderId, assignments, { mode: assignmentMode });
 
       await Promise.all(
         linesToSave
@@ -757,9 +1205,9 @@ const OrderFlowAssignmentPage: React.FC = () => {
           .map((l) => persistStockFulfillmentSpecs(l, stockMappings[l.id] || []))
       );
 
-      toast.success('Execution flows saved');
-      await loadQueue();
-      await loadLines(selectedOrderId);
+      toast.success(assignmentMode === 'reassign' ? 'Execution flows re-assigned' : 'Execution flows saved');
+      setSelectedOrderId(null);
+      await Promise.all([loadQueue(), loadAssignedQueue()]);
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || 'Failed to save');
@@ -793,8 +1241,16 @@ const OrderFlowAssignmentPage: React.FC = () => {
         {queueLoadNotice && (
           <Alert>
             <AlertTriangle className="h-4 w-4" />
-            <AlertTitle>Queue view unavailable</AlertTitle>
+            <AlertTitle>Awaiting queue view unavailable</AlertTitle>
             <AlertDescription className="text-sm">{queueLoadNotice}</AlertDescription>
+          </Alert>
+        )}
+
+        {assignedQueueLoadNotice && (
+          <Alert>
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Assigned queue view unavailable</AlertTitle>
+            <AlertDescription className="text-sm">{assignedQueueLoadNotice}</AlertDescription>
           </Alert>
         )}
 
@@ -819,157 +1275,110 @@ const OrderFlowAssignmentPage: React.FC = () => {
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Orders awaiting assignment</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loadingQueue ? (
-              <div className="flex justify-center py-8">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              </div>
-            ) : queue.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4">
-                {requireFlag
-                  ? 'No orders are waiting for flow assignment (requires a linked receipt).'
-                  : 'Turn on “Require flow assignment” above to gate orders after receipt.'}
-              </p>
-            ) : (
-              <div className="overflow-x-auto">
-              <Table className="min-w-[720px]">
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="align-middle min-w-[6.5rem]">
-                      <span className="text-xs font-semibold">Order #</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[7rem]">
-                      <span className="text-xs font-semibold">Reference</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[10rem]">
-                      <span className="text-xs font-semibold">Products</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[10rem]">
-                      <span className="text-xs font-semibold">Fabric</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[8rem]">
-                      <span className="text-xs font-semibold">Size</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[7rem]">
-                      <span className="text-xs font-semibold">Sales Mgr.</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[6.5rem]">
-                      <span className="text-xs font-semibold">Order date</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[6.5rem]">
-                      <span className="text-xs font-semibold">Exp. delivery</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[14rem] w-56 text-left">
-                      <span className="text-xs font-semibold">Status</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[6rem]">
-                      <span className="text-xs font-semibold">Pending</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[5.5rem]">
-                      <span className="text-xs font-semibold">Amount</span>
-                    </TableHead>
-                    <TableHead className="align-middle min-w-[5.5rem]">
-                      <span className="text-xs font-semibold">Balance</span>
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {queue.map((r) => (
-                    <TableRow
-                      key={r.order_id}
-                      className={cn(
-                        'cursor-pointer',
-                        selectedOrderId === r.order_id && 'bg-muted/40'
-                      )}
-                      onClick={() => setSelectedOrderId(r.order_id)}
-                    >
-                      <TableCell className="font-medium">{r.order_number}</TableCell>
-                      <TableCell>
-                        {queuePreviewByOrderId[r.order_id]?.imageUrl ? (
-                          <img
-                            src={queuePreviewByOrderId[r.order_id]?.imageUrl || ''}
-                            alt=""
-                            className="h-12 w-12 rounded-md border border-border object-cover bg-muted"
-                          />
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.products || '—'}</TableCell>
-                      <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.fabrics || '—'}</TableCell>
-                      <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.sizes || '—'}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Avatar className="w-10 h-10">
-                            <AvatarImage
-                              src={r.sales_manager ? salesManagers[r.sales_manager]?.avatar_url ?? undefined : undefined}
-                              alt={r.sales_manager ? salesManagers[r.sales_manager]?.full_name ?? 'Sales manager' : 'Sales manager'}
-                            />
-                            <AvatarFallback className="text-xs">
-                              {(r.sales_manager ? salesManagers[r.sales_manager]?.full_name : '')
-                                ?.split(' ')
-                                .map((n) => n[0])
-                                .join('')
-                                .toUpperCase() || 'SM'}
-                            </AvatarFallback>
-                          </Avatar>
-                          <span className="text-sm">{(r.sales_manager && salesManagers[r.sales_manager]?.full_name) || 'N/A'}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {r.order_date
-                          ? formatLocaleDateFromApi(r.order_date, 'en-GB', {
-                              day: '2-digit',
-                              month: 'short',
-                              year: '2-digit',
-                            })
-                          : 'N/A'}
-                      </TableCell>
-                      <TableCell>
-                        {r.expected_delivery_date
-                          ? formatLocaleDateFromApi(r.expected_delivery_date, 'en-GB', {
-                              day: '2-digit',
-                              month: 'short',
-                              year: '2-digit',
-                            })
-                          : 'N/A'}
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-sm">{r.order_status || 'pending'}</div>
-                      </TableCell>
-                      <TableCell>
-                        <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700">
-                          {r.pending_line_count ?? 0}/{r.line_count ?? 0}
-                        </span>
-                      </TableCell>
-                      <TableCell>₹{Number(r.final_amount ?? 0).toFixed(2)}</TableCell>
-                      <TableCell>₹{Number(r.balance_amount ?? 0).toFixed(2)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              </div>
-            )}
+          <CardContent className="pt-6">
+            <Tabs
+              value={activeTab}
+              onValueChange={(v) => {
+                setActiveTab(v as QueueTab);
+                setSelectedOrderId(null);
+              }}
+            >
+              <TabsList>
+                <TabsTrigger value="awaiting">Awaiting assignment</TabsTrigger>
+                <TabsTrigger value="assigned">Assigned</TabsTrigger>
+              </TabsList>
+              <TabsContent value="awaiting" className="mt-4">
+                {loadingQueue ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : queue.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4">
+                    {requireFlag
+                      ? 'No orders are waiting for flow assignment (requires a linked receipt).'
+                      : 'Turn on “Require flow assignment” above to gate orders after receipt.'}
+                  </p>
+                ) : (
+                  <OrderFlowQueueTable
+                    rows={queue}
+                    variant="awaiting"
+                    selectedOrderId={selectedOrderId}
+                    onSelect={setSelectedOrderId}
+                    queuePreviewByOrderId={queuePreviewByOrderId}
+                    salesManagers={salesManagers}
+                  />
+                )}
+              </TabsContent>
+              <TabsContent value="assigned" className="mt-4 space-y-4">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      id="assigned-reassign-filter"
+                      checked={assignedReassignFilterActive}
+                      onCheckedChange={setAssignedReassignFilterActive}
+                    />
+                    <Label htmlFor="assigned-reassign-filter" className="cursor-pointer">
+                      Re-assign available only
+                    </Label>
+                  </div>
+                  {assignedReassignFilterActive ? (
+                    <span className="text-xs text-muted-foreground">
+                      Showing orders where re-assign is allowed
+                    </span>
+                  ) : null}
+                </div>
+                {loadingAssignedQueue ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : assignedQueue.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4">
+                    {requireFlag
+                      ? 'No orders with all lines assigned yet (requires a linked receipt).'
+                      : 'Turn on “Require flow assignment” above to gate orders after receipt.'}
+                  </p>
+                ) : filteredAssignedQueue.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4">
+                    No orders with re-assign available. Turn off the filter to see locked orders.
+                  </p>
+                ) : (
+                  <OrderFlowQueueTable
+                    rows={filteredAssignedQueue}
+                    variant="assigned"
+                    selectedOrderId={selectedOrderId}
+                    onSelect={setSelectedOrderId}
+                    queuePreviewByOrderId={queuePreviewByOrderId}
+                    salesManagers={salesManagers}
+                  />
+                )}
+              </TabsContent>
+            </Tabs>
           </CardContent>
         </Card>
 
         <Dialog open={!!selectedOrderId} onOpenChange={(open) => !open && setSelectedOrderId(null)}>
           <DialogContent className="max-w-5xl max-h-[85vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Assign execution flows</DialogTitle>
+              <DialogTitle>
+                {assignmentMode === 'reassign' ? 'Re-assign execution flows' : 'Assign execution flows'}
+              </DialogTitle>
             </DialogHeader>
             <div className="space-y-6">
               {loadingLines ? (
                 <Loader2 className="h-6 w-6 animate-spin" />
               ) : (
                 <>
-                  {pendingLines.length === 0 && (
+                  {dialogReadOnly && reassignBlockReason ? (
+                    <Alert>
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTitle>Re-assign locked</AlertTitle>
+                      <AlertDescription className="text-sm">{reassignBlockReason}</AlertDescription>
+                    </Alert>
+                  ) : null}
+                  {assignmentMode === 'assign' && pendingLines.length === 0 && (
                     <p className="text-sm text-muted-foreground">All lines on this order already have a flow assigned.</p>
                   )}
-                  {pendingLines.length > 0 && (
+                  {!dialogReadOnly && dialogLines.length > 0 && (
                     <div className="rounded-lg border border-border p-4 space-y-3">
                       <div className="flex items-center gap-2">
                         <Checkbox
@@ -995,7 +1404,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
                             setBulkFlowChoice(flow);
                             applyBulkFlowToAllLines(flow);
                             if (flow === 'inventory') {
-                              for (const line of pendingLines) ensureStockMappingsForLine(line);
+                              for (const line of dialogLines) ensureStockMappingsForLine(line);
                             }
                           }}
                           className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
@@ -1043,7 +1452,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
                       )}
                     </div>
                   )}
-                  {pendingLines.map((line) => {
+                  {dialogLines.map((line) => {
                     const effectiveFlow = bulkAssignEnabled ? bulkFlowChoice : choices[line.id] || 'stitching';
                     const specs = parseOrderLineSpecifications(line.specifications);
                     const sizeRows = getOrderLineSizeRows(specs, line.quantity, line.sizes_quantities);
@@ -1077,7 +1486,12 @@ const OrderFlowAssignmentPage: React.FC = () => {
                           </div>
                         </div>
                       </div>
-                      {!bulkAssignEnabled ? (
+                      {dialogReadOnly ? (
+                        <p className="text-sm text-muted-foreground">
+                          Current flow:{' '}
+                          <span className="font-medium">{executionFlowLabel(line.execution_flow as ExecutionFlow)}</span>
+                        </p>
+                      ) : !bulkAssignEnabled ? (
                       <RadioGroup
                         value={choices[line.id] || 'stitching'}
                         onValueChange={(v) => {
@@ -1086,6 +1500,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
                           if (flow === 'inventory') ensureStockMappingsForLine(line);
                         }}
                         className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
+                        disabled={dialogReadOnly}
                       >
                         {EXECUTION_FLOWS.map((f) => (
                           <Label
@@ -1129,12 +1544,12 @@ const OrderFlowAssignmentPage: React.FC = () => {
                           </Label>
                         ))}
                       </RadioGroup>
-                      ) : (
+                      ) : !dialogReadOnly ? (
                         <p className="text-xs text-muted-foreground">
                           Flow for all lines: <span className="font-medium">{executionFlowLabel(effectiveFlow)}</span>
                         </p>
-                      )}
-                      {effectiveFlow === 'inventory' ? (
+                      ) : null}
+                      {!dialogReadOnly && effectiveFlow === 'inventory' ? (
                         <InventoryStockMappingPanel
                           lineId={line.id}
                           sizeRows={sizeRows}
@@ -1146,7 +1561,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
                           onChange={handleStockMappingsChange}
                         />
                       ) : null}
-                      {!bulkAssignEnabled && choices[line.id] === 'outsource' && (
+                      {!dialogReadOnly && !bulkAssignEnabled && choices[line.id] === 'outsource' && (
                         <div className="text-sm">
                           <Button
                             type="button"
@@ -1165,9 +1580,17 @@ const OrderFlowAssignmentPage: React.FC = () => {
                     </div>
                   );
                   })}
-                  <Button onClick={() => void submitAssignments()} disabled={saving || orderLines.length === 0}>
-                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save assignments'}
-                  </Button>
+                  {!dialogReadOnly && dialogLines.length > 0 && (
+                    <Button onClick={() => void submitAssignments()} disabled={saving}>
+                      {saving ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : assignmentMode === 'reassign' ? (
+                        'Save re-assignment'
+                      ) : (
+                        'Save assignments'
+                      )}
+                    </Button>
+                  )}
                 </>
               )}
             </div>

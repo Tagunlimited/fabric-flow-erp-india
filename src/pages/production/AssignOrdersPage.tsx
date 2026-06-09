@@ -29,23 +29,56 @@ import { useNavigate } from "react-router-dom";
 import { formatDueDateIndian } from '@/lib/utils';
 import { getOrderTotalQuantityFromItems } from '@/utils/orderItemLineQuantity';
 import { ReassignCuttingMasterDialog } from '@/components/production/ReassignCuttingMasterDialog';
+import { chunkArray } from '@/lib/chunkArray';
+import { fetchOrderItemsByOrderIds } from '@/lib/fetchOrderItemsBulk';
+import {
+  getOrderCardPlaceholderSrc,
+  getOrderItemListThumbnailUrl,
+  firstOrderImageUrlFromArray,
+} from '@/utils/orderItemImageUtils';
 
-function firstImageFromArray(arr: unknown): string | undefined {
-  if (!Array.isArray(arr) || arr.length === 0) return undefined;
-  const v = arr[0];
-  return v != null && String(v).trim() !== '' ? String(v) : undefined;
+const ASSIGN_ORDERS_IN_CHUNK = 80;
+const ORDER_ITEM_LINE_SELECT =
+  'id, order_id, created_at, quantity, sizes_quantities, specifications, product_description, cutting_price_single_needle, cutting_price_overlock_flatlock, product_category_id, category_image_url, mockup_images';
+
+async function fetchRowsInChunks(
+  table: string,
+  select: string,
+  column: string,
+  ids: string[],
+  applyFilters?: (q: ReturnType<typeof supabase.from>) => ReturnType<typeof supabase.from>
+): Promise<any[]> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!unique.length) return [];
+  const rows: any[] = [];
+  for (const batch of chunkArray(unique, ASSIGN_ORDERS_IN_CHUNK)) {
+    let q = supabase.from(table as any).select(select).in(column, batch as any);
+    if (applyFilters) q = applyFilters(q);
+    const { data, error } = await q;
+    if (error) throw error;
+    if (data?.length) rows.push(...data);
+  }
+  return rows;
 }
 
-/** Best preview image for an order line (mockup → reference → line/category image). */
+function firstImageFromArray(arr: unknown): string | undefined {
+  return firstOrderImageUrlFromArray(arr) ?? undefined;
+}
+
+/** Best preview image for an order line (shared util + reference + category fallback). */
 function resolveOrderItemLinePreviewImage(
   item: {
     mockup_images?: unknown;
     reference_images?: unknown;
+    specifications?: unknown;
     category_image_url?: string | null;
     product_category_id?: string | null;
   },
-  categoryFallback?: Record<string, string>
+  categoryFallback?: Record<string, string>,
+  orderMeta?: { order_type?: string | null }
 ): string | undefined {
+  const fromShared = getOrderItemListThumbnailUrl(item, orderMeta);
+  if (fromShared) return fromShared;
   return (
     firstImageFromArray(item.mockup_images) ||
     firstImageFromArray(item.reference_images) ||
@@ -57,7 +90,8 @@ function resolveOrderItemLinePreviewImage(
 
 function buildOrderItemLineRatesFromItems(
   items: any[],
-  categoryLookup: Record<string, { category_name?: string | null; category_image_url?: string | null }>
+  categoryLookup: Record<string, { category_name?: string | null; category_image_url?: string | null }>,
+  orderMeta?: { order_type?: string | null }
 ): OrderItemLineRates[] {
   const imageFallback: Record<string, string> = {};
   for (const [id, meta] of Object.entries(categoryLookup)) {
@@ -81,7 +115,7 @@ function buildOrderItemLineRatesFromItems(
       categoryName,
       productDescription,
       productLabel,
-      imageUrl: resolveOrderItemLinePreviewImage(it, imageFallback),
+      imageUrl: resolveOrderItemLinePreviewImage(it, imageFallback, orderMeta),
       quantity: it.quantity != null ? Number(it.quantity) : undefined,
       cuttingPriceSingleNeedle:
         it.cutting_price_single_needle != null ? Number(it.cutting_price_single_needle) : null,
@@ -369,6 +403,8 @@ const AssignOrdersPage = () => {
             name: row.full_name,
             designation: row.designation,
             avatar_url: row.avatar_url,
+            availability: 'available',
+            department: row.designation,
           }));
           
           setWorkers(list);
@@ -453,41 +489,46 @@ const AssignOrdersPage = () => {
         });
         const orderIds = Object.keys(bomsByOrder);
 
-        // 2) Fetch orders for those ids (exclude cancelled and readymade orders)
-        const { data: orders, error: ordersErr } = await supabase
-          .from('orders')
-          .select('id, order_number, status, expected_delivery_date, customer_id')
-          .eq('is_deleted', false)
-          .in('id', orderIds as any)
-          .or('order_type.is.null,order_type.eq.custom');
-        if (ordersErr) throw ordersErr;
+        // 2) Fetch orders for those ids (chunked — large `.in()` lists exceed PostgREST URL limits)
+        const orders = await fetchRowsInChunks(
+          'orders',
+          'id, order_number, status, expected_delivery_date, customer_id, order_type',
+          'id',
+          orderIds,
+          (q) => q.eq('is_deleted', false).or('order_type.is.null,order_type.eq.custom')
+        );
 
-        const validOrders = (orders || []).filter((o: any) => o.status !== 'cancelled');
+        const validOrders = orders.filter((o: any) => o.status !== 'cancelled');
         const customerIds = Array.from(new Set(validOrders.map((o: any) => o.customer_id).filter(Boolean)));
 
         // 3) Fetch customers for name display
         let customersMap: Record<string, { company_name?: string }> = {};
         if (customerIds.length > 0) {
-          const { data: customers } = await supabase
-            .from('customers')
-            .select('id, company_name')
-            .in('id', customerIds as any);
-          (customers || []).forEach((c: any) => { if (c?.id) customersMap[c.id] = { company_name: c.company_name }; });
+          const customers = await fetchRowsInChunks('customers', 'id, company_name', 'id', customerIds);
+          customers.forEach((c: any) => { if (c?.id) customersMap[c.id] = { company_name: c.company_name }; });
         }
 
-        // 4) Fetch BOM items for all BOMs to determine material availability
-        const { data: bomItems, error: bomItemsErr } = await supabase
-          .from('bom_record_items' as any)
-          .select('bom_id, item_id, item_code, item_name, qty_total')
-          .in('bom_id', bomIds as any);
-        if (bomItemsErr) throw bomItemsErr;
+        // 4) Fetch BOM items for all BOMs to determine material availability (non-fatal if this fails)
+        let bomItems: any[] = [];
+        try {
+          bomItems = await fetchRowsInChunks(
+            'bom_record_items',
+            'bom_id, item_id, item_code, item_name, qty_total',
+            'bom_id',
+            bomIds
+          );
+        } catch (bomItemsErr) {
+          console.error('Failed to load BOM items for material status:', bomItemsErr);
+        }
 
         // Fetch POs linked to these BOMs: 1) purchase_orders.bom_id 2) bom_po_items (in case PO has no bom_id set)
-        const { data: posFromBoms } = await supabase
-          .from('purchase_orders')
-          .select('id, bom_id')
-          .eq('is_deleted', false)
-          .in('bom_id', bomIds);
+        const posFromBoms = await fetchRowsInChunks(
+          'purchase_orders',
+          'id, bom_id',
+          'bom_id',
+          bomIds,
+          (q) => q.eq('is_deleted', false)
+        );
 
         let bomIdToPoIds: Record<string, Set<string>> = {};
         (posFromBoms || []).forEach((po: any) => {
@@ -497,10 +538,7 @@ const AssignOrdersPage = () => {
           }
         });
 
-        const { data: bomPoItems } = await supabase
-          .from('bom_po_items')
-          .select('bom_id, po_id')
-          .in('bom_id', bomIds);
+        const bomPoItems = await fetchRowsInChunks('bom_po_items', 'bom_id, po_id', 'bom_id', bomIds);
         (bomPoItems || []).forEach((row: any) => {
           if (row?.bom_id && row?.po_id) {
             if (!bomIdToPoIds[row.bom_id]) bomIdToPoIds[row.bom_id] = new Set();
@@ -597,11 +635,13 @@ const AssignOrdersPage = () => {
         // Load existing assignments from DB
         let assignmentsByOrder: Record<string, any> = {};
         try {
-          const { data: rows } = await supabase
-            .from('order_assignments' as any)
-            .select('order_id, cutting_master_id, cutting_master_name, cutting_work_date, cutting_price_single_needle, cutting_price_overlock_flatlock')
-            .in('order_id', orderIds as any);
-          (rows || []).forEach((r: any) => { if (r?.order_id) assignmentsByOrder[r.order_id] = r; });
+          const rows = await fetchRowsInChunks(
+            'order_assignments',
+            'order_id, cutting_master_id, cutting_master_name, cutting_work_date, cutting_price_single_needle, cutting_price_overlock_flatlock',
+            'order_id',
+            orderIds
+          );
+          rows.forEach((r: any) => { if (r?.order_id) assignmentsByOrder[r.order_id] = r; });
         } catch (e) {
           console.error('Failed to load order assignments:', e);
         }
@@ -632,18 +672,22 @@ const AssignOrdersPage = () => {
         // Fetch order items to get sizes_quantities for size-wise calculations
         let orderItemsByOrder: Record<string, any[]> = {};
         try {
-          const { data: orderItemsData } = await supabase
-            .from('order_items' as any)
-            .select(
-              'id, order_id, quantity, sizes_quantities, specifications, product_description, cutting_price_single_needle, cutting_price_overlock_flatlock, product_category_id, category_image_url, reference_images, mockup_images'
-            )
-            .in('order_id', orderIds as any)
-            .order('created_at', { ascending: true });
+          const { data: orderItemsData, error: orderItemsErr } = await fetchOrderItemsByOrderIds(
+            orderIds,
+            ORDER_ITEM_LINE_SELECT
+          );
+          if (orderItemsErr) throw orderItemsErr;
           (orderItemsData || []).forEach((item: any) => {
             if (item?.order_id) {
               if (!orderItemsByOrder[item.order_id]) orderItemsByOrder[item.order_id] = [];
               orderItemsByOrder[item.order_id].push(item);
             }
+          });
+          Object.values(orderItemsByOrder).forEach((lines) => {
+            lines.sort(
+              (a, b) =>
+                new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+            );
           });
         } catch (e) {
           console.error('Failed to load order items:', e);
@@ -700,10 +744,12 @@ const AssignOrdersPage = () => {
         const allCuttingMasterIds: string[] = [];
         let cuttingMastersByOrder: Record<string, any[]> = {};
         try {
-          const { data: cuttingRows } = await supabase
-            .from('order_cutting_assignments' as any)
-            .select('id, order_id, cutting_master_id, cutting_master_name, cutting_master_avatar_url, assigned_date, assigned_quantity, completed_quantity, status, notes, cut_quantities_by_size')
-            .in('order_id', orderIds as any);
+          const cuttingRows = await fetchRowsInChunks(
+            'order_cutting_assignments',
+            'id, order_id, cutting_master_id, cutting_master_name, cutting_master_avatar_url, assigned_date, assigned_quantity, completed_quantity, status, notes, cut_quantities_by_size',
+            'order_id',
+            orderIds
+          );
           (cuttingRows || []).forEach((r: any) => { 
             if (r?.order_id) {
               if (!cuttingMastersByOrder[r.order_id]) cuttingMastersByOrder[r.order_id] = [];
@@ -865,10 +911,12 @@ const AssignOrdersPage = () => {
           const itemsForOrder = orderItemsByOrder[o.id] || [];
           const lineRates: OrderItemLineRates[] = buildOrderItemLineRatesFromItems(
             itemsForOrder,
-            orderItemCategoryLookup
+            orderItemCategoryLookup,
+            { order_type: o.order_type }
           );
           if (lineRates.length > 0) {
             base.orderItemLines = lineRates;
+            base.productCategoryImage = lineRates.find((l) => l.imageUrl)?.imageUrl;
           }
 
           const headerRatesMissing =
@@ -1144,13 +1192,10 @@ const AssignOrdersPage = () => {
     orderId: string
   ): Promise<OrderItemLineRates[]> => {
     try {
-      const { data: items, error } = await supabase
-        .from('order_items' as any)
-        .select(
-          'id, product_description, quantity, cutting_price_single_needle, cutting_price_overlock_flatlock, product_category_id, category_image_url, reference_images, mockup_images'
-        )
-        .eq('order_id', orderId as any)
-        .order('created_at', { ascending: true });
+      const [{ data: items, error }, { data: orderRow }] = await Promise.all([
+        fetchOrderItemsByOrderIds([orderId], ORDER_ITEM_LINE_SELECT),
+        supabase.from('orders' as any).select('order_type').eq('id', orderId as any).maybeSingle(),
+      ]);
       if (error) {
         console.error('Stitching dialog: order_items query failed:', error);
         return [];
@@ -1177,7 +1222,9 @@ const AssignOrdersPage = () => {
           }
         });
       }
-      return buildOrderItemLineRatesFromItems(items, categoryLookup);
+      return buildOrderItemLineRatesFromItems(items, categoryLookup, {
+        order_type: (orderRow as { order_type?: string | null } | null)?.order_type,
+      });
     } catch (e) {
       console.error('Failed to load order lines for stitching dialog:', e);
       return [];
@@ -1287,8 +1334,9 @@ const AssignOrdersPage = () => {
     setStitchingFormLines([]);
 
     let lines = assignment.orderItemLines || [];
-    if (lines.length === 0) {
-      lines = await fetchOrderItemLinesForStitchingDialog(orderId);
+    if (lines.length === 0 || lines.some((l) => !l.imageUrl)) {
+      const fetched = await fetchOrderItemLinesForStitchingDialog(orderId);
+      if (fetched.length > 0) lines = fetched;
     }
 
     const defSn =
@@ -2236,17 +2284,15 @@ const AssignOrdersPage = () => {
                     >
                       <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
                         <div className="mx-auto shrink-0 sm:mx-0">
-                          {row.imageUrl ? (
-                            <img
-                              src={row.imageUrl}
-                              alt=""
-                              className="h-28 w-28 rounded-md border object-cover bg-muted"
-                            />
-                          ) : (
-                            <div className="flex h-28 w-28 items-center justify-center rounded-md border border-dashed bg-muted px-2 text-center text-xs text-muted-foreground">
-                              No image
-                            </div>
-                          )}
+                          <img
+                            src={row.imageUrl || getOrderCardPlaceholderSrc()}
+                            alt={row.productDescription || row.productLabel || 'Product'}
+                            className="h-28 w-28 rounded-md border object-cover bg-muted"
+                            onError={(e) => {
+                              e.currentTarget.onerror = null;
+                              e.currentTarget.src = getOrderCardPlaceholderSrc();
+                            }}
+                          />
                         </div>
                         <div className="min-w-0 flex-1 space-y-3">
                           <div className="flex flex-wrap items-center gap-2">
