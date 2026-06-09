@@ -1,3 +1,4 @@
+import { deriveGrnHeaderStatusFromLines } from '@/utils/grnStatus';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -1606,25 +1607,38 @@ const GRNForm = () => {
         await persistGrnItemsToDb();
 
         const headerTotals = computeGrnMasterTotalsFromItems(grnItems);
-        const preservedStatus = grn.status || 'received';
+        const derivedStatus = deriveGrnHeaderStatusFromLines(grnItems, grn.status || 'draft');
+        const statusToPersist =
+          derivedStatus === 'approved' ||
+          derivedStatus === 'partially_approved' ||
+          derivedStatus === 'rejected'
+            ? derivedStatus
+            : grn.status || 'received';
+
+        const updatePayload: Record<string, unknown> = {
+          po_id: grn.po_id,
+          supplier_id: grn.supplier_id,
+          grn_date: grn.grn_date,
+          received_date: grn.received_date || nowIso,
+          received_by: grn.received_by || user?.id,
+          received_at_location: grn.received_at_location,
+          status: statusToPersist,
+          ...headerTotals,
+          quality_inspector: grn.quality_inspector,
+          inspection_date: grn.inspection_date,
+          inspection_notes: grn.inspection_notes,
+          rejection_reason: grn.rejection_reason,
+          updated_at: nowIso,
+        };
+
+        if (statusToPersist === 'approved' || statusToPersist === 'partially_approved') {
+          updatePayload.approved_by = user?.id;
+          updatePayload.approved_at = nowIso;
+        }
 
         const { error: grnError } = await supabase
           .from('grn_master')
-          .update({
-            po_id: grn.po_id,
-            supplier_id: grn.supplier_id,
-            grn_date: grn.grn_date,
-            received_date: grn.received_date || nowIso,
-            received_by: grn.received_by || user?.id,
-            received_at_location: grn.received_at_location,
-            status: preservedStatus,
-            ...headerTotals,
-            quality_inspector: grn.quality_inspector,
-            inspection_date: grn.inspection_date,
-            inspection_notes: grn.inspection_notes,
-            rejection_reason: grn.rejection_reason,
-            updated_at: nowIso,
-          } as any)
+          .update(updatePayload as any)
           .eq('id', id as any);
 
         if (grnError) {
@@ -1698,7 +1712,7 @@ const GRNForm = () => {
         }
 
         const approvedItems = grnItems.filter(
-          (item) => item.quality_status === 'approved' && item.approved_quantity > 0
+          (item) => item.quality_status === 'approved' && buildGrnItemLineQuantities(item).approvedQty > 0
         );
         if (approvedItems.length > 0 && approvedItems.every((i) => i.id)) {
           const { data: existingInventory } = await supabase
@@ -1724,12 +1738,28 @@ const GRNForm = () => {
         setGrn((prev) => ({
           ...prev,
           ...headerTotals,
-          status: preservedStatus,
+          status: statusToPersist as GRN['status'],
           received_date: prev.received_date || nowIso,
           received_by: prev.received_by || user?.id,
+          ...(statusToPersist === 'approved' || statusToPersist === 'partially_approved'
+            ? { approved_by: user?.id, approved_at: nowIso }
+            : {}),
         }));
+
+        if (grn.po_id && statusToPersist === 'approved') {
+          try {
+            await supabase.rpc('check_and_update_po_completion', { p_po_id: grn.po_id as any });
+          } catch (poCompleteErr) {
+            console.warn('PO auto-completion check skipped:', poCompleteErr);
+          }
+        }
+
         toast.success(
-          'GRN saved. Line quality and quantities updated — use Approve GRN or Partial Approval when inspection is complete.'
+          statusToPersist === 'approved'
+            ? 'GRN saved and fully approved — PO closes when all lines are received (over-receipt counts).'
+            : statusToPersist === 'partially_approved'
+              ? 'GRN saved with partial approval.'
+              : 'GRN saved. Line quality and quantities updated.'
         );
         navigate(`/procurement/grn/${id}`, { replace: true });
       }

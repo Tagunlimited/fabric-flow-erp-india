@@ -8,6 +8,7 @@ import { remainingQtyForNewPurchaseOrderLine } from './bomOrderLineUtils';
 import { BomItemOrderStatus } from '@/services/bomPOTracking';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { normalizeSelectedColors } from '@/utils/bomSelectedColors';
 
 interface BomToPOWizardDialogProps {
   open: boolean;
@@ -71,7 +72,12 @@ export function BomToPOWizardDialog({
           qty_total,
           unit_of_measure,
           item_id,
-          item_code
+          item_code,
+          fabric_name,
+          fabric_color,
+          fabric_gsm,
+          selected_colors,
+          item_image_url
         `)
         .eq('bom_id', bomId);
 
@@ -117,10 +123,11 @@ export function BomToPOWizardDialog({
         (bomItemsData || []).map(async (item) => {
           console.log('Processing BOM item for wizard:', item);
           
-          let imageUrl = null;
-          let fabricName = '';
-          let fabricColor = '';
-          let fabricGsm = '';
+          let imageUrl = (item as { item_image_url?: string | null }).item_image_url || null;
+          let fabricName = ((item as { fabric_name?: string }).fabric_name || '').trim();
+          let fabricColor = ((item as { fabric_color?: string }).fabric_color || '').trim();
+          let fabricGsm = ((item as { fabric_gsm?: string }).fabric_gsm || '').trim();
+          const bomSelectedColors = normalizeSelectedColors((item as { selected_colors?: unknown }).selected_colors);
           let itemAttributes: any = {};
           
           if (item.category === 'Fabric') {
@@ -139,10 +146,10 @@ export function BomToPOWizardDialog({
               }
 
               if (orderItem?.fabric) {
-                fabricName = orderItem.fabric.fabric_name || '';
-                fabricColor = orderItem.fabric.color || orderItem.color || '';
-                fabricGsm = orderItem.fabric.gsm || orderItem.gsm || '';
-                imageUrl = orderItem.fabric.image || null;
+                if (!fabricName) fabricName = orderItem.fabric.fabric_name || '';
+                if (!fabricColor) fabricColor = orderItem.fabric.color || orderItem.color || '';
+                if (!fabricGsm) fabricGsm = orderItem.fabric.gsm || orderItem.gsm || '';
+                if (!imageUrl) imageUrl = orderItem.fabric.image || null;
               }
             }
             
@@ -336,6 +343,16 @@ export function BomToPOWizardDialog({
             }
           }
           
+          if (item.category !== 'Fabric' && bomSelectedColors.length > 0) {
+            const colorLabel = bomSelectedColors
+              .map((c) => c.colorName?.trim())
+              .filter(Boolean)
+              .join(', ');
+            if (colorLabel && !itemAttributes.color) {
+              itemAttributes = { ...itemAttributes, color: colorLabel };
+            }
+          }
+
           // DO NOT use BOM product_image_url as fallback - it may be a mockup image
           // Only use fabric/item images from master tables
           
@@ -352,6 +369,7 @@ export function BomToPOWizardDialog({
             fabric_name: fabricName,
             fabric_color: fabricColor,
             fabric_gsm: fabricGsm,
+            selected_colors: bomSelectedColors,
             // Item attributes
             item_attributes: itemAttributes,
             // Additional fields for PO creation

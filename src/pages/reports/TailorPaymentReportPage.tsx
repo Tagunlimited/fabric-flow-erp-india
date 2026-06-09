@@ -23,8 +23,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { parseLineOrderItemIdFromNotes } from "@/utils/orderBatchAssignmentLine";
 import { getOrderItemDisplayImage } from "@/utils/orderItemImageUtils";
+import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
 
 const INR = new Intl.NumberFormat("en-IN", {
   style: "currency",
@@ -69,6 +71,7 @@ function statusVariant(
 
 export default function TailorPaymentReportPage() {
   const { toast } = useToast();
+  const { sizeTypes } = useSizeTypes();
   const initialRange = useMemo(() => {
     const { from, to } = rangeForPreset("this_month");
     return { from, to, preset: "this_month" as const };
@@ -192,8 +195,11 @@ export default function TailorPaymentReportPage() {
       arr.push(r);
       m.set(r.order_batch_assignment_id, arr);
     }
+    for (const [aid, sizes] of m) {
+      m.set(aid, sortSizeDistributionsByMasterOrder(sizes, null, sizeTypes));
+    }
     return m;
-  }, [detailRows]);
+  }, [detailRows, sizeTypes]);
 
   const handleApprove = async (batch: TailorPaymentBatchSummaryRow) => {
     if (!periodDates) return;
@@ -401,6 +407,8 @@ export default function TailorPaymentReportPage() {
                   {[...groupedDetail.entries()].map(([aid, sizes]) => {
                     const first = sizes[0];
                     const img = assignmentImages.get(aid);
+                    const snTotal = sizes.reduce((sum, s) => sum + (Number(s.sn_line_amount) || 0), 0);
+                    const ofTotal = sizes.reduce((sum, s) => sum + (Number(s.of_line_amount) || 0), 0);
                     return (
                       <div key={aid} className="rounded-lg border border-border bg-muted/20 p-3">
                         <div className="mb-3 flex flex-col gap-3 sm:flex-row">
@@ -446,6 +454,11 @@ export default function TailorPaymentReportPage() {
                                 </TableCell>
                               </TableRow>
                             ))}
+                            <TableRow className="bg-muted/40 font-medium">
+                              <TableCell colSpan={6}>Total</TableCell>
+                              <TableCell className="text-right tabular-nums">{INR.format(snTotal)}</TableCell>
+                              <TableCell className="text-right tabular-nums">{INR.format(ofTotal)}</TableCell>
+                            </TableRow>
                           </TableBody>
                         </Table>
                       </div>

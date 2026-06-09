@@ -89,6 +89,7 @@ import ManualQuotationFormPage from './pages/accounts/ManualQuotationFormPage';
 import ManualQuotationDetailPage from './pages/accounts/ManualQuotationDetailPage';
 import ReceiptPage from './pages/accounts/ReceiptPage';
 import ReceivablesPage from './pages/accounts/ReceivablesPage';
+import PayablesPage from './pages/accounts/PayablesPage';
 import InvoicePage from './pages/accounts/InvoicePage';
 import InvoiceDetailPage from './pages/accounts/InvoiceDetailPage';
 import { CompanySettingsProvider } from "@/hooks/CompanySettingsContext";
@@ -704,6 +705,12 @@ const App = () => {
                 <Route path="/accounts/receivables" element={
                   <ProtectedRouteWithCompanySettings>
                     <ReceivablesPage />
+                  </ProtectedRouteWithCompanySettings>
+                } />
+
+                <Route path="/accounts/payables" element={
+                  <ProtectedRouteWithCompanySettings>
+                    <PayablesPage />
                   </ProtectedRouteWithCompanySettings>
                 } />
 

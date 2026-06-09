@@ -292,8 +292,9 @@ All colors MUST be HSL.
     display: none !important;
   }
   
+  /* Hide sticky/fixed UI chrome; exclude `table-fixed` (Tailwind table layout, not position). */
   [class*="sticky"],
-  [class*="fixed"] {
+  [class*="fixed"]:not(.table-fixed) {
     position: static !important;
     display: none !important;
   }
@@ -388,13 +389,16 @@ All colors MUST be HSL.
     hyphens: auto;
   }
 
-  /* Delivery challan print surface: enforce A4-safe padding and overflow control */
+  /* Delivery challan / invoice print surface: A4-safe padding and overflow control */
   .delivery-challan-print,
-  .delivery-challan-print * {
+  .invoice-print,
+  .delivery-challan-print *,
+  .invoice-print * {
     box-sizing: border-box !important;
   }
 
-  .delivery-challan-print {
+  .delivery-challan-print,
+  .invoice-print {
     width: 100% !important;
     max-width: 210mm !important;
     margin: 0 auto !important;
@@ -402,7 +406,8 @@ All colors MUST be HSL.
     overflow: visible !important;
   }
 
-  .delivery-challan-print .delivery-challan-content {
+  .delivery-challan-print .delivery-challan-content,
+  .invoice-print .invoice-print-content {
     width: 100% !important;
     max-width: 100% !important;
     margin: 0 !important;
@@ -413,15 +418,26 @@ All colors MUST be HSL.
   .delivery-challan-print div,
   .delivery-challan-print span,
   .delivery-challan-print td,
-  .delivery-challan-print th {
+  .delivery-challan-print th,
+  .invoice-print p,
+  .invoice-print div,
+  .invoice-print span,
+  .invoice-print td,
+  .invoice-print th {
     word-break: break-word !important;
     overflow-wrap: anywhere !important;
     white-space: normal !important;
   }
 
-  .delivery-challan-print table {
+  .delivery-challan-print table,
+  .invoice-print table {
     width: 100% !important;
     max-width: 100% !important;
+    display: table !important;
+  }
+
+  .invoice-print .order-summary-print-table {
+    visibility: visible !important;
   }
 
   .delivery-challan-print .challan-size-grid {

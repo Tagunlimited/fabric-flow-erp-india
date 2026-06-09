@@ -11,6 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { format } from 'date-fns';
 import { ItemImage } from '@/components/ui/OptimizedImage';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { poLineColorDetailText } from '@/utils/purchaseOrderColor';
 
 type PurchaseOrder = {
   id: string;
@@ -39,6 +40,8 @@ type ItemRowLite = {
   fabric_name: string | null;
   fabric_color: string | null;
   fabric_gsm: string | null;
+  item_color: string | null;
+  selected_colors: unknown;
   notes: string | null;
 };
 
@@ -102,12 +105,11 @@ const PurchaseOrderRow = memo(function PurchaseOrderRow({
           {items.slice(0, 2).map((item, idx) => (
             <div key={idx} className="border-b border-gray-100 pb-1 last:border-b-0">
               <div className="font-medium">{(item.item_type === 'fabric' && item.fabric_for_supplier) ? item.fabric_for_supplier : (item.item_name || 'N/A')}</div>
-              {item.item_type === 'fabric' && (
+              {poLineColorDetailText(item, item.item_color) ? (
                 <div className="text-xs text-muted-foreground">
-                  {item.fabric_color && `${item.fabric_color}, `}
-                  {item.fabric_gsm && `${item.fabric_gsm} GSM`}
+                  {poLineColorDetailText(item, item.item_color)}
                 </div>
-              )}
+              ) : null}
               {item.notes && (
                 <div className="text-xs text-muted-foreground truncate">
                   {item.notes}
@@ -183,7 +185,9 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
             item_type, 
             fabric_name, 
             fabric_color, 
-            fabric_gsm, 
+            fabric_gsm,
+            item_color,
+            selected_colors,
             notes,
             item_id
           )
@@ -310,7 +314,7 @@ const PurchaseOrderList = memo(function PurchaseOrderList() {
           (item.item_type === 'fabric' && (item as any).fabric_for_supplier)
             ? (item as any).fabric_for_supplier
             : (item.item_name || 'N/A');
-        return `${lineName} ${item.fabric_color || ''} ${item.fabric_gsm || ''} ${item.notes || ''}`;
+        return `${lineName} ${poLineColorDetailText(item, item.item_color)} ${item.notes || ''}`;
       }).join(' ');
       const supplierText = `${s?.supplier_name || ''} ${s?.supplier_code || ''}`;
       const orderDateText = po.order_date ? format(new Date(po.order_date), 'dd MMM yyyy') : '';

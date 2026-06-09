@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
+import {
+  generateInvoiceNumber,
+  insertInvoiceWithGeneratedNumber,
+} from '@/lib/generateInvoiceNumber';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -155,43 +159,6 @@ export function InvoiceForm() {
       console.log('Order data loaded from location state:', location.state.orderData);
     }
   }, [location.state]);
-
-  const getFinancialYear = (date: Date) => {
-    const startYear = date.getMonth() < 3 ? date.getFullYear() - 1 : date.getFullYear();
-    const endYearShort = String(startYear + 1).slice(-2);
-    return `${startYear}-${endYearShort}`;
-  };
-
-  // Generate invoice number: TUC/YYYY-YY/TI/0001
-  const generateInvoiceNumber = async () => {
-    try {
-      const fy = getFinancialYear(new Date());
-      const prefix = `TUC/${fy}/TI/`;
-      const { data, error } = await supabase
-        .from('invoices')
-        .select('invoice_number')
-        .ilike('invoice_number', `${prefix}%`)
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      if (error) throw error;
-
-      let nextNumber = 1;
-      if (data && data.length > 0) {
-        const lastInvoice = data[0];
-        const lastNumber = lastInvoice.invoice_number?.match(/\/(\d{1,})$/);
-        if (lastNumber) {
-          nextNumber = parseInt(lastNumber[1]) + 1;
-        }
-      }
-
-      return `${prefix}${nextNumber.toString().padStart(4, '0')}`;
-    } catch (error) {
-      console.error('Error generating invoice number:', error);
-      const fy = getFinancialYear(new Date());
-      return `TUC/${fy}/TI/0001`;
-    }
-  };
 
   // Load data on component mount
   useEffect(() => {
@@ -459,13 +426,13 @@ export function InvoiceForm() {
           .eq('invoice_id', id);
 
       } else {
-        const { data, error } = await supabase
-          .from('invoices')
-          .insert(invoiceData)
-          .select()
-          .single();
+        const { invoice_number: _previewNumber, ...invoiceInsertBase } = invoiceData;
+        const { data, error } = await insertInvoiceWithGeneratedNumber((invoiceNumber) => ({
+          ...invoiceInsertBase,
+          invoice_number: invoiceNumber,
+        }));
 
-        if (error) throw error;
+        if (error || !data) throw error ?? new Error('Failed to create invoice');
         savedInvoice = data;
       }
 

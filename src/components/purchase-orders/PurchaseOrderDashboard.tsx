@@ -16,6 +16,10 @@ import {
   PendingItemGroup,
   usePendingPoItems
 } from '@/hooks/usePendingPoItems';
+import {
+  classifyPurchaseOrderReceipt,
+  type PoReceiptBucket,
+} from '@/utils/poReceiptStatus';
 
 interface PurchaseOrderLite {
   id: string;
@@ -33,6 +37,7 @@ interface PurchaseOrderLite {
   grns: Array<{ id: string; grn_number: string; status: string | null; grn_date: string | null }>;
   /** Sales order numbers (human-readable) linked via BOM / bom_po_items */
   order_numbers: string[];
+  receipt_bucket: PoReceiptBucket;
 }
 
 const PLACEHOLDER_IMAGE = getPendingItemPlaceholder();
@@ -157,7 +162,8 @@ export function PurchaseOrderDashboard() {
 
   const [activeTab, setActiveTab] = useState<'pending' | 'in_progress' | 'completed'>('pending');
   const [loadingPOs, setLoadingPOs] = useState(true);
-  const [inProgressPOs, setInProgressPOs] = useState<PurchaseOrderLite[]>([]);
+  const [openGrnPOs, setOpenGrnPOs] = useState<PurchaseOrderLite[]>([]);
+  const [needsGrnPOs, setNeedsGrnPOs] = useState<PurchaseOrderLite[]>([]);
   const [completedPOs, setCompletedPOs] = useState<PurchaseOrderLite[]>([]);
   const [wizardBom, setWizardBom] = useState<{ id: string; number: string } | null>(null);
   const [refreshFlag, setRefreshFlag] = useState(0);
@@ -203,14 +209,22 @@ export function PurchaseOrderDashboard() {
             status,
             supplier:supplier_master(id, supplier_name, supplier_code),
             items:purchase_order_items(id, quantity, unit_of_measure),
-            grns:grn_master(id, grn_number, status, grn_date)
+            grns:grn_master(
+              id,
+              grn_number,
+              status,
+              grn_date,
+              grn_items(po_item_id, approved_quantity, received_quantity, quality_status)
+            )
           `)
+          .eq('is_deleted', false)
           .order('created_at', { ascending: false });
 
         if (error) throw error;
 
         const processedBase = (data || []).map((po: any) => {
           const totalQuantity = (po.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
+          const receipt_bucket = classifyPurchaseOrderReceipt(po);
           return {
             id: po.id,
             po_number: po.po_number,
@@ -220,14 +234,27 @@ export function PurchaseOrderDashboard() {
             status: po.status,
             total_items: po.items?.length || 0,
             total_quantity: totalQuantity,
-            grns: po.grns || [],
+            grns: (po.grns || []).map((g: any) => ({
+              id: g.id,
+              grn_number: g.grn_number,
+              status: g.status,
+              grn_date: g.grn_date,
+            })),
+            receipt_bucket,
           };
         });
 
         const processed = await attachOrderNumbersToPurchaseOrders(processedBase);
 
-        setInProgressPOs(processed.filter((po) => !po.grns || po.grns.length === 0) as PurchaseOrderLite[]);
-        setCompletedPOs(processed.filter((po) => po.grns && po.grns.length > 0) as PurchaseOrderLite[]);
+        setOpenGrnPOs(
+          processed.filter((po) => po.receipt_bucket === 'open_grn') as PurchaseOrderLite[]
+        );
+        setNeedsGrnPOs(
+          processed.filter((po) => po.receipt_bucket === 'needs_grn') as PurchaseOrderLite[]
+        );
+        setCompletedPOs(
+          processed.filter((po) => po.receipt_bucket === 'fully_received') as PurchaseOrderLite[]
+        );
       } catch (error) {
         console.error('Failed to load purchase orders', error);
         toast.error('Failed to load purchase orders');
@@ -247,10 +274,79 @@ export function PurchaseOrderDashboard() {
     return {
       pendingBoms: uniqueBomCount,
       pendingItems: totalPendingQuantity,
-      inProgressPOs: inProgressPOs.length,
+      openGrnPOs: openGrnPOs.length,
+      needsGrnPOs: needsGrnPOs.length,
       completedPOs: completedPOs.length
     };
-  }, [pendingItems, inProgressPOs.length, completedPOs.length]);
+  }, [pendingItems, openGrnPOs.length, needsGrnPOs.length, completedPOs.length]);
+
+  const renderInProgressPOTable = (rows: PurchaseOrderLite[], showCreateGrn: boolean) => (
+    <div className="overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>PO Number</TableHead>
+            <TableHead>Order #</TableHead>
+            <TableHead>Supplier</TableHead>
+            <TableHead>Order Date</TableHead>
+            <TableHead>Total Items</TableHead>
+            <TableHead>Total Quantity</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead>Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((po) => (
+            <TableRow key={po.id}>
+              <TableCell className="font-medium">{po.po_number}</TableCell>
+              <TableCell>{formatOrderNumbersCell(po.order_numbers)}</TableCell>
+              <TableCell>
+                <div className="text-sm">
+                  <div className="font-medium">{po.supplier?.supplier_name || '-'}</div>
+                  {po.supplier?.supplier_code && (
+                    <div className="text-xs text-muted-foreground">{po.supplier.supplier_code}</div>
+                  )}
+                </div>
+              </TableCell>
+              <TableCell>{po.order_date ? format(new Date(po.order_date), 'dd MMM yyyy') : '-'}</TableCell>
+              <TableCell>{po.total_items}</TableCell>
+              <TableCell>{formatQuantity(po.total_quantity)}</TableCell>
+              <TableCell>
+                <Badge variant="outline" className="capitalize">
+                  {po.status?.replace('_', ' ') || 'Pending'}
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => navigate(`/procurement/po/${po.id}`)}>
+                    View
+                  </Button>
+                  {showCreateGrn && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => navigate(`/procurement/grn/new?po=${po.id}`)}
+                    >
+                      Create GRN
+                    </Button>
+                  )}
+                  {!showCreateGrn && po.grns[0] && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => navigate(`/procurement/grn/${po.grns[0].id}`)}
+                    >
+                      Open GRN
+                    </Button>
+                  )}
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
 
   const renderPendingSection = (title: string, groups: PendingItemGroup[]) => {
     if (groups.length === 0) {
@@ -417,8 +513,11 @@ export function PurchaseOrderDashboard() {
           <CardContent className="py-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">POs In Progress</p>
-                <p className="text-2xl font-bold">{stats.inProgressPOs}</p>
+                <p className="text-sm text-muted-foreground">Awaiting Receipt</p>
+                <p className="text-2xl font-bold">{stats.openGrnPOs + stats.needsGrnPOs}</p>
+                <p className="text-xs text-muted-foreground">
+                  {stats.openGrnPOs} open GRN · {stats.needsGrnPOs} no GRN
+                </p>
               </div>
               <Hourglass className="w-8 h-8 text-amber-500" />
             </div>
@@ -507,70 +606,45 @@ export function PurchaseOrderDashboard() {
 
       {activeTab === 'in_progress' && (
         <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            This tab tracks purchase orders still awaiting full receipt. Open GRNs match the GRN page
+            &quot;Pending&quot; tab; POs without a GRN need one created first.
+          </p>
           <Card>
             <CardHeader>
-              <CardTitle>Purchase Orders Awaiting GRN ({inProgressPOs.length})</CardTitle>
+              <CardTitle>Open GRNs — process on GRN page ({openGrnPOs.length})</CardTitle>
             </CardHeader>
             <CardContent>
               {loadingPOs ? (
                 <div className="space-y-3">
                   <Skeleton className="h-12" />
                   <Skeleton className="h-12" />
-                  <Skeleton className="h-12" />
                 </div>
-              ) : inProgressPOs.length === 0 ? (
-                <div className="py-12 text-center text-muted-foreground">
-                  No purchase orders pending GRN.
+              ) : openGrnPOs.length === 0 ? (
+                <div className="py-8 text-center text-muted-foreground">
+                  No purchase orders with an open GRN (matches GRN Pending when all GRNs are approved).
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>PO Number</TableHead>
-                        <TableHead>Order #</TableHead>
-                        <TableHead>Supplier</TableHead>
-                        <TableHead>Order Date</TableHead>
-                        <TableHead>Total Items</TableHead>
-                        <TableHead>Total Quantity</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {inProgressPOs.map(po => (
-                        <TableRow key={po.id}>
-                          <TableCell className="font-medium">{po.po_number}</TableCell>
-                          <TableCell>{formatOrderNumbersCell(po.order_numbers)}</TableCell>
-                          <TableCell>
-                            <div className="text-sm">
-                              <div className="font-medium">{po.supplier?.supplier_name || '-'}</div>
-                              {po.supplier?.supplier_code && (
-                                <div className="text-xs text-muted-foreground">{po.supplier.supplier_code}</div>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell>{po.order_date ? format(new Date(po.order_date), 'dd MMM yyyy') : '-'}</TableCell>
-                          <TableCell>{po.total_items}</TableCell>
-                          <TableCell>{formatQuantity(po.total_quantity)}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="capitalize">{po.status?.replace('_', ' ') || 'Pending'}</Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex gap-2">
-                              <Button size="sm" variant="outline" onClick={() => navigate(`/procurement/po/${po.id}`)}>
-                                View
-                              </Button>
-                              <Button size="sm" variant="outline" onClick={() => navigate(`/procurement/grn/new?po=${po.id}`)}>
-                                Create GRN
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                renderInProgressPOTable(openGrnPOs, false)
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>No GRN created yet ({needsGrnPOs.length})</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loadingPOs ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-12" />
+                  <Skeleton className="h-12" />
                 </div>
+              ) : needsGrnPOs.length === 0 ? (
+                <div className="py-8 text-center text-muted-foreground">
+                  Every active PO either has an open GRN or is fully received.
+                </div>
+              ) : (
+                renderInProgressPOTable(needsGrnPOs, true)
               )}
             </CardContent>
           </Card>
@@ -581,7 +655,7 @@ export function PurchaseOrderDashboard() {
         <div className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Purchase Orders with GRN ({completedPOs.length})</CardTitle>
+              <CardTitle>Fully received ({completedPOs.length})</CardTitle>
             </CardHeader>
             <CardContent>
               {loadingPOs ? (
@@ -592,7 +666,7 @@ export function PurchaseOrderDashboard() {
                 </div>
               ) : completedPOs.length === 0 ? (
                 <div className="py-12 text-center text-muted-foreground">
-                  No completed purchase orders yet.
+                  No purchase orders fully received via approved GRNs yet.
                 </div>
               ) : (
                 <div className="overflow-x-auto">

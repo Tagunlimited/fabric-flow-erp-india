@@ -1,3 +1,54 @@
+/** Normalize a single image entry (URL string or `{ url }` object) from DB/form data. */
+export function normalizeOrderImageUrl(entry: unknown): string | null {
+  if (entry == null) return null;
+  if (typeof entry === 'string') {
+    const trimmed = entry.trim();
+    if (!trimmed || trimmed === '[object Object]') return null;
+    return trimmed;
+  }
+  if (typeof entry === 'object') {
+    const o = entry as Record<string, unknown>;
+    for (const key of ['url', 'publicUrl', 'public_url', 'src', 'href']) {
+      const v = o[key];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+  }
+  return null;
+}
+
+/** First usable URL from a mockup/reference array (column or specifications). */
+export function firstOrderImageUrlFromArray(arr: unknown): string | null {
+  if (!Array.isArray(arr)) return null;
+  for (const entry of arr) {
+    const url = normalizeOrderImageUrl(entry);
+    if (url) return url;
+  }
+  return null;
+}
+
+function mockupUrlsFromSpecifications(specifications: unknown): string[] {
+  try {
+    let specs = specifications;
+    if (typeof specs === 'string') specs = JSON.parse(specs);
+    if (!specs || typeof specs !== 'object') return [];
+    const fromMockup = firstOrderImageUrlFromArray((specs as { mockup_images?: unknown }).mockup_images);
+    return fromMockup ? [fromMockup] : [];
+  } catch {
+    return [];
+  }
+}
+
+function referenceUrlFromSpecifications(specifications: unknown): string | null {
+  try {
+    let specs = specifications;
+    if (typeof specs === 'string') specs = JSON.parse(specs);
+    if (!specs || typeof specs !== 'object') return null;
+    return firstOrderImageUrlFromArray((specs as { reference_images?: unknown }).reference_images);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Utility function to get the display image for an order item.
  * Priority: mockup_images (column) > mockup_images (specifications) > category_image_url
@@ -63,36 +114,11 @@ export function getOrderItemDisplayImage(item: any, order?: any): string | null 
   }
 
   // For custom orders, use mockup images if available (do NOT fall back to category_image_url)
-  // Priority 1: Check mockup_images column (TEXT[] array)
-  if (item.mockup_images && Array.isArray(item.mockup_images) && item.mockup_images.length > 0) {
-    const firstMockup = item.mockup_images[0];
-    if (firstMockup && typeof firstMockup === 'string' && firstMockup.trim()) {
-      return firstMockup.trim();
-    }
-  }
+  const fromColumn = firstOrderImageUrlFromArray(item.mockup_images);
+  if (fromColumn) return fromColumn;
 
-  // Priority 2: Check mockup_images in specifications JSONB
-  try {
-    let specifications = item.specifications;
-    
-    // Parse if specifications is a string
-    if (typeof specifications === 'string') {
-      specifications = JSON.parse(specifications);
-    }
-    
-    if (specifications && typeof specifications === 'object') {
-      const mockupImages = specifications.mockup_images;
-      if (Array.isArray(mockupImages) && mockupImages.length > 0) {
-        const firstMockup = mockupImages[0];
-        if (firstMockup && typeof firstMockup === 'string' && firstMockup.trim()) {
-          return firstMockup.trim();
-        }
-      }
-    }
-  } catch (error) {
-    // If parsing fails, continue
-    console.warn('Error parsing specifications for mockup images:', error);
-  }
+  const fromSpecs = mockupUrlsFromSpecifications(item.specifications)[0];
+  if (fromSpecs) return fromSpecs;
 
   // For custom orders, do NOT fall back to category_image_url - return null if no mockup
   return null;
@@ -110,7 +136,15 @@ export function getOrderItemListThumbnailUrl(
 ): string | null {
   const primary = getOrderItemDisplayImage(item, order);
   if (primary) return primary;
+
   const isReadymade = order?.order_type === 'readymade';
+  if (!isReadymade) {
+    const ref =
+      firstOrderImageUrlFromArray(item?.reference_images) ||
+      referenceUrlFromSpecifications(item?.specifications);
+    if (ref) return ref;
+  }
+
   if (
     !isReadymade &&
     item?.category_image_url &&

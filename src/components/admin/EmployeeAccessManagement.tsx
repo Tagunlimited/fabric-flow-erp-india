@@ -275,7 +275,8 @@ export function EmployeeAccessManagement() {
           { title: 'View Quotation', url: '/accounts/quotations', icon: 'Calculator', sort_order: 1, is_active: true },
           { title: 'Create/View Invoices', url: '/accounts/invoices', icon: 'Calculator', sort_order: 2, is_active: true },
           { title: 'Receipts', url: '/accounts/receipts', icon: 'Calculator', sort_order: 3, is_active: true },
-          { title: 'Payments', url: '/accounts/payments', icon: 'Calculator', sort_order: 4, is_active: true }
+          { title: 'Receivables', url: '/accounts/receivables', icon: 'Wallet', sort_order: 5, is_active: true },
+          { title: 'Payables', url: '/accounts/payables', icon: 'CreditCard', sort_order: 6, is_active: true }
         ]},
         { title: 'Design & Printing', url: null, icon: 'Palette', sort_order: 5, is_active: true, children: [
           { title: 'Designs', url: '/design/designs', icon: 'FileImage', sort_order: 1, is_active: true },
