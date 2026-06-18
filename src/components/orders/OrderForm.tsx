@@ -25,6 +25,11 @@ import { getOrderItemDisplayImageForForm, getImageSrcFromFileOrUrl } from '@/uti
 import { usePageState } from '@/contexts/AppCacheContext';
 import { getSortedSizes, sortSizesQuantities, SizeType as SizeTypeUtil } from '@/utils/sizeSorting';
 import { initializeSizePrices, calculateSizeBasedTotal, calculateAverageUnitPrice } from '@/utils/priceCalculation';
+import {
+  allocateOrderNumber,
+  findOrderByCreateIdempotencyKey,
+  isUniqueViolation,
+} from '@/api/orders/orderCreate';
 
 function formatOrderCreateError(error: unknown): string {
   if (typeof error === 'string') return error;
@@ -214,6 +219,10 @@ export function OrderForm({
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [brandingTypes, setBrandingTypes] = useState<BrandingType[]>([]);
   const [loading, setLoading] = useState(false);
+  const submitLockRef = useRef(false);
+  const createIdempotencyKeyRef = useRef(crypto.randomUUID());
+  const createdOrderIdRef = useRef<string | null>(null);
+  const createdOrderNumberRef = useRef<string | null>(null);
   const [orderDatePopoverOpen, setOrderDatePopoverOpen] = useState(false);
   const [expectedDeliveryPopoverOpen, setExpectedDeliveryPopoverOpen] = useState(false);
 
@@ -1024,60 +1033,6 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
   const ORDER_NUMBER_PATTERN = /^(TUC|RMO)\/\d{2}-\d{2}\/\d+$/;
 
-  const generateOrderNumber = async () => {
-    try {
-      const now = new Date();
-      const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
-      const fyEnd = fyStart + 1;
-      const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
-      const pattern = `TUC/${fyStr}/`;
-
-      // Get all order numbers for the current financial year (no month filter)
-      const { data, error } = await supabase
-        .from('orders')
-        .select('order_number')
-        .like('order_number', `${pattern}%`)
-        .order('order_number', { ascending: false });
-
-      if (error) throw error;
-
-      let nextSequence = 1;
-      if (data && data.length > 0) {
-        // Find the maximum sequence number across all orders in this financial year
-        const sequences = data
-          .map(order => {
-            const match = (order as any).order_number.match(/\/(\d+)$/);
-            return match ? parseInt(match[1]) : 0;
-          })
-          .filter(seq => !isNaN(seq));
-
-        if (sequences.length > 0) {
-          nextSequence = Math.max(...sequences) + 1;
-        }
-      }
-
-      const sequence = nextSequence.toString().padStart(3, '0');
-      const candidate = `${pattern}${sequence}`;
-      if (!ORDER_NUMBER_PATTERN.test(candidate)) {
-        throw new Error(`Invalid generated order number format: ${candidate}`);
-      }
-      return candidate;
-    } catch (error) {
-      console.error('Error generating order number:', error);
-      // Fallback to timestamp-based unique number if sequence generation fails
-      const now = new Date();
-      const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
-      const fyEnd = fyStart + 1;
-      const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
-      const timestamp = Date.now().toString().slice(-6);
-      const fallback = `TUC/${fyStr}/${timestamp}`;
-      if (!ORDER_NUMBER_PATTERN.test(fallback)) {
-        throw new Error(`Invalid fallback order number format: ${fallback}`);
-      }
-      return fallback;
-    }
-  };
-
   const generateManualQuotationNumber = async (sourceDate: Date) => {
     const fyStart = sourceDate.getMonth() < 3 ? sourceDate.getFullYear() - 1 : sourceDate.getFullYear();
     const fyEnd = fyStart + 1;
@@ -1518,12 +1473,12 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Prevent submission if tab is hidden
     if (document.hidden) {
       return;
     }
-    
-    setLoading(true);
+    if (submitLockRef.current) {
+      return;
+    }
 
     try {
       const { subtotal, gstAmount, additionalChargesTotal, grandTotal, balance } = calculateTotals();
@@ -1531,13 +1486,11 @@ const getSelectedFabricVariant = (productIndex: number) => {
       // Validate required fields
       if (!formData.customer_id) {
         toast.error('Please select a customer');
-        setLoading(false);
         return;
       }
 
       if (!formData.sales_manager) {
         toast.error('Please select a sales manager');
-        setLoading(false);
         return;
       }
 
@@ -1545,9 +1498,27 @@ const getSelectedFabricVariant = (productIndex: number) => {
       const selectedEmployee = employees.find(emp => emp.id === formData.sales_manager);
       if (!selectedEmployee) {
         toast.error('Selected sales manager not found in employees list');
-        setLoading(false);
         return;
       }
+
+      if (mode === 'order' && prefillFromManualQuotationId) {
+        const { data: manualQuotation, error: manualQuotationError } = await supabase
+          .from('manual_quotations' as any)
+          .select('converted_order_id, quotation_number')
+          .eq('id', prefillFromManualQuotationId)
+          .maybeSingle();
+        if (manualQuotationError) throw manualQuotationError;
+        if (manualQuotation?.converted_order_id) {
+          toast.info('This quotation was already converted to an order.');
+          navigate(`/orders/${manualQuotation.converted_order_id}`);
+          return;
+        }
+      }
+
+      submitLockRef.current = true;
+      setLoading(true);
+      createdOrderIdRef.current = null;
+      createdOrderNumberRef.current = null;
 
       const saveManualQuotation = async () => {
         let manualId = manualQuotationId || '';
@@ -1755,76 +1726,107 @@ const getSelectedFabricVariant = (productIndex: number) => {
         return;
       }
 
-      // Retry mechanism for order number generation and insertion
+      // Retry only on order_number unique collisions (not idempotency or generic errors).
       let orderResult: any = null;
-      let maxRetries = 3;
-      
+      const maxRetries = 3;
+
       for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-          const orderNumber = await generateOrderNumber();
-          if (!ORDER_NUMBER_PATTERN.test(orderNumber)) {
-            throw new Error(`Invalid order number generated: ${orderNumber}`);
-          }
-          
-          // Check if any product has mockup images uploaded
-          // User requirement: ONLY mockup images trigger status change, reference images not required
-          const hasMockupImages = formData.products.some(product => 
-            product.mockup_images && product.mockup_images.length > 0
-          );
-          
-          // Set initial status: 'designing_done' if mockup images exist, otherwise 'pending'
-          const initialStatus: 'designing_done' | 'pending' = hasMockupImages ? 'designing_done' : 'pending';
+        const orderNumber = await allocateOrderNumber('TUC');
+        if (!ORDER_NUMBER_PATTERN.test(orderNumber)) {
+          throw new Error(`Invalid order number generated: ${orderNumber}`);
+        }
 
-      const orderData = {
-        order_number: orderNumber,
-        order_date: formatLocalDateYMD(
-          formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)
-        ),
-        expected_delivery_date: formatLocalDateYMD(
-          formData.expected_delivery_date instanceof Date
-            ? formData.expected_delivery_date
-            : new Date(formData.expected_delivery_date)
-        ),
-        customer_id: formData.customer_id,
-        sales_manager: formData.sales_manager,
-        total_amount: Number(subtotal),
-        tax_amount: Number(gstAmount),
-        final_amount: Number(grandTotal),
-        advance_amount: Number(formData.advance_amount),
-        balance_amount: Number(balance),
-        gst_rate: Number(formData.gst_rate),
-        payment_channel: formData.payment_channel || null,
-        reference_id: formData.reference_id || null,
-            status: initialStatus,
-        notes: ''
-      };
+        const hasMockupImages = formData.products.some(
+          (product) => product.mockup_images && product.mockup_images.length > 0
+        );
+        const initialStatus: 'designing_done' | 'pending' = hasMockupImages ? 'designing_done' : 'pending';
 
-          const { data, error: orderError } = await supabase
-        .from('orders')
-        .insert(orderData as any)
-        .select()
-        .single();
+        const orderData = {
+          order_number: orderNumber,
+          create_idempotency_key: createIdempotencyKeyRef.current,
+          order_date: formatLocalDateYMD(
+            formData.order_date instanceof Date ? formData.order_date : new Date(formData.order_date)
+          ),
+          expected_delivery_date: formatLocalDateYMD(
+            formData.expected_delivery_date instanceof Date
+              ? formData.expected_delivery_date
+              : new Date(formData.expected_delivery_date)
+          ),
+          customer_id: formData.customer_id,
+          sales_manager: formData.sales_manager,
+          total_amount: Number(subtotal),
+          tax_amount: Number(gstAmount),
+          final_amount: Number(grandTotal),
+          advance_amount: Number(formData.advance_amount),
+          balance_amount: Number(balance),
+          gst_rate: Number(formData.gst_rate),
+          payment_channel: formData.payment_channel || null,
+          reference_id: formData.reference_id || null,
+          status: initialStatus,
+          notes: '',
+        };
 
-      if (orderError) {
-            // If it's a duplicate key error, retry with a new order number
-            if (orderError.code === '23505' && attempt < maxRetries - 1) {
-              await new Promise(resolve => setTimeout(resolve, 100)); // Small delay before retry
+        const { data, error: orderError } = await supabase
+          .from('orders')
+          .insert(orderData as any)
+          .select()
+          .single();
+
+        if (orderError) {
+          if (isUniqueViolation(orderError)) {
+            const existing = await findOrderByCreateIdempotencyKey(createIdempotencyKeyRef.current);
+            if (existing) {
+              orderResult = existing;
+              break;
+            }
+            if (attempt < maxRetries - 1) {
+              await new Promise((resolve) => setTimeout(resolve, 100));
               continue;
             }
-        throw orderError;
-      }
-
-          orderResult = data;
-          break; // Success, exit the retry loop
-        } catch (retryError: any) {
-          if (attempt === maxRetries - 1) {
-            throw retryError; // Last attempt failed, throw the error
           }
+          throw orderError;
         }
+
+        orderResult = data;
+        break;
       }
 
       if (!orderResult) {
         throw new Error('Failed to create order after multiple attempts');
+      }
+
+      createdOrderIdRef.current = String((orderResult as any).id);
+      createdOrderNumberRef.current = String((orderResult as any).order_number || '');
+
+      const { count: existingItemCount } = await supabase
+        .from('order_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('order_id', (orderResult as any).id);
+      const savedItems = existingItemCount ?? 0;
+      if (savedItems >= formData.products.length) {
+        toast.success('Order already created');
+        createIdempotencyKeyRef.current = crypto.randomUUID();
+        createdOrderIdRef.current = null;
+        createdOrderNumberRef.current = null;
+        resetData({ silent: true });
+        if (onOrderCreated) {
+          onOrderCreated();
+        } else {
+          navigate('/orders');
+        }
+        return;
+      }
+      if (savedItems > 0) {
+        toast.error(
+          `Order #${createdOrderNumberRef.current || 'created'} was partially saved. Open it to complete.`,
+          {
+            action: {
+              label: 'Open order',
+              onClick: () => navigate(`/orders/${(orderResult as any).id}`),
+            },
+          }
+        );
+        return;
       }
 
       // Insert order items with uploaded images
@@ -1834,27 +1836,23 @@ const getSelectedFabricVariant = (productIndex: number) => {
         // Validate product data
         if (!product.product_category_id) {
           toast.error(`Product ${productIndex + 1}: Please select a product category`);
-          setLoading(false);
           return;
         }
-        
+
         if (!product.fabric_id) {
           toast.error(`Product ${productIndex + 1}: Please select a fabric`);
-          setLoading(false);
           return;
         }
-        
+
         if (!product.size_type_id) {
           toast.error(`Product ${productIndex + 1}: Please select a size type`);
-          setLoading(false);
           return;
         }
-        
+
         const totalQuantity = Object.values(product.sizes_quantities || {}).reduce((total, qty) => total + qty, 0);
-        
+
         if (totalQuantity === 0) {
           toast.error(`Product ${productIndex + 1}: Please enter quantities for at least one size`);
-          setLoading(false);
           return;
         }
         
@@ -1959,6 +1957,10 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
       toast.success('Order created successfully!');
 
+      createIdempotencyKeyRef.current = crypto.randomUUID();
+      createdOrderIdRef.current = null;
+      createdOrderNumberRef.current = null;
+
       // Clear saved form data after successful order creation (no extra "form reset" toast)
       resetData({ silent: true });
       
@@ -1974,8 +1976,22 @@ const getSelectedFabricVariant = (productIndex: number) => {
           ? 'Manual quotation schema is outdated. Please run latest Supabase migrations and retry.'
           : formatOrderCreateError(error);
       console.error('Order create failed:', msg, error);
-      toast.error(msg);
+      if (createdOrderIdRef.current) {
+        const orderNo = createdOrderNumberRef.current || 'created';
+        toast.error(
+          `Order #${orderNo} was created but saving lines failed. Open the order to complete or fix it.`,
+          {
+            action: {
+              label: 'Open order',
+              onClick: () => navigate(`/orders/${createdOrderIdRef.current}`),
+            },
+          }
+        );
+      } else {
+        toast.error(msg);
+      }
     } finally {
+      submitLockRef.current = false;
       setLoading(false);
     }
   };

@@ -700,7 +700,7 @@ export function EnhancedDashboard() {
     return (
       <div className="space-y-8 animate-pulse">
         <div className="h-10 w-64 rounded-lg bg-muted" />
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 grid-cols-2 sm:gap-4 xl:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="h-32 rounded-2xl bg-muted" />
           ))}
@@ -859,7 +859,7 @@ export function EnhancedDashboard() {
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 grid-cols-2 sm:gap-4 xl:grid-cols-4">
         <StatCard
           title="Total revenue"
           subtitle="Lines + GST + additional charges"
@@ -1205,17 +1205,17 @@ function StatCard({
         className
       )}
     >
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 space-y-1">
-            <p className="text-sm font-medium text-muted-foreground">{title}</p>
-            <p className="truncate text-2xl font-bold tracking-tight" title={value}>
+      <CardContent className="p-3 sm:p-5">
+        <div className="flex items-start justify-between gap-2 sm:gap-3">
+          <div className="min-w-0 space-y-0.5 sm:space-y-1">
+            <p className="text-xs font-medium text-muted-foreground sm:text-sm">{title}</p>
+            <p className="truncate text-lg font-bold tracking-tight sm:text-2xl" title={value}>
               {valueCompact && value.length > 14 ? valueCompact : value}
             </p>
-            <p className="text-xs text-muted-foreground">{subtitle}</p>
+            <p className="text-[10px] leading-snug text-muted-foreground sm:text-xs">{subtitle}</p>
           </div>
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <Icon className="h-5 w-5" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary sm:h-11 sm:w-11">
+            <Icon className="h-4 w-4 sm:h-5 sm:w-5" />
           </div>
         </div>
       </CardContent>
