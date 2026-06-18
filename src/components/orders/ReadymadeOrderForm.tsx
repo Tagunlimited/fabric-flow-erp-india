@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +22,11 @@ import { usePageState } from '@/contexts/AppCacheContext';
 import { initializeSizePrices, calculateSizeBasedTotal, calculateAverageUnitPrice } from '@/utils/priceCalculation';
 import { getSortedSizes, sortSizesByMasterOrder } from '@/utils/sizeSorting';
 import { BrandingPlacementCombobox } from './BrandingPlacementCombobox';
+import {
+  allocateOrderNumber,
+  findOrderByCreateIdempotencyKey,
+  isUniqueViolation,
+} from '@/api/orders/orderCreate';
 
 interface Customer {
   id: string;
@@ -151,6 +156,10 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
   const [brandingTypes, setBrandingTypes] = useState<BrandingType[]>([]);
   const [sizeTypes, setSizeTypes] = useState<SizeType[]>([]);
   const [loading, setLoading] = useState(false);
+  const submitLockRef = useRef(false);
+  const createIdempotencyKeyRef = useRef(crypto.randomUUID());
+  const createdOrderIdRef = useRef<string | null>(null);
+  const createdOrderNumberRef = useRef<string | null>(null);
   const [classSearchOpen, setClassSearchOpen] = useState<{ [key: number]: boolean }>({});
   const [mainImages, setMainImages] = useState<{ [key: number]: { reference?: string; mockup?: string } }>({});
   const [imageModal, setImageModal] = useState<{ open: boolean; url: string | null }>({ open: false, url: null });
@@ -344,60 +353,6 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
   };
 
   const ORDER_NUMBER_PATTERN = /^(TUC|RMO)\/\d{2}-\d{2}\/\d+$/;
-
-  const generateOrderNumber = async () => {
-    try {
-      const now = new Date();
-      const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
-      const fyEnd = fyStart + 1;
-      const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
-      const pattern = `RMO/${fyStr}/`;
-
-      // Get all readymade order numbers for the current financial year
-      const { data, error } = await supabase
-        .from('orders')
-        .select('order_number')
-        .eq('order_type', 'readymade')
-        .like('order_number', `${pattern}%`)
-        .order('order_number', { ascending: false });
-
-      if (error) throw error;
-
-      let nextSequence = 1;
-      if (data && data.length > 0) {
-        // Find the maximum sequence number across all readymade orders in this financial year
-        const sequences = data
-          .map(order => {
-            const match = order.order_number.match(/\/(\d+)$/);
-            return match ? parseInt(match[1]) : 0;
-          })
-          .filter(seq => !isNaN(seq));
-
-        if (sequences.length > 0) {
-          nextSequence = Math.max(...sequences) + 1;
-        }
-      }
-
-      const sequence = nextSequence.toString().padStart(3, '0');
-      const candidate = `${pattern}${sequence}`;
-      if (!ORDER_NUMBER_PATTERN.test(candidate)) {
-        throw new Error(`Invalid generated order number format: ${candidate}`);
-      }
-      return candidate;
-    } catch (error) {
-      console.error('Error generating order number:', error);
-      const now = new Date();
-      const fyStart = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
-      const fyEnd = fyStart + 1;
-      const fyStr = `${fyStart.toString().slice(-2)}-${fyEnd.toString().slice(-2)}`;
-      const timestamp = Date.now().toString().slice(-6);
-      const fallback = `RMO/${fyStr}/${timestamp}`;
-      if (!ORDER_NUMBER_PATTERN.test(fallback)) {
-        throw new Error(`Invalid fallback order number format: ${fallback}`);
-      }
-      return fallback;
-    }
-  };
 
   const addProduct = () => {
     setFormData(prev => ({
@@ -784,6 +739,9 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLockRef.current) {
+      return;
+    }
 
     if (!formData.customer_id) {
       toast.error('Please select a customer');
@@ -795,7 +753,6 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
       return;
     }
 
-    // Validate products - check if size quantities are set or total quantity > 0
     if (formData.products.some(p => {
       if (!p.product_master_id) return true;
       const totalQty = Object.keys(p.sizes_quantities || {}).length > 0
@@ -807,39 +764,104 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
       return;
     }
 
+    submitLockRef.current = true;
+    setLoading(true);
+    createdOrderIdRef.current = null;
+    createdOrderNumberRef.current = null;
+
     try {
-      setLoading(true);
-      const orderNumber = await generateOrderNumber();
-      if (!ORDER_NUMBER_PATTERN.test(orderNumber)) {
-        throw new Error(`Invalid order number generated: ${orderNumber}`);
-      }
       const { subtotal, gstAmount, total, balance } = calculateTotals();
 
-      // Create order
-      const { data: orderData, error: orderError } = await supabase
-        .from('orders')
-        .insert({
-          order_number: orderNumber,
-          order_date: formatLocalDateYMD(formData.order_date),
-          expected_delivery_date: formatLocalDateYMD(formData.expected_delivery_date),
-          customer_id: formData.customer_id,
-          sales_manager: formData.sales_manager || null,
-          order_type: 'readymade' as any,
-          status: 'pending' as any,
-          total_amount: subtotal,
-          gst_amount: gstAmount,
-          tax_amount: gstAmount,
-          final_amount: total,
-          advance_amount: 0,
-          balance_amount: total,
-          payment_channel: null,
-          reference_id: formData.reference_id || null,
-          notes: formData.notes || null
-        } as any)
-        .select('id')
-        .single();
+      let orderData: { id: string } | null = null;
+      const maxRetries = 3;
 
-      if (orderError) throw orderError;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const orderNumber = await allocateOrderNumber('RMO');
+        if (!ORDER_NUMBER_PATTERN.test(orderNumber)) {
+          throw new Error(`Invalid order number generated: ${orderNumber}`);
+        }
+
+        const { data, error: orderError } = await supabase
+          .from('orders')
+          .insert({
+            order_number: orderNumber,
+            create_idempotency_key: createIdempotencyKeyRef.current,
+            order_date: formatLocalDateYMD(formData.order_date),
+            expected_delivery_date: formatLocalDateYMD(formData.expected_delivery_date),
+            customer_id: formData.customer_id,
+            sales_manager: formData.sales_manager || null,
+            order_type: 'readymade' as any,
+            status: 'pending' as any,
+            total_amount: subtotal,
+            gst_amount: gstAmount,
+            tax_amount: gstAmount,
+            final_amount: total,
+            advance_amount: 0,
+            balance_amount: total,
+            payment_channel: null,
+            reference_id: formData.reference_id || null,
+            notes: formData.notes || null
+          } as any)
+          .select('id, order_number')
+          .single();
+
+        if (orderError) {
+          if (isUniqueViolation(orderError)) {
+            const existing = await findOrderByCreateIdempotencyKey(createIdempotencyKeyRef.current);
+            if (existing) {
+              orderData = { id: String((existing as any).id) };
+              createdOrderNumberRef.current = String((existing as any).order_number || '');
+              break;
+            }
+            if (attempt < maxRetries - 1) {
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              continue;
+            }
+          }
+          throw orderError;
+        }
+
+        orderData = data as { id: string; order_number?: string };
+        createdOrderNumberRef.current = String((data as any)?.order_number || orderNumber);
+        break;
+      }
+
+      if (!orderData?.id) {
+        throw new Error('Failed to create order after multiple attempts');
+      }
+
+      createdOrderIdRef.current = orderData.id;
+
+      const { count: existingItemCount } = await supabase
+        .from('order_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('order_id', orderData.id);
+      const savedItems = existingItemCount ?? 0;
+      if (savedItems >= formData.products.length) {
+        toast.success('Readymade order already created');
+        createIdempotencyKeyRef.current = crypto.randomUUID();
+        createdOrderIdRef.current = null;
+        createdOrderNumberRef.current = null;
+        resetFormState();
+        if (onOrderCreated) {
+          onOrderCreated();
+        } else {
+          navigate('/orders/readymade');
+        }
+        return;
+      }
+      if (savedItems > 0) {
+        toast.error(
+          `Order #${createdOrderNumberRef.current || 'created'} was partially saved. Open it to complete.`,
+          {
+            action: {
+              label: 'Open order',
+              onClick: () => navigate(`/orders/${orderData.id}`),
+            },
+          }
+        );
+        return;
+      }
 
       // Upload images and attachments for each product, then create order items
       for (let productIndex = 0; productIndex < formData.products.length; productIndex++) {
@@ -984,7 +1006,11 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
       }
 
       toast.success('Readymade order created successfully!');
-      
+
+      createIdempotencyKeyRef.current = crypto.randomUUID();
+      createdOrderIdRef.current = null;
+      createdOrderNumberRef.current = null;
+
       if (onOrderCreated) {
         onOrderCreated();
       } else {
@@ -994,8 +1020,22 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
       resetFormState();
     } catch (error: any) {
       console.error('Error creating order:', error);
-      toast.error(error.message || 'Failed to create order');
+      if (createdOrderIdRef.current) {
+        const orderNo = createdOrderNumberRef.current || 'created';
+        toast.error(
+          `Order #${orderNo} was created but saving lines failed. Open the order to complete or fix it.`,
+          {
+            action: {
+              label: 'Open order',
+              onClick: () => navigate(`/orders/${createdOrderIdRef.current}`),
+            },
+          }
+        );
+      } else {
+        toast.error(error.message || 'Failed to create order');
+      }
     } finally {
+      submitLockRef.current = false;
       setLoading(false);
     }
   };

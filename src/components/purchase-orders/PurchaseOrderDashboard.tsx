@@ -607,8 +607,9 @@ export function PurchaseOrderDashboard() {
       {activeTab === 'in_progress' && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            This tab tracks purchase orders still awaiting full receipt. Open GRNs match the GRN page
-            &quot;Pending&quot; tab; POs without a GRN need one created first.
+            This tab tracks purchase orders still awaiting full receipt. &quot;No GRN created yet&quot;
+            lists only POs with no GRN record. &quot;Open GRNs&quot; includes in-progress GRNs and
+            approved GRNs that have not yet fully received all PO lines.
           </p>
           <Card>
             <CardHeader>
@@ -622,7 +623,7 @@ export function PurchaseOrderDashboard() {
                 </div>
               ) : openGrnPOs.length === 0 ? (
                 <div className="py-8 text-center text-muted-foreground">
-                  No purchase orders with an open GRN (matches GRN Pending when all GRNs are approved).
+                  No purchase orders with an open or partially received GRN.
                 </div>
               ) : (
                 renderInProgressPOTable(openGrnPOs, false)

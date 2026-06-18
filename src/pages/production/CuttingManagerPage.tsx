@@ -39,6 +39,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { CuttingJobMobileCard } from "@/components/production/CuttingJobMobileCard";
 import { MultipleBatchAssignmentDialog } from "@/components/production/MultipleBatchAssignmentDialog";
 import { UpdateCuttingQuantityDialog } from "@/components/production/UpdateCuttingQuantityDialog";
 import { ReassignBatchDialog } from "@/components/production/ReassignBatchDialog";
@@ -181,6 +182,7 @@ const CuttingManagerPage = () => {
     assigned_batch: '',
   });
   const [filterDialogColumn, setFilterDialogColumn] = useState<keyof typeof columnFilters | null>(null);
+  const [expandedMobileJobId, setExpandedMobileJobId] = useState<string | null>(null);
 
   // Initialize with empty array - data will be loaded from backend
   const [cuttingJobs, setCuttingJobs] = useState<CuttingJob[]>([]);
@@ -904,7 +906,7 @@ const CuttingManagerPage = () => {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-6">
           <Card className="shadow-erp-md">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -976,7 +978,10 @@ const CuttingManagerPage = () => {
             role="tab"
             aria-selected={cuttingTab === 'jobs'}
             className={cn('orders-view-switch-tab', cuttingTab === 'jobs' && 'is-active')}
-            onClick={() => setCuttingTab('jobs')}
+            onClick={() => {
+              setCuttingTab('jobs');
+              setExpandedMobileJobId(null);
+            }}
           >
             Active Jobs
           </button>
@@ -985,7 +990,10 @@ const CuttingManagerPage = () => {
             role="tab"
             aria-selected={cuttingTab === 'completed'}
             className={cn('orders-view-switch-tab', cuttingTab === 'completed' && 'is-active')}
-            onClick={() => setCuttingTab('completed')}
+            onClick={() => {
+              setCuttingTab('completed');
+              setExpandedMobileJobId(null);
+            }}
           >
             Completed Jobs
           </button>
@@ -994,8 +1002,8 @@ const CuttingManagerPage = () => {
           {cuttingTab === 'jobs' && (
           <div className="space-y-4">
 
-            {/* Filters */}
-            <Card>
+            {/* Filters — desktop only; mobile uses inline search on the jobs card */}
+            <Card className="hidden md:block">
               <CardHeader>
                 <CardTitle>Filters</CardTitle>
               </CardHeader>
@@ -1069,19 +1077,70 @@ const CuttingManagerPage = () => {
               </CardContent>
             </Card>
 
-            {/* Jobs Table */}
+            {/* Jobs list */}
             <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
+              <CardHeader className="pb-3 md:pb-6">
+                <div className="flex items-center justify-between gap-3">
                   <CardTitle>Cutting Jobs</CardTitle>
-                  <Button>
+                  <Button size="sm" className="shrink-0">
                     <Plus className="w-4 h-4 mr-2" />
                     New Job
                   </Button>
                 </div>
+                <div className="mt-3 flex gap-2 md:hidden">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      placeholder="Search jobs..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="pl-9 h-10"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-10 w-10 shrink-0"
+                    onClick={() => setFilterDialogColumn('progress')}
+                    aria-label="Filter jobs"
+                  >
+                    <Filter className="h-4 w-4" />
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
-                <div className="overflow-x-auto">
+                <div className="md:hidden space-y-3">
+                  {filteredActiveJobs.length === 0 ? (
+                    <p className="py-8 text-center text-sm text-muted-foreground">No cutting jobs found.</p>
+                  ) : (
+                    filteredActiveJobs.map((job) => (
+                      <CuttingJobMobileCard
+                        key={job.id}
+                        job={job}
+                        expanded={expandedMobileJobId === job.id}
+                        compact={expandedMobileJobId !== null && expandedMobileJobId !== job.id}
+                        onToggle={() =>
+                          setExpandedMobileJobId((prev) => (prev === job.id ? null : job.id))
+                        }
+                        completionPercentage={getCompletionPercentage(job)}
+                        progressBarColor={getProgressBarColor(getCompletionPercentage(job))}
+                        statusColorClass={getStatusColor(job.status)}
+                        formatDate={formatDateDDMMYY}
+                        onAssignBatch={() => handleAssignBatch(job)}
+                        onReassignBatch={(assignment) => handleReassignBatch(job, assignment)}
+                        canReassignBatch={canReassignBatch}
+                        onViewOrder={() => navigate(`/orders/${job.id}?from=production`)}
+                        onAddCutQty={() => {
+                          setUpdateJob(job);
+                          setUpdateOpen(true);
+                        }}
+                        onReassignMaster={() => navigate('/production/assign-orders')}
+                      />
+                    ))
+                  )}
+                </div>
+                <div className="hidden md:block overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -1282,8 +1341,8 @@ const CuttingManagerPage = () => {
 
           {cuttingTab === 'completed' && (
           <div className="space-y-4">
-            {/* Filters */}
-            <Card>
+            {/* Filters — desktop only */}
+            <Card className="hidden md:block">
               <CardHeader>
                 <CardTitle>Filters</CardTitle>
               </CardHeader>
@@ -1357,18 +1416,68 @@ const CuttingManagerPage = () => {
               </CardContent>
             </Card>
 
-            {/* Completed Jobs Table */}
+            {/* Completed jobs list */}
             <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
+              <CardHeader className="pb-3 md:pb-6">
+                <div className="flex items-center justify-between gap-3">
                   <CardTitle>Completed Cutting Jobs</CardTitle>
-                  <Badge className="bg-green-100 text-green-800">
+                  <Badge className="bg-green-100 text-green-800 shrink-0">
                     {filteredCompletedJobs.length} Completed
                   </Badge>
                 </div>
+                <div className="mt-3 flex gap-2 md:hidden">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      placeholder="Search completed jobs..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="pl-9 h-10"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-10 w-10 shrink-0"
+                    onClick={() => setFilterDialogColumn('progress')}
+                    aria-label="Filter completed jobs"
+                  >
+                    <Filter className="h-4 w-4" />
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
-                <div className="overflow-x-auto">
+                <div className="md:hidden space-y-3">
+                  {filteredCompletedJobs.length === 0 ? (
+                    <p className="py-8 text-center text-sm text-muted-foreground">No completed cutting jobs found.</p>
+                  ) : (
+                    filteredCompletedJobs.map((job) => (
+                      <CuttingJobMobileCard
+                        key={job.id}
+                        job={{ ...job, status: 'completed' }}
+                        expanded={expandedMobileJobId === job.id}
+                        compact={expandedMobileJobId !== null && expandedMobileJobId !== job.id}
+                        onToggle={() =>
+                          setExpandedMobileJobId((prev) => (prev === job.id ? null : job.id))
+                        }
+                        completionPercentage={100}
+                        progressBarColor="bg-green-500"
+                        statusColorClass="bg-green-100 text-green-800"
+                        formatDate={formatDateDDMMYY}
+                        onAssignBatch={() => handleAssignBatch(job)}
+                        onReassignBatch={(assignment) => handleReassignBatch(job, assignment)}
+                        canReassignBatch={canReassignBatch}
+                        onViewOrder={() => navigate(`/orders/${job.id}?from=production`)}
+                        onAddCutQty={() => handleGeneratePDF(job)}
+                        onGeneratePdf={() => handleGeneratePDF(job)}
+                        generatingPdf={generatingPDF === job.id}
+                        variant="completed"
+                      />
+                    ))
+                  )}
+                </div>
+                <div className="hidden md:block overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
