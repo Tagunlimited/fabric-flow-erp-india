@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import './POPlanningSegmentedSwitch.css';
@@ -20,6 +20,12 @@ import {
   classifyPurchaseOrderReceipt,
   type PoReceiptBucket,
 } from '@/utils/poReceiptStatus';
+import {
+  loadOutsourceLinesAwaitingPo,
+  loadOutsourcePosAwaitingGrn,
+  type OutsourceLineContext,
+  type OutsourcePoAwaitingGrn,
+} from '@/lib/outsourceFulfillment';
 
 interface PurchaseOrderLite {
   id: string;
@@ -160,8 +166,11 @@ async function attachOrderNumbersToPurchaseOrders<
 export function PurchaseOrderDashboard() {
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState<'pending' | 'in_progress' | 'completed'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'in_progress' | 'completed' | 'outsource'>('pending');
   const [loadingPOs, setLoadingPOs] = useState(true);
+  const [loadingOutsource, setLoadingOutsource] = useState(true);
+  const [outsourceAwaitingPo, setOutsourceAwaitingPo] = useState<OutsourceLineContext[]>([]);
+  const [outsourceAwaitingGrn, setOutsourceAwaitingGrn] = useState<OutsourcePoAwaitingGrn[]>([]);
   const [openGrnPOs, setOpenGrnPOs] = useState<PurchaseOrderLite[]>([]);
   const [needsGrnPOs, setNeedsGrnPOs] = useState<PurchaseOrderLite[]>([]);
   const [completedPOs, setCompletedPOs] = useState<PurchaseOrderLite[]>([]);
@@ -266,7 +275,27 @@ export function PurchaseOrderDashboard() {
     loadPOs();
   }, [refreshFlag]);
 
-  const planningTabIdx = activeTab === 'pending' ? 0 : activeTab === 'in_progress' ? 1 : 2;
+  useEffect(() => {
+    const loadOutsource = async () => {
+      try {
+        setLoadingOutsource(true);
+        const [awaitingPo, awaitingGrn] = await Promise.all([
+          loadOutsourceLinesAwaitingPo(),
+          loadOutsourcePosAwaitingGrn(),
+        ]);
+        setOutsourceAwaitingPo(awaitingPo);
+        setOutsourceAwaitingGrn(awaitingGrn);
+      } catch (error) {
+        console.error('Failed to load outsource procurement queue', error);
+      } finally {
+        setLoadingOutsource(false);
+      }
+    };
+    void loadOutsource();
+  }, [refreshFlag]);
+
+  const planningTabIdx =
+    activeTab === 'pending' ? 0 : activeTab === 'in_progress' ? 1 : activeTab === 'completed' ? 2 : 3;
 
   const stats = useMemo(() => {
     const totalPendingQuantity = pendingItems.reduce((sum, item) => sum + Number(item.remaining_quantity || 0), 0);
@@ -276,9 +305,11 @@ export function PurchaseOrderDashboard() {
       pendingItems: totalPendingQuantity,
       openGrnPOs: openGrnPOs.length,
       needsGrnPOs: needsGrnPOs.length,
-      completedPOs: completedPOs.length
+      completedPOs: completedPOs.length,
+      outsourceAwaitingPo: outsourceAwaitingPo.length,
+      outsourceAwaitingGrn: outsourceAwaitingGrn.length,
     };
-  }, [pendingItems, openGrnPOs.length, needsGrnPOs.length, completedPOs.length]);
+  }, [pendingItems, openGrnPOs.length, needsGrnPOs.length, completedPOs.length, outsourceAwaitingPo.length, outsourceAwaitingGrn.length]);
 
   const renderInProgressPOTable = (rows: PurchaseOrderLite[], showCreateGrn: boolean) => (
     <div className="overflow-x-auto">
@@ -542,8 +573,20 @@ export function PurchaseOrderDashboard() {
           data-idx={planningTabIdx}
           role="tablist"
           aria-label="Purchase order planning views"
+          style={
+            {
+              '--po-seg-count': 4,
+            } as CSSProperties
+          }
         >
-          <span className="po-planning-segmented__thumb" aria-hidden />
+          <span
+            className="po-planning-segmented__thumb"
+            aria-hidden
+            style={{
+              width: 'calc((100% - 8px) / 4)',
+              left: `calc(4px + ${planningTabIdx} * (100% - 8px) / 4)`,
+            }}
+          />
           <button
             type="button"
             role="tab"
@@ -573,6 +616,16 @@ export function PurchaseOrderDashboard() {
             onClick={() => setActiveTab('completed')}
           >
             Completed
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'outsource'}
+            data-idx="3"
+            className="po-planning-segmented__btn"
+            onClick={() => setActiveTab('outsource')}
+          >
+            Outsource
           </button>
         </div>
       </div>
@@ -713,6 +766,127 @@ export function PurchaseOrderDashboard() {
                             <Button size="sm" variant="outline" onClick={() => navigate(`/procurement/po/${po.id}`)}>
                               View
                             </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {activeTab === 'outsource' && (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Sales order lines assigned to the outsource path: raise a linked PO, then record GRN when goods arrive from the vendor.
+          </p>
+          <Card>
+            <CardHeader>
+              <CardTitle>Awaiting purchase order ({outsourceAwaitingPo.length})</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loadingOutsource ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-12" />
+                  <Skeleton className="h-12" />
+                </div>
+              ) : outsourceAwaitingPo.length === 0 ? (
+                <div className="py-8 text-center text-muted-foreground">
+                  No outsource lines waiting for a linked purchase order.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Order #</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead>Qty</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {outsourceAwaitingPo.map((row) => (
+                        <TableRow key={row.order_item_id}>
+                          <TableCell className="font-medium">{row.order_number || '—'}</TableCell>
+                          <TableCell>{row.product_label || '—'}</TableCell>
+                          <TableCell>{formatQuantity(row.quantity)}</TableCell>
+                          <TableCell>
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                navigate(
+                                  `/procurement/po/new?mode=outsource&sales_order_id=${row.order_id}&sales_order_item_id=${row.order_item_id}`
+                                )
+                              }
+                            >
+                              Create PO
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Awaiting GRN ({outsourceAwaitingGrn.length})</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loadingOutsource ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-12" />
+                  <Skeleton className="h-12" />
+                </div>
+              ) : outsourceAwaitingGrn.length === 0 ? (
+                <div className="py-8 text-center text-muted-foreground">
+                  No outsource purchase orders waiting for goods receipt.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>PO #</TableHead>
+                        <TableHead>Order #</TableHead>
+                        <TableHead>Supplier</TableHead>
+                        <TableHead>PO Qty</TableHead>
+                        <TableHead>Received</TableHead>
+                        <TableHead>Remaining</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {outsourceAwaitingGrn.map((row) => (
+                        <TableRow key={row.po_id}>
+                          <TableCell className="font-medium">{row.po_number}</TableCell>
+                          <TableCell>{formatSalesOrderLabel(row.order_number)}</TableCell>
+                          <TableCell>{row.supplier_name || '—'}</TableCell>
+                          <TableCell>{formatQuantity(row.po_quantity)}</TableCell>
+                          <TableCell>{formatQuantity(row.grn_approved_quantity)}</TableCell>
+                          <TableCell>{formatQuantity(row.remaining_quantity)}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => navigate(`/procurement/po/${row.po_id}`)}
+                              >
+                                View PO
+                              </Button>
+                              <Button
+                                size="sm"
+                                onClick={() => navigate(`/procurement/grn/new?po=${row.po_id}`)}
+                              >
+                                Create GRN
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}

@@ -15,9 +15,12 @@ import {
   sizeTypesArrayToMap,
 } from "@/components/accounts/OrderSummaryPrintLine";
 
+import { describeDispatchOrderLine } from '@/lib/dispatchProductBreakdown';
+
 interface DispatchItem {
   size_name: string;
   quantity: number;
+  order_item_id?: string | null;
 }
 
 interface OrderItem {
@@ -25,6 +28,7 @@ interface OrderItem {
   product_category_id: string;
   product_description: string;
   quantity: number;
+  execution_flow?: string | null;
   color?: string;
   gsm?: string;
   mockup_images?: string[];
@@ -105,7 +109,7 @@ export default function DispatchChallanPrint() {
       // Fetch dispatch items for this challan
       const { data: itemsData, error: itemsError } = await (supabase as any)
         .from('dispatch_order_items')
-        .select('size_name, quantity')
+        .select('size_name, quantity, order_item_id')
         .eq('is_deleted', false)
         .eq('dispatch_order_id', dispatchId);
 
@@ -120,7 +124,7 @@ export default function DispatchChallanPrint() {
       const { data: orderItemsData, error: orderItemsError } = await (supabase as any)
         .from('order_items')
         .select(
-          'id, product_category_id, product_description, quantity, color, gsm, mockup_images, category_image_url, fabric_id, specifications, sizes_quantities, size_prices, size_type_id, unit_price, gst_rate'
+          'id, product_category_id, product_description, quantity, execution_flow, color, gsm, mockup_images, category_image_url, fabric_id, specifications, sizes_quantities, size_prices, size_type_id, unit_price, gst_rate'
         )
         .eq('is_deleted', false)
         .eq('order_id', dispatchData.order_id);
@@ -210,7 +214,18 @@ export default function DispatchChallanPrint() {
     window.print();
   };
 
-  const balanceQuantity = totalApproved - totalDispatched;
+  const isOutsourceChallan = useMemo(
+    () => orderItems.some((item) => item.execution_flow === 'outsource'),
+    [orderItems]
+  );
+
+  const totalQuantity = useMemo(
+    () => orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+    [orderItems]
+  );
+
+  const referenceQuantity = isOutsourceChallan ? totalQuantity : totalApproved;
+  const balanceQuantity = referenceQuantity - totalDispatched;
 
   const fabricsForPrint = useMemo(() => {
     const m: Record<string, { name: string }> = {};
@@ -221,6 +236,27 @@ export default function DispatchChallanPrint() {
   }, [orderItems]);
 
   const orderForSummary = dispatchOrder?.orders;
+
+  const dispatchItemsByProduct = useMemo(() => {
+    if (!dispatchItems.length) return [];
+    const hasSplit = dispatchItems.some((i) => i.order_item_id);
+    if (!hasSplit) {
+      return [{ label: null as string | null, items: dispatchItems }];
+    }
+    const byId = new Map<string, DispatchItem[]>();
+    dispatchItems.forEach((item) => {
+      const key = item.order_item_id || 'legacy';
+      if (!byId.has(key)) byId.set(key, []);
+      byId.get(key)!.push(item);
+    });
+    return Array.from(byId.entries()).map(([key, items]) => {
+      const line = orderItems.find((oi) => oi.id === key);
+      return {
+        label: key === 'legacy' ? 'All products (combined)' : describeDispatchOrderLine(line),
+        items,
+      };
+    });
+  }, [dispatchItems, orderItems]);
 
   if (loading || !dispatchOrder) {
     return (
@@ -327,16 +363,31 @@ export default function DispatchChallanPrint() {
 
             {/* Dispatched Items - Size Distribution */}
             {dispatchItems.length > 0 && (
-              <div className="challan-print-keep-together mb-3 pb-2 border-b">
-                <h3 className="text-sm font-semibold mb-2">Dispatched Items (Size-wise):</h3>
-                <div className="challan-size-grid grid grid-cols-8 gap-1.5" style={{ gridAutoFlow: 'dense' }}>
-                  {dispatchItems.map((item, index) => (
-                    <div key={index} className="border border-gray-300 rounded p-1.5 text-center bg-gray-50">
-                      <div className="text-xs font-semibold text-gray-700">{item.size_name === 'Total' ? 'Total' : item.size_name}</div>
-                      <div className="text-base font-bold text-gray-900">{item.quantity}</div>
+              <div className="challan-print-keep-together mb-3 pb-2 border-b space-y-3">
+                <h3 className="text-sm font-semibold">Dispatched Items (Size-wise):</h3>
+                {dispatchItemsByProduct.map((group, gIdx) => (
+                  <div key={gIdx}>
+                    {group.label ? (
+                      <p className="text-xs font-medium text-gray-800 mb-1.5">{group.label}</p>
+                    ) : null}
+                    <div
+                      className="challan-size-grid grid grid-cols-8 gap-1.5"
+                      style={{ gridAutoFlow: 'dense' }}
+                    >
+                      {group.items.map((item, index) => (
+                        <div
+                          key={index}
+                          className="border border-gray-300 rounded p-1.5 text-center bg-gray-50"
+                        >
+                          <div className="text-xs font-semibold text-gray-700">
+                            {item.size_name === 'Total' ? 'Total' : item.size_name}
+                          </div>
+                          <div className="text-base font-bold text-gray-900">{item.quantity}</div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -388,10 +439,17 @@ export default function DispatchChallanPrint() {
             <div className="challan-print-keep-together flex justify-end mb-4">
               <div className="w-80">
                 <div className="space-y-2 border-t pt-3">
-                  <div className="flex justify-between py-1 text-sm">
-                    <span className="font-medium">Total Approved Quantity:</span>
-                    <span className="font-semibold">{totalApproved}</span>
-                  </div>
+                  {isOutsourceChallan ? (
+                    <div className="flex justify-between py-1 text-sm">
+                      <span className="font-medium">Total Quantity:</span>
+                      <span className="font-semibold">{totalQuantity}</span>
+                    </div>
+                  ) : (
+                    <div className="flex justify-between py-1 text-sm">
+                      <span className="font-medium">Total Approved Quantity:</span>
+                      <span className="font-semibold">{totalApproved}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between py-1 text-sm">
                     <span className="font-medium">This Dispatch:</span>
                     <span className="font-semibold text-blue-600">{thisDispatchTotal}</span>

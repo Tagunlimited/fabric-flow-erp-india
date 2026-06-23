@@ -52,6 +52,7 @@ interface AvailableFabric {
   allocated_quantity: number;
   available_quantity: number;
   unit: string;
+  master_uom?: string;
 }
 
 function fabricAvailabilitySummaryLine(f: AvailableFabric): string {
@@ -182,7 +183,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
           const grossQty = Number(availability?.gross_quantity || 0);
           const allocatedQty = Number(availability?.allocated_quantity || 0);
           const inventoryQty = Number(availability?.available_quantity || 0);
-          const inventoryUnit = normalizeUnit(availability?.unit || fabric.uom || 'kg');
+          const stockUnit = availability?.unit || (normalizeUnit(fabric.uom || 'kg') === 'kg' ? 'Kgs' : normalizeUnit(fabric.uom || 'kg'));
+          const masterUom = availability?.master_uom;
 
           if (import.meta.env.DEV) {
             console.log('[CuttingAvailabilityDebug]', {
@@ -191,6 +193,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
               gross: grossQty,
               allocated: allocatedQty,
               net: inventoryQty,
+              stockUnit,
+              masterUom,
               rowIds: availability?.contributing_row_ids || [],
             });
           }
@@ -205,7 +209,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
             gross_quantity: grossQty,
             allocated_quantity: allocatedQty,
             available_quantity: inventoryQty,
-            unit: inventoryUnit === 'kg' ? 'Kgs' : inventoryUnit,
+            unit: stockUnit,
+            master_uom: masterUom,
           };
         });
 
@@ -734,15 +739,32 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                           {fabricAvailabilitySummaryLine(selectedFabricRecord)}
                         </p>
                       )}
+                      {fabricUsage.fabric_id && selectedFabricRecord && selectedFabricRecord.master_uom && selectedFabricRecord.master_uom !== selectedFabricRecord.unit && (
+                        <p className="text-xs text-amber-700">
+                          Stock is tracked in {selectedFabricRecord.unit}; fabric master default unit is {selectedFabricRecord.master_uom}.
+                        </p>
+                      )}
+                      {fabricUsage.fabric_id && selectedFabricRecord && selectedFabricRecord.available_quantity <= 0 && getTotalAdditionalCutQuantity() > 0 && (
+                        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
+                          No linked warehouse stock for this fabric. Inventory may list stock under a different fabric name — check Fabric Master supplier alias or warehouse item linkage.
+                        </p>
+                      )}
                     </div>
                   </div>
                   
-                  {fabricUsage.fabric_id && fabricUsage.used_quantity > 0 && (
+                  {fabricUsage.fabric_id && fabricUsage.used_quantity > 0 && selectedFabricRecord && fabricUsage.used_quantity <= selectedFabricRecord.available_quantity && (
                     <div className="mt-3 p-3 bg-green-100 border border-green-200 rounded">
                       <div className="text-sm text-green-800">
-                        ✓ Will record usage of {fabricUsage.used_quantity.toFixed(2)} {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'kgs'} 
-                        of {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.fabric_name || 'fabric'} 
+                        ✓ Will record usage of {fabricUsage.used_quantity.toFixed(2)} {selectedFabricRecord.unit || 'kgs'} 
+                        of {selectedFabricRecord.fabric_name || 'fabric'} 
                         for {getTotalAdditionalCutQuantity()} pieces and deduct from inventory
+                      </div>
+                    </div>
+                  )}
+                  {fabricUsage.fabric_id && fabricUsage.used_quantity > 0 && selectedFabricRecord && fabricUsage.used_quantity > selectedFabricRecord.available_quantity && (
+                    <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded">
+                      <div className="text-sm text-red-800">
+                        Insufficient fabric inventory. Available: {selectedFabricRecord.available_quantity.toFixed(2)} {selectedFabricRecord.unit}
                       </div>
                     </div>
                   )}

@@ -134,18 +134,16 @@ export default function InvoicePage() {
 
   useEffect(() => {
     fetchOrders();
-  }, [activeTab, showCompleted]);
+  }, [showCompleted]);
 
   const fetchOrders = async () => {
     try {
       setLoading(true);
-      
-      const visibleStatuses =
-        showCompleted === 'yes'
-          ? (['dispatched', 'partial_dispatched', 'completed'] as const)
-          : (['dispatched', 'partial_dispatched'] as const);
 
-      // Get all invoicable orders (completed included only when enabled)
+      // Always include `completed` — invoiced orders are marked completed and must appear on the Completed tab.
+      const visibleStatuses = ['dispatched', 'partial_dispatched', 'completed'] as const;
+
+      // Get all invoicable orders
       const { data: ordersData, error: ordersError } = await measureAsync('InvoicePage.fetchOrders.baseOrders', async () =>
         supabase
           .from('orders')
@@ -157,6 +155,35 @@ export default function InvoicePage() {
 
       if (ordersError) throw ordersError;
       let list: Order[] = (ordersData as any) || [];
+
+      // Also include any order that already has an invoice (even if status was not updated to completed).
+      try {
+        const { data: invoiceOrderRows } = await supabase
+          .from('invoices')
+          .select('order_id')
+          .eq('is_deleted', false)
+          .not('order_id', 'is', null);
+
+        const invoicedOrderIds = Array.from(
+          new Set((invoiceOrderRows || []).map((r: any) => r.order_id).filter(Boolean))
+        );
+        const existingIds = new Set(list.map((o) => o.id));
+        const missingInvoicedIds = invoicedOrderIds.filter((id) => !existingIds.has(id));
+
+        if (missingInvoicedIds.length > 0) {
+          const { data: invoicedOrders } = await supabase
+            .from('orders')
+            .select(`*, customer:customers(company_name, phone)`)
+            .eq('is_deleted', false)
+            .in('id', missingInvoicedIds as any);
+
+          if (invoicedOrders?.length) {
+            list = [...list, ...(invoicedOrders as any[])];
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching invoiced orders:', error);
+      }
       
       // Also fetch orders that are "ready to dispatch" (all approved items dispatched)
       // These might have different statuses but should still show in invoices
@@ -459,7 +486,11 @@ export default function InvoicePage() {
       );
     });
   }, [orders, columnFilters, employeeMap]);
-  const pendingOrders = filteredOrders.filter(order => !order.has_invoice);
+  const pendingOrders = filteredOrders.filter(
+    (order) =>
+      !order.has_invoice &&
+      (showCompleted === 'yes' || order.status !== 'completed')
+  );
   const completedOrders = filteredOrders.filter(order => order.has_invoice);
 
   const renderOrderRow = (order: Order) => (
@@ -577,7 +608,7 @@ export default function InvoicePage() {
               </button>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Show completed</span>
+              <span className="text-sm text-muted-foreground">Show completed in pending</span>
               <Select value={showCompleted} onValueChange={(v: 'no' | 'yes') => setShowCompleted(v)}>
                 <SelectTrigger className="w-[160px]">
                   <SelectValue placeholder="No (default)" />

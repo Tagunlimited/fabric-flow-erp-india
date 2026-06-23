@@ -2,9 +2,13 @@
 export function orderNeedsQcVerification(order: {
   picked_quantity: number;
   approved_quantity: number;
+  rejected_quantity?: number;
 }): boolean {
   const p = Number(order.picked_quantity) || 0;
   const a = Number(order.approved_quantity) || 0;
+  const r = Number(order.rejected_quantity) || 0;
+  if (p <= 0) return false;
+  if (r > 0) return true;
   return p > a;
 }
 

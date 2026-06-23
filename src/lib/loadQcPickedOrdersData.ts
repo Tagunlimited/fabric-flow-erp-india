@@ -1,7 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import { chunkArray } from '@/lib/chunkArray';
 import { fetchOrderItemsByOrderIds } from '@/lib/fetchOrderItemsBulk';
-import { getOrderItemListThumbnailUrl } from '@/utils/orderItemImageUtils';
+import { collectOrderItemThumbnails, type OrderMetaForThumb } from '@/lib/orderItemThumbnails';
 import type { QcAssignmentMeta } from '@/utils/qcOrderFilters';
 import { sumAssignedFromSizeDistributions } from '@/utils/pickerRemaining';
 
@@ -28,6 +28,7 @@ export interface QcPickedOrderCard {
   picked_quantity: number;
   total_quantity: number;
   image_url?: string;
+  image_urls?: string[];
   assignment_ids: string[];
   approved_quantity: number;
   rejected_quantity: number;
@@ -74,11 +75,12 @@ async function fetchAllPickedFromSizeRows(): Promise<Record<string, number>> {
   const map: Record<string, number> = {};
   let offset = 0;
   while (true) {
+    // Match PickerPage: sum all size rows (no is_deleted filter). QC and picker must agree on picked totals.
     const { data, error } = await supabase
       .from('order_batch_size_distributions')
       .select('order_batch_assignment_id, picked_quantity')
-      .eq('is_deleted', false)
       .gt('picked_quantity', 0)
+      .order('order_batch_assignment_id')
       .range(offset, offset + PICKED_ROWS_PAGE - 1);
     if (error) throw error;
     const rows = data || [];
@@ -133,7 +135,8 @@ function mergePickedMaps(
   const merged = { ...fromSizes };
   for (const [id, notePick] of Object.entries(fromNotes)) {
     const col = merged[id] || 0;
-    if (col <= 0 && notePick > 0) merged[id] = notePick;
+    const best = Math.max(col, notePick);
+    if (best > 0) merged[id] = best;
   }
   return merged;
 }
@@ -168,14 +171,14 @@ async function fetchQcTotalsByAssignment(
   return { approved, rejected };
 }
 
-async function fetchCustomOrdersMap(orderIds: string[]): Promise<Record<string, OrderMeta>> {
+async function fetchOrdersMap(orderIds: string[]): Promise<Record<string, OrderMeta>> {
   const map: Record<string, OrderMeta> = {};
   const rows = await fetchRowsInChunks(
     'orders',
     'id, order_number, customer_id, order_type, customer:customers(company_name)',
     'id',
     orderIds,
-    (q) => q.eq('is_deleted', false).or('order_type.is.null,order_type.eq.custom')
+    (q) => q.eq('is_deleted', false)
   );
   rows.forEach((o: any) => {
     if (!o?.id) return;
@@ -192,34 +195,45 @@ async function fetchCustomOrdersMap(orderIds: string[]): Promise<Record<string, 
 export async function resolveQcOrderThumbnails(
   orderIds: string[],
   ordersMap: Record<string, OrderMeta>
-): Promise<{ imageByOrder: Record<string, string | undefined>; categoryByOrder: Record<string, string | undefined> }> {
-  const imageByOrder: Record<string, string | undefined> = {};
+): Promise<{
+  imagesByOrder: Record<string, string[]>;
+  categoryByOrder: Record<string, string | undefined>;
+}> {
   const categoryByOrder: Record<string, string | undefined> = {};
   const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))];
-  if (!uniqueOrderIds.length) return { imageByOrder, categoryByOrder };
+  if (!uniqueOrderIds.length) return { imagesByOrder: {}, categoryByOrder };
+
+  const metaForThumb: Record<string, OrderMetaForThumb> = {};
+  uniqueOrderIds.forEach((id) => {
+    metaForThumb[id] = { order_type: ordersMap[id]?.order_type ?? null };
+  });
+  const imagesByOrder = await collectOrderItemThumbnails(uniqueOrderIds, metaForThumb);
 
   const { data: items } = await fetchOrderItemsByOrderIds(uniqueOrderIds, ORDER_ITEM_THUMB_SELECT);
   (items || []).forEach((it: any) => {
     const oid = it?.order_id;
-    if (!oid) return;
-    if (!imageByOrder[oid]) {
-      const thumb = getOrderItemListThumbnailUrl(it, {
-        order_type: ordersMap[oid]?.order_type ?? undefined,
-      });
-      if (thumb) imageByOrder[oid] = thumb;
-    }
-    if (!categoryByOrder[oid]) {
-      try {
-        const specs =
-          typeof it.specifications === 'string' ? JSON.parse(it.specifications) : it.specifications;
-        if (specs?.category) categoryByOrder[oid] = specs.category;
-        else if (specs?.class) categoryByOrder[oid] = specs.class;
-      } catch {
-        /* optional */
-      }
+    if (!oid || categoryByOrder[oid]) return;
+    try {
+      const specs =
+        typeof it.specifications === 'string' ? JSON.parse(it.specifications) : it.specifications;
+      if (specs?.category) categoryByOrder[oid] = specs.category;
+      else if (specs?.class) categoryByOrder[oid] = specs.class;
+    } catch {
+      /* optional */
     }
   });
-  return { imageByOrder, categoryByOrder };
+  return { imagesByOrder, categoryByOrder };
+}
+
+async function fetchActiveAssignmentIds(assignmentIds: string[]): Promise<Set<string>> {
+  const rows = await fetchRowsInChunks(
+    'order_batch_assignments',
+    'id',
+    'id',
+    assignmentIds,
+    (q) => q.eq('is_deleted', false)
+  );
+  return new Set(rows.map((r: any) => String(r?.id || '').trim()).filter(Boolean));
 }
 
 export async function loadQcPickedOrdersData(): Promise<LoadQcPickedOrdersResult> {
@@ -228,17 +242,23 @@ export async function loadQcPickedOrdersData(): Promise<LoadQcPickedOrdersResult
     fetchPickedFromNotesMap(),
   ]);
   const pickedByAssignment = mergePickedMaps(pickedFromSizes, pickedFromNotes);
-  const activeAssignmentIds = Object.entries(pickedByAssignment)
+  const candidateAssignmentIds = Object.entries(pickedByAssignment)
     .filter(([, picked]) => picked > 0)
     .map(([id]) => id);
 
-  if (activeAssignmentIds.length === 0) {
+  if (candidateAssignmentIds.length === 0) {
+    return { orders: [], assignmentMeta: {} };
+  }
+
+  const activeAssignmentIds = await fetchActiveAssignmentIds(candidateAssignmentIds);
+  const activeAssignmentIdList = candidateAssignmentIds.filter((id) => activeAssignmentIds.has(id));
+  if (activeAssignmentIdList.length === 0) {
     return { orders: [], assignmentMeta: {} };
   }
 
   const [assignmentRows, qcTotals] = await Promise.all([
-    fetchAssignmentDetailRows(activeAssignmentIds),
-    fetchQcTotalsByAssignment(activeAssignmentIds),
+    fetchAssignmentDetailRows(activeAssignmentIdList),
+    fetchQcTotalsByAssignment(activeAssignmentIdList),
   ]);
 
   const { approved: approvedByAssignment, rejected: rejectedByAssignment } = qcTotals;
@@ -257,7 +277,7 @@ export async function loadQcPickedOrdersData(): Promise<LoadQcPickedOrdersResult
   });
 
   const qcCompleteByAssignment: Record<string, boolean> = {};
-  activeAssignmentIds.forEach((id) => {
+  activeAssignmentIdList.forEach((id) => {
     const picked = pickedByAssignment[id] || 0;
     const approved = approvedByAssignment[id] || 0;
     const rejected = rejectedByAssignment[id] || 0;
@@ -267,7 +287,7 @@ export async function loadQcPickedOrdersData(): Promise<LoadQcPickedOrdersResult
   });
 
   const orderIds = Array.from(new Set(rows.map((r: any) => r.order_id).filter(Boolean)));
-  const ordersMap = await fetchCustomOrdersMap(orderIds);
+  const ordersMap = await fetchOrdersMap(orderIds);
 
   const byOrder: Record<string, QcPickedOrderCard> = {};
   const assignmentMeta: Record<string, QcAssignmentMeta> = {};
@@ -364,12 +384,18 @@ export async function enrichQcOrdersWithImages(
   const orderIds = orders.map((o) => o.order_id);
   let meta = ordersMap;
   if (!meta) {
-    meta = await fetchCustomOrdersMap(orderIds);
+    meta = await fetchOrdersMap(orderIds);
   }
-  const { imageByOrder, categoryByOrder } = await resolveQcOrderThumbnails(orderIds, meta);
-  return orders.map((o) => ({
-    ...o,
-    image_url: imageByOrder[o.order_id] ?? o.image_url,
-    product_category: categoryByOrder[o.order_id] ?? o.product_category,
-  }));
+  const { imagesByOrder, categoryByOrder } = await resolveQcOrderThumbnails(orderIds, meta);
+  return orders.map((o) => {
+    const urls =
+      imagesByOrder[o.order_id] ??
+      (o.image_urls?.length ? o.image_urls : o.image_url ? [o.image_url] : []);
+    return {
+      ...o,
+      image_urls: urls,
+      image_url: urls[0] ?? o.image_url,
+      product_category: categoryByOrder[o.order_id] ?? o.product_category,
+    };
+  });
 }

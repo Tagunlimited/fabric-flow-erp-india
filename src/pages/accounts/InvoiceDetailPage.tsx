@@ -102,7 +102,6 @@ export default function InvoiceDetailPage() {
   const [fabrics, setFabrics] = useState<{ [key: string]: Fabric }>({});
   const [additionalCharges, setAdditionalCharges] = useState<AdditionalCharge[]>([]);
   const [salesManager, setSalesManager] = useState<SalesManager | null>(null);
-  const [dispatchItems, setDispatchItems] = useState<Array<{size_name: string; quantity: number}>>([]);
   const [isInvoiceId, setIsInvoiceId] = useState(false);
   const [receipts, setReceipts] = useState<any[]>([]);
   const [totalPaid, setTotalPaid] = useState(0);
@@ -226,28 +225,6 @@ export default function InvoiceDetailPage() {
         if (salesManagerData) {
           setSalesManager(salesManagerData as any);
         }
-      }
-
-      // Load dispatch items for this order
-      const { data: items } = await supabase
-        .from('dispatch_order_items')
-        .select('size_name, quantity')
-        .eq('is_deleted', false)
-        .eq('order_id', orderId as any);
-      
-      if (items) {
-        // Aggregate by size
-        const aggregated: Record<string, number> = {};
-        items.forEach((item: any) => {
-          const size = item.size_name;
-          aggregated[size] = (aggregated[size] || 0) + Number(item.quantity || 0);
-        });
-        
-        const itemsList = Object.entries(aggregated).map(([size_name, quantity]) => ({
-          size_name,
-          quantity
-        }));
-        setDispatchItems(itemsList);
       }
 
       // Fetch receipts/payments for this order
@@ -484,23 +461,22 @@ export default function InvoiceDetailPage() {
         >
           <div className="invoice-print-content w-full max-w-4xl mx-auto print:max-w-none print:mx-0 print:w-full print:p-0">
                 {/* Company Header - Compact left-aligned */}
-                <div className="flex items-start gap-3 mb-3 pb-2 border-b-2 border-gray-300">
-                  {/* Company Logo */}
+                <div className="flex items-stretch gap-5 mb-3 pb-2 border-b-2 border-gray-300">
+                  {/* Company Logo — height matches the company text block */}
                   {company?.logo_url && (
-                    <div className="flex-shrink-0">
+                    <div className="flex w-[104px] shrink-0 items-center self-stretch">
                       <img 
                         src={company.logo_url} 
                         alt={company.company_name} 
-                        className="h-12 w-auto object-contain"
-                        style={{ maxWidth: '50px' }}
+                        className="h-full w-full object-contain object-left"
                         onError={(e) => {
                           e.currentTarget.style.display = 'none';
                         }}
                       />
-                  </div>
+                    </div>
                   )}
                   {/* Company Details */}
-                  <div className="flex-1">
+                  <div className="flex flex-1 flex-col justify-center pl-2">
                     <h1 className="text-lg font-bold mb-1">{company?.company_name || 'Company Name'}</h1>
                     <p className="text-xs text-gray-700 leading-relaxed break-words">{company?.address || 'Company Address'}</p>
                     <p className="text-xs text-gray-700 leading-relaxed">
@@ -544,21 +520,6 @@ export default function InvoiceDetailPage() {
                     </div>
                   </div>
                 </div>
-
-                {/* Dispatched Items - Compact */}
-                {dispatchItems.length > 0 && (
-                  <div className="mb-3 pb-2 border-b">
-                    <h3 className="text-sm font-semibold mb-2">Dispatched Items:</h3>
-                    <div className="grid grid-cols-8 gap-1.5" style={{ gridAutoFlow: 'dense' }}>
-                      {dispatchItems.map((item, index) => (
-                        <div key={index} className="border border-gray-300 rounded p-1.5 text-center bg-gray-50">
-                          <div className="text-xs font-semibold text-gray-700">{item.size_name}</div>
-                          <div className="text-base font-bold text-gray-900">{item.quantity}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
 
                 {/* Order summary — aligned with quotation layout */}
                 <div className="mb-4">

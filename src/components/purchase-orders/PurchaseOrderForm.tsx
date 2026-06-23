@@ -22,6 +22,22 @@ import { convertImageToBase64WithCache, createFallbackLogo } from '@/utils/image
 import { Checkbox } from '@/components/ui/checkbox';
 import { PendingItem, PendingItemGroup, getPendingItemPlaceholder, usePendingPoItems } from '@/hooks/usePendingPoItems';
 import { normalizeSelectedColors, selectedColorsDisplayText, type BomSelectedColor } from '@/utils/bomSelectedColors';
+import { recalcOrderStatus } from '@/lib/recalcOrderStatus';
+import { useSizeTypes } from '@/hooks/useSizeTypes';
+import {
+  getOrderLineSizeRows,
+  normalizeSizesQuantities,
+  OUTSOURCE_MANUAL_ENTRY_MODE,
+  parseOrderLineSpecifications,
+  sumSizesQuantities,
+  sizesQuantitiesToRows,
+} from '@/lib/orderLineSizes';
+import {
+  createEmptyOutsourceManualLine,
+  OutsourceManualPoLinesPanel,
+  validateOutsourceManualLines,
+  type OutsourceManualPoLine,
+} from '@/components/purchase-orders/OutsourceManualPoLinesPanel';
 import {
   poLineColorPayload,
   resolvePoLineColor,
@@ -87,6 +103,9 @@ type LineItem = {
   bom_number?: string;
   product_name?: string | null;
   sales_order_item_id?: string | null;
+  size_type_id?: string | null;
+  sizes_quantities?: Record<string, number>;
+  entry_mode?: string | null;
 };
 
 function buildPoLineBomRecordStub(line: LineItem, bomId: string): Record<string, unknown> {
@@ -219,7 +238,15 @@ export function PurchaseOrderForm() {
   // Check for BOM data in URL params and location state
   const location = useLocation();
   const bomParam = searchParams.get('bom');
+  const modeParam = searchParams.get('mode');
+  const salesOrderIdParam = searchParams.get('sales_order_id');
+  const salesOrderItemIdParam = searchParams.get('sales_order_item_id');
   const [bomData, setBomData] = useState<any>(null);
+  const [isOutsourceMode, setIsOutsourceMode] = useState(
+    () => modeParam === 'outsource' || (!!salesOrderIdParam && !bomParam)
+  );
+
+  const { sizeTypes } = useSizeTypes();
 
   const [loading, setLoading] = useState(false);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -567,6 +594,7 @@ export function PurchaseOrderForm() {
    * When opened from a BOM, always show the picker (even while loading).
    */
   const showPendingBomPickerSection = useMemo(() => {
+    if (isOutsourceMode) return false;
     if (isReadOnly) return false;
     if (bomData?.id) return true;
     if (pendingLoading || pendingError) return true;
@@ -578,7 +606,22 @@ export function PurchaseOrderForm() {
     pendingError,
     fabricGroups.length,
     itemGroups.length,
+    isOutsourceMode,
   ]);
+
+  const outsourceManualLines = useMemo(
+    () =>
+      items.filter(
+        (it) =>
+          it.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE ||
+          (isOutsourceMode && !it.bom_item_id && it.item_type === 'product')
+      ) as OutsourceManualPoLine[],
+    [items, isOutsourceMode]
+  );
+
+  const handleOutsourceLinesChange = (lines: OutsourceManualPoLine[]) => {
+    setItems(lines);
+  };
 
   const itemColorMap = useMemo(() => {
     const map = new Map<string, string | null>();
@@ -644,11 +687,15 @@ export function PurchaseOrderForm() {
         selected_colors?: BomSelectedColor[];
         fabric_gsm?: string;
         item_color?: string | null;
+        entry_mode?: string | null;
+        sizes_quantities?: Record<string, number>;
+        fabric_gsm?: string;
+        item_color?: string | null;
         remarks: Set<string>;
       }
     >();
   
-    items.forEach(item => {
+    items.forEach((item, itemIndex) => {
       const qty = Number(item.quantity || 0);
       if (!Number.isFinite(qty) || qty <= 0) return;
       const unit = item.unit_of_measure || '';
@@ -659,7 +706,10 @@ export function PurchaseOrderForm() {
           : '';
       const masterColor = item.item_id ? itemColorMap.get(item.item_id) || null : null;
       // BOM-backed lines must not merge: same fabric on two BOMs would otherwise sum quantities (wrong).
-      const identityKey = bomItemId
+      const identityKey =
+        item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE
+          ? ['outsource_manual', String(itemIndex), norm(item.item_name)].join('|')
+          : bomItemId
         ? ['bom_item', bomItemId].join('|')
         : itemType === 'fabric'
           ? [
@@ -735,7 +785,8 @@ export function PurchaseOrderForm() {
           key: identityKey,
           item_name: item.item_name,
           item_type: item.item_type || 'item',
-          item_id: item.item_id || null,
+          item_id:
+            item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE ? null : item.item_id || null,
           item_category: item.item_category || null,
           unit_of_measure: unit,
           total_quantity: qty,
@@ -747,7 +798,9 @@ export function PurchaseOrderForm() {
           selected_colors: colorFields.selected_colors,
           fabric_gsm: item.fabric_gsm,
           item_color: colorFields.item_color,
-          remarks: remarksSet
+          entry_mode: item.entry_mode ?? null,
+          sizes_quantities: item.sizes_quantities,
+          remarks: remarksSet,
         });
       }
     });
@@ -1358,25 +1411,43 @@ export function PurchaseOrderForm() {
     if (bomParam) return;
     if (location.state?.bomData) return;
 
-    const so = searchParams.get('sales_order_id');
-    const soi = searchParams.get('sales_order_item_id');
+    const so = salesOrderIdParam;
+    const soi = salesOrderItemIdParam;
+    if (modeParam === 'outsource' || so) {
+      setIsOutsourceMode(true);
+    }
     if (so) {
       setPo((p) => (p.sales_order_id === so ? p : { ...p, sales_order_id: so }));
     }
-    if (!so || !soi || salesOrderLinePrefillDoneRef.current) return;
+    if (!isOutsourceMode && modeParam !== 'outsource' && !so) return;
+    if (salesOrderLinePrefillDoneRef.current) return;
+    if (!soi) {
+      if (isOutsourceMode && items.length === 0) {
+        setItems([createEmptyOutsourceManualLine()]);
+      }
+      return;
+    }
 
     salesOrderLinePrefillDoneRef.current = true;
     void (async () => {
       const { data, error } = await supabase
         .from('order_items')
-        .select('id, quantity, product_id, product_description')
+        .select(
+          'id, quantity, product_id, product_description, size_type_id, sizes_quantities, specifications, execution_flow, gsm, color'
+        )
         .eq('id', soi)
         .maybeSingle();
 
       if (error || !data) {
         salesOrderLinePrefillDoneRef.current = false;
-        toast.error('Could not load the sales order line for this purchase order.');
+        if (!items.length) {
+          setItems([createEmptyOutsourceManualLine({ sales_order_item_id: soi })]);
+        }
         return;
+      }
+
+      if ((data as { execution_flow?: string }).execution_flow === 'outsource') {
+        setIsOutsourceMode(true);
       }
 
       let label = String(data.product_description || '').trim();
@@ -1392,24 +1463,37 @@ export function PurchaseOrderForm() {
       }
       if (!label) label = 'Sales order line';
 
-      const qty = Number(data.quantity) || 0;
-      setItems((prev) =>
-        prev.length > 0
-          ? prev
-          : [
-              {
-                item_type: 'product',
-                item_id: String(data.product_id || ''),
-                item_name: label,
-                item_image_url: null,
-                quantity: qty,
-                unit_of_measure: 'pcs',
-                sales_order_item_id: soi,
-              },
-            ]
+      const specs = parseOrderLineSpecifications((data as any).specifications);
+      const sizeRows = getOrderLineSizeRows(
+        specs,
+        Number(data.quantity) || 0,
+        (data as any).sizes_quantities
       );
+      const sizes_quantities =
+        sizeRows.length > 0
+          ? Object.fromEntries(sizeRows.map((r) => [r.size, r.qty]))
+          : { Total: Number(data.quantity) || 0 };
+
+      setItems([
+        {
+          item_type: 'product',
+          item_id: '',
+          item_name: label,
+          item_image_url: null,
+          quantity: sumSizesQuantities(sizes_quantities),
+          unit_of_measure: 'pcs',
+          sales_order_item_id: soi,
+          size_type_id: (data as any).size_type_id ?? null,
+          sizes_quantities,
+          entry_mode: OUTSOURCE_MANUAL_ENTRY_MODE,
+          fabric_gsm:
+            String(specs.gsm || (data as any).gsm || '').trim() || undefined,
+          item_color:
+            String(specs.color || (data as any).color || '').trim() || null,
+        },
+      ]);
     })();
-  }, [id, bomParam, location.state, searchParams]);
+  }, [id, bomParam, location.state, searchParams, modeParam, salesOrderIdParam, salesOrderItemIdParam, isOutsourceMode, items.length]);
 
   // Load BOM data into form
   useEffect(() => {
@@ -1786,7 +1870,8 @@ export function PurchaseOrderForm() {
         fabric_name: item.fabric_name,
         remarks: [item.remarks, item.notes].filter(Boolean).join(' | '),
         item_type: item.item_type,
-        item_id: item.item_id || null,
+        item_id:
+          item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE ? null : item.item_id || null,
         item_category: item.item_category,
         fabric_color: item.fabric_color,
         selected_colors: normalizeSelectedColors(item.selected_colors),
@@ -1794,13 +1879,34 @@ export function PurchaseOrderForm() {
         fabric_for_supplier: item.fabric_for_supplier || resolveFabricForSupplierName(item, fabricOptions) || null,
         item_color: item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null),
         quantity: item.quantity,
-        unit_of_measure: item.unit_of_measure
+        unit_of_measure: item.unit_of_measure,
+        entry_mode: item.entry_mode,
+        sizes_quantities: item.sizes_quantities,
       }));
 
       const lineItemsHTML = aggregatedItems.map(item => {
-        // Debug logging for fabric items
-        console.log('PDF - Aggregated item data:', item);
-        
+        if (item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE) {
+          const sizeRows = sizesQuantitiesToRows(item.sizes_quantities || {});
+          const sizeTable =
+            sizeRows.length > 0
+              ? `<table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:10px;">
+                  <tr>${sizeRows.map((r) => `<th style="border:1px solid #ddd;padding:2px 6px;">${r.size}</th>`).join('')}</tr>
+                  <tr>${sizeRows.map((r) => `<td style="border:1px solid #ddd;padding:2px 6px;text-align:center;">${r.qty}</td>`).join('')}</tr>
+                </table>`
+              : formatQuantity(item.total_quantity ?? item.quantity ?? 0);
+          return `
+        <tr>
+          <td>Product</td>
+          <td>${item.item_name}${sizeRows.length > 0 ? `<br/>${sizeTable}` : ''}</td>
+          <td>${item.fabric_gsm || '-'}</td>
+          <td>${lineColorDisplay({ ...item, notes: (item as { notes?: string }).notes || item.remarks })}</td>
+          <td style="text-align: right;">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
+          <td>${item.unit_of_measure || 'pcs'}</td>
+          <td>${item.remarks || '-'}</td>
+        </tr>
+      `;
+        }
+
         const displayName = purchaseOrderLineItemDisplayName(item, fabricOptions);
         
         return `
@@ -1984,7 +2090,8 @@ export function PurchaseOrderForm() {
         fabric_name: item.fabric_name,
         remarks: [item.remarks, item.notes].filter(Boolean).join(' | '),
         item_type: item.item_type,
-        item_id: item.item_id || null,
+        item_id:
+          item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE ? null : item.item_id || null,
         item_category: item.item_category,
         fabric_color: item.fabric_color,
         selected_colors: normalizeSelectedColors(item.selected_colors),
@@ -1992,13 +2099,34 @@ export function PurchaseOrderForm() {
         fabric_for_supplier: item.fabric_for_supplier || resolveFabricForSupplierName(item, fabricOptions) || null,
         item_color: item.item_color || (item.item_id ? itemColorMap.get(item.item_id) || null : null),
         quantity: item.quantity,
-        unit_of_measure: item.unit_of_measure
+        unit_of_measure: item.unit_of_measure,
+        entry_mode: item.entry_mode,
+        sizes_quantities: item.sizes_quantities,
       }));
 
       const lineItemsHTML = aggregatedItems.map(item => {
-        // Debug logging for fabric items
-        console.log('Print - Aggregated item data:', item);
-        
+        if (item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE) {
+          const sizeRows = sizesQuantitiesToRows(item.sizes_quantities || {});
+          const sizeTable =
+            sizeRows.length > 0
+              ? `<table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:10px;">
+                  <tr>${sizeRows.map((r) => `<th style="border:1px solid #ddd;padding:2px 6px;">${r.size}</th>`).join('')}</tr>
+                  <tr>${sizeRows.map((r) => `<td style="border:1px solid #ddd;padding:2px 6px;text-align:center;">${r.qty}</td>`).join('')}</tr>
+                </table>`
+              : formatQuantity(item.total_quantity ?? item.quantity ?? 0);
+          return `
+        <tr>
+          <td>Product</td>
+          <td>${item.item_name}${sizeRows.length > 0 ? `<br/>${sizeTable}` : ''}</td>
+          <td>${item.fabric_gsm || '-'}</td>
+          <td>${lineColorDisplay({ ...item, notes: (item as { notes?: string }).notes || item.remarks })}</td>
+          <td class="number-cell">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
+          <td>${item.unit_of_measure || 'pcs'}</td>
+          <td>${item.remarks || '-'}</td>
+        </tr>
+      `;
+        }
+
         const displayName = purchaseOrderLineItemDisplayName(item, fabricOptions);
         
         return `
@@ -2691,8 +2819,18 @@ export function PurchaseOrderForm() {
           bom_item_id: item.bom_item_id || tracking?.bom_item_id || null,
           bom_id: item.bom_id || tracking?.bom_id || null,
           sales_order_item_id: (item as { sales_order_item_id?: string | null }).sales_order_item_id ?? null,
+          size_type_id: (item as { size_type_id?: string | null }).size_type_id ?? null,
+          sizes_quantities: normalizeSizesQuantities(
+            (item as { sizes_quantities?: Record<string, number> }).sizes_quantities
+          ),
+          entry_mode: (item as { entry_mode?: string | null }).entry_mode ?? null,
         };
       });
+
+      const hasOutsourceManual = processedItems.some(
+        (it) => it.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE
+      );
+      if (hasOutsourceManual) setIsOutsourceMode(true);
       
       // No pricing calculations needed for purchase orders
       const itemsWithTotals = processedItems;
@@ -2789,8 +2927,16 @@ export function PurchaseOrderForm() {
 
     if (items.length === 0) {
       toast.error('Please add at least one item');
+      return;
+    }
+
+    if (isOutsourceMode) {
+      const validationError = validateOutsourceManualLines(outsourceManualLines);
+      if (validationError) {
+        toast.error(validationError);
         return;
       }
+    }
 
     try {
       setLoading(true);
@@ -2927,7 +3073,8 @@ export function PurchaseOrderForm() {
         return {
         po_id: poId, // Changed from purchase_order_id to po_id
         item_type: item.type || item.item_type || 'item', // Use correct field name with fallback
-        item_id: item.item_id || null,
+        item_id:
+          item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE ? null : item.item_id || null,
         item_name:
           item.item_type === 'fabric' && supplierFabricName
             ? supplierFabricName
@@ -2939,6 +3086,12 @@ export function PurchaseOrderForm() {
         sales_order_item_id: item.sales_order_item_id || null,
         selected_colors: colorFields.selected_colors,
         item_color: colorFields.item_color,
+        size_type_id: item.size_type_id || null,
+        sizes_quantities: item.sizes_quantities || {},
+        entry_mode: item.entry_mode || null,
+        ...(item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE && {
+          fabric_gsm: item.fabric_gsm || null,
+        }),
         // Add fabric-specific fields for fabric items
         ...(item.item_type === 'fabric' && {
           fabric_name: item.fabric_name || null,
@@ -3031,6 +3184,9 @@ export function PurchaseOrderForm() {
       setSavedPoNumber(poNumber || '');
       setPostSaveDialogOpen(true);
       toast.success('Purchase order saved successfully');
+      if (poData.sales_order_id) {
+        await recalcOrderStatus(poData.sales_order_id);
+      }
       
       } catch (error) {
       console.error('Error saving purchase order:', error);
@@ -3567,7 +3723,16 @@ export function PurchaseOrderForm() {
 
       {/* Line Items */}
       <div className="space-y-6">
-        {isReadOnly && (
+        {isReadOnly && isOutsourceMode && outsourceManualLines.length > 0 && (
+          <OutsourceManualPoLinesPanel
+            lines={outsourceManualLines}
+            onChange={() => {}}
+            readOnly
+            sizeTypes={sizeTypes}
+          />
+        )}
+
+        {isReadOnly && !isOutsourceMode && (
           <Card>
             <CardHeader>
               <CardTitle>Selected Items</CardTitle>
@@ -3639,7 +3804,20 @@ export function PurchaseOrderForm() {
           </Card>
         )}
 
-        {!isReadOnly &&
+        {!isReadOnly && isOutsourceMode && (
+          <OutsourceManualPoLinesPanel
+            lines={
+              outsourceManualLines.length > 0
+                ? outsourceManualLines
+                : [createEmptyOutsourceManualLine({ sales_order_item_id: salesOrderItemIdParam })]
+            }
+            onChange={handleOutsourceLinesChange}
+            sizeTypes={sizeTypes}
+            defaultSalesOrderItemId={salesOrderItemIdParam}
+          />
+        )}
+
+        {!isReadOnly && !isOutsourceMode &&
           (bomData?.id ? (
             <Collapsible open={nonBomLinesOpen} onOpenChange={setNonBomLinesOpen} className="space-y-2">
               <CollapsibleTrigger asChild>

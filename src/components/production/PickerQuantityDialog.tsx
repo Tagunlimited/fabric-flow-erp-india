@@ -411,6 +411,7 @@ export default function PickerQuantityDialog({
       }
 
       await decrementQcRejected();
+      await persistToNotes();
 
       await insertOrderBatchPickEventRows(pickLedgerDeltas);
 
