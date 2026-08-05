@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { fetchAllActiveOrderReceiptLinks } from "@/lib/fetchActiveOrderReceiptLinks";
 import { fetchOrdersForReceiptLinks } from "@/lib/fetchOrdersForReceiptLinks";
 import { measureAsync } from "@/lib/perf";
-import { shouldRetryReadWithoutIsDeletedFilter } from "@/lib/supabaseSoftDeleteCompat";
 
-export interface ReceiptLink {
-  reference_id: string | null;
-  reference_number: string | null;
-  reference_type?: string | null;
-  status?: string | null;
+export type { OrderReceiptLink as ReceiptLink } from "@/lib/fetchActiveOrderReceiptLinks";
+
+export interface OrdersWithReceiptsOptions {
+  /** Include readymade orders (needed for Design & Printing queues). */
+  includeReadymade?: boolean;
 }
 
 export interface OrdersWithReceiptsResult<T = any> {
@@ -18,17 +17,10 @@ export interface OrdersWithReceiptsResult<T = any> {
   refetch: () => Promise<void>;
 }
 
-/** Cap linked orders returned to keep design/production queues responsive. */
-const MAX_ORDERS_WITH_RECEIPTS = 400;
-
-function isActiveOrderReceipt(row: ReceiptLink): boolean {
-  const referenceType = String(row.reference_type || "").trim().toLowerCase();
-  const status = String(row.status || "").trim().toLowerCase();
-  const hasLink = !!(row.reference_id || String(row.reference_number || "").trim());
-  return referenceType === "order" && status === "active" && hasLink;
-}
-
-export function useOrdersWithReceipts<T = any>(): OrdersWithReceiptsResult<T> {
+export function useOrdersWithReceipts<T = any>(
+  options?: OrdersWithReceiptsOptions
+): OrdersWithReceiptsResult<T> {
+  const includeReadymade = options?.includeReadymade ?? false;
   const [orders, setOrders] = useState<T[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -38,29 +30,9 @@ export function useOrdersWithReceipts<T = any>(): OrdersWithReceiptsResult<T> {
       setLoading(true);
       setError(null);
 
-      let { data: receipts, error: receiptsError } = await measureAsync(
+      const validReceipts = await measureAsync(
         "useOrdersWithReceipts.receipts",
-        async () =>
-          supabase
-            .from("receipts")
-            .select("reference_id, reference_number, reference_type, status")
-            .eq("is_deleted", false)
-            .or("reference_type.eq.order,reference_type.eq.ORDER")
-      );
-
-      if (receiptsError && shouldRetryReadWithoutIsDeletedFilter(receiptsError)) {
-        const r2 = await supabase
-          .from("receipts")
-          .select("reference_id, reference_number, reference_type, status")
-          .or("reference_type.eq.order,reference_type.eq.ORDER");
-        receipts = r2.data;
-        receiptsError = r2.error;
-      }
-
-      if (receiptsError) throw receiptsError;
-
-      const validReceipts: ReceiptLink[] = ((receipts || []) as ReceiptLink[]).filter(
-        isActiveOrderReceipt
+        fetchAllActiveOrderReceiptLinks
       );
 
       if (validReceipts.length === 0) {
@@ -84,15 +56,10 @@ export function useOrdersWithReceipts<T = any>(): OrdersWithReceiptsResult<T> {
       );
 
       const ordersData = await measureAsync("useOrdersWithReceipts.orders", async () =>
-        fetchOrdersForReceiptLinks(orderIds, orderNumbers)
+        fetchOrdersForReceiptLinks(orderIds, orderNumbers, { includeReadymade })
       );
 
-      const capped =
-        ordersData.length > MAX_ORDERS_WITH_RECEIPTS
-          ? ordersData.slice(0, MAX_ORDERS_WITH_RECEIPTS)
-          : ordersData;
-
-      setOrders(capped as unknown as T[]);
+      setOrders(ordersData as unknown as T[]);
     } catch (err) {
       console.error("useOrdersWithReceipts: failed to fetch", err);
       setOrders([]);
@@ -100,7 +67,7 @@ export function useOrdersWithReceipts<T = any>(): OrdersWithReceiptsResult<T> {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [includeReadymade]);
 
   useEffect(() => {
     void fetchOrders();

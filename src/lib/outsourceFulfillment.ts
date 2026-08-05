@@ -62,6 +62,114 @@ export function describeLineFulfillmentNextStep(
   );
 }
 
+/** Map PO line id → sales order line when sales_order_item_id was not saved on the PO. */
+async function resolveOrphanPoItemLineIds(
+  poiRows: Array<{ id: string; sales_order_item_id?: string | null; po_id?: string | null }>
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const orphans = poiRows.filter((r) => !r.sales_order_item_id);
+  if (!orphans.length) return out;
+
+  const poIds = [...new Set(orphans.map((r) => r.po_id).filter(Boolean))] as string[];
+  if (!poIds.length) return out;
+
+  const { data: pos } = await supabase
+    .from('purchase_orders')
+    .select('id, sales_order_id')
+    .in('id', poIds as any);
+
+  const orderIdByPoId = new Map<string, string>();
+  for (const po of pos || []) {
+    const salesOrderId = String((po as any).sales_order_id || '');
+    if (salesOrderId) orderIdByPoId.set(String((po as any).id), salesOrderId);
+  }
+
+  const orderIds = [...new Set([...orderIdByPoId.values()])];
+  if (!orderIds.length) return out;
+
+  const { data: outsourceLines } = await supabase
+    .from('order_items')
+    .select('id, order_id')
+    .in('order_id', orderIds as any)
+    .eq('execution_flow', 'outsource');
+
+  const linesByOrder = new Map<string, string[]>();
+  for (const line of outsourceLines || []) {
+    const oid = String((line as any).order_id || '');
+    if (!oid) continue;
+    if (!linesByOrder.has(oid)) linesByOrder.set(oid, []);
+    linesByOrder.get(oid)!.push(String((line as any).id));
+  }
+
+  for (const poi of orphans) {
+    const orderId = poi.po_id ? orderIdByPoId.get(String(poi.po_id)) : undefined;
+    if (!orderId) continue;
+    const lineIds = linesByOrder.get(orderId) || [];
+    if (lineIds.length === 1) {
+      out.set(String(poi.id), lineIds[0]);
+    }
+  }
+
+  return out;
+}
+
+function approvedGrnQtyByPoItem(
+  grnRows: Array<{ po_item_id?: string | null; approved_quantity?: number | null; quality_status?: string | null }> | null
+): Map<string, number> {
+  const grnByPoItem = new Map<string, number>();
+  for (const g of grnRows || []) {
+    const poItemId = String(g.po_item_id || '');
+    if (!poItemId) continue;
+    if (String(g.quality_status || '').toLowerCase() !== 'approved') continue;
+    grnByPoItem.set(poItemId, (grnByPoItem.get(poItemId) || 0) + Number(g.approved_quantity || 0));
+  }
+  return grnByPoItem;
+}
+
+async function loadPoiRowsForOrderLines(orderItemIds: string[]): Promise<any[]> {
+  const ids = [...new Set(orderItemIds.filter(Boolean))];
+  if (!ids.length) return [];
+
+  const { data: linkedPoiRows } = await supabase
+    .from('purchase_order_items')
+    .select('id, po_id, sales_order_item_id, quantity, sizes_quantities, entry_mode')
+    .in('sales_order_item_id', ids as any);
+
+  const poiRows = [...(linkedPoiRows || [])];
+  const existingIds = new Set(poiRows.map((r: any) => r.id));
+
+  const { data: lineOrderRows } = await supabase
+    .from('order_items')
+    .select('id, order_id')
+    .in('id', ids as any);
+  const orderIdsForLines = [...new Set((lineOrderRows || []).map((r: any) => r.order_id).filter(Boolean))];
+  if (!orderIdsForLines.length) return poiRows;
+
+  const { data: poForOrders } = await supabase
+    .from('purchase_orders')
+    .select('id, sales_order_id')
+    .in('sales_order_id', orderIdsForLines as any)
+    .eq('is_deleted', false);
+  const poIdsForOrders = (poForOrders || []).map((p: any) => p.id).filter(Boolean);
+  if (!poIdsForOrders.length) return poiRows;
+
+  const { data: orphanManual } = await supabase
+    .from('purchase_order_items')
+    .select('id, po_id, sales_order_item_id, quantity, sizes_quantities, entry_mode')
+    .in('po_id', poIdsForOrders as any)
+    .is('sales_order_item_id', null)
+    .eq('entry_mode', 'outsource_manual');
+
+  for (const row of orphanManual || []) {
+    if (!existingIds.has((row as any).id)) {
+      poiRows.push(row);
+      existingIds.add((row as any).id);
+    }
+  }
+
+  return poiRows;
+}
+
 /** Approved GRN qty per sales order line (outsource PO linkage). */
 export async function loadOutsourceGrnApprovedByLine(
   orderItemIds: string[]
@@ -70,12 +178,10 @@ export async function loadOutsourceGrnApprovedByLine(
   const ids = [...new Set(orderItemIds.filter(Boolean))];
   if (!ids.length) return out;
 
-  const { data: poiRows, error } = await supabase
-    .from('purchase_order_items')
-    .select('id, sales_order_item_id, quantity')
-    .in('sales_order_item_id', ids as any);
+  const poiRows = await loadPoiRowsForOrderLines(ids);
+  if (!poiRows.length) return out;
 
-  if (error || !poiRows?.length) return out;
+  const orphanLineByPoItem = await resolveOrphanPoItemLineIds(poiRows);
 
   const poItemIds = poiRows.map((r: any) => r.id).filter(Boolean);
   const { data: grnRows } = await supabase
@@ -83,18 +189,15 @@ export async function loadOutsourceGrnApprovedByLine(
     .select('po_item_id, approved_quantity, quality_status')
     .in('po_item_id', poItemIds as any);
 
-  const grnByPoItem = new Map<string, number>();
-  for (const g of grnRows || []) {
-    const poItemId = String((g as any).po_item_id || '');
-    if (!poItemId) continue;
-    if (String((g as any).quality_status || '').toLowerCase() !== 'approved') continue;
-    grnByPoItem.set(poItemId, (grnByPoItem.get(poItemId) || 0) + Number((g as any).approved_quantity || 0));
-  }
+  const grnByPoItem = approvedGrnQtyByPoItem(grnRows);
 
-  for (const row of poiRows as any[]) {
-    const lineId = String(row.sales_order_item_id || '');
+  for (const row of poiRows) {
+    const lineId = String(
+      row.sales_order_item_id || orphanLineByPoItem.get(String(row.id)) || ''
+    );
     if (!lineId) continue;
     const approved = grnByPoItem.get(String(row.id)) || 0;
+    if (approved <= 0) continue;
     out.set(lineId, (out.get(lineId) || 0) + approved);
   }
   return out;
@@ -220,12 +323,16 @@ export async function loadOutsourcePosAwaitingGrn(): Promise<OutsourcePoAwaiting
   const { data: poRows, error } = await supabase
     .from('purchase_orders')
     .select(
-      'id, po_number, order_date, sales_order_id, supplier:suppliers(supplier_name), purchase_order_items(id, quantity, sales_order_item_id)'
+      'id, po_number, order_date, sales_order_id, supplier:supplier_master(supplier_name), purchase_order_items(id, quantity, sales_order_item_id)'
     )
     .not('sales_order_id', 'is', null)
     .eq('is_deleted', false);
 
-  if (error || !poRows?.length) return [];
+  if (error) {
+    console.error('loadOutsourcePosAwaitingGrn:', error);
+    return [];
+  }
+  if (!poRows?.length) return [];
 
   const allLineIds = (poRows as any[])
     .flatMap((po) => (po.purchase_order_items || []).map((pi: any) => pi.sales_order_item_id))
@@ -250,10 +357,27 @@ export async function loadOutsourcePosAwaitingGrn(): Promise<OutsourcePoAwaiting
     .in('id', orderIds as any);
   const orderNumById = new Map((orders || []).map((o: any) => [o.id, o.order_number]));
 
+  const outsourceOrderIds = new Set<string>();
+  if (orderIds.length) {
+    const { data: outsourceOrderLines } = await supabase
+      .from('order_items')
+      .select('order_id')
+      .in('order_id', orderIds as any)
+      .eq('execution_flow', 'outsource');
+    for (const row of outsourceOrderLines || []) {
+      const oid = String((row as any).order_id || '');
+      if (oid) outsourceOrderIds.add(oid);
+    }
+  }
+
   for (const po of poRows as any[]) {
-    const items = (po.purchase_order_items || []).filter(
-      (pi: any) => pi?.sales_order_item_id && outsourceLineIds.has(String(pi.sales_order_item_id))
-    );
+    const isOutsourceOrderPo = outsourceOrderIds.has(String(po.sales_order_id || ''));
+    const items = (po.purchase_order_items || []).filter((pi: any) => {
+      if (pi?.sales_order_item_id && outsourceLineIds.has(String(pi.sales_order_item_id))) {
+        return true;
+      }
+      return !pi?.sales_order_item_id && isOutsourceOrderPo;
+    });
     if (!items.length) continue;
 
     let poQty = 0;
@@ -303,12 +427,10 @@ export async function loadOutsourceGrnApprovedByLineAndSize(
   const ids = [...new Set(orderItemIds.filter(Boolean))];
   if (!ids.length) return out;
 
-  const { data: poiRows, error } = await supabase
-    .from('purchase_order_items')
-    .select('id, sales_order_item_id, sizes_quantities, entry_mode')
-    .in('sales_order_item_id', ids as any);
+  const poiRows = await loadPoiRowsForOrderLines(ids);
+  if (!poiRows.length) return out;
 
-  if (error || !poiRows?.length) return out;
+  const orphanLineByPoItem = await resolveOrphanPoItemLineIds(poiRows);
 
   const poItemIds = poiRows.map((r: any) => r.id).filter(Boolean);
   const { data: grnRows } = await supabase
@@ -329,8 +451,10 @@ export async function loadOutsourceGrnApprovedByLineAndSize(
     );
   }
 
-  for (const poi of poiRows as any[]) {
-    const lineId = String(poi.sales_order_item_id || '');
+  for (const poi of poiRows) {
+    const lineId = String(
+      poi.sales_order_item_id || orphanLineByPoItem.get(String(poi.id)) || ''
+    );
     if (!lineId) continue;
 
     const sizes = normalizeSizesQuantities(poi.sizes_quantities);
@@ -339,7 +463,7 @@ export async function loadOutsourceGrnApprovedByLineAndSize(
 
     if (hasManualSizes) {
       const lineMap = out.get(lineId) || {};
-      for (const [size, _ordered] of Object.entries(sizes)) {
+      for (const [size] of Object.entries(sizes)) {
         const approved = grnByPoItemSize.get(`${poi.id}|${size}`) || 0;
         if (approved > 0) {
           lineMap[size] = (lineMap[size] || 0) + approved;
@@ -429,12 +553,16 @@ export type OutsourceDispatchCandidate = {
 
 /** Custom orders with outsource GRN qty available for dispatch (no batch QC required). */
 export async function loadOutsourceDispatchCandidates(): Promise<OutsourceDispatchCandidate[]> {
-  const { data: lines } = await supabase
+  const { data: lines, error } = await supabase
     .from('order_items')
     .select('id, order_id, quantity, execution_flow, orders!inner(id, order_number, order_type, is_deleted, status, customers(company_name))')
     .eq('execution_flow', 'outsource')
     .eq('is_deleted', false);
 
+  if (error) {
+    console.error('loadOutsourceDispatchCandidates:', error);
+    return [];
+  }
   if (!lines?.length) return [];
 
   const byOrder = new Map<string, { order: any; lineIds: string[]; orderQty: number }>();

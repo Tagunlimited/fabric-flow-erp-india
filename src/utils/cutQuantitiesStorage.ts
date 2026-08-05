@@ -93,6 +93,59 @@ export function isOrderItemEligibleForBatchAssignment(
   return getTotalCutForOrderItem(raw, orderItemId, allOrderItemIds) > 0;
 }
 
+/** True when recorded cut qty for the line meets or exceeds required line qty. */
+export function isOrderItemCuttingComplete(
+  raw: unknown,
+  orderItemId: string,
+  allOrderItemIds: string[],
+  requiredQty: number
+): boolean {
+  const required = Math.max(0, Number(requiredQty) || 0);
+  if (required <= 0) return false;
+  const cut = getTotalCutForOrderItem(raw, orderItemId, allOrderItemIds);
+  return cut + 1e-6 >= required;
+}
+
+/** Cut pieces on a line not yet assigned to tailor batches (sum across sizes). */
+export function getRemainingCutToAssignForLine(
+  cutRaw: unknown,
+  orderItemId: string,
+  allOrderItemIds: string[],
+  assignedBySize: Record<string, number> = {}
+): number {
+  const byItem = normalizeToByOrderItem(cutRaw, allOrderItemIds);
+  const cuts = byItem[orderItemId] || {};
+  return Object.entries(cuts).reduce((sum, [sizeName, cutQty]) => {
+    const cut = Number(cutQty) || 0;
+    const assigned = Number(assignedBySize[sizeName] || 0);
+    return sum + Math.max(0, cut - assigned);
+  }, 0);
+}
+
+export type OrderAssignmentCutFields = {
+  cut_quantity?: number;
+  cut_quantities_by_size?: unknown;
+};
+
+/** Merge cut totals from another order_assignments row into accumulated fields. */
+export function mergeOrderAssignmentCutFields(
+  current: OrderAssignmentCutFields | undefined,
+  incoming: OrderAssignmentCutFields
+): OrderAssignmentCutFields {
+  const currentCol = Math.max(0, Number(current?.cut_quantity || 0));
+  const incomingCol = Math.max(0, Number(incoming.cut_quantity || 0));
+  const currentJson = sumAllCutsInStoredJson(current?.cut_quantities_by_size ?? null);
+  const incomingJson = sumAllCutsInStoredJson(incoming.cut_quantities_by_size ?? null);
+  const resolved = Math.max(currentCol, currentJson, incomingCol, incomingJson);
+  const useIncomingJson = incomingJson >= currentJson;
+  return {
+    cut_quantity: resolved,
+    cut_quantities_by_size: useIncomingJson
+      ? incoming.cut_quantities_by_size ?? current?.cut_quantities_by_size
+      : current?.cut_quantities_by_size ?? incoming.cut_quantities_by_size,
+  };
+}
+
 export function buildStoredPayloadFromByOrderItem(
   byOrderItem: Record<string, Record<string, number>>
 ): { by_order_item: Record<string, Record<string, number>> } {

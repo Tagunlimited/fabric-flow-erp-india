@@ -48,29 +48,35 @@ import { buildStitchingJobCardDocumentForJob } from '@/utils/stitchingJobCardFro
 import { BatchAssignmentPreviewDialog } from '@/components/production/BatchAssignmentPreviewDialog';
 import { getOrderTotalQuantityFromItems } from '@/utils/orderItemLineQuantity';
 import { selectedColorsDisplayText } from '@/utils/bomSelectedColors';
-import { sumAllCutsInStoredJson } from '@/utils/cutQuantitiesStorage';
+import {
+  mergeOrderAssignmentCutFields,
+  sumAllCutsInStoredJson,
+} from '@/utils/cutQuantitiesStorage';
+import { fetchBatchAssignmentsByOrderIds } from '@/lib/fetchBatchAssignmentsByOrderIds';
+import { fetchRowsInChunks } from '@/lib/fetchRowsInChunks';
+import { fetchOrderItemsByOrderIds } from '@/lib/fetchOrderItemsBulk';
+import { measureAsync } from '@/lib/perf';
+import {
+  deriveCuttingJobStatus,
+  getCutCompletionPercentage,
+  getTotalBatchAssignedQty,
+  isCuttingJobCompleted,
+} from '@/utils/cuttingJobCompletion';
 
-/** View/API may expose assignment PK as `id` or `assignment_id`. */
-function batchAssignmentRowId(ba: { id?: string; assignment_id?: string } | null | undefined): string {
-  return String(ba?.id ?? ba?.assignment_id ?? '').trim();
-}
+const CUTTING_ORDER_ITEM_SELECT =
+  'id, order_id, product_category_id, product_description, fabric_id, color, gsm, quantity, sizes_quantities, specifications, category_image_url, execution_flow, size_type_id, mockup_images';
 
-/**
- * Pieces allocated on a size row for totals and completion checks.
- * Prefer max(assigned_quantity, quantity): `assigned_quantity` defaults to 0 in DB, so `??` would ignore legacy `quantity`.
- * If both are zero but picking was recorded, fall back to picked (stale assignment columns).
- */
-function effectiveBatchSizeLinePieces(sd: {
-  assigned_quantity?: unknown;
-  quantity?: unknown;
-  picked_quantity?: unknown;
-}): number {
-  const a = Math.max(0, Number(sd?.assigned_quantity) || 0);
-  const q = Math.max(0, Number(sd?.quantity) || 0);
-  const p = Math.max(0, Number(sd?.picked_quantity) || 0);
-  const fromExplicit = Math.max(a, q);
-  if (fromExplicit > 0) return fromExplicit;
-  return p;
+function orderItemSelectedColors(item: { specifications?: unknown } | null | undefined): unknown {
+  if (!item) return undefined;
+  try {
+    const specs =
+      typeof item.specifications === 'string'
+        ? JSON.parse(item.specifications)
+        : item.specifications || {};
+    return (specs as { selected_colors?: unknown }).selected_colors;
+  } catch {
+    return undefined;
+  }
 }
 
 interface CuttingJob {
@@ -191,6 +197,7 @@ const CuttingManagerPage = () => {
   const LOCAL_STORAGE_KEY = 'production-assignments';
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateJob, setUpdateJob] = useState<CuttingJob | null>(null);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   
   // Batch assignment dialog state
@@ -317,21 +324,34 @@ const CuttingManagerPage = () => {
     }
   };
 
-  // Load assigned cutting jobs from DB (order_assignments) and enrich with order/customer/BOM
-    const loadCuttingJobs = async (): Promise<CuttingJob[]> => {
-      try {
-        // First, get order IDs that have cutting assignments from both tables
-        const { data: rows } = await supabase
-          .from('order_assignments' as any)
-          .select(`
-            order_id, 
-            cutting_master_id,
-            cutting_master_name, 
-            cutting_work_date, 
-            cut_quantity,
-            cut_quantities_by_size
-          `)
-          .not('cutting_master_id', 'is', null);
+  const loadCuttingJobs = async (): Promise<CuttingJob[]> => {
+    try {
+      return await measureAsync('CuttingManagerPage.loadCuttingJobs', async () => {
+        const [{ data: rows }, { data: cuttingAssignmentsRows, error: cuttingAssignmentsError }] =
+          await Promise.all([
+            supabase
+              .from('order_assignments' as any)
+              .select(`
+                order_id,
+                cutting_master_id,
+                cutting_master_name,
+                cutting_work_date,
+                cut_quantity,
+                cut_quantities_by_size
+              `)
+              .not('cutting_master_id', 'is', null),
+            supabase
+              .from('order_cutting_assignments' as any)
+              .select(
+                'order_id, cutting_master_id, cutting_master_name, cutting_master_avatar_url, assigned_date'
+              )
+              .not('order_id', 'is', null),
+          ]);
+
+        if (cuttingAssignmentsError) {
+          console.error('Failed to load cutting assignments:', cuttingAssignmentsError);
+        }
+
         const map: Record<string, any> = {};
         (rows || []).forEach((r: any) => {
           if (!r?.order_id) return;
@@ -348,7 +368,6 @@ const CuttingManagerPage = () => {
           const bestRow = pickBestOrderAssignmentRow(current, r);
           map[key] = {
             ...bestRow,
-            // Prevent a stale/lower duplicate row from forcing a fully cut order back to pending.
             cut_quantity: Math.max(existingResolvedCut, rowResolvedCut),
             cut_quantities_by_size:
               rowCutFromJson >= sumAllCutsInStoredJson(current?.cut_quantities_by_size ?? null)
@@ -356,162 +375,129 @@ const CuttingManagerPage = () => {
                 : current?.cut_quantities_by_size,
           };
         });
-        const orderIds: string[] = Object.keys(map);
-        
-        // Also fetch order IDs from order_cutting_assignments for multiple cutting masters
-        const { data: cuttingAssignmentsRows } = await supabase
-          .from('order_cutting_assignments' as any)
-          .select('order_id')
-          .not('order_id', 'is', null);
-        const cuttingAssignmentOrderIds = Array.from(new Set((cuttingAssignmentsRows || []).map((r: any) => r.order_id).filter(Boolean)));
-        const allOrderIds = Array.from(new Set([...orderIds, ...cuttingAssignmentOrderIds]));
-        
+
+        const cuttingMastersByOrder: Record<string, any[]> = {};
+        (cuttingAssignmentsRows || []).forEach((r: any) => {
+          if (!r?.order_id) return;
+          const key = String(r.order_id);
+          if (!cuttingMastersByOrder[key]) cuttingMastersByOrder[key] = [];
+          cuttingMastersByOrder[key].push(r);
+        });
+
+        const allOrderIds = Array.from(
+          new Set([
+            ...Object.keys(map),
+            ...(cuttingAssignmentsRows || []).map((r: any) => String(r.order_id || '')).filter(Boolean),
+          ])
+        );
+
         if (allOrderIds.length === 0) {
           setCuttingJobs([]);
           return [];
         }
-        
-        // Fetch multiple cutting masters from order_cutting_assignments
-        let cuttingMastersByOrder: Record<string, any[]> = {};
-        try {
-          const { data: cuttingMastersData } = await supabase
-            .from('order_cutting_assignments' as any)
-            .select('order_id, cutting_master_id, cutting_master_name, cutting_master_avatar_url, assigned_date')
-            .in('order_id', allOrderIds as any);
-          (cuttingMastersData || []).forEach((r: any) => { 
-            if (r?.order_id) {
-              if (!cuttingMastersByOrder[r.order_id]) cuttingMastersByOrder[r.order_id] = [];
-              cuttingMastersByOrder[r.order_id].push(r);
-            }
-          });
-        } catch (e) {
-          console.error('Failed to load cutting masters:', e);
+
+        const [orders, orderItemsResult, batchAssignmentsByOrderId, boms, assignmentCutRows] =
+          await Promise.all([
+            fetchRowsInChunks(
+              'orders',
+              'id, order_number, expected_delivery_date, customer_id',
+              'id',
+              allOrderIds
+            ),
+            fetchOrderItemsByOrderIds(allOrderIds, CUTTING_ORDER_ITEM_SELECT),
+            fetchBatchAssignmentsByOrderIds(allOrderIds),
+            fetchRowsInChunks('bom_records', 'order_id, product_name, total_order_qty', 'order_id', allOrderIds),
+            fetchRowsInChunks(
+              'order_assignments',
+              'order_id, cut_quantity, cut_quantities_by_size',
+              'order_id',
+              allOrderIds
+            ),
+          ]);
+
+        for (const row of assignmentCutRows) {
+          if (!row?.order_id) continue;
+          const key = String(row.order_id);
+          const merged = mergeOrderAssignmentCutFields(map[key], row);
+          map[key] = { ...(map[key] || {}), ...merged };
         }
 
-        // Fetch employee avatar URLs for cutting masters
-        const cuttingMasterIds = Array.from(new Set([
-          ...Object.values(cuttingMastersByOrder).flat().map((cm: any) => cm.cutting_master_id).filter(Boolean),
-          ...Object.values(map).map((r: any) => r.cutting_master_id).filter(Boolean)
-        ]));
-        let employeeAvatars: Record<string, string> = {};
-        if (cuttingMasterIds.length > 0) {
-          try {
-            const { data: employees } = await supabase
-              .from('employees' as any)
-              .select('id, avatar_url')
-              .in('id', cuttingMasterIds as any);
-            (employees || []).forEach((emp: any) => {
-              if (emp?.id && emp?.avatar_url) {
-                employeeAvatars[emp.id] = emp.avatar_url;
-              }
-            });
-          } catch (e) {
-            console.error('Failed to load employee avatars:', e);
-          }
+        if (orderItemsResult.error) {
+          console.error('Error fetching order items:', orderItemsResult.error);
         }
 
-        // Fetch orders first (simplified query)
-        const { data: orders, error: ordersError } = await supabase
-          .from('orders' as any)
-          .select('id, order_number, expected_delivery_date, customer_id')
-          .in('id', allOrderIds as any);
+        const orderItems = (orderItemsResult.data || []).filter(
+          (item: any) => !item.execution_flow || item.execution_flow === 'stitching'
+        );
 
-        if (ordersError) {
-          console.error('Error fetching orders:', ordersError);
-          setCuttingJobs([]);
-          return [];
-        }
+        const productCategoryIds = Array.from(
+          new Set(orderItems.map((item: any) => item.product_category_id).filter(Boolean))
+        );
+        const fabricIds = Array.from(
+          new Set(orderItems.map((item: any) => item.fabric_id).filter(Boolean))
+        );
+        const customerIds = Array.from(
+          new Set((orders || []).map((o: any) => o.customer_id).filter(Boolean))
+        );
 
-        // Fetch order items separately
-        // First try to fetch order items without relationships
-        const { data: orderItems, error: orderItemsError } = await supabase
-          .from('order_items' as any)
-          .select('*')
-          .in('order_id', allOrderIds as any)
-          .or('execution_flow.eq.stitching,execution_flow.is.null');
+        const [productCategories, fabrics, customers] = await Promise.all([
+          productCategoryIds.length > 0
+            ? fetchRowsInChunks(
+                'product_categories',
+                'id, category_name, category_image_url',
+                'id',
+                productCategoryIds
+              )
+            : Promise.resolve([]),
+          fabricIds.length > 0
+            ? fetchRowsInChunks(
+                'fabric_master',
+                'id, fabric_name, color, gsm, image, hex',
+                'id',
+                fabricIds
+              )
+            : Promise.resolve([]),
+          customerIds.length > 0
+            ? fetchRowsInChunks('customers', 'id, company_name', 'id', customerIds)
+            : Promise.resolve([]),
+        ]);
 
-        if (orderItemsError) {
-          console.error('Error fetching order items:', orderItemsError);
-        } else {
-          console.log('Order items fetched successfully:', orderItems);
-        }
-
-        // Fetch product categories separately
-        const productCategoryIds = Array.from(new Set((orderItems || []).map((item: any) => item.product_category_id).filter(Boolean)));
-        let productCategoriesMap: Record<string, any> = {};
-        if (productCategoryIds.length > 0) {
-          const { data: productCategories, error: productCategoriesError } = await supabase
-            .from('product_categories' as any)
-            .select('id, category_name, category_image_url')
-            .in('id', productCategoryIds as any);
-          
-          if (productCategoriesError) {
-            console.error('Error fetching product categories:', productCategoriesError);
-          } else {
-            console.log('Product categories fetched:', productCategories);
-            (productCategories || []).forEach((cat: any) => {
-              productCategoriesMap[cat.id] = cat;
-            });
-          }
-        }
-
-        // Fetch fabric data separately
-        const fabricIds = Array.from(new Set((orderItems || []).map((item: any) => item.fabric_id).filter(Boolean)));
-        let fabricMap: Record<string, any> = {};
-        if (fabricIds.length > 0) {
-          const { data: fabrics, error: fabricsError } = await supabase
-            .from('fabric_master' as any)
-            .select('id, fabric_name, color, gsm, image, hex')
-            .in('id', fabricIds as any);
-          
-          if (fabricsError) {
-            console.error('Error fetching fabrics:', fabricsError);
-          } else {
-            console.log('Fabrics fetched:', fabrics);
-            (fabrics || []).forEach((fabric: any) => {
-              fabricMap[fabric.id] = fabric;
-            });
-          }
-        }
-
-        // Group order items by order_id and enrich with related data
-        const orderItemsByOrderId: Record<string, any[]> = {};
-        (orderItems || []).forEach((item: any) => {
-          if (!orderItemsByOrderId[item.order_id]) {
-            orderItemsByOrderId[item.order_id] = [];
-          }
-          
-          // Enrich item with related data
-          const enrichedItem = {
-            ...item,
-            product_category: productCategoriesMap[item.product_category_id] || null,
-            fabric: fabricMap[item.fabric_id] || null
-          };
-          
-          orderItemsByOrderId[item.order_id].push(enrichedItem);
+        const productCategoriesMap: Record<string, any> = {};
+        productCategories.forEach((cat: any) => {
+          if (cat?.id) productCategoriesMap[cat.id] = cat;
         });
 
-        // Fetch customers
-        const customerIds = Array.from(new Set((orders || []).map((o: any) => o.customer_id).filter(Boolean)));
-        let customersMap: Record<string, { company_name?: string }> = {};
-        if (customerIds.length > 0) {
-          const { data: customers } = await supabase
-            .from('customers' as any)
-            .select('id, company_name')
-            .in('id', customerIds as any);
-          (customers || []).forEach((c: any) => { if (c?.id) customersMap[c.id] = { company_name: c.company_name }; });
-        }
+        const fabricMap: Record<string, any> = {};
+        fabrics.forEach((fabric: any) => {
+          if (fabric?.id) fabricMap[fabric.id] = fabric;
+        });
 
-        // Fetch BOM headers for fallback product name
-        const { data: boms } = await supabase
-          .from('bom_records' as any)
-          .select('order_id, product_name, total_order_qty')
-          .in('order_id', allOrderIds as any);
+        const customersMap: Record<string, { company_name?: string }> = {};
+        customers.forEach((c: any) => {
+          if (c?.id) customersMap[c.id] = { company_name: c.company_name };
+        });
+
+        const orderItemsByOrderId: Record<string, any[]> = {};
+        orderItems.forEach((item: any) => {
+          const oid = String(item.order_id || '');
+          if (!oid) return;
+          if (!orderItemsByOrderId[oid]) orderItemsByOrderId[oid] = [];
+          orderItemsByOrderId[oid].push({
+            ...item,
+            product_category: productCategoriesMap[item.product_category_id] || null,
+            fabric: fabricMap[item.fabric_id] || null,
+          });
+        });
+
         const bomByOrder: Record<string, { product_name?: string; qty: number }> = {};
         (boms || []).forEach((b: any) => {
-          const key = b.order_id as string;
+          const key = String(b.order_id || '');
+          if (!key) return;
           const prev = bomByOrder[key]?.qty || 0;
-          bomByOrder[key] = { product_name: bomByOrder[key]?.product_name || b.product_name, qty: prev + (b.total_order_qty || 0) };
+          bomByOrder[key] = {
+            product_name: bomByOrder[key]?.product_name || b.product_name,
+            qty: prev + (b.total_order_qty || 0),
+          };
         });
 
         const computePriority = (dueDateStr?: string | null): CuttingJob['priority'] => {
@@ -527,183 +513,102 @@ const CuttingManagerPage = () => {
         const jobs: CuttingJob[] = (orders || [])
           .filter((o: any) => (orderItemsByOrderId[o.id] || []).length > 0)
           .map((o: any) => {
-          const p: any = map[o.id] || {};
-          const bom: any = bomByOrder[o.id] || { product_name: undefined, qty: 0 };
-          const orderItems = orderItemsByOrderId[o.id] || [];
-          const firstOrderItem = orderItems[0];
-          const productCategoryName = firstOrderItem?.product_category?.category_name || 
-                                     firstOrderItem?.product_description || 
-                                     (bom as any).product_name || 
-                                     'Product';
-          
-          // Get cutting masters for this order
-          const cuttingMasters = cuttingMastersByOrder[o.id] || [];
+            const p: any = map[o.id] || {};
+            const bom: any = bomByOrder[o.id] || { product_name: undefined, qty: 0 };
+            const lineItems = orderItemsByOrderId[o.id] || [];
+            const firstOrderItem = lineItems[0];
+            const productCategoryName =
+              firstOrderItem?.product_category?.category_name ||
+              firstOrderItem?.product_description ||
+              (bom as any).product_name ||
+              'Product';
+            const cuttingMasters = cuttingMastersByOrder[o.id] || [];
+            const cutFromColumn = Number(p.cut_quantity || 0);
+            const cutFromJson = sumAllCutsInStoredJson(p.cut_quantities_by_size ?? null);
+            const resolvedCutQuantity = Math.max(cutFromColumn, cutFromJson);
 
-          // cut_quantity column can lag behind cut_quantities_by_size (JSON); progress should match real recorded cuts.
-          const cutFromColumn = Number(p.cut_quantity || 0);
-          const cutFromJson = sumAllCutsInStoredJson(p.cut_quantities_by_size ?? null);
-          const resolvedCutQuantity = Math.max(cutFromColumn, cutFromJson);
-          
-          // Build the job object with cutting master information
-          const job: CuttingJob = {
-            id: o.id,
-            jobNumber: o.order_number,
-            orderNumber: o.order_number,
-            customerName: customersMap[o.customer_id]?.company_name || '',
-            productName: productCategoryName,
-            fabricType: firstOrderItem?.fabric ? 
-              `${firstOrderItem.fabric.fabric_name} - ${firstOrderItem.fabric.gsm} GSM, ${selectedColorsDisplayText(
-                firstOrderItem.selected_colors || firstOrderItem.fabric?.selected_colors,
-                firstOrderItem.color || firstOrderItem.fabric?.color
-              )}` : 
-              '-',
-            quantity: getOrderTotalQuantityFromItems(orderItems),
-            cutQuantity: resolvedCutQuantity,
-            cutQuantitiesBySize: p.cut_quantities_by_size || {},
-            startDate: p.cutting_work_date || '',
-            dueDate: o.expected_delivery_date || '',
-            status: resolvedCutQuantity > 0 ? 'in_progress' : 'pending',
-            priority: computePriority(o.expected_delivery_date),
-            cuttingPattern: '',
-            fabricConsumption: 0,
-            efficiency: 0,
-            notes: '',
-            defects: 0,
-            reworkRequired: false,
-            // Add order items with product and fabric details
-            orderItems: orderItemsByOrderId[o.id] || [],
-            customer: customersMap[o.customer_id] ? { 
-              company_name: customersMap[o.customer_id].company_name,
-              contact_person: (customersMap[o.customer_id] as any).contact_person || ''
-            } : undefined,
-          };
-          
-          // Add cutting masters if available
-          if (cuttingMasters.length > 0) {
-            job.cuttingMasters = cuttingMasters.map((cm: any) => ({
-              id: cm.cutting_master_id,
-              name: cm.cutting_master_name,
-              // Use avatar from order_cutting_assignments if available
-              avatarUrl: cm.cutting_master_avatar_url || undefined,
-              assignedDate: cm.assigned_date || p.cutting_work_date || new Date().toISOString().split('T')[0]
-            }));
-            // Set legacy fields for backward compatibility (use first cutting master)
-            job.cuttingMasterId = cuttingMasters[0].cutting_master_id;
-            job.cuttingMasterName = cuttingMasters[0].cutting_master_name;
-            job.cuttingMasterAvatarUrl = cuttingMasters[0].cutting_master_avatar_url || undefined;
-            job.assignedTo = cuttingMasters[0].cutting_master_name || '';
-          } else if (p.cutting_master_id || p.cutting_master_name) {
-            // Legacy single cutting master from order_assignments
-            job.cuttingMasterId = p.cutting_master_id;
-            job.cuttingMasterName = p.cutting_master_name;
-            job.cuttingMasterAvatarUrl = undefined; // No avatar available for legacy assignments
-            job.assignedTo = p.cutting_master_name || '';
-          } else {
-            job.assignedTo = '';
-          }
-          
-          return job;
-        }).filter((job): job is CuttingJob => job !== undefined);
+            const job: CuttingJob = {
+              id: o.id,
+              jobNumber: o.order_number,
+              orderNumber: o.order_number,
+              customerName: customersMap[o.customer_id]?.company_name || '',
+              productName: productCategoryName,
+              fabricType: firstOrderItem?.fabric
+                ? `${firstOrderItem.fabric.fabric_name} - ${firstOrderItem.fabric.gsm} GSM, ${selectedColorsDisplayText(
+                    orderItemSelectedColors(firstOrderItem),
+                    firstOrderItem.color || firstOrderItem.fabric?.color
+                  )}`
+                : '-',
+              quantity: getOrderTotalQuantityFromItems(lineItems),
+              cutQuantity: resolvedCutQuantity,
+              cutQuantitiesBySize: p.cut_quantities_by_size || {},
+              startDate: p.cutting_work_date || '',
+              dueDate: o.expected_delivery_date || '',
+              status: resolvedCutQuantity > 0 ? 'in_progress' : 'pending',
+              priority: computePriority(o.expected_delivery_date),
+              cuttingPattern: '',
+              fabricConsumption: 0,
+              efficiency: 0,
+              notes: '',
+              defects: 0,
+              reworkRequired: false,
+              orderItems: lineItems,
+              batchAssignments: batchAssignmentsByOrderId[o.id] || [],
+              customer: customersMap[o.customer_id]
+                ? {
+                    company_name: customersMap[o.customer_id].company_name,
+                    contact_person: (customersMap[o.customer_id] as any).contact_person || '',
+                  }
+                : undefined,
+            };
 
-        // Fetch batch assignments for each order
-        const jobsWithBatchAssignments: CuttingJob[] = (await Promise.all(jobs.map(async (job) => {
-          if (!job || !job.id) {
-            console.error('Invalid job found, skipping:', job);
-            return null;
-          }
-          try {
-            const { data: batchAssignments } = await supabase
-              .from('order_batch_assignments_with_details' as any)
-              .select('*')
-              .eq('order_id', job.id as any);
-
-            const assignmentIds = (batchAssignments || [])
-              .map((ba: any) => batchAssignmentRowId(ba))
-              .filter(Boolean);
-            let sizeDistributionsMap: Record<string, any[]> = {};
-
-            let tableTotalsByAssignmentId: Record<string, number> = {};
-            if (assignmentIds.length > 0) {
-              const { data: obaTotals } = await supabase
-                .from('order_batch_assignments' as any)
-                .select('id, total_quantity')
-                .in('id', assignmentIds as any);
-              (obaTotals || []).forEach((r: any) => {
-                if (r?.id != null) {
-                  tableTotalsByAssignmentId[String(r.id)] = Number(r.total_quantity || 0) || 0;
-                }
-              });
+            if (cuttingMasters.length > 0) {
+              job.cuttingMasters = cuttingMasters.map((cm: any) => ({
+                id: cm.cutting_master_id,
+                name: cm.cutting_master_name,
+                avatarUrl: cm.cutting_master_avatar_url || undefined,
+                assignedDate:
+                  cm.assigned_date || p.cutting_work_date || new Date().toISOString().split('T')[0],
+              }));
+              job.cuttingMasterId = cuttingMasters[0].cutting_master_id;
+              job.cuttingMasterName = cuttingMasters[0].cutting_master_name;
+              job.cuttingMasterAvatarUrl = cuttingMasters[0].cutting_master_avatar_url || undefined;
+              job.assignedTo = cuttingMasters[0].cutting_master_name || '';
+            } else if (p.cutting_master_id || p.cutting_master_name) {
+              job.cuttingMasterId = p.cutting_master_id;
+              job.cuttingMasterName = p.cutting_master_name;
+              job.cuttingMasterAvatarUrl = undefined;
+              job.assignedTo = p.cutting_master_name || '';
+            } else {
+              job.assignedTo = '';
             }
 
-            if (assignmentIds.length > 0) {
-              const { data: sizeDistributions } = await supabase
-                .from('order_batch_size_distributions' as any)
-                .select('order_batch_assignment_id, size_name, quantity, assigned_quantity, picked_quantity')
-                .in('order_batch_assignment_id', assignmentIds as any);
+            return job;
+          })
+          .filter((job): job is CuttingJob => job !== undefined);
 
-              (sizeDistributions || []).forEach((sd: any) => {
-                const assignmentId = String(sd.order_batch_assignment_id || '').trim();
-                if (!assignmentId) return;
-                if (!sizeDistributionsMap[assignmentId]) {
-                  sizeDistributionsMap[assignmentId] = [];
-                }
-                const quantity = effectiveBatchSizeLinePieces(sd);
-                const pickedQuantity = Number(sd.picked_quantity || 0);
-                sizeDistributionsMap[assignmentId].push({
-                  size_name: sd.size_name,
-                  quantity,
-                  picked_quantity: pickedQuantity,
-                  left_quantity: Math.max(0, quantity - pickedQuantity),
-                });
-              });
-            }
-
-            const enrichedBatchAssignments = (batchAssignments || []).map((ba: any) => {
-              const aid = batchAssignmentRowId(ba);
-              const viewTotal = Number(ba.total_quantity || 0) || 0;
-              const tableTotal = aid ? tableTotalsByAssignmentId[aid] ?? 0 : 0;
-              const fromSizes = (sizeDistributionsMap[aid] || []).reduce(
-                (s, row) => s + effectiveBatchSizeLinePieces(row),
-                0
-              );
-              const mergedTotal = Math.max(viewTotal, tableTotal, fromSizes);
-              return {
-                ...ba,
-                id: aid || ba.id,
-                total_quantity: mergedTotal,
-                size_distributions: sizeDistributionsMap[aid] || [],
-              };
-            });
-
-            return {
-              ...job,
-              batchAssignments: enrichedBatchAssignments
-            } as CuttingJob;
-          } catch (error) {
-            console.error(`Error fetching batch assignments for order ${job.id}:`, error);
-            return {
-              ...job,
-              batchAssignments: []
-            } as CuttingJob;
-          }
-        }))).filter((job): job is CuttingJob => job !== null && job !== undefined);
-
-        const nextJobs = jobsWithBatchAssignments as CuttingJob[];
-        setCuttingJobs(nextJobs);
-        return nextJobs;
-      } catch (err) {
-        console.error('Error loading cutting jobs:', err);
-        setCuttingJobs([]);
-        return [];
-      }
-    };
-
+        setCuttingJobs(jobs);
+        return jobs;
+      });
+    } catch (err) {
+      console.error('Error loading cutting jobs:', err);
+      setCuttingJobs([]);
+      return [];
+    }
+  };
 
   useEffect(() => {
-    loadCuttingJobs();
+    const run = async () => {
+      setLoading(true);
+      try {
+        await loadCuttingJobs();
+      } finally {
+        setLoading(false);
+      }
+    };
+    void run();
   }, []);
 
-  // Add refresh function
   const refreshData = async (): Promise<CuttingJob[]> => {
     setRefreshing(true);
     try {
@@ -738,31 +643,9 @@ const CuttingManagerPage = () => {
 
   const getRequiredQuantity = (job: CuttingJob) => Math.max(0, Number(job.quantity || 0));
 
-  const getTotalAssignedToBatches = (job: CuttingJob) =>
-    (job.batchAssignments || []).reduce((sum, assignment) => {
-      const directQty = Number(assignment.total_quantity || 0);
-      const fromSizes = (assignment.size_distributions || []).reduce(
-        (sizeSum, row) => sizeSum + effectiveBatchSizeLinePieces(row),
-        0
-      );
-      return sum + Math.max(directQty, fromSizes);
-    }, 0);
+  const deriveJobStatus = (job: CuttingJob): CuttingJob['status'] => deriveCuttingJobStatus(job);
 
-  const deriveJobStatus = (job: CuttingJob): CuttingJob['status'] => {
-    const requiredQty = getRequiredQuantity(job);
-    const cutQty = Math.max(0, Number(job.cutQuantity || 0));
-    const assignedQty = getTotalAssignedToBatches(job);
-    const isFullyCut = requiredQty > 0 && cutQty >= requiredQty;
-    const hasBatchAssignments = (job.batchAssignments || []).length > 0;
-    // Fully cut + at least one tailor batch row + assigned pieces cover all recorded cuts (no partial assign-to-tailor).
-    const allCutPiecesAssignedToTailors =
-      hasBatchAssignments && cutQty > 0 && assignedQty + 1e-6 >= cutQty;
-    if (isFullyCut && allCutPiecesAssignedToTailors) return 'completed';
-    if (cutQty > 0 || assignedQty > 0) return 'in_progress';
-    return 'pending';
-  };
-
-  const isJobCompleted = (job: CuttingJob) => deriveJobStatus(job) === 'completed';
+  const isJobCompleted = (job: CuttingJob) => isCuttingJobCompleted(job);
 
   // Sort handler
   const handleSort = (field: string) => {
@@ -864,8 +747,25 @@ const CuttingManagerPage = () => {
   };
 
   function getCompletionPercentage(job: CuttingJob) {
-    if (!job.quantity) return 0;
-    return Math.min(100, Math.round((job.cutQuantity / job.quantity) * 100));
+    return getCutCompletionPercentage(job);
+  }
+
+  function getBatchAssignedQty(job: CuttingJob) {
+    return getTotalBatchAssignedQty(job);
+  }
+
+  function getBatchProgressLabel(job: CuttingJob) {
+    const cutQty = Math.max(0, Number(job.cutQuantity || 0));
+    const assignedQty = getBatchAssignedQty(job);
+    return `Batch ${assignedQty}/${cutQty || job.quantity}`;
+  }
+
+  function getBatchProgressColor(job: CuttingJob) {
+    const cutQty = Math.max(0, Number(job.cutQuantity || 0));
+    const assignedQty = getBatchAssignedQty(job);
+    if (!cutQty) return 'text-muted-foreground';
+    if (assignedQty + 1e-6 >= cutQty) return 'text-emerald-700';
+    return 'text-amber-700';
   }
 
   const getProgressBarColor = (percentage: number) => {
@@ -897,11 +797,11 @@ const CuttingManagerPage = () => {
           <Button 
             variant="outline" 
             onClick={refreshData}
-            disabled={refreshing}
+            disabled={loading || refreshing}
             className="flex items-center space-x-2"
           >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-            <span>{refreshing ? 'Refreshing...' : 'Refresh'}</span>
+            <RefreshCw className={`w-4 h-4 ${loading || refreshing ? 'animate-spin' : ''}`} />
+            <span>{loading || refreshing ? 'Loading...' : 'Refresh'}</span>
           </Button>
         </div>
 
@@ -1111,7 +1011,11 @@ const CuttingManagerPage = () => {
               </CardHeader>
               <CardContent>
                 <div className="md:hidden space-y-3">
-                  {filteredActiveJobs.length === 0 ? (
+                  {loading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <RefreshCw className="w-8 h-8 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : filteredActiveJobs.length === 0 ? (
                     <p className="py-8 text-center text-sm text-muted-foreground">No cutting jobs found.</p>
                   ) : (
                     filteredActiveJobs.map((job) => (
@@ -1125,6 +1029,7 @@ const CuttingManagerPage = () => {
                         }
                         completionPercentage={getCompletionPercentage(job)}
                         progressBarColor={getProgressBarColor(getCompletionPercentage(job))}
+                        batchAssignedQty={getBatchAssignedQty(job)}
                         statusColorClass={getStatusColor(job.status)}
                         formatDate={formatDateDDMMYY}
                         onAssignBatch={() => handleAssignBatch(job)}
@@ -1157,7 +1062,17 @@ const CuttingManagerPage = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredActiveJobs.map((job) => (
+                      {loading ? (
+                        <TableRow>
+                          <TableCell colSpan={10} className="h-32 text-center">
+                            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                              <RefreshCw className="w-5 h-5 animate-spin" />
+                              <span>Loading cutting jobs…</span>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                      filteredActiveJobs.map((job) => (
                         <TableRow key={job.id}>
                           <TableCell className="font-medium">{job.jobNumber}</TableCell>
                           <TableCell>{job.orderNumber}</TableCell>
@@ -1169,7 +1084,7 @@ const CuttingManagerPage = () => {
                             </div>
                           </TableCell>
                           <TableCell>
-                            <div className="w-32">
+                            <div className="w-36">
                               <div className="flex justify-between text-sm mb-1">
                                 <span>{getCompletionPercentage(job)}%</span>
                                 <span>{typeof job.cutQuantity === 'number' ? job.cutQuantity.toFixed(0) : job.cutQuantity}/{typeof job.quantity === 'number' ? job.quantity.toFixed(0) : job.quantity}</span>
@@ -1180,6 +1095,9 @@ const CuttingManagerPage = () => {
                                   style={{ width: `${getCompletionPercentage(job)}%` }}
                                 />
                               </div>
+                              <p className={`mt-1 text-xs font-medium ${getBatchProgressColor(job)}`}>
+                                {getBatchProgressLabel(job)}
+                              </p>
                             </div>
                           </TableCell>
                           <TableCell>
@@ -1330,7 +1248,7 @@ const CuttingManagerPage = () => {
                             </div>
                           </TableCell>
                         </TableRow>
-                      ))}
+                      )))}
                     </TableBody>
                   </Table>
                 </div>
@@ -1449,7 +1367,11 @@ const CuttingManagerPage = () => {
               </CardHeader>
               <CardContent>
                 <div className="md:hidden space-y-3">
-                  {filteredCompletedJobs.length === 0 ? (
+                  {loading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <RefreshCw className="w-8 h-8 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : filteredCompletedJobs.length === 0 ? (
                     <p className="py-8 text-center text-sm text-muted-foreground">No completed cutting jobs found.</p>
                   ) : (
                     filteredCompletedJobs.map((job) => (
@@ -1493,6 +1415,17 @@ const CuttingManagerPage = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
+                      {loading ? (
+                        <TableRow>
+                          <TableCell colSpan={9} className="h-32 text-center">
+                            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                              <RefreshCw className="w-5 h-5 animate-spin" />
+                              <span>Loading completed jobs…</span>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                      <>
                       {filteredCompletedJobs.map((job) => (
                         <TableRow key={job.id} className="bg-green-50/30">
                           <TableCell className="font-medium">{job.jobNumber}</TableCell>
@@ -1637,11 +1570,13 @@ const CuttingManagerPage = () => {
                       ))}
                       {filteredCompletedJobs.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={10} className="text-center py-8 text-gray-500">
+                          <TableCell colSpan={9} className="text-center py-8 text-gray-500">
                             <CheckCircle className="w-12 h-12 mx-auto mb-2 text-gray-400" />
                             <p>No completed cutting jobs found.</p>
                           </TableCell>
                         </TableRow>
+                      )}
+                      </>
                       )}
                     </TableBody>
                   </Table>

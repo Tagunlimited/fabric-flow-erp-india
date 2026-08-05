@@ -32,21 +32,30 @@ export type OutsourceManualPoLine = {
 };
 
 export function createEmptyOutsourceManualLine(
-  options?: { sales_order_item_id?: string | null }
+  options?: {
+    sales_order_item_id?: string | null;
+    item_name?: string;
+    unit_of_measure?: string;
+    size_type_id?: string | null;
+    sizes_quantities?: Record<string, number>;
+    fabric_gsm?: string;
+    item_color?: string | null;
+  }
 ): OutsourceManualPoLine {
+  const sizes = options?.sizes_quantities ?? { Total: 0 };
   return {
     item_type: 'product',
     item_id: '',
-    item_name: '',
+    item_name: options?.item_name ?? '',
     item_image_url: null,
-    quantity: 0,
-    unit_of_measure: 'pcs',
+    quantity: sumSizesQuantities(sizes),
+    unit_of_measure: options?.unit_of_measure ?? 'pcs',
     sales_order_item_id: options?.sales_order_item_id ?? null,
-    size_type_id: null,
-    sizes_quantities: { Total: 0 },
+    size_type_id: options?.size_type_id ?? null,
+    sizes_quantities: sizes,
     entry_mode: OUTSOURCE_MANUAL_ENTRY_MODE,
-    fabric_gsm: '',
-    item_color: '',
+    fabric_gsm: options?.fabric_gsm ?? '',
+    item_color: options?.item_color ?? '',
   };
 }
 
@@ -147,14 +156,26 @@ export function OutsourceManualPoLinesPanel({
             <CardContent className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label>Product name</Label>
+                  <Label>Fabric for supplier</Label>
                   <Input
                     value={line.item_name}
                     disabled={readOnly}
-                    placeholder="e.g. School Pant, Zipper, Bottle, Bag"
+                    placeholder="Defaults from sales order fabric; edit if needed"
                     onChange={(e) => updateLine(index, { item_name: e.target.value })}
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label>Unit of measure</Label>
+                  <Input
+                    value={line.unit_of_measure || 'pcs'}
+                    disabled={readOnly}
+                    placeholder="e.g. meters, pcs"
+                    onChange={(e) => updateLine(index, { unit_of_measure: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label>Size type</Label>
                   <Select
@@ -215,7 +236,9 @@ export function OutsourceManualPoLinesPanel({
                   ))}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Total quantity: <span className="font-semibold text-foreground">{totalQty}</span> pcs
+                  Total quantity:{' '}
+                  <span className="font-semibold text-foreground">{totalQty}</span>{' '}
+                  {line.unit_of_measure || 'pcs'}
                 </p>
               </div>
 
@@ -250,7 +273,7 @@ export function validateOutsourceManualLines(lines: OutsourceManualPoLine[]): st
   for (let i = 0; i < active.length; i++) {
     const line = active[i];
     if (!String(line.item_name || '').trim()) {
-      return `Product line ${i + 1}: enter a product name.`;
+      return `Product line ${i + 1}: enter a fabric for supplier / product name.`;
     }
     const total = sumSizesQuantities(line.sizes_quantities || {});
     if (total <= 0) {

@@ -255,45 +255,69 @@ const OrderBatchAssignmentPage: React.FC = () => {
       return;
     }
 
+    if (sizeDistributions.length === 0) {
+      toast({
+        title: "Error",
+        description: "No size quantities found on this order",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setAssigning(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      
-      // Create batch assignments for each selected batch
-      const assignments = Array.from(selectedBatches).map(batchId => ({
-        order_id: id,
-        batch_id: batchId,
-        assigned_by_id: user?.id,
-        assigned_by_name: user?.user_metadata?.full_name || 'System',
-        assignment_date: new Date().toISOString().split('T')[0],
-        notes: `Order ${order?.order_number} assigned to batch`
-      }));
+      const batchCount = selectedBatches.size;
 
-      const { data: assignmentData, error: assignmentError } = await supabase
-        .from('order_batch_assignments')
-        .insert(assignments)
-        .select();
+      for (const batchId of selectedBatches) {
+        const perBatchSizes = sizeDistributions.map((sizeDist) => ({
+          size_name: sizeDist.size_name,
+          assigned_quantity: Math.floor(sizeDist.quantity / batchCount),
+        }));
+        const totalQty = perBatchSizes.reduce((sum, row) => sum + row.assigned_quantity, 0);
+        if (totalQty === 0) continue;
 
-      if (assignmentError) throw assignmentError;
+        const { data: assignmentResult, error: assignmentError } = await supabase
+          .from('order_batch_assignments')
+          .insert({
+            order_id: id,
+            batch_id: batchId,
+            assigned_by_id: user?.id,
+            assigned_by_name: user?.user_metadata?.full_name || 'System',
+            assignment_date: new Date().toISOString().split('T')[0],
+            total_quantity: totalQty,
+            notes: `Order ${order?.order_number} assigned to batch`,
+          })
+          .select()
+          .single();
 
-      // Create size distributions for each assignment
-      const sizeDistributions = [];
-      for (const assignment of assignmentData) {
-        for (const sizeDist of sizeDistributions) {
-          sizeDistributions.push({
-            order_batch_assignment_id: assignment.id,
-            size_name: sizeDist.size_name,
-            quantity: Math.floor(sizeDist.quantity / selectedBatches.size) // Distribute equally for now
-          });
+        if (assignmentError) throw assignmentError;
+
+        const rowsToInsert = perBatchSizes
+          .filter((row) => row.assigned_quantity > 0)
+          .map((row) => ({
+            order_batch_assignment_id: assignmentResult.id,
+            size_name: row.size_name,
+            assigned_quantity: row.assigned_quantity,
+            quantity: row.assigned_quantity,
+          }));
+
+        if (rowsToInsert.length > 0) {
+          let sizeError: any = null;
+          ({ error: sizeError } = await supabase
+            .from('order_batch_size_distributions')
+            .insert(rowsToInsert));
+          if (sizeError && /assigned_quantity/i.test(String(sizeError.message || ''))) {
+            const quantityCompatRows = rowsToInsert.map(({ assigned_quantity, ...rest }) => ({
+              ...rest,
+              quantity: assigned_quantity,
+            }));
+            ({ error: sizeError } = await supabase
+              .from('order_batch_size_distributions')
+              .insert(quantityCompatRows));
+          }
+          if (sizeError) throw sizeError;
         }
-      }
-
-      if (sizeDistributions.length > 0) {
-        const { error: sizeError } = await supabase
-          .from('order_batch_size_distributions')
-          .insert(sizeDistributions);
-
-        if (sizeError) throw sizeError;
       }
 
       toast({

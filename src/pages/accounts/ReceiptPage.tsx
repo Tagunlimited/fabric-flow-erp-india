@@ -501,7 +501,8 @@ export default function ReceiptPage() {
         reference_txn_id: isCredit ? null : (referenceId || null),
         verified_by: isCredit ? null : (verifiedBy || null),
         notes: isCredit ? 'Credit order - Payment pending' : (notes || null),
-        entry_date: date.toISOString()
+        entry_date: date.toISOString(),
+        status: 'active',
       };
 
       // Try to create receipt with retry logic for race conditions

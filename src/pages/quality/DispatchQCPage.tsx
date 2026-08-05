@@ -433,7 +433,7 @@ export default function DispatchQCPage() {
             const urls = imagesByOrder[oid] || [];
             byOrder[oid] = {
               order_id: oid,
-              order_number: oc.order_number,
+              order_number: oc.order_number || '',
               customer_name: oc.customer_name,
               approved_quantity: oc.approved_quantity,
               total_quantity: oc.approved_quantity,
@@ -447,11 +447,30 @@ export default function DispatchQCPage() {
             };
           }
         }
+
+        const outsourceOnlyIds = outsourceCandidates
+          .map((oc) => oc.order_id)
+          .filter((oid) => !imagesByOrder[oid]?.length);
+        if (outsourceOnlyIds.length) {
+          const extraThumbs = await collectOrderItemThumbnails(outsourceOnlyIds);
+          for (const oid of outsourceOnlyIds) {
+            const urls = extraThumbs[oid] || [];
+            if (!urls.length) continue;
+            imagesByOrder[oid] = urls;
+            if (byOrder[oid]) {
+              byOrder[oid].image_urls = urls;
+              byOrder[oid].image_url = firstThumbnail(urls);
+            }
+          }
+        }
       } catch (error) {
         console.error('Error loading outsource dispatch candidates:', error);
       }
 
       setOrders(Object.values(byOrder));
+    } catch (error) {
+      console.error('Error loading dispatch queue:', error);
+      setOrders([]);
     } finally {
       setLoading(false);
     }
@@ -459,7 +478,13 @@ export default function DispatchQCPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const filteredOrders = q ? orders.filter(o => o.order_number.toLowerCase().includes(q) || (o.customer_name || '').toLowerCase().includes(q)) : orders;
+    const filteredOrders = q
+      ? orders.filter(
+          (o) =>
+            (o.order_number || '').toLowerCase().includes(q) ||
+            (o.customer_name || '').toLowerCase().includes(q)
+        )
+      : orders;
     return filteredOrders;
   }, [orders, search]);
 

@@ -260,18 +260,33 @@ async function patchWarehouseRowsForFabricCutting(
 
   const results = await Promise.all(
     [...patchByRowId.entries()].map(([rowId, fabricId]) =>
-      supabase.from('warehouse_inventory').update({ item_id: fabricId } as any).eq('id', rowId as any)
+      supabase.rpc('link_or_merge_warehouse_fabric_row' as any, {
+        p_source_wi_id: rowId,
+        p_fabric_id: fabricId,
+      })
     )
   );
   results.forEach((res, idx) => {
     if (res.error) {
       const [rowId, fabricId] = [...patchByRowId.entries()][idx];
       console.warn('[patchWarehouseRowsForFabricCutting] failed', rowId, fabricId, res.error);
+      throw res.error;
     }
-  });
-  patchByRowId.forEach((fabricId, rowId) => {
+    const [rowId, fabricId] = [...patchByRowId.entries()][idx];
+    const survivingId = String((res.data as string | null) || rowId);
     const row = storageRows.find((r: any) => String(r.id) === rowId);
-    if (row) row.item_id = fabricId;
+    if (row) {
+      if (survivingId !== rowId) {
+        const target = storageRows.find((r: any) => String(r.id) === survivingId);
+        if (target) {
+          target.quantity = Number(target.quantity || 0) + Number(row.quantity || 0);
+        }
+        const removeIdx = storageRows.findIndex((r: any) => String(r.id) === rowId);
+        if (removeIdx >= 0) storageRows.splice(removeIdx, 1);
+      } else {
+        row.item_id = fabricId;
+      }
+    }
   });
 }
 

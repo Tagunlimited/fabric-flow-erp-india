@@ -63,6 +63,7 @@ interface CuttingJobMobileCardProps {
   onToggle: () => void;
   completionPercentage: number;
   progressBarColor: string;
+  batchAssignedQty?: number;
   statusColorClass: string;
   formatDate: (value?: string) => string;
   onAssignBatch: () => void;
@@ -131,38 +132,56 @@ function ProgressRow({
   cutQuantity,
   quantity,
   progressBarColor,
+  batchAssignedQty,
   compact = false,
 }: {
   percentage: number;
   cutQuantity: number;
   quantity: number;
   progressBarColor: string;
+  batchAssignedQty?: number;
   compact?: boolean;
 }) {
   const cutDisplay = typeof cutQuantity === 'number' ? cutQuantity.toFixed(0) : cutQuantity;
   const qtyDisplay = typeof quantity === 'number' ? quantity.toFixed(0) : quantity;
+  const cutTarget = Math.max(0, Number(cutQuantity) || 0);
+  const batchTarget = cutTarget || Math.max(0, Number(quantity) || 0);
+  const batchAssigned = Math.max(0, Number(batchAssignedQty) || 0);
+  const batchComplete = batchTarget > 0 && batchAssigned + 1e-6 >= batchTarget;
 
   return (
-    <div className={cn('flex items-center gap-2', compact ? 'mt-1' : 'mt-3')}>
-      <span
-        className={cn(
-          'shrink-0 rounded-md border px-1.5 py-0.5 text-xs font-semibold tabular-nums',
-          percentage < 30 && 'border-red-200 bg-red-50 text-red-700',
-          percentage >= 30 && percentage < 70 && 'border-amber-200 bg-amber-50 text-amber-700',
-          percentage >= 70 && 'border-emerald-200 bg-emerald-50 text-emerald-700'
-        )}
-      >
-        {percentage}%
-      </span>
-      <div className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-gray-200">
-        <div
-          className={cn('h-full rounded-full transition-all duration-300', progressBarColor)}
-          style={{ width: `${percentage}%` }}
-        />
+    <div className={cn(compact ? 'mt-1' : 'mt-3')}>
+      <div className={cn('flex items-center gap-2')}>
+        <span
+          className={cn(
+            'shrink-0 rounded-md border px-1.5 py-0.5 text-xs font-semibold tabular-nums',
+            percentage < 30 && 'border-red-200 bg-red-50 text-red-700',
+            percentage >= 30 && percentage < 70 && 'border-amber-200 bg-amber-50 text-amber-700',
+            percentage >= 70 && 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          )}
+        >
+          {percentage}%
+        </span>
+        <div className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-gray-200">
+          <div
+            className={cn('h-full rounded-full transition-all duration-300', progressBarColor)}
+            style={{ width: `${percentage}%` }}
+          />
+        </div>
+        <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-600 tabular-nums">
+          {cutDisplay} / {qtyDisplay} pcs
+        </span>
       </div>
-      <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-600 tabular-nums">
-        {cutDisplay} / {qtyDisplay} pcs
-      </span>
+      {typeof batchAssignedQty === 'number' && (
+        <p
+          className={cn(
+            'mt-1 text-[11px] font-medium tabular-nums',
+            batchComplete ? 'text-emerald-700' : 'text-amber-700'
+          )}
+        >
+          Batch {batchAssigned}/{batchTarget}
+        </p>
+      )}
     </div>
   );
 }
@@ -174,6 +193,7 @@ export function CuttingJobMobileCard({
   onToggle,
   completionPercentage,
   progressBarColor,
+  batchAssignedQty,
   statusColorClass,
   formatDate,
   onAssignBatch,
@@ -221,6 +241,7 @@ export function CuttingJobMobileCard({
               cutQuantity={job.cutQuantity}
               quantity={job.quantity}
               progressBarColor={progressBarColor}
+              batchAssignedQty={batchAssignedQty}
               compact
             />
           </div>
@@ -284,6 +305,7 @@ export function CuttingJobMobileCard({
           cutQuantity={job.cutQuantity}
           quantity={job.quantity}
           progressBarColor={progressBarColor}
+          batchAssignedQty={batchAssignedQty}
         />
 
         {!expanded && (

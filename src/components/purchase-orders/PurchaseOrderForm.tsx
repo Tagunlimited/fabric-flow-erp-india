@@ -45,6 +45,8 @@ import {
 } from '@/utils/purchaseOrderColor';
 import {
   getBomLinePoQuantity,
+  orderLineFabricUom,
+  orderLineOutsourcePoDefaultName,
   remainingQtyForNewPurchaseOrderLine,
 } from '@/components/purchase-orders/bomOrderLineUtils';
 import {
@@ -55,8 +57,11 @@ import {
 import { BomAllocateStockDialog } from '@/components/purchase-orders/BomAllocateStockDialog';
 import { getBomItemOrderStatus } from '@/services/bomPOTracking';
 import {
+  normalizePoFabricLine,
+  purchaseOrderFabricGsmDisplay,
   purchaseOrderLineItemDisplayName,
   resolveFabricForSupplierName,
+  looksLikeGsmValue,
 } from '@/utils/poFabricDisplay';
 
 type CompanySettings = {
@@ -783,7 +788,10 @@ export function PurchaseOrderForm() {
         }
         grouped.set(identityKey, {
           key: identityKey,
-          item_name: item.item_name,
+          item_name:
+            item.item_type === 'fabric'
+              ? normalizePoFabricLine(item, fabricOptions)?.supplier_display_name || item.item_name
+              : item.item_name,
           item_type: item.item_type || 'item',
           item_id:
             item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE ? null : item.item_id || null,
@@ -796,7 +804,10 @@ export function PurchaseOrderForm() {
             item.fabric_for_supplier || resolveFabricForSupplierName(item, fabricOptions) || null,
           fabric_color: colorFields.fabric_color || item.fabric_color,
           selected_colors: colorFields.selected_colors,
-          fabric_gsm: item.fabric_gsm,
+          fabric_gsm:
+            item.item_type === 'fabric'
+              ? normalizePoFabricLine(item, fabricOptions)?.fabric_gsm || item.fabric_gsm
+              : item.fabric_gsm,
           item_color: colorFields.item_color,
           entry_mode: item.entry_mode ?? null,
           sizes_quantities: item.sizes_quantities,
@@ -820,9 +831,9 @@ export function PurchaseOrderForm() {
   const createLineItemFromPending = (pending: PendingItem): LineItem => {
     const typeKey = (pending.item_type || pending.category || '').toLowerCase();
     const isFabric = typeKey === 'fabric';
-    return {
+    const base: LineItem = {
       item_type: isFabric ? 'fabric' : 'item',
-      item_id: pending.item_id || '',
+      item_id: pending.item_id || pending.fabric_id || '',
       item_name: pending.item_name,
       item_image_url: pending.image_url || null,
       quantity: Number(pending.remaining_quantity || pending.qty_total || 0),
@@ -830,8 +841,8 @@ export function PurchaseOrderForm() {
       remarks: '',
       item_category: pending.category || (isFabric ? 'Fabric' : null),
       item_color: pending.item_color || null,
-      fabric_name: isFabric ? pending.fabric_name || pending.item_name : undefined,
-      fabric_for_supplier: isFabric ? (pending as any).fabric_for_supplier || null : undefined,
+      fabric_name: isFabric ? pending.fabric_name || null : undefined,
+      fabric_for_supplier: isFabric ? pending.fabric_for_supplier || null : undefined,
       fabric_color: isFabric ? pending.fabric_color || undefined : undefined,
       selected_colors: normalizeSelectedColors((pending as any).selected_colors),
       fabric_gsm: isFabric ? pending.fabric_gsm || undefined : undefined,
@@ -839,7 +850,24 @@ export function PurchaseOrderForm() {
       bom_item_id: pending.bom_item_id,
       bom_id: pending.bom_id,
       bom_number: pending.bom_number,
-      product_name: pending.product_name
+      product_name: pending.product_name,
+    };
+
+    if (!isFabric) return base;
+
+    const normalized = normalizePoFabricLine(
+      { ...base, item_type: 'fabric', fabric_id: pending.fabric_id },
+      fabricOptions
+    );
+    if (!normalized) return base;
+
+    return {
+      ...base,
+      item_name: normalized.supplier_display_name,
+      fabric_name: normalized.fabric_name || base.fabric_name,
+      fabric_color: normalized.fabric_color || base.fabric_color,
+      fabric_gsm: normalized.fabric_gsm || base.fabric_gsm,
+      fabric_for_supplier: normalized.fabric_for_supplier,
     };
   };
 
@@ -1433,7 +1461,8 @@ export function PurchaseOrderForm() {
       const { data, error } = await supabase
         .from('order_items')
         .select(
-          'id, quantity, product_id, product_description, size_type_id, sizes_quantities, specifications, execution_flow, gsm, color'
+          `id, quantity, product_id, product_description, size_type_id, sizes_quantities, specifications, execution_flow, gsm, color, fabric_id,
+          fabric:fabric_master(id, fabric_name, color, gsm, fabric_for_supplier, uom)`
         )
         .eq('id', soi)
         .maybeSingle();
@@ -1450,18 +1479,8 @@ export function PurchaseOrderForm() {
         setIsOutsourceMode(true);
       }
 
-      let label = String(data.product_description || '').trim();
-      if (data.product_id) {
-        const pr = await supabase
-          .from('product_master')
-          .select('product_name')
-          .eq('id', data.product_id)
-          .maybeSingle();
-        if (!pr.error && pr.data && (pr.data as { product_name?: string }).product_name) {
-          label = String((pr.data as { product_name?: string }).product_name);
-        }
-      }
-      if (!label) label = 'Sales order line';
+      const defaultName = orderLineOutsourcePoDefaultName(data);
+      const defaultUom = orderLineFabricUom(data);
 
       const specs = parseOrderLineSpecifications((data as any).specifications);
       const sizeRows = getOrderLineSizeRows(
@@ -1475,22 +1494,15 @@ export function PurchaseOrderForm() {
           : { Total: Number(data.quantity) || 0 };
 
       setItems([
-        {
-          item_type: 'product',
-          item_id: '',
-          item_name: label,
-          item_image_url: null,
-          quantity: sumSizesQuantities(sizes_quantities),
-          unit_of_measure: 'pcs',
+        createEmptyOutsourceManualLine({
           sales_order_item_id: soi,
+          item_name: defaultName,
+          unit_of_measure: defaultUom,
           size_type_id: (data as any).size_type_id ?? null,
           sizes_quantities,
-          entry_mode: OUTSOURCE_MANUAL_ENTRY_MODE,
-          fabric_gsm:
-            String(specs.gsm || (data as any).gsm || '').trim() || undefined,
-          item_color:
-            String(specs.color || (data as any).color || '').trim() || null,
-        },
+          fabric_gsm: String(specs.gsm || (data as any).gsm || (data as any).fabric?.gsm || '').trim(),
+          item_color: String(specs.color || (data as any).color || (data as any).fabric?.color || '').trim() || null,
+        }),
       ]);
     })();
   }, [id, bomParam, location.state, searchParams, modeParam, salesOrderIdParam, salesOrderItemIdParam, isOutsourceMode, items.length]);
@@ -1526,13 +1538,14 @@ export function PurchaseOrderForm() {
           let fabricColor = item.fabric_color || firstSelection.color || '';
           let fabricGsm = item.fabric_gsm || firstSelection.gsm || '';
           
-          // If fabric details are not available, try to parse from item_name
-          if (!fabricColor || !fabricGsm) {
-            const itemNameParts = item.item_name?.split(' - ') || [];
-            if (itemNameParts.length >= 3) {
-              fabricName = fabricName || itemNameParts[0]?.trim();
-              fabricColor = fabricColor || itemNameParts[1]?.trim();
-              fabricGsm = fabricGsm || itemNameParts[2]?.replace('GSM', '').trim();
+          // Only parse item_name when the last segment is numeric GSM (not a product label).
+          if ((!fabricColor || !fabricGsm) && item.item_name) {
+            const itemNameParts = item.item_name.split(' - ').map((part: string) => part.trim());
+            const gsmCandidate = itemNameParts[itemNameParts.length - 1]?.replace(/\s*GSM\s*/i, '').trim();
+            if (itemNameParts.length >= 3 && looksLikeGsmValue(gsmCandidate)) {
+              fabricName = fabricName || itemNameParts[0];
+              fabricColor = fabricColor || itemNameParts[1];
+              fabricGsm = fabricGsm || gsmCandidate;
             }
           }
           
@@ -1567,9 +1580,9 @@ export function PurchaseOrderForm() {
             fabricOptionsCount: fabricOptions.length
           });
           
-          return {
+          const bomFabricLine: LineItem = {
             item_type: 'fabric',
-            item_id: item.item_id || '',
+            item_id: item.item_id || item.fabric_id || '',
             item_name: fabricName || item.item_name || '',
             item_image_url: fabricOption?.image_url || item.item_image_url || null,
             quantity: getBomLinePoQuantity(item),
@@ -1577,22 +1590,34 @@ export function PurchaseOrderForm() {
             bom_id: bomData.id || undefined,
             bom_qty_total: Number(item.qty_total ?? item.quantity ?? 0) || undefined,
             unit_of_measure: item.unit_of_measure || 'Kgs',
-            // Store fabric-specific data with parsed values
-            fabric_name: fabricName || 'Unknown Fabric',
+            fabric_name: fabricName || item.fabric_name || null,
             fabric_for_supplier:
               (item as { fabric_for_supplier?: string | null }).fabric_for_supplier ??
               fabricOption?.fabric_for_supplier ??
               null,
-            fabric_color: fabricColor || 'N/A',
+            fabric_color: fabricColor || fabricOption?.color || null,
             selected_colors: normalizeSelectedColors((item as any).selected_colors),
-            fabric_gsm: fabricGsm || 'N/A',
+            fabric_gsm: fabricGsm || fabricOption?.gsm || null,
+            fabric_id: item.fabric_id ?? fabricOption?.id ?? undefined,
             fabricSelections: fabricSelections,
             attributes: {
               colorsList: fabricColor ? [fabricColor] : (fabricOption?.color ? [fabricOption.color] : []),
               gsmList: fabricGsm ? [fabricGsm] : (fabricOption?.gsm ? [fabricOption.gsm] : []),
-              description: item.item_name || 'Fabric Item'
-            }
+              description: item.product_name || item.item_name || 'Fabric Item',
+            },
           };
+          const normalizedBomFabric = normalizePoFabricLine(bomFabricLine, fabricOptions);
+          if (normalizedBomFabric) {
+            return {
+              ...bomFabricLine,
+              item_name: normalizedBomFabric.supplier_display_name,
+              fabric_name: normalizedBomFabric.fabric_name || bomFabricLine.fabric_name,
+              fabric_color: normalizedBomFabric.fabric_color || bomFabricLine.fabric_color,
+              fabric_gsm: normalizedBomFabric.fabric_gsm || bomFabricLine.fabric_gsm,
+              fabric_for_supplier: normalizedBomFabric.fabric_for_supplier,
+            };
+          }
+          return bomFabricLine;
         } else {
           // Handle regular items
           // Find the item in itemOptions to get the GST rate, image, and type
@@ -1727,7 +1752,7 @@ export function PurchaseOrderForm() {
           .map((c) => c.colorName?.trim())
           .filter(Boolean)
           .join(', ');
-        return {
+        const enrichedBase = {
           ...item,
           // Ensure item_id is resolved from options if missing (prevents NOT NULL violations)
           item_id: item.item_id || itemOption?.id || fabricOption?.id || '',
@@ -1743,13 +1768,30 @@ export function PurchaseOrderForm() {
           item_color: item.item_color || colorFromSelection || itemOption?.color || null,
           // Also update fabric-specific fields if this is a fabric item
           ...(item.item_type === 'fabric' && {
-            fabric_color: item.fabric_color || fabricOption?.color || 'N/A',
-            fabric_gsm: item.fabric_gsm || fabricOption?.gsm || 'N/A',
-            fabric_name: item.fabric_name || fabricOption?.fabric_name || item.item_name,
+            fabric_color: item.fabric_color || fabricOption?.color || null,
+            fabric_gsm: item.fabric_gsm || fabricOption?.gsm || null,
+            fabric_name: item.fabric_name || fabricOption?.fabric_name || null,
+            fabric_id: item.fabric_id || fabricOption?.id || undefined,
             fabric_for_supplier:
               item.fabric_for_supplier ?? fabricOption?.fabric_for_supplier ?? null,
-          })
+          }),
         };
+
+        if (item.item_type === 'fabric') {
+          const normalized = normalizePoFabricLine(enrichedBase, fabricOptions);
+          if (normalized) {
+            return {
+              ...enrichedBase,
+              item_name: normalized.supplier_display_name,
+              fabric_name: normalized.fabric_name || enrichedBase.fabric_name,
+              fabric_color: normalized.fabric_color || enrichedBase.fabric_color,
+              fabric_gsm: normalized.fabric_gsm || enrichedBase.fabric_gsm,
+              fabric_for_supplier: normalized.fabric_for_supplier,
+            };
+          }
+        }
+
+        return enrichedBase;
       });
       
       // Only update if there are changes
@@ -1759,6 +1801,7 @@ export function PurchaseOrderForm() {
           item.item_image_url !== prev.item_image_url ||
           item.item_category !== prev.item_category ||
           item.item_id !== prev.item_id ||
+          item.item_name !== prev.item_name ||
           item.item_color !== prev.item_color ||
           item.fabric_for_supplier !== prev.fabric_for_supplier ||
           item.fabric_name !== prev.fabric_name ||
@@ -1913,7 +1956,7 @@ export function PurchaseOrderForm() {
         <tr>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
           <td>${displayName}</td>
-          <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
+          <td>${item.item_type === 'fabric' ? purchaseOrderFabricGsmDisplay(item, fabricOptions) : '-'}</td>
           <td>${lineColorDisplay({ ...item, notes: (item as { notes?: string }).notes || item.remarks })}</td>
           <td style="text-align: right;">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
@@ -2133,7 +2176,7 @@ export function PurchaseOrderForm() {
         <tr>
           <td>${item.item_type === 'fabric' ? 'Fabric' : (item.item_category || item.item_type || 'N/A')}</td>
           <td>${displayName}</td>
-          <td>${item.item_type === 'fabric' ? (item.fabric_gsm || 'N/A') : '-'}</td>
+          <td>${item.item_type === 'fabric' ? purchaseOrderFabricGsmDisplay(item, fabricOptions) : '-'}</td>
           <td>${lineColorDisplay({ ...item, notes: (item as { notes?: string }).notes || item.remarks })}</td>
           <td class="number-cell">${formatQuantity(item.total_quantity ?? item.quantity ?? 0)}</td>
           <td>${item.unit_of_measure || 'N/A'}</td>
@@ -2812,6 +2855,10 @@ export function PurchaseOrderForm() {
           fabric_gsm: item.fabric_gsm || bomRecord?.fabric_gsm || null,
           item_color: colorFields.item_color,
           item_image_url: item.item_image_url || bomRecord?.item_image_url || null,
+          item_name:
+            item.item_type === 'fabric' && fabricForSupplier
+              ? fabricForSupplier
+              : item.item_name,
           // Ensure proper field mapping
           type: item.item_type || 'item',
           quantity: item.quantity || 0,
@@ -3062,12 +3109,29 @@ export function PurchaseOrderForm() {
         }
       }
 
+      let defaultOutsourceLineId: string | null = salesOrderItemIdParam || null;
+      if (
+        isOutsourceMode &&
+        poData.sales_order_id &&
+        itemsWithTotals.some((item) => !item.sales_order_item_id)
+      ) {
+        if (!defaultOutsourceLineId) {
+          const { data: outsourceLines } = await supabase
+            .from('order_items')
+            .select('id')
+            .eq('order_id', poData.sales_order_id)
+            .eq('execution_flow', 'outsource');
+          if (outsourceLines?.length === 1) {
+            defaultOutsourceLineId = outsourceLines[0].id;
+          }
+        }
+      }
+
       // Insert line items
       const lineItemsData = itemsWithTotals.map(item => {
-        const supplierFabricName =
-          item.item_type === 'fabric'
-            ? resolveFabricForSupplierName(item, fabricOptions)
-            : null;
+        const normalizedFabric =
+          item.item_type === 'fabric' ? normalizePoFabricLine(item, fabricOptions) : null;
+        const supplierFabricName = normalizedFabric?.supplier_display_name || null;
         const masterColor = item.item_id ? itemColorMap.get(item.item_id) || null : null;
         const colorFields = poLineColorPayload(item, masterColor);
         return {
@@ -3083,7 +3147,7 @@ export function PurchaseOrderForm() {
         quantity: item.quantity,
         unit_of_measure: item.unit_of_measure,
         remarks: item.remarks,
-        sales_order_item_id: item.sales_order_item_id || null,
+        sales_order_item_id: item.sales_order_item_id || defaultOutsourceLineId || null,
         selected_colors: colorFields.selected_colors,
         item_color: colorFields.item_color,
         size_type_id: item.size_type_id || null,
@@ -3094,9 +3158,9 @@ export function PurchaseOrderForm() {
         }),
         // Add fabric-specific fields for fabric items
         ...(item.item_type === 'fabric' && {
-          fabric_name: item.fabric_name || null,
-          fabric_color: colorFields.fabric_color,
-          fabric_gsm: item.fabric_gsm || null,
+          fabric_name: normalizedFabric?.fabric_name || item.fabric_name || null,
+          fabric_color: normalizedFabric?.fabric_color || colorFields.fabric_color,
+          fabric_gsm: normalizedFabric?.fabric_gsm || item.fabric_gsm || null,
           // Only set fabric_id when it exists in `fabrics`; otherwise keep null.
           fabric_id:
             (item.fabric_id && validFabricIds.has(String(item.fabric_id))
@@ -3175,9 +3239,16 @@ export function PurchaseOrderForm() {
       setItems((prev) =>
         prev.map((item) => {
           if (item.item_type !== 'fabric') return item;
-          const supplierName = resolveFabricForSupplierName(item, fabricOptions);
-          if (!supplierName) return item;
-          return { ...item, fabric_for_supplier: supplierName, item_name: supplierName };
+          const normalized = normalizePoFabricLine(item, fabricOptions);
+          if (!normalized) return item;
+          return {
+            ...item,
+            fabric_for_supplier: normalized.fabric_for_supplier,
+            fabric_name: normalized.fabric_name || item.fabric_name,
+            fabric_color: normalized.fabric_color || item.fabric_color,
+            fabric_gsm: normalized.fabric_gsm || item.fabric_gsm,
+            item_name: normalized.supplier_display_name,
+          };
         })
       );
       setPo(prev => ({ ...prev, id: poId || undefined, po_number: poNumber }));
