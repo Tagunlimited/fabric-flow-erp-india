@@ -17,7 +17,7 @@ import { getBinsForProduct } from "@/utils/inventoryAdjustmentAPI";
 import type { BinInfo, BinSizeInfo } from "@/utils/inventoryAdjustmentAPI";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { useCompanySettings } from "@/hooks/CompanySettingsContext";
+import { resolveBatchLineAssignedQty } from '@/utils/batchAssignedQuantity';
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizesByMasterOrder, sortSizeDistributionsByMasterOrder, getFallbackSizeOrder } from "@/utils/sizeSorting";
 import { parseLineOrderItemIdFromNotes } from "@/utils/orderBatchAssignmentLine";
@@ -166,7 +166,7 @@ type BatchAssignmentRow = {
 function normalizeSizeDistributionsFromDb(raw: unknown): any[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((d: any) => {
-    const assigned = Number(d?.assigned_quantity ?? d?.quantity ?? d?.assignedQuantity ?? 0);
+    const assigned = resolveBatchLineAssignedQty(d);
     return {
       ...d,
       size_name: d?.size_name,
@@ -1717,7 +1717,7 @@ export default function PickerPage() {
           {sortedSizes.length > 0 && (
             <div className="picker-batch-order-sizes">
               {sortedSizes.map((sd: any) => {
-                const assignedQty = Number(sd.assigned_quantity ?? sd.quantity ?? 0);
+                const assignedQty = resolveBatchLineAssignedQty(sd);
                 const pickedQty = Number(sd.picked_quantity ?? 0);
                 let sizeLeft = Math.max(0, assignedQty - pickedQty);
                 if (sortedSizes.length === 1 && qcReplace > 0) {

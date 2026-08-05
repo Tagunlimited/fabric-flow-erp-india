@@ -22,6 +22,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { cn, formatCurrency, formatLocalDateYMD } from '@/lib/utils';
 import { getOrderItemDisplayImageForForm, getImageSrcFromFileOrUrl } from '@/utils/orderItemImageUtils';
+import { generateUuid } from '@/utils/uuid';
 import { usePageState } from '@/contexts/AppCacheContext';
 import { getSortedSizes, sortSizesQuantities, SizeType as SizeTypeUtil } from '@/utils/sizeSorting';
 import { initializeSizePrices, calculateSizeBasedTotal, calculateAverageUnitPrice } from '@/utils/priceCalculation';
@@ -220,7 +221,7 @@ export function OrderForm({
   const [brandingTypes, setBrandingTypes] = useState<BrandingType[]>([]);
   const [loading, setLoading] = useState(false);
   const submitLockRef = useRef(false);
-  const createIdempotencyKeyRef = useRef(crypto.randomUUID());
+  const createIdempotencyKeyRef = useRef(generateUuid());
   const createdOrderIdRef = useRef<string | null>(null);
   const createdOrderNumberRef = useRef<string | null>(null);
   const [orderDatePopoverOpen, setOrderDatePopoverOpen] = useState(false);
@@ -1805,7 +1806,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
       const savedItems = existingItemCount ?? 0;
       if (savedItems >= formData.products.length) {
         toast.success('Order already created');
-        createIdempotencyKeyRef.current = crypto.randomUUID();
+        createIdempotencyKeyRef.current = generateUuid();
         createdOrderIdRef.current = null;
         createdOrderNumberRef.current = null;
         resetData({ silent: true });
@@ -1957,7 +1958,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
       toast.success('Order created successfully!');
 
-      createIdempotencyKeyRef.current = crypto.randomUUID();
+      createIdempotencyKeyRef.current = generateUuid();
       createdOrderIdRef.current = null;
       createdOrderNumberRef.current = null;
 

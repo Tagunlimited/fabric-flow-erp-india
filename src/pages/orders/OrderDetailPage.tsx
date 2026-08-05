@@ -55,6 +55,11 @@ import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
 import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
 import { ProductCustomizationModal } from "@/components/orders/ProductCustomizationModal";
 import { executionFlowLabel, fulfillmentStatusLabel } from '@/domain/fulfillment/types';
+import {
+  describeLineFulfillmentNextStep,
+  loadOutsourceLineContextsForOrder,
+  type OutsourceLineContext,
+} from '@/lib/outsourceFulfillment';
 import { CustomizationColorChips } from "@/components/common/CustomizationColorChips";
 import { ImageZoomLightbox } from "@/components/common/ImageZoomLightbox";
 import {
@@ -1255,6 +1260,7 @@ export default function OrderDetailPage() {
   const [order, setOrder] = useState<Order | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+  const [outsourceLineCtx, setOutsourceLineCtx] = useState<Record<string, OutsourceLineContext>>({});
   const [salesManager, setSalesManager] = useState<SalesManager | null>(null);
   const [fabrics, setFabrics] = useState<{ [key: string]: Fabric }>({});
   const [productCategories, setProductCategories] = useState<{ [key: string]: ProductCategory }>({});
@@ -1679,6 +1685,12 @@ export default function OrderDetailPage() {
         }
         
         setOrderItems((itemsData as unknown as OrderItem[]) || []);
+        try {
+          const ctx = await loadOutsourceLineContextsForOrder(String(id));
+          setOutsourceLineCtx(ctx);
+        } catch {
+          setOutsourceLineCtx({});
+        }
 
         try {
           const { data: chargesData } = await (supabase as any)
@@ -4144,6 +4156,13 @@ export default function OrderDetailPage() {
                                       <div className="text-muted-foreground max-w-[10rem] leading-snug">
                                         {fulfillmentStatusLabel(
                                           (displayItem.fulfillment_status ?? item.fulfillment_status) as any
+                                        )}
+                                      </div>
+                                      <div className="text-xs text-primary max-w-[12rem] leading-snug mt-0.5">
+                                        {describeLineFulfillmentNextStep(
+                                          (displayItem.execution_flow ?? item.execution_flow) as any,
+                                          (displayItem.fulfillment_status ?? item.fulfillment_status) as any,
+                                          outsourceLineCtx[item.id]
                                         )}
                                       </div>
                                     </div>

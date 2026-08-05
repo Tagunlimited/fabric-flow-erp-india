@@ -10,6 +10,10 @@ import QCReviewDialog from "@/components/quality/QCReviewDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getOrderCardPlaceholderSrc } from '@/utils/orderItemImageUtils';
 import {
+  OrderMultiImagePanel,
+  resolveOrderImageUrls,
+} from '@/components/orders/OrderMultiImagePanel';
+import {
   enrichQcOrdersWithImages,
   loadQcPickedOrdersData,
   type QcBatchAvatarInfo,
@@ -243,21 +247,11 @@ export default function QCPage() {
                         <div className="flex-shrink-0 w-full md:w-[40%]">
                           {/* Product Image Panel with Gradient - Portrait */}
                           <div className="rounded-xl overflow-hidden w-full aspect-[3/4] relative" style={{ background: 'linear-gradient(to bottom, rgb(239 246 255) 40%, rgb(241 245 249) 40%)' }}>
-                            <div className="absolute inset-0 flex items-center justify-center p-4 sm:p-5">
-                              <img 
-                                src={o.image_url || getOrderCardPlaceholderSrc()} 
-                                alt={o.order_number}
-                                className="max-h-[85%] max-w-[85%] object-contain"
-                                onError={(e) => {
-                                  const el = e.target as HTMLImageElement;
-                                  if (el.src.endsWith(getOrderCardPlaceholderSrc())) {
-                                    el.style.display = 'none';
-                                    return;
-                                  }
-                                  el.src = getOrderCardPlaceholderSrc();
-                                }}
-                              />
-                            </div>
+                            <OrderMultiImagePanel
+                              urls={resolveOrderImageUrls(o.image_urls, o.image_url)}
+                              alt={o.order_number}
+                              variant="portrait"
+                            />
                           </div>
                         </div>
 

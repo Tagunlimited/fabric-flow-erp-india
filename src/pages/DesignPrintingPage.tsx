@@ -98,7 +98,7 @@ const DesignPrintingPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { orders: ordersWithReceipts, loading: ordersLoading, error: ordersError, refetch } =
-    useOrdersWithReceipts<Order>();
+    useOrdersWithReceipts<Order>({ includeReadymade: true });
   const [orders, setOrders] = useState<Order[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
   const pageLoading = ordersLoading || itemsLoading;

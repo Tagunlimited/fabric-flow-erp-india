@@ -175,12 +175,40 @@ export default function QCPageWithTabs() {
                     <CardContent className="p-0">
                       <div className="flex gap-0">
                         <div className="relative w-[96px] shrink-0 self-stretch min-h-[120px] bg-muted/40">
-                          <img
-                            src={o.image_url || getOrderCardPlaceholderSrc()}
-                            alt=""
-                            className="absolute inset-0 h-full w-full object-cover"
-                          />
-                          <div className="absolute inset-0 bg-gradient-to-t from-background/85 via-transparent to-transparent" />
+                          {(() => {
+                            const urls =
+                              o.image_urls?.length
+                                ? o.image_urls
+                                : o.image_url
+                                  ? [o.image_url]
+                                  : [getOrderCardPlaceholderSrc()];
+                            const visible = urls.slice(0, 4);
+                            const extra = urls.length - visible.length;
+                            if (visible.length === 1) {
+                              return (
+                                <img
+                                  src={visible[0]}
+                                  alt=""
+                                  className="absolute inset-0 h-full w-full object-cover"
+                                />
+                              );
+                            }
+                            return (
+                              <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-px">
+                                {visible.map((url, idx) => (
+                                  <div key={`${url}-${idx}`} className="relative min-h-0 overflow-hidden">
+                                    <img src={url} alt="" className="h-full w-full object-cover" />
+                                    {extra > 0 && idx === visible.length - 1 ? (
+                                      <span className="absolute inset-0 flex items-center justify-center bg-black/50 text-[10px] font-semibold text-white">
+                                        +{extra}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                          <div className="absolute inset-0 bg-gradient-to-t from-background/85 via-transparent to-transparent pointer-events-none" />
                         </div>
                         <div className="flex min-w-0 flex-1 flex-col gap-2.5 p-4">
                           <div className="flex items-start justify-between gap-2">

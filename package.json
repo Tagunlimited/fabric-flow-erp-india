@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "test:roles": "node --test tests/role-regression.test.mjs",
     "test:fulfillment": "node --test tests/order-fulfillment-policy.test.mjs",
+    "test:cutting": "node --test tests/cutting-job-completion.test.mjs",
     "preview": "npx vite preview"
   },
   "dependencies": {

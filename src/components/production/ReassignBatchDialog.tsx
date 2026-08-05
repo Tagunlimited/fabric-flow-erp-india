@@ -9,7 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { ArrowRight, Package } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { supabase } from '@/integrations/supabase/client';
+import { resolveBatchLineAssignedQty } from '@/utils/batchAssignedQuantity';
 
 interface BatchAssignment {
   id: string;
@@ -155,7 +155,8 @@ export const ReassignBatchDialog: React.FC<ReassignBatchDialogProps> = ({
         const { error: updateError } = await supabase
           .from('order_batch_size_distributions')
           .update({
-            quantity: newQuantity
+            quantity: newQuantity,
+            assigned_quantity: newQuantity,
           })
           .eq('order_batch_assignment_id', batchAssignment.id)
           .eq('size_name', size);
@@ -168,10 +169,13 @@ export const ReassignBatchDialog: React.FC<ReassignBatchDialogProps> = ({
       // Step 2: Update old batch's total_quantity
       const { data: updatedSizeDists } = await supabase
         .from('order_batch_size_distributions')
-        .select('quantity')
+        .select('quantity, assigned_quantity')
         .eq('order_batch_assignment_id', batchAssignment.id);
 
-      const newTotalQty = (updatedSizeDists || []).reduce((sum, sd) => sum + (Number(sd.quantity) || 0), 0);
+      const newTotalQty = (updatedSizeDists || []).reduce(
+        (sum, sd) => sum + resolveBatchLineAssignedQty(sd),
+        0
+      );
 
       const existingNotes = batchAssignment.batch_name || '';
       const { error: updateOldBatchError } = await supabase
@@ -202,18 +206,20 @@ export const ReassignBatchDialog: React.FC<ReassignBatchDialogProps> = ({
           // Check if size distribution exists
           const { data: existingSizeDist } = await supabase
             .from('order_batch_size_distributions')
-            .select('quantity, picked_quantity')
+            .select('quantity, assigned_quantity, picked_quantity')
             .eq('order_batch_assignment_id', existingAssignment.id)
             .eq('size_name', size)
             .maybeSingle();
 
           if (existingSizeDist) {
-            // Update existing
+            const nextQty =
+              resolveBatchLineAssignedQty(existingSizeDist) + reassignedQty;
             const { error: updateError } = await supabase
               .from('order_batch_size_distributions')
               .update({
-                quantity: (existingSizeDist.quantity || 0) + reassignedQty,
-                picked_quantity: existingSizeDist.picked_quantity || 0 // Keep existing picked, new quantities are not picked
+                quantity: nextQty,
+                assigned_quantity: nextQty,
+                picked_quantity: existingSizeDist.picked_quantity || 0,
               })
               .eq('order_batch_assignment_id', existingAssignment.id)
               .eq('size_name', size);
@@ -229,7 +235,8 @@ export const ReassignBatchDialog: React.FC<ReassignBatchDialogProps> = ({
                 order_batch_assignment_id: existingAssignment.id,
                 size_name: size,
                 quantity: reassignedQty,
-                picked_quantity: 0 // New quantities are not picked yet
+                assigned_quantity: reassignedQty,
+                picked_quantity: 0,
               });
 
             if (insertError) {
@@ -241,10 +248,13 @@ export const ReassignBatchDialog: React.FC<ReassignBatchDialogProps> = ({
         // Update total_quantity for new batch
         const { data: newBatchSizeDists } = await supabase
           .from('order_batch_size_distributions')
-          .select('quantity')
+          .select('quantity, assigned_quantity')
           .eq('order_batch_assignment_id', existingAssignment.id);
 
-        const newBatchTotalQty = (newBatchSizeDists || []).reduce((sum, sd) => sum + (Number(sd.quantity) || 0), 0);
+        const newBatchTotalQty = (newBatchSizeDists || []).reduce(
+          (sum, sd) => sum + resolveBatchLineAssignedQty(sd),
+          0
+        );
 
         const { error: updateNewBatchError } = await supabase
           .from('order_batch_assignments')
@@ -287,7 +297,8 @@ export const ReassignBatchDialog: React.FC<ReassignBatchDialogProps> = ({
             order_batch_assignment_id: newAssignment.id,
             size_name,
             quantity,
-            picked_quantity: 0 // New quantities are not picked yet
+            assigned_quantity: quantity,
+            picked_quantity: 0,
           }));
 
         if (sizeDistributionsToInsert.length > 0) {

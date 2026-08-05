@@ -52,7 +52,7 @@ const DesignDesignsPage = () => {
   const navigate = useNavigate();
   const { config: company } = useCompanySettings();
   const { orders: ordersWithReceipts, loading: ordersLoading, error: ordersError, refetch } =
-    useOrdersWithReceipts<Order>();
+    useOrdersWithReceipts<Order>({ includeReadymade: true });
   const [orders, setOrders] = useState<Order[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
   const pageLoading = ordersLoading || itemsLoading;

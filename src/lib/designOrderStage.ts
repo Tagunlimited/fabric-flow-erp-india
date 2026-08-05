@@ -1,4 +1,4 @@
-import { getOrderItemDisplayImage } from '@/utils/orderItemImageUtils';
+import { getOrderItemDisplayImage, firstOrderImageUrlFromArray } from '@/utils/orderItemImageUtils';
 
 /** Minimal order shape for design-stage checks (Designs + Printing queues). */
 export interface DesignStageOrder {
@@ -34,14 +34,15 @@ export function hasMockup(order: DesignStageOrder): boolean {
   if (!order.order_items || order.order_items.length === 0) return false;
 
   return order.order_items.some((item: any) => {
+    if (firstOrderImageUrlFromArray(item.mockup_images)) return true;
+
     try {
       const specs =
         typeof item.specifications === 'string'
           ? JSON.parse(item.specifications)
           : item.specifications || {};
 
-      const mockupImages = specs.mockup_images || [];
-      return Array.isArray(mockupImages) && mockupImages.length > 0;
+      return !!firstOrderImageUrlFromArray(specs.mockup_images);
     } catch {
       return false;
     }

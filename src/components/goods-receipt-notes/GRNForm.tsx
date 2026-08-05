@@ -1,4 +1,11 @@
 import { deriveGrnHeaderStatusFromLines } from '@/utils/grnStatus';
+import { recalcOrderStatus } from '@/lib/recalcOrderStatus';
+import {
+  isOutsourceManualPoLine,
+  normalizeSizesQuantities,
+  OUTSOURCE_MANUAL_ENTRY_MODE,
+  sizesQuantitiesToRows,
+} from '@/lib/orderLineSizes';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -93,6 +100,8 @@ type GRNItem = {
   fabric_hex?: string | null;
   item_color?: string;
   selected_colors?: BomSelectedColor[];
+  size_name?: string | null;
+  entry_mode?: string | null;
 };
 
 type PurchaseOrder = {
@@ -118,12 +127,48 @@ type Supplier = {
 
 const resolveInventoryItemId = (item: any): string | null => {
   if (!item) return null;
+  if (item.size_name || item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE) return null;
   const itemType = String(item.item_type || '').toLowerCase();
   if (itemType === 'fabric') {
     return String(item.fabric_id || item.item_id || '').trim() || null;
   }
   return String(item.item_id || '').trim() || null;
 };
+
+function isOutsourceManualGrnLine(item: GRNItem): boolean {
+  return !!item.size_name || item.entry_mode === OUTSOURCE_MANUAL_ENTRY_MODE;
+}
+
+function expandPoItemToGrnRows(base: GRNItem, poItem: any): GRNItem[] {
+  if (!isOutsourceManualPoLine(poItem)) {
+    return [base];
+  }
+  const sizeRows = sizesQuantitiesToRows(normalizeSizesQuantities(poItem.sizes_quantities));
+  if (sizeRows.length === 0) {
+    return [{ ...base, size_name: 'Total', entry_mode: OUTSOURCE_MANUAL_ENTRY_MODE }];
+  }
+  return sizeRows.map((row) => ({
+    ...base,
+    ordered_quantity: row.qty,
+    size_name: row.size,
+    entry_mode: OUTSOURCE_MANUAL_ENTRY_MODE,
+    item_name: poItem.item_name,
+  }));
+}
+
+async function recalcLinkedSalesOrderStatus(poId: string | null | undefined) {
+  if (!poId) return;
+  try {
+    const { data } = await supabase
+      .from('purchase_orders')
+      .select('sales_order_id')
+      .eq('id', poId)
+      .maybeSingle();
+    await recalcOrderStatus((data as { sales_order_id?: string | null })?.sales_order_id);
+  } catch (e) {
+    console.warn('Could not recalc sales order status after GRN', e);
+  }
+}
 
 function computeGrnMasterTotalsFromItems(items: GRNItem[]) {
   const approvedLines = items.filter((i) => i.quality_status === 'approved');
@@ -262,7 +307,10 @@ const GRNForm = () => {
               fabric_color,
               selected_colors,
               fabric_gsm,
-              fabric_id
+              fabric_id,
+              sizes_quantities,
+              entry_mode,
+              size_type_id
             `
           )
           .in('po_id', poIds);
@@ -834,7 +882,8 @@ const GRNForm = () => {
           });
         }
         
-        return {
+        return expandPoItemToGrnRows(
+          {
           po_item_id: item.id,
           item_type: item.item_type || 'item',
           item_id: resolveInventoryItemId(item) || '',
@@ -857,11 +906,14 @@ const GRNForm = () => {
           fabric_for_supplier: fabricForSupplier,
           fabric_hex: fabricHex,
           item_color: itemColor,
-          selected_colors: normalizeSelectedColors((item as any).selected_colors)
-        };
+          selected_colors: normalizeSelectedColors((item as any).selected_colors),
+          entry_mode: (item as any).entry_mode ?? null,
+        },
+          item
+        );
       }));
 
-      setGrnItems(items);
+      setGrnItems(items.flat());
     }
   }, [purchaseOrders, suppliers, supabase]);
 
@@ -956,6 +1008,10 @@ const GRNForm = () => {
       
       for (const item of approvedItems) {
         if (item.quality_status === 'approved' && item.approved_quantity > 0) {
+          if (isOutsourceManualGrnLine(item)) {
+            console.log(`Skipping warehouse inventory for outsource manual line: ${item.item_name} (${item.size_name})`);
+            continue;
+          }
           let inventoryItemId = resolveInventoryItemId(item);
           if (!inventoryItemId && item.po_item_id) {
             const { data: poLine } = await supabase
@@ -1249,6 +1305,7 @@ const GRNForm = () => {
         fabric_gsm: item.fabric_gsm,
         fabric_name: item.fabric_name,
         item_color: item.item_color,
+        size_name: item.size_name ?? null,
       };
 
       let { error } = await supabase.from('grn_items').update(payload as any).eq('id', item.id as any);
@@ -1552,7 +1609,8 @@ const GRNForm = () => {
           selected_colors: normalizeSelectedColors(item.selected_colors),
           fabric_gsm: item.fabric_gsm,
           fabric_name: item.fabric_name,
-          item_color: item.item_color
+          item_color: item.item_color,
+          size_name: item.size_name ?? null,
         }));
 
         console.log('Items to insert:', itemsToInsert);
@@ -1601,6 +1659,7 @@ const GRNForm = () => {
         }));
         setGrnItems(finalizedItems);
         toast.success('GRN saved, marked as received, and inventory added');
+        await recalcLinkedSalesOrderStatus(grn.po_id);
         navigate(`/procurement/grn/${(grnData as any).id}`);
       } else {
         // Update existing GRN — persist line QC as-is; do not force full approval
@@ -1677,6 +1736,7 @@ const GRNForm = () => {
             fabric_gsm: item.fabric_gsm,
             fabric_name: item.fabric_name,
             item_color: item.item_color,
+            size_name: item.size_name ?? null,
           } as any);
           if (error && isMissingSelectedColorsColumn(error)) {
             const retry = await supabase.from('grn_items').insert({
@@ -1705,6 +1765,7 @@ const GRNForm = () => {
               fabric_gsm: item.fabric_gsm,
               fabric_name: item.fabric_name,
               item_color: item.item_color,
+              size_name: item.size_name ?? null,
             } as any);
             error = retry.error;
           }
@@ -1753,6 +1814,8 @@ const GRNForm = () => {
             console.warn('PO auto-completion check skipped:', poCompleteErr);
           }
         }
+
+        await recalcLinkedSalesOrderStatus(grn.po_id);
 
         toast.success(
           statusToPersist === 'approved'
@@ -2312,7 +2375,7 @@ const GRNForm = () => {
                   if (itemIndex < 0) return null;
                   const { label: colorLabel, swatchHex } = getGrnItemColorDisplay(item);
                   return (
-                  <Card key={item.id || `${item.po_item_id}-${itemIndex}`} className="border border-gray-200 hover:border-gray-300 transition-colors">
+                  <Card key={item.id || `${item.po_item_id}-${item.size_name || 'legacy'}-${itemIndex}`} className="border border-gray-200 hover:border-gray-300 transition-colors">
                     <CardContent className="p-6">
                       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                         {/* Item Image and Basic Info */}
@@ -2329,6 +2392,9 @@ const GRNForm = () => {
                             />
                             <div className="flex-1 min-w-0">
                               <h4 className="font-semibold text-lg">{item.item_name || 'N/A'}</h4>
+                              {item.size_name ? (
+                                <p className="text-sm font-medium text-blue-700">Size: {item.size_name}</p>
+                              ) : null}
                               {item.item_type === 'fabric' && (item.fabric_for_supplier || item.fabric_name) && (
                                 <p className="text-sm text-muted-foreground">
                                   <span className="font-medium text-foreground">Fabric for Supplier: </span>

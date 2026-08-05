@@ -11,9 +11,28 @@ import { Search } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
-import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
-import { getOrderItemListThumbnailUrl, getOrderCardPlaceholderSrc } from '@/utils/orderItemImageUtils';
 import { playOrderStatusChangeSound } from '@/utils/orderStatusSound';
+import {
+  collectOrderItemThumbnails,
+  firstThumbnail,
+  mergeBomThumbnailsIntoMap,
+} from '@/lib/orderItemThumbnails';
+import {
+  OrderMultiImagePanel,
+  resolveOrderImageUrls,
+} from '@/components/orders/OrderMultiImagePanel';
+import { DispatchProductSection } from '@/components/dispatch/DispatchProductSection';
+import {
+  DISPATCH_LEGACY_BUCKET,
+  dispatchLineKey,
+  dispatchQtyFromExistingItems,
+  describeDispatchOrderLine,
+  loadDispatchProductBreakdown,
+  prefillDispatchQtyFromProductLines,
+  type DispatchProductLine,
+  type DispatchQtyKey,
+} from '@/lib/dispatchProductBreakdown';
+import { loadOutsourceDispatchCandidates } from '@/lib/outsourceFulfillment';
 
 interface OrderCard {
   order_id: string;
@@ -24,8 +43,12 @@ interface OrderCard {
   picked_quantity: number;
   dispatched_quantity?: number;
   image_url?: string;
+  image_urls?: string[];
+  product_count?: number;
   is_readymade?: boolean;
-  hasPendingChallan?: boolean; // Flag to track if order has a pending challan that needs to be marked as shipped
+  is_outsource?: boolean;
+  hasPendingChallan?: boolean;
+  order_type?: string | null;
 }
 
 export default function DispatchQCPage() {
@@ -37,12 +60,20 @@ export default function DispatchQCPage() {
 
   // Dispatch modal state
   const [dispatchOpen, setDispatchOpen] = useState(false);
-  const [dispatchTarget, setDispatchTarget] = useState<{ order_id: string; order_number: string; customer_name?: string; image_url?: string } | null>(null);
+  const [dispatchTarget, setDispatchTarget] = useState<{
+    order_id: string;
+    order_number: string;
+    customer_name?: string;
+    image_url?: string;
+    image_urls?: string[];
+    is_readymade?: boolean;
+    order_type?: string | null;
+  } | null>(null);
   const [courierName, setCourierName] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
   const [dispatchNote, setDispatchNote] = useState("");
   const [savingDispatch, setSavingDispatch] = useState(false);
-  const [dispatchQtyBySize, setDispatchQtyBySize] = useState<Record<string, number>>({});
+  const [dispatchQtyByLine, setDispatchQtyByLine] = useState<Record<DispatchQtyKey, number>>({});
   const [dispatchOrderId, setDispatchOrderId] = useState<string | null>(null);
 
   const getFinancialYear = (date: Date) => {
@@ -76,7 +107,9 @@ export default function DispatchQCPage() {
   // Details modal state
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
-  const [dispatchItems, setDispatchItems] = useState<Array<{size_name: string; quantity: number}>>([]);
+  const [dispatchItems, setDispatchItems] = useState<
+    Array<{ size_name: string; quantity: number; order_item_id?: string | null; label?: string }>
+  >([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
 
   useEffect(() => { loadApprovedOrders(); }, []);
@@ -90,7 +123,6 @@ export default function DispatchQCPage() {
         .select('assignment_id, order_id, total_quantity')
         .order('assignment_date', { ascending: false });
       const rows = asn || [];
-      if (rows.length === 0) { setOrders([]); return; }
       const assignmentIds = rows.map((r: any) => r.assignment_id).filter(Boolean);
       const orderIds = Array.from(new Set(rows.map((r: any) => r.order_id).filter(Boolean)));
 
@@ -220,29 +252,39 @@ export default function DispatchQCPage() {
           .in('id', allCustomerIds as any);
         (customers || []).forEach((c: any) => { customersMap[c.id] = c.company_name; });
       }
-      let imageByOrder: Record<string, string | undefined> = {};
+      let imagesByOrder: Record<string, string[]> = {};
+      const allThumbOrderIds = Array.from(new Set([...orderIds, ...(readymadeOrders || []).map((o: any) => o.id)]));
       try {
+        const thumbMeta: Record<string, { order_type?: string | null }> = {};
+        Object.entries(ordersMap).forEach(([id, m]) => {
+          thumbMeta[id] = { order_type: m.order_type ?? null };
+        });
+        (readymadeOrders || []).forEach((o: any) => {
+          thumbMeta[o.id] = { order_type: 'readymade' };
+        });
+        imagesByOrder = await collectOrderItemThumbnails(allThumbOrderIds, thumbMeta);
         const { data: boms } = await (supabase as any)
           .from('bom_records')
           .select('order_id, product_image_url')
           .eq('is_deleted', false)
           .in('order_id', orderIds as any);
-        (boms || []).forEach((b: any) => { if (b?.order_id && b?.product_image_url) imageByOrder[b.order_id] = b.product_image_url; });
+        imagesByOrder = mergeBomThumbnailsIntoMap(imagesByOrder, boms || []);
       } catch {}
+
+      const itemCountByOrder: Record<string, number> = {};
       try {
-        const { data: items } = await (supabase as any)
-          .from('order_items')
-          .select('order_id, category_image_url, mockup_images, specifications')
-          .eq('is_deleted', false)
-          .in('order_id', orderIds as any);
-        (items || []).forEach((it: any) => {
-          const oid = it?.order_id; if (!oid) return;
-          if (!imageByOrder[oid]) {
-            const orderMeta = ordersMap[oid];
-            const thumb = getOrderItemListThumbnailUrl(it, { order_type: orderMeta?.order_type ?? undefined });
-            if (thumb) imageByOrder[oid] = thumb;
-          }
-        });
+        if (allThumbOrderIds.length > 0) {
+          const { data: itemCounts } = await (supabase as any)
+            .from('order_items')
+            .select('order_id')
+            .eq('is_deleted', false)
+            .in('order_id', allThumbOrderIds as any);
+          (itemCounts || []).forEach((it: any) => {
+            const oid = it?.order_id;
+            if (!oid) return;
+            itemCountByOrder[oid] = (itemCountByOrder[oid] || 0) + 1;
+          });
+        }
       } catch {}
 
       // Get dispatched quantities per order
@@ -269,6 +311,7 @@ export default function DispatchQCPage() {
         if (approved <= 0) return;
         const oid = r.order_id as string;
         if (!byOrder[oid]) {
+          const urls = imagesByOrder[oid] || [];
           byOrder[oid] = {
             order_id: oid,
             order_number: ordersMap[oid]?.order_number || '',
@@ -277,7 +320,10 @@ export default function DispatchQCPage() {
             total_quantity: 0,
             picked_quantity: 0,
             dispatched_quantity: dispatchedByOrder[oid] || 0,
-            image_url: imageByOrder[oid]
+            image_urls: urls,
+            image_url: firstThumbnail(urls),
+            product_count: itemCountByOrder[oid] || 0,
+            order_type: ordersMap[oid]?.order_type ?? null,
           };
         }
         byOrder[oid].approved_quantity += approved;
@@ -289,22 +335,6 @@ export default function DispatchQCPage() {
       if (readymadeOrders && readymadeOrders.length > 0) {
         // Get dispatched quantities for readymade orders
         const readymadeIds = readymadeOrders.map((o: any) => o.id);
-        let readymadeImageByOrder: Record<string, string | undefined> = {};
-        if (readymadeIds.length > 0) {
-          try {
-            const { data: rmItems } = await (supabase as any)
-              .from('order_items')
-              .select('order_id, category_image_url, mockup_images, specifications')
-              .eq('is_deleted', false)
-              .in('order_id', readymadeIds as any);
-            (rmItems || []).forEach((it: any) => {
-              const oid = it?.order_id as string | undefined;
-              if (!oid || readymadeImageByOrder[oid]) return;
-              const thumb = getOrderItemListThumbnailUrl(it, { order_type: 'readymade' });
-              if (thumb) readymadeImageByOrder[oid] = thumb;
-            });
-          } catch {}
-        }
         let readymadeDispatched: Record<string, number> = {};
         if (readymadeIds.length > 0) {
           try {
@@ -369,23 +399,78 @@ export default function DispatchQCPage() {
           const shouldShow = totalQty > 0 && (hasRemaining || hasPendingChallan);
           
           if (shouldShow) {
+            const urls = imagesByOrder[o.id] || [];
             byOrder[o.id] = {
               order_id: o.id,
               order_number: o.order_number,
               customer_name: o.customers?.company_name || customersMap[o.customer_id] || '',
-              approved_quantity: totalQty, // For readymade, approved = total (no QC needed)
+              approved_quantity: totalQty,
               total_quantity: totalQty,
-              picked_quantity: totalQty, // For readymade, picked = total (no picking needed)
+              picked_quantity: totalQty,
               dispatched_quantity: dispatchedQty,
-              image_url: readymadeImageByOrder[o.id],
-              is_readymade: true, // Flag to identify readymade orders
-              hasPendingChallan: hasPendingChallan // Store flag for tab filtering
-            } as any;
+              image_urls: urls,
+              image_url: firstThumbnail(urls),
+              product_count: itemCountByOrder[o.id] || 0,
+              is_readymade: true,
+              hasPendingChallan: hasPendingChallan,
+              order_type: 'readymade',
+            };
           }
         });
       }
 
+      try {
+        const outsourceCandidates = await loadOutsourceDispatchCandidates();
+        for (const oc of outsourceCandidates) {
+          const oid = oc.order_id;
+          const dispatchedQty =
+            byOrder[oid]?.dispatched_quantity ?? dispatchedByOrder[oid] ?? 0;
+          if (byOrder[oid]) {
+            byOrder[oid].approved_quantity =
+              Number(byOrder[oid].approved_quantity || 0) + oc.approved_quantity;
+            byOrder[oid].is_outsource = true;
+          } else {
+            const urls = imagesByOrder[oid] || [];
+            byOrder[oid] = {
+              order_id: oid,
+              order_number: oc.order_number || '',
+              customer_name: oc.customer_name,
+              approved_quantity: oc.approved_quantity,
+              total_quantity: oc.approved_quantity,
+              picked_quantity: oc.approved_quantity,
+              dispatched_quantity: dispatchedQty,
+              image_urls: urls,
+              image_url: firstThumbnail(urls),
+              product_count: itemCountByOrder[oid] || 0,
+              is_outsource: true,
+              order_type: oc.order_type ?? null,
+            };
+          }
+        }
+
+        const outsourceOnlyIds = outsourceCandidates
+          .map((oc) => oc.order_id)
+          .filter((oid) => !imagesByOrder[oid]?.length);
+        if (outsourceOnlyIds.length) {
+          const extraThumbs = await collectOrderItemThumbnails(outsourceOnlyIds);
+          for (const oid of outsourceOnlyIds) {
+            const urls = extraThumbs[oid] || [];
+            if (!urls.length) continue;
+            imagesByOrder[oid] = urls;
+            if (byOrder[oid]) {
+              byOrder[oid].image_urls = urls;
+              byOrder[oid].image_url = firstThumbnail(urls);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error loading outsource dispatch candidates:', error);
+      }
+
       setOrders(Object.values(byOrder));
+    } catch (error) {
+      console.error('Error loading dispatch queue:', error);
+      setOrders([]);
     } finally {
       setLoading(false);
     }
@@ -393,7 +478,13 @@ export default function DispatchQCPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const filteredOrders = q ? orders.filter(o => o.order_number.toLowerCase().includes(q) || (o.customer_name || '').toLowerCase().includes(q)) : orders;
+    const filteredOrders = q
+      ? orders.filter(
+          (o) =>
+            (o.order_number || '').toLowerCase().includes(q) ||
+            (o.customer_name || '').toLowerCase().includes(q)
+        )
+      : orders;
     return filteredOrders;
   }, [orders, search]);
 
@@ -455,20 +546,32 @@ export default function DispatchQCPage() {
     fetchCompleted();
   }, []);
 
-  const [sizeRows, setSizeRows] = useState<Array<{ size_name: string; approved: number; dispatched: number; to_dispatch: number }>>([]);
+  const [productLines, setProductLines] = useState<DispatchProductLine[]>([]);
+  const [isLegacyMerged, setIsLegacyMerged] = useState(false);
   const [isReadymadeOrder, setIsReadymadeOrder] = useState(false);
+
   const openDispatchDialog = async (o: OrderCard & { is_readymade?: boolean }) => {
-    setDispatchTarget({ order_id: o.order_id, order_number: o.order_number, customer_name: o.customer_name, image_url: o.image_url });
+    setDispatchTarget({
+      order_id: o.order_id,
+      order_number: o.order_number,
+      customer_name: o.customer_name,
+      image_url: o.image_url,
+      image_urls: o.image_urls,
+      is_readymade: o.is_readymade,
+      order_type: o.order_type ?? null,
+    });
     setCourierName("");
     setTrackingNumber("");
     setDispatchNote("");
     setDispatchOrderId(null);
-    
-    // Check if this is a readymade order
-    const isReadymade = (o as any).is_readymade || false;
+    setDispatchQtyByLine({});
+    setProductLines([]);
+    setIsLegacyMerged(false);
+
+    const isReadymade = Boolean(o.is_readymade);
     setIsReadymadeOrder(isReadymade);
-    
-    // Check for existing dispatch_order (challan) that hasn't been shipped yet
+
+    let existingDispatchId: string | null = null;
     try {
       const { data: existingDispatch } = await (supabase as any)
         .from('dispatch_orders')
@@ -479,8 +582,9 @@ export default function DispatchQCPage() {
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
-      
+
       if (existingDispatch) {
+        existingDispatchId = existingDispatch.id;
         setDispatchOrderId(existingDispatch.id);
         setCourierName(existingDispatch.courier_name || '');
         setTrackingNumber(existingDispatch.tracking_number || '');
@@ -488,126 +592,43 @@ export default function DispatchQCPage() {
     } catch (error) {
       console.error('Error checking for existing dispatch order:', error);
     }
-    
-    if (isReadymade) {
-      // For readymade orders, get total quantity from order_items (no sizes/QC)
-      try {
-        const { data: orderItems } = await (supabase as any)
-          .from('order_items')
-          .select('quantity')
-          .eq('is_deleted', false)
-          .eq('order_id', o.order_id);
-        
-        const totalQuantity = (orderItems || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
-        
-        // Get already dispatched quantity
-        const { data: disp } = await (supabase as any)
-          .from('dispatch_order_items')
-          .select('quantity')
-          .eq('is_deleted', false)
-          .eq('order_id', o.order_id);
-        const dispatchedTotal = (disp || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0);
-        const toDispatch = Math.max(0, totalQuantity - dispatchedTotal);
-        
-        // For readymade orders, use "Total" as the size name
-        // Show even if toDispatch is 0 (so user can see challan and mark as dispatched)
-        if (totalQuantity > 0) {
-          setSizeRows([{
-            size_name: 'Total',
-            approved: totalQuantity,
-            dispatched: dispatchedTotal,
-            to_dispatch: toDispatch
-          }]);
-          // Only set dispatch quantity if there's something to dispatch
-          // If challan already exists, don't pre-fill (user already generated it)
-          if (toDispatch > 0 && !dispatchOrderId) {
-            setDispatchQtyBySize({ 'Total': toDispatch });
-          } else {
-            setDispatchQtyBySize({});
-          }
-        } else {
-          setSizeRows([]);
-          setDispatchQtyBySize({});
+
+    try {
+      const { productLines: lines, isLegacyMerged: legacy } = await loadDispatchProductBreakdown(
+        o.order_id,
+        {
+          isReadymade,
+          orderType: o.order_type ?? (isReadymade ? 'readymade' : null),
+          sizeTypes,
+          includeZeroRemaining: Boolean(existingDispatchId),
         }
-      } catch (error) {
-        console.error('Error loading readymade order data:', error);
-        setSizeRows([]);
-        setDispatchQtyBySize({});
-      }
-    } else {
-      // Load per-size approved and already dispatched (for custom orders)
-      try {
-        // Approved by size from qc_reviews
-        // Note: approved_quantity is cumulative across all QC sessions (including replacements after rejection)
-        // Summing across all assignments for the order gives total approved per size
-        const { data: qc } = await (supabase as any)
-          .from('qc_reviews')
-          .select('size_name, approved_quantity, order_batch_assignment_id')
-          .eq('is_deleted', false)
-          .in('order_batch_assignment_id', (
-            await (supabase as any)
-              .from('order_batch_assignments')
-              .select('id')
-              .eq('is_deleted', false)
-              .eq('order_id', o.order_id)
-          ).data?.map((r: any) => r.id) || []);
-        const approvedMap: Record<string, number> = {};
-        (qc || []).forEach((r: any) => {
-          const k = r.size_name as string; 
-          // Sum approved quantities (already cumulative per assignment-size, so this gives total approved per size)
-          approvedMap[k] = (approvedMap[k] || 0) + Number(r.approved_quantity || 0);
-        });
-        // Dispatched by size
-        const { data: disp } = await (supabase as any)
+      );
+      setProductLines(lines);
+      setIsLegacyMerged(legacy);
+
+      if (existingDispatchId) {
+        const { data: existingItems } = await (supabase as any)
           .from('dispatch_order_items')
-          .select('size_name, quantity')
+          .select('order_item_id, size_name, quantity')
           .eq('is_deleted', false)
-          .eq('order_id', o.order_id);
-        const dispatchedMap: Record<string, number> = {};
-        (disp || []).forEach((r: any) => {
-          const k = r.size_name as string; dispatchedMap[k] = (dispatchedMap[k] || 0) + Number(r.quantity || 0);
-        });
-        const sizes = Array.from(new Set([...Object.keys(approvedMap), ...Object.keys(dispatchedMap)]));
-        const rows = sizes.map(size => {
-          const approved = Number(approvedMap[size] || 0);
-          const dispatched = Number(dispatchedMap[size] || 0);
-          const to_dispatch = Math.max(0, approved - dispatched);
-          return { size_name: size, approved, dispatched, to_dispatch };
-        }).filter(r => r.to_dispatch > 0);
-        
-        // Sort sizes using master order
-        // Try to get size_type_id from order items
-        let sizeTypeId: string | null = null;
-        try {
-          const { data: orderItems } = await (supabase as any)
-            .from('order_items')
-            .select('size_type_id')
-            .eq('is_deleted', false)
-            .eq('order_id', o.order_id)
-            .limit(1);
-          if (orderItems && orderItems.length > 0 && orderItems[0].size_type_id) {
-            sizeTypeId = orderItems[0].size_type_id;
-          }
-        } catch {}
-        
-        const sortedRows = sortSizeDistributionsByMasterOrder(rows, sizeTypeId, sizeTypes);
-        setSizeRows(sortedRows);
-        // Pre-fill dispatch quantities with remaining to dispatch so Generate Challan works immediately
-        const prefill: Record<string, number> = {};
-        sortedRows.forEach(r => { prefill[r.size_name] = Number(r.to_dispatch || 0); });
-        setDispatchQtyBySize(prefill);
-      } catch {
-        setSizeRows([]);
-        setDispatchQtyBySize({});
+          .eq('dispatch_order_id', existingDispatchId);
+        setDispatchQtyByLine(dispatchQtyFromExistingItems(existingItems || []));
+      } else {
+        setDispatchQtyByLine(prefillDispatchQtyFromProductLines(lines));
       }
+    } catch (error) {
+      console.error('Error loading dispatch product breakdown:', error);
+      setProductLines([]);
+      setDispatchQtyByLine({});
     }
+
     setDispatchOpen(true);
   };
 
   const handleGenerateChallan = async () => {
     if (!dispatchTarget) return;
     // Require at least one qty > 0
-    const totalToSend = Object.values(dispatchQtyBySize).reduce((a, b) => a + Number(b || 0), 0);
+    const totalToSend = Object.values(dispatchQtyByLine).reduce((a, b) => a + Number(b || 0), 0);
     if (totalToSend <= 0) return;
     try {
       setSavingDispatch(true);
@@ -657,14 +678,20 @@ export default function DispatchQCPage() {
       }
       if (!newId) throw new Error('Could not allocate dispatch number');
       // Insert dispatch items per size
-      const lines = Object.entries(dispatchQtyBySize)
+      const lines = Object.entries(dispatchQtyByLine)
         .filter(([, qty]) => Number(qty || 0) > 0)
-        .map(([sizeName, qty]) => ({
-          dispatch_order_id: newId,
-          order_id: dispatchTarget.order_id,
-          size_name: sizeName || 'Total', // Default to 'Total' if size_name is empty (for readymade orders)
-          quantity: Number(qty || 0)
-        }));
+        .map(([key, qty]) => {
+          const sep = key.indexOf('::');
+          const orderItemId = sep > 0 ? key.slice(0, sep) : DISPATCH_LEGACY_BUCKET;
+          const sizeName = sep > 0 ? key.slice(sep + 2) : key;
+          return {
+            dispatch_order_id: newId,
+            order_id: dispatchTarget.order_id,
+            order_item_id: orderItemId === DISPATCH_LEGACY_BUCKET ? null : orderItemId,
+            size_name: sizeName || 'Total',
+            quantity: Number(qty || 0),
+          };
+        });
       if (lines.length > 0) {
         const { error: itemsError } = await (supabase as any).from('dispatch_order_items').insert(lines as any);
         if (itemsError) {
@@ -862,17 +889,56 @@ export default function DispatchQCPage() {
     }
   };
 
-  const incDispatch = (size: string, delta: number, maxAllowed: number) => {
-    setDispatchQtyBySize(prev => {
+  const incDispatch = (
+    orderItemId: string,
+    sizeName: string,
+    delta: number,
+    maxAllowed: number
+  ) => {
+    const key = dispatchLineKey(orderItemId, sizeName);
+    setDispatchQtyByLine((prev) => {
       const next = { ...prev };
-      const curr = Number(next[size] || 0);
-      const v = Math.max(0, Math.min(maxAllowed, curr + delta));
-      next[size] = v;
+      const curr = Number(next[key] || 0);
+      next[key] = Math.max(0, Math.min(maxAllowed, curr + delta));
       return next;
     });
   };
-  const setDispatchDirect = (size: string, value: number, maxAllowed: number) => {
-    setDispatchQtyBySize(prev => ({ ...prev, [size]: Math.max(0, Math.min(maxAllowed, Number(value) || 0)) }));
+
+  const setDispatchDirect = (
+    orderItemId: string,
+    sizeName: string,
+    value: number,
+    maxAllowed: number
+  ) => {
+    const key = dispatchLineKey(orderItemId, sizeName);
+    setDispatchQtyByLine((prev) => ({
+      ...prev,
+      [key]: Math.max(0, Math.min(maxAllowed, Number(value) || 0)),
+    }));
+  };
+
+  const enrichDispatchItems = async (
+    items: Array<{ size_name: string; quantity: number; order_item_id?: string | null }>
+  ) => {
+    const itemIds = Array.from(
+      new Set(items.map((i) => i.order_item_id).filter(Boolean) as string[])
+    );
+    let labelByItemId: Record<string, string> = {};
+    if (itemIds.length > 0) {
+      const { data: orderItems } = await (supabase as any)
+        .from('order_items')
+        .select('id, product_description, specifications')
+        .in('id', itemIds);
+      (orderItems || []).forEach((it: any) => {
+        if (it?.id) labelByItemId[it.id] = describeDispatchOrderLine(it);
+      });
+    }
+    return items.map((item) => ({
+      ...item,
+      label: item.order_item_id
+        ? labelByItemId[item.order_item_id] || 'Product'
+        : undefined,
+    }));
   };
 
   const openDetailsModal = async (order: any) => {
@@ -886,12 +952,12 @@ export default function DispatchQCPage() {
       try {
         const { data, error } = await (supabase as any)
           .from('dispatch_order_items')
-          .select('size_name, quantity')
+          .select('size_name, quantity, order_item_id')
           .eq('is_deleted', false)
           .eq('dispatch_order_id', order.id);
         
         if (!error && data) {
-          setDispatchItems(data);
+          setDispatchItems(await enrichDispatchItems(data));
         }
       } catch (error) {
         console.error('Error loading dispatch items:', error);
@@ -925,23 +991,12 @@ export default function DispatchQCPage() {
         // Load all dispatch items for this order
         const { data, error } = await (supabase as any)
           .from('dispatch_order_items')
-          .select('size_name, quantity')
+          .select('size_name, quantity, order_item_id')
           .eq('is_deleted', false)
           .eq('order_id', order.order_id);
         
         if (!error && data) {
-          // Aggregate by size
-          const aggregated: Record<string, number> = {};
-          data.forEach((item: any) => {
-            const size = item.size_name;
-            aggregated[size] = (aggregated[size] || 0) + Number(item.quantity || 0);
-          });
-          
-          const items = Object.entries(aggregated).map(([size_name, quantity]) => ({
-            size_name,
-            quantity
-          }));
-          setDispatchItems(items);
+          setDispatchItems(await enrichDispatchItems(data));
         }
       } catch (error) {
         console.error('Error loading dispatch items:', error);
@@ -1011,21 +1066,11 @@ export default function DispatchQCPage() {
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex items-start gap-4">
                           {/* Product Image - Larger and more prominent */}
-                          <div className="flex-shrink-0">
-                            <img 
-                              src={o.image_url || getOrderCardPlaceholderSrc()} 
-                              alt={o.order_number} 
-                              className="w-24 h-24 rounded-lg object-cover border-2 border-gray-200 shadow-sm"
-                              onError={(e) => {
-                                const target = e.currentTarget;
-                                const ph = getOrderCardPlaceholderSrc();
-                                if (target.src.endsWith(ph)) {
-                                  target.onerror = null;
-                                  return;
-                                }
-                                target.src = ph;
-                                target.onerror = null;
-                              }}
+                          <div className="flex-shrink-0 h-24 w-24">
+                            <OrderMultiImagePanel
+                              urls={resolveOrderImageUrls(o.image_urls, o.image_url)}
+                              alt={o.order_number}
+                              variant="compact"
                             />
                           </div>
                           <div className="flex-1">
@@ -1065,21 +1110,11 @@ export default function DispatchQCPage() {
                             <div className="flex items-start justify-between gap-4">
                               <div className="flex items-start gap-4">
                                 {/* Product Image - Larger */}
-                                <div className="flex-shrink-0">
-                                  <img 
-                                    src={o.image_url || getOrderCardPlaceholderSrc()} 
-                                    alt={o.order_number} 
-                                    className="w-20 h-20 rounded-lg object-cover border-2 border-gray-200 shadow-sm"
-                                    onError={(e) => {
-                                      const target = e.currentTarget;
-                                      const ph = getOrderCardPlaceholderSrc();
-                                      if (target.src.endsWith(ph)) {
-                                        target.onerror = null;
-                                        return;
-                                      }
-                                      target.src = ph;
-                                      target.onerror = null;
-                                    }}
+                                <div className="flex-shrink-0 h-20 w-20">
+                                  <OrderMultiImagePanel
+                                    urls={resolveOrderImageUrls(o.image_urls, o.image_url)}
+                                    alt={o.order_number}
+                                    variant="compact"
                                   />
                                 </div>
                                 <div className="flex-1">
@@ -1143,61 +1178,52 @@ export default function DispatchQCPage() {
           <div className="space-y-4 overflow-y-auto px-4 pb-4 sm:px-0 sm:pb-0 max-h-[calc(90vh-72px)]">
             {/* Order info with product image */}
             <div className="flex items-center gap-4 pb-3 border-b">
-              {dispatchTarget?.image_url && (
-                <div className="flex-shrink-0">
-                  <img 
-                    src={dispatchTarget.image_url} 
-                    alt="Product" 
-                    className="w-20 h-20 rounded-lg object-cover border-2 border-gray-200 shadow-sm"
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none';
-                    }}
-                  />
-                </div>
-              )}
+              <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-lg border bg-muted/30">
+                <OrderMultiImagePanel
+                  urls={resolveOrderImageUrls(
+                    dispatchTarget?.image_urls,
+                    dispatchTarget?.image_url
+                  )}
+                  alt={dispatchTarget?.order_number || 'Order'}
+                  variant="compact"
+                  className="h-full w-full"
+                />
+              </div>
               <div className="flex-1">
                 <div className="font-semibold text-base">Order #{dispatchTarget?.order_number}</div>
                 {dispatchTarget?.customer_name && (
                   <div className="text-sm text-muted-foreground mt-1">{dispatchTarget.customer_name}</div>
                 )}
+                {productLines.length > 1 ? (
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {productLines.length} products in this order
+                  </div>
+                ) : null}
               </div>
             </div>
-            <div className="border rounded p-3">
-              <div className="text-xs font-medium mb-2">Remaining Pcs to Dispatch</div>
-              {sizeRows.length === 0 ? (
-                <div className="text-xs text-muted-foreground">No pending quantities to dispatch.</div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                  {sizeRows.map((r, idx) => (
-                    <div key={idx} className="border rounded p-2 text-center">
-                      <div className="text-[11px] text-muted-foreground">{r.size_name}</div>
-                      <div className="text-base font-semibold">{r.to_dispatch}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            {sizeRows.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {sizeRows.map((r, idx) => {
-                  const maxAllowed = r.to_dispatch;
-                  const val = Number(dispatchQtyBySize[r.size_name] || 0);
-                  return (
-                    <div key={idx} className="border rounded p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="text-sm font-medium">{isReadymadeOrder && r.size_name === 'Total' ? 'Total Quantity' : `Size ${r.size_name}`}</div>
-                        <div className="text-xs text-muted-foreground">{isReadymadeOrder ? `Total: ${r.approved} • Dispatched: ${r.dispatched}` : `Approved ${r.approved} • Dispatched ${r.dispatched}`}</div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button type="button" variant="outline" size="sm" onClick={() => incDispatch(r.size_name, -1, maxAllowed)}>-</Button>
-                        <Input type="number" className="w-20 text-center" value={val} min={0} max={maxAllowed}
-                          onChange={(e) => setDispatchDirect(r.size_name, Number(e.target.value || 0), maxAllowed)} />
-                        <Button type="button" variant="outline" size="sm" onClick={() => incDispatch(r.size_name, +1, maxAllowed)}>+</Button>
-                        <div className="text-xs text-muted-foreground ml-auto">Max {maxAllowed}</div>
-                      </div>
-                    </div>
-                  );
-                })}
+
+            {isLegacyMerged ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Products are not separated on this order; sizes are combined across all lines.
+              </div>
+            ) : null}
+
+            {productLines.length === 0 ? (
+              <div className="text-xs text-muted-foreground border rounded p-3">
+                No pending quantities to dispatch.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {productLines.map((line) => (
+                  <DispatchProductSection
+                    key={line.order_item_id}
+                    line={line}
+                    isReadymadeOrder={isReadymadeOrder}
+                    dispatchQtyByLine={dispatchQtyByLine}
+                    onInc={incDispatch}
+                    onSetDirect={setDispatchDirect}
+                  />
+                ))}
               </div>
             )}
             <div>
@@ -1298,15 +1324,48 @@ export default function DispatchQCPage() {
                         <div className="text-sm text-muted-foreground">Loading dispatch items...</div>
                       </div>
                     ) : dispatchItems.length > 0 ? (
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                        {dispatchItems.map((item, index) => (
-                          <div key={index} className="border rounded-lg p-3 text-center">
-                            <div className="text-sm font-medium text-gray-700">{item.size_name}</div>
-                            <div className="text-lg font-bold text-blue-600">{item.quantity}</div>
-                            <div className="text-xs text-gray-500">pieces</div>
+                      (() => {
+                        const hasProductSplit = dispatchItems.some((i) => i.order_item_id);
+                        if (!hasProductSplit) {
+                          return (
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                              {dispatchItems.map((item, index) => (
+                                <div key={index} className="border rounded-lg p-3 text-center">
+                                  <div className="text-sm font-medium text-gray-700">{item.size_name}</div>
+                                  <div className="text-lg font-bold text-blue-600">{item.quantity}</div>
+                                  <div className="text-xs text-gray-500">pieces</div>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        }
+                        const byProduct = new Map<string, typeof dispatchItems>();
+                        dispatchItems.forEach((item) => {
+                          const key = item.order_item_id || 'legacy';
+                          if (!byProduct.has(key)) byProduct.set(key, []);
+                          byProduct.get(key)!.push(item);
+                        });
+                        return (
+                          <div className="space-y-4">
+                            {Array.from(byProduct.entries()).map(([key, items]) => (
+                              <div key={key}>
+                                <div className="text-sm font-medium mb-2">
+                                  {items[0]?.label || 'All products (combined)'}
+                                </div>
+                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                                  {items.map((item, index) => (
+                                    <div key={index} className="border rounded-lg p-3 text-center">
+                                      <div className="text-sm font-medium text-gray-700">{item.size_name}</div>
+                                      <div className="text-lg font-bold text-blue-600">{item.quantity}</div>
+                                      <div className="text-xs text-gray-500">pieces</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        );
+                      })()
                     ) : (
                       <div className="text-center py-4 text-sm text-muted-foreground">
                         No dispatch items found

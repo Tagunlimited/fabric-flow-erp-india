@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,7 @@ import {
   normalizeToByOrderItem,
   buildStoredPayloadFromByOrderItem,
   sumAllCutsInStoredJson,
+  isOrderItemCuttingComplete,
 } from '@/utils/cutQuantitiesStorage';
 import { sizesFromOrderItem } from '@/utils/sizesFromOrderItem';
 import { getOrderItemLineQuantity } from '@/utils/orderItemLineQuantity';
@@ -52,6 +53,7 @@ interface AvailableFabric {
   allocated_quantity: number;
   available_quantity: number;
   unit: string;
+  master_uom?: string;
 }
 
 function fabricAvailabilitySummaryLine(f: AvailableFabric): string {
@@ -114,6 +116,18 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
   const [loading, setLoading] = useState(false);
   /** Bumped after fabric is deducted so we re-fetch availability while the dialog stays open (multi-line cutting). */
   const [fabricAvailabilityTick, setFabricAvailabilityTick] = useState(0);
+
+  const orderItemIds = useMemo(
+    () => orderItems.map((i: any) => i.id).filter(Boolean) as string[],
+    [orderItems]
+  );
+
+  const pendingOrderItems = useMemo(() => {
+    return orderItems.filter((it: any) => {
+      const required = getOrderItemLineQuantity(it);
+      return !isOrderItemCuttingComplete(fullCutRaw, it.id, orderItemIds, required);
+    });
+  }, [orderItems, fullCutRaw, orderItemIds]);
 
   const sortSizes = (sizes: OrderSize[], sizeTypeId?: string | null) => {
     if (!sizes || sizes.length === 0) return sizes;
@@ -182,7 +196,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
           const grossQty = Number(availability?.gross_quantity || 0);
           const allocatedQty = Number(availability?.allocated_quantity || 0);
           const inventoryQty = Number(availability?.available_quantity || 0);
-          const inventoryUnit = normalizeUnit(availability?.unit || fabric.uom || 'kg');
+          const stockUnit = availability?.unit || (normalizeUnit(fabric.uom || 'kg') === 'kg' ? 'Kgs' : normalizeUnit(fabric.uom || 'kg'));
+          const masterUom = availability?.master_uom;
 
           if (import.meta.env.DEV) {
             console.log('[CuttingAvailabilityDebug]', {
@@ -191,6 +206,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
               gross: grossQty,
               allocated: allocatedQty,
               net: inventoryQty,
+              stockUnit,
+              masterUom,
               rowIds: availability?.contributing_row_ids || [],
             });
           }
@@ -205,7 +222,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
             gross_quantity: grossQty,
             allocated_quantity: allocatedQty,
             available_quantity: inventoryQty,
-            unit: inventoryUnit === 'kg' ? 'Kgs' : inventoryUnit,
+            unit: stockUnit,
+            master_uom: masterUom,
           };
         });
 
@@ -225,12 +243,16 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
   }, [isOpen, jobId, orderItems, fabricAvailabilityTick]);
 
   useEffect(() => {
-    if (!isOpen || !orderItems?.length) return;
-    setSelectedOrderItemId(prev => {
-      if (prev && orderItems.some((i: any) => i.id === prev)) return prev;
-      return orderItems[0]?.id ?? null;
+    if (!isOpen) return;
+    if (!pendingOrderItems.length) {
+      setSelectedOrderItemId(null);
+      return;
+    }
+    setSelectedOrderItemId((prev) => {
+      if (prev && pendingOrderItems.some((i: any) => i.id === prev)) return prev;
+      return pendingOrderItems[0]?.id ?? null;
     });
-  }, [isOpen, orderItems]);
+  }, [isOpen, pendingOrderItems]);
 
   useEffect(() => {
     if (!isOpen || !jobId || !selectedOrderItemId || !orderItems?.length) return;
@@ -469,16 +491,15 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
       }
 
       const addedPieces = getTotalAdditionalCutQuantity();
-      const lineIndex = orderItems.findIndex((i: any) => i.id === selectedOrderItemId);
-      const hasAnotherLine =
-        orderItems.length > 1 &&
-        lineIndex >= 0 &&
-        lineIndex < orderItems.length - 1;
+      const nextPending = orderItems.find((it: any) => {
+        const required = getOrderItemLineQuantity(it);
+        return !isOrderItemCuttingComplete(storedPayload, it.id, orderItemIds, required);
+      });
 
-      if (hasAnotherLine) {
+      if (nextPending && nextPending.id !== selectedOrderItemId) {
         setFullCutRaw(storedPayload);
         setFabricUsage({ fabric_id: '', used_quantity: 0, cutting_quantity: 0 });
-        setSelectedOrderItemId(orderItems[lineIndex + 1].id);
+        setSelectedOrderItemId(nextPending.id);
         onSuccess();
         toast.success(`Added ${addedPieces} pieces. Continue with the next product line.`);
       } else {
@@ -495,7 +516,9 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
   };
 
   const selectedLine =
-    orderItems.find((i: any) => i.id === selectedOrderItemId) || orderItems[0] || null;
+    pendingOrderItems.find((i: any) => i.id === selectedOrderItemId) ||
+    pendingOrderItems[0] ||
+    null;
   const fabricsForPicker =
     selectedLine?.fabric_id &&
     availableFabrics.some(f => f.fabric_id === selectedLine.fabric_id)
@@ -521,6 +544,15 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
         </DialogHeader>
 
         <div className="space-y-6">
+          {pendingOrderItems.length === 0 ? (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-6 text-center">
+              <p className="font-medium text-emerald-800">All product lines are fully cut</p>
+              <p className="mt-1 text-sm text-emerald-700">
+                Every line on this order has reached its required cutting quantity.
+              </p>
+            </div>
+          ) : (
+            <>
           {/* Order Info */}
           <div className="bg-gray-50 p-4 rounded-lg">
             <div className="flex space-x-6">
@@ -578,14 +610,14 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
             </div>
           </div>
 
-          {orderItems.length > 1 && (
+          {pendingOrderItems.length > 1 && (
             <div className="space-y-2">
               <Label className="text-sm font-medium">Product line</Label>
               <p className="text-xs text-muted-foreground">
-                Select which product you are cutting. Only sizes for that line appear below.
+                Select which product you are cutting. Fully cut lines are hidden.
               </p>
               <div className="bom-line-radio-inputs" role="radiogroup" aria-label="Product line">
-                {orderItems.map((it: any) => (
+                {pendingOrderItems.map((it: any) => (
                   <label key={it.id} className="cursor-pointer">
                     <input
                       type="radio"
@@ -734,15 +766,32 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
                           {fabricAvailabilitySummaryLine(selectedFabricRecord)}
                         </p>
                       )}
+                      {fabricUsage.fabric_id && selectedFabricRecord && selectedFabricRecord.master_uom && selectedFabricRecord.master_uom !== selectedFabricRecord.unit && (
+                        <p className="text-xs text-amber-700">
+                          Stock is tracked in {selectedFabricRecord.unit}; fabric master default unit is {selectedFabricRecord.master_uom}.
+                        </p>
+                      )}
+                      {fabricUsage.fabric_id && selectedFabricRecord && selectedFabricRecord.available_quantity <= 0 && getTotalAdditionalCutQuantity() > 0 && (
+                        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
+                          No linked warehouse stock for this fabric. Inventory may list stock under a different fabric name — check Fabric Master supplier alias or warehouse item linkage.
+                        </p>
+                      )}
                     </div>
                   </div>
                   
-                  {fabricUsage.fabric_id && fabricUsage.used_quantity > 0 && (
+                  {fabricUsage.fabric_id && fabricUsage.used_quantity > 0 && selectedFabricRecord && fabricUsage.used_quantity <= selectedFabricRecord.available_quantity && (
                     <div className="mt-3 p-3 bg-green-100 border border-green-200 rounded">
                       <div className="text-sm text-green-800">
-                        ✓ Will record usage of {fabricUsage.used_quantity.toFixed(2)} {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.unit || 'kgs'} 
-                        of {availableFabrics.find(f => f.fabric_id === fabricUsage.fabric_id)?.fabric_name || 'fabric'} 
+                        ✓ Will record usage of {fabricUsage.used_quantity.toFixed(2)} {selectedFabricRecord.unit || 'kgs'} 
+                        of {selectedFabricRecord.fabric_name || 'fabric'} 
                         for {getTotalAdditionalCutQuantity()} pieces and deduct from inventory
+                      </div>
+                    </div>
+                  )}
+                  {fabricUsage.fabric_id && fabricUsage.used_quantity > 0 && selectedFabricRecord && fabricUsage.used_quantity > selectedFabricRecord.available_quantity && (
+                    <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded">
+                      <div className="text-sm text-red-800">
+                        Insufficient fabric inventory. Available: {selectedFabricRecord.available_quantity.toFixed(2)} {selectedFabricRecord.unit}
                       </div>
                     </div>
                   )}
@@ -848,6 +897,8 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
               </div>
             )}
           </div>
+            </>
+          )}
         </div>
 
         <DialogFooter className="flex justify-end space-x-3">
@@ -856,7 +907,12 @@ export const UpdateCuttingQuantityDialog: React.FC<UpdateCuttingQuantityDialogPr
           </Button>
           <Button 
             onClick={handleSave} 
-            disabled={loading || orderSizes.length === 0 || getTotalAdditionalCutQuantity() === 0}
+            disabled={
+              loading ||
+              pendingOrderItems.length === 0 ||
+              orderSizes.length === 0 ||
+              getTotalAdditionalCutQuantity() === 0
+            }
             className="bg-blue-600 hover:bg-blue-700"
           >
             {loading ? 'Saving...' : `Add ${getTotalAdditionalCutQuantity()} Pieces`}

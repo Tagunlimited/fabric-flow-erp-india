@@ -11,6 +11,8 @@ export const FulfillmentPolicy = {
     if (fulfillment === 'pending_flow') return 'Assign execution path';
     if (flow === 'stitching' && fulfillment === 'flow_assigned') return 'Create BOM & raise PO';
     if (flow === 'outsource' && fulfillment === 'flow_assigned') return 'Create purchase order for this line';
+  if (flow === 'outsource' && fulfillment === 'awaiting_procurement') return 'Create GRN for linked purchase order';
+  if (flow === 'outsource' && fulfillment === 'ready_for_dispatch') return 'Ready for dispatch';
     if (flow === 'inventory' && fulfillment === 'awaiting_procurement') return 'Reserve remaining stock';
     if (flow === 'inventory' && fulfillment === 'ready_for_dispatch') return 'Ready for dispatch';
     return fulfillment.replace(/_/g, ' ');

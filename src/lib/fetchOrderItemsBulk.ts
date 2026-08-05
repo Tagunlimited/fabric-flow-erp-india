@@ -2,7 +2,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
 import { chunkArray } from '@/lib/chunkArray';
 
-const ORDER_ITEMS_IN_CHUNK = 100;
+const ORDER_ITEMS_IN_CHUNK = 50;
 
 /** Fetch order_items for many orders without exceeding PostgREST `.in()` limits. */
 export async function fetchOrderItemsByOrderIds(

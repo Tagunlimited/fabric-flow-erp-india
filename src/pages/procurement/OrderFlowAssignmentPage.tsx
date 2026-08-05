@@ -40,6 +40,11 @@ import {
   reassignBlockMessage,
 } from '@/domain/fulfillment/reassign';
 import type { AssignOrderItemFlowsMode } from '@/api/fulfillment/assignFlows';
+import {
+  describeLineFulfillmentNextStep,
+  loadOutsourceLineContextsForOrder,
+  type OutsourceLineContext,
+} from '@/lib/outsourceFulfillment';
 
 type QueueRow = {
   order_id: string;
@@ -68,6 +73,7 @@ type QueueOrderPreview = {
   products: string;
   fabrics: string;
   sizes: string;
+  qty: number;
 };
 
 type OrderLine = {
@@ -119,7 +125,7 @@ function lineCardDisplay(
 function summarizeOrderLineForQueue(
   line: OrderLine,
   orderMeta: { order_type?: string | null } | undefined
-): { imageUrl: string | null; product: string; fabric: string; sizeLabels: string[] } {
+): { imageUrl: string | null; product: string; fabric: string; sizeLabels: string[]; qty: number } {
   const specs = parseOrderLineSpecifications(line.specifications);
   const imageUrl = getOrderItemListThumbnailUrl(line, orderMeta);
   const product =
@@ -128,10 +134,10 @@ function summarizeOrderLineForQueue(
     'Line item';
   const fabric = String(line.fabric?.fabric_name || '').trim();
 
-  const sizeLabels = getOrderLineSizeRows(specs, line.quantity, line.sizes_quantities)
-    .filter((r) => r.qty > 0)
-    .map((r) => r.size);
-  return { imageUrl, product, fabric, sizeLabels };
+  const sizeRows = getOrderLineSizeRows(specs, line.quantity, line.sizes_quantities);
+  const sizeLabels = sizeRows.filter((r) => r.qty > 0).map((r) => r.size);
+  const qty = sizeRows.reduce((sum, r) => sum + r.qty, 0);
+  return { imageUrl, product, fabric, sizeLabels, qty };
 }
 
 type SalesManager = { id: string; full_name: string | null; avatar_url?: string | null };
@@ -553,6 +559,9 @@ function OrderFlowQueueTable({
             <TableHead className="align-middle min-w-[8rem]">
               <span className="text-xs font-semibold">Size</span>
             </TableHead>
+            <TableHead className="align-middle min-w-[4rem] text-right">
+              <span className="text-xs font-semibold">Qty</span>
+            </TableHead>
             <TableHead className="align-middle min-w-[7rem]">
               <span className="text-xs font-semibold">Sales Mgr.</span>
             </TableHead>
@@ -603,6 +612,11 @@ function OrderFlowQueueTable({
               <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.products || '—'}</TableCell>
               <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.fabrics || '—'}</TableCell>
               <TableCell className="text-sm">{queuePreviewByOrderId[r.order_id]?.sizes || '—'}</TableCell>
+              <TableCell className="text-sm text-right font-medium tabular-nums">
+                {queuePreviewByOrderId[r.order_id]?.qty
+                  ? queuePreviewByOrderId[r.order_id].qty.toLocaleString('en-IN')
+                  : '—'}
+              </TableCell>
               <TableCell>
                 <div className="flex items-center gap-2">
                   <Avatar className="w-10 h-10">
@@ -706,6 +720,7 @@ const OrderFlowAssignmentPage: React.FC = () => {
   const [settingsSchemaError, setSettingsSchemaError] = useState<string | null>(null);
   const [queueLoadNotice, setQueueLoadNotice] = useState<string | null>(null);
   const [queuePreviewByOrderId, setQueuePreviewByOrderId] = useState<Record<string, QueueOrderPreview>>({});
+  const [outsourceLineCtx, setOutsourceLineCtx] = useState<Record<string, OutsourceLineContext>>({});
 
   const isMissingRequireFlowColumn = (e: unknown) => {
     const err = e as { code?: string; message?: string } | null;
@@ -976,18 +991,21 @@ const OrderFlowAssignmentPage: React.FC = () => {
         const fabricSet = new Set<string>();
         const sizeSet = new Set<string>();
         let imageUrl: string | null = null;
+        let totalQty = 0;
         for (const line of lines) {
           const summary = summarizeOrderLineForQueue(line, { order_type: q.order_type });
           if (!imageUrl && summary.imageUrl) imageUrl = summary.imageUrl;
           if (summary.product) productSet.add(summary.product);
           if (summary.fabric) fabricSet.add(summary.fabric);
           summary.sizeLabels.forEach((s) => sizeSet.add(s));
+          totalQty += summary.qty;
         }
         byOrder[q.order_id] = {
           imageUrl,
           products: Array.from(productSet).join(', ') || '—',
           fabrics: Array.from(fabricSet).join(', ') || '—',
           sizes: Array.from(sizeSet).join(', ') || '—',
+          qty: totalQty,
         };
       }
       setQueuePreviewByOrderId(byOrder);
@@ -1034,6 +1052,12 @@ const OrderFlowAssignmentPage: React.FC = () => {
       }
       setChoices(next);
       setStockMappings(stockNext);
+      try {
+        const ctx = await loadOutsourceLineContextsForOrder(orderId);
+        setOutsourceLineCtx(ctx);
+      } catch {
+        setOutsourceLineCtx({});
+      }
     } catch (e) {
       console.error(e);
       toast.error('Failed to load order lines');
@@ -1480,6 +1504,15 @@ const OrderFlowAssignmentPage: React.FC = () => {
                             <p className="text-xs text-muted-foreground">
                               Qty {line.quantity ?? '—'} · {fulfillmentStatusLabel(line.fulfillment_status as any)}
                             </p>
+                            <p className="text-xs font-medium text-primary mt-0.5">
+                              {describeLineFulfillmentNextStep(
+                                (dialogReadOnly
+                                  ? line.execution_flow
+                                  : choices[line.id] || line.execution_flow) as ExecutionFlow,
+                                line.fulfillment_status as any,
+                                outsourceLineCtx[line.id]
+                              )}
+                            </p>
                             {subtitleParts.length > 0 ? (
                               <p className="text-xs text-muted-foreground mt-0.5">{subtitleParts.join(' · ')}</p>
                             ) : null}
@@ -1561,7 +1594,10 @@ const OrderFlowAssignmentPage: React.FC = () => {
                           onChange={handleStockMappingsChange}
                         />
                       ) : null}
-                      {!dialogReadOnly && !bulkAssignEnabled && choices[line.id] === 'outsource' && (
+                      {!bulkAssignEnabled &&
+                        (choices[line.id] === 'outsource' || line.execution_flow === 'outsource') &&
+                        (outsourceLineCtx[line.id]?.phase === 'awaiting_po' ||
+                          (!outsourceLineCtx[line.id] && !dialogReadOnly && choices[line.id] === 'outsource')) && (
                         <div className="text-sm">
                           <Button
                             type="button"
@@ -1569,11 +1605,28 @@ const OrderFlowAssignmentPage: React.FC = () => {
                             className="h-auto p-0"
                             onClick={() =>
                               navigate(
-                                `/procurement/po/new?sales_order_id=${selectedOrderId}&sales_order_item_id=${line.id}`
+                                `/procurement/po/new?mode=outsource&sales_order_id=${selectedOrderId}&sales_order_item_id=${line.id}`
                               )
                             }
                           >
                             Open purchase order for this line
+                          </Button>
+                        </div>
+                      )}
+                      {!bulkAssignEnabled &&
+                        line.execution_flow === 'outsource' &&
+                        outsourceLineCtx[line.id]?.phase === 'awaiting_grn' &&
+                        outsourceLineCtx[line.id]?.po_id && (
+                        <div className="text-sm">
+                          <Button
+                            type="button"
+                            variant="link"
+                            className="h-auto p-0"
+                            onClick={() =>
+                              navigate(`/procurement/grn/new?po=${outsourceLineCtx[line.id]?.po_id}`)
+                            }
+                          >
+                            Create GRN for linked purchase order
                           </Button>
                         </div>
                       )}

@@ -7,7 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useSizeTypes } from "@/hooks/useSizeTypes";
 import { sortSizeDistributionsByMasterOrder } from "@/utils/sizeSorting";
-import { computePickedAfterPickerDelta } from "@/utils/pickerRemaining";
+import { resolveBatchLineAssignedQty } from '@/utils/batchAssignedQuantity';
 import { insertOrderBatchPickEventRows } from "@/utils/orderBatchPickEvents";
 
 interface SizeItem {
@@ -120,7 +120,7 @@ export default function PickerQuantityDialog({
         if (error) throw error;
         const mapped = (data || [])
           .map((row: any) => {
-            const assigned = Number(row.assigned_quantity ?? row.quantity ?? 0);
+            const assigned = resolveBatchLineAssignedQty(row);
             return {
               size_name: String(row.size_name || '').trim(),
               quantity: assigned,
@@ -213,7 +213,7 @@ export default function PickerQuantityDialog({
   const assignedTotal = useMemo(
     () =>
       (effectiveSizeDistributions || []).reduce(
-        (sum, s) => sum + Number(s.quantity ?? s.assigned_quantity ?? 0),
+        (sum, s) => sum + resolveBatchLineAssignedQty(s),
         0
       ),
     [effectiveSizeDistributions]
@@ -223,7 +223,7 @@ export default function PickerQuantityDialog({
 
   const getAssigned = (size: string) => {
     const row = (effectiveSizeDistributions || []).find((s) => s.size_name === size);
-    return Number(row?.quantity ?? row?.assigned_quantity ?? 0);
+    return row ? resolveBatchLineAssignedQty(row) : 0;
   };
   const getPicked = (size: string) => Number(pickedBySize[size] || 0);
   const getRejected = (size: string) => Number(rejectedBySize[size] || 0);
@@ -411,6 +411,7 @@ export default function PickerQuantityDialog({
       }
 
       await decrementQcRejected();
+      await persistToNotes();
 
       await insertOrderBatchPickEventRows(pickLedgerDeltas);
 

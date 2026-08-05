@@ -1,5 +1,6 @@
-/**
- * Physical pieces left to gather for an assignment (`assigned_quantity` unchanged).
+import { sumAssignedFromSizeDistributionRows } from '@/utils/batchAssignedQuantity';
+
+/** Physical pieces left to gather for an assignment (`assigned_quantity` unchanged).
  * After QC rejects rows, picked_quantity is lowered in DB — gaps show here without inflating totals.
  */
 export function assignmentLeftToPick(assignedTotal: number, pickedTotal: number): number {
@@ -30,11 +31,7 @@ export function assignmentLeftToPickWithLegacyRejected(
 
 /** Sum assigned pieces from view JSON or legacy row shapes. */
 export function sumAssignedFromSizeDistributions(sizeDistributions: unknown): number {
-  if (!Array.isArray(sizeDistributions)) return 0;
-  return sizeDistributions.reduce((sum, d: any) => {
-    const n = d?.assigned_quantity ?? d?.quantity ?? d?.assignedQuantity;
-    return sum + Math.max(0, Number(n) || 0);
-  }, 0);
+  return sumAssignedFromSizeDistributionRows(sizeDistributions);
 }
 
 /**

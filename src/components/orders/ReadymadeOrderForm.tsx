@@ -27,6 +27,7 @@ import {
   findOrderByCreateIdempotencyKey,
   isUniqueViolation,
 } from '@/api/orders/orderCreate';
+import { generateUuid } from '@/utils/uuid';
 
 interface Customer {
   id: string;
@@ -157,7 +158,7 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
   const [sizeTypes, setSizeTypes] = useState<SizeType[]>([]);
   const [loading, setLoading] = useState(false);
   const submitLockRef = useRef(false);
-  const createIdempotencyKeyRef = useRef(crypto.randomUUID());
+  const createIdempotencyKeyRef = useRef(generateUuid());
   const createdOrderIdRef = useRef<string | null>(null);
   const createdOrderNumberRef = useRef<string | null>(null);
   const [classSearchOpen, setClassSearchOpen] = useState<{ [key: number]: boolean }>({});
@@ -839,7 +840,7 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
       const savedItems = existingItemCount ?? 0;
       if (savedItems >= formData.products.length) {
         toast.success('Readymade order already created');
-        createIdempotencyKeyRef.current = crypto.randomUUID();
+        createIdempotencyKeyRef.current = generateUuid();
         createdOrderIdRef.current = null;
         createdOrderNumberRef.current = null;
         resetFormState();
@@ -1007,7 +1008,7 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
 
       toast.success('Readymade order created successfully!');
 
-      createIdempotencyKeyRef.current = crypto.randomUUID();
+      createIdempotencyKeyRef.current = generateUuid();
       createdOrderIdRef.current = null;
       createdOrderNumberRef.current = null;
 

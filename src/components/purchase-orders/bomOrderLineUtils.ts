@@ -106,6 +106,32 @@ export function orderLineFabricColorGsmSuffix(line: any): string {
   return [color, gsm].filter(Boolean).join(' - ');
 }
 
+export function orderLineFabricForSupplierName(line: any): string {
+  if (!line) return '';
+  return String(line.fabric?.fabric_for_supplier ?? '').trim();
+}
+
+/** Fabric UOM from linked `fabric_master` (e.g. meters), else pcs for accessory-only lines. */
+export function orderLineFabricUom(line: any): string {
+  if (!line) return 'pcs';
+  const fromFabric = String(line.fabric?.uom ?? '').trim();
+  if (fromFabric) return fromFabric;
+  const specs =
+    line.specifications && typeof line.specifications === 'object'
+      ? line.specifications
+      : {};
+  const fromSpecs = String((specs as { uom?: string }).uom ?? '').trim();
+  return fromSpecs || 'pcs';
+}
+
+/** Default outsource PO line label: fabric for supplier when fabric-linked, else product description. */
+export function orderLineOutsourcePoDefaultName(line: any): string {
+  const supplier = orderLineFabricForSupplierName(line);
+  if (supplier) return supplier;
+  const desc = orderLineDisplayName(line).trim() || orderLineProductDropdownOnly(line).trim();
+  return desc || 'Sales order line';
+}
+
 export function sortOrderLines<T extends { id: string; created_at?: string | null }>(lines: T[]): T[] {
   return [...(lines || [])].sort((a, b) => {
     const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
