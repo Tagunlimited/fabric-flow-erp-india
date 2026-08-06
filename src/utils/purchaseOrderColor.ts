@@ -54,6 +54,7 @@ export function resolvePoLineScalarColor(
     ? cleanScalar(line.fabric_color)
     : cleanScalar(line.item_color) ||
       cleanScalar(itemMasterColor) ||
+      cleanScalar(line.fabric_color) ||
       cleanScalar(parseColorFromNotes(line.notes));
 
   return scalar;
@@ -99,6 +100,7 @@ export function poLineColorPayload(
     ? null
     : cleanScalar(line.item_color) ||
       cleanScalar(itemMasterColor) ||
+      cleanScalar(line.fabric_color) ||
       cleanScalar(parseColorFromNotes(line.notes));
 
   if (!fabric && !item_color && selected_colors.length > 0) {

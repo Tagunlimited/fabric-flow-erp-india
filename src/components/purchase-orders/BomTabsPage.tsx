@@ -8,7 +8,10 @@ import { Eye, Search, Package, FileText, Filter } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BomOrderLinePicker } from './BomOrderLinePicker';
-import { shouldRetryReadWithoutIsDeletedFilter } from '@/lib/supabaseSoftDeleteCompat';
+import { fetchAllActiveOrderReceiptLinks } from '@/lib/fetchActiveOrderReceiptLinks';
+import { fetchOrdersForReceiptLinks } from '@/lib/fetchOrdersForReceiptLinks';
+import { fetchOrderItemsByOrderIds } from '@/lib/fetchOrderItemsBulk';
+import { fetchRowsInChunks } from '@/lib/fetchRowsInChunks';
 import { cn } from '@/lib/utils';
 import { orderLineEligibleForBom } from './bomOrderLineUtils';
 import '../../pages/OrdersPageViewSwitch.css';
@@ -79,83 +82,74 @@ function getBomIdForLine(orderId: string, orderItemId: string, bomRows: BomRowRe
   return forOrder.find(b => b.order_item_id === orderItemId)?.id ?? null;
 }
 
+const BOM_LIST_ORDER_ITEMS_SELECT =
+  'id, order_id, product_id, quantity, unit_price, total_price, product_description, category_image_url, created_at, execution_flow, fulfillment_status';
+
 async function fetchCustomOrdersWithBomRefs(): Promise<{ orders: Order[]; bomRows: BomRowRef[] }> {
-  const { data: bomRecords, error: bomError } = await supabase
-    .from('bom_records')
-    .select('id, order_id, order_item_id')
-    .eq('is_deleted', false);
+  const [{ data: bomRecords, error: bomError }, receiptLinks] = await Promise.all([
+    supabase.from('bom_records').select('id, order_id, order_item_id').eq('is_deleted', false),
+    fetchAllActiveOrderReceiptLinks(),
+  ]);
 
   if (bomError) throw bomError;
   const bomList = (bomRecords || []) as BomRowRef[];
 
-  const { data: allOrdersRaw, error: ordersError } = await supabase
-    .from('orders')
-    .select(`
-      *,
-      customer:customers(company_name, contact_person),
-      order_items(
-        id,
-        product_id,
-        quantity,
-        unit_price,
-        total_price,
-        product_description,
-        category_image_url,
-        created_at,
-        execution_flow,
-        fulfillment_status
-      )
-    `)
-    .eq('is_deleted', false)
-    .not('status', 'eq', 'cancelled')
-    .order('order_date', { ascending: false });
+  const orderIds = receiptLinks
+    .map((r) => (r.reference_id ? String(r.reference_id) : ''))
+    .filter(Boolean);
+  const orderNumbers = receiptLinks
+    .map((r) => String(r.reference_number || '').trim())
+    .filter(Boolean);
 
-  if (ordersError) throw ordersError;
-
-  const receiptSelect = 'reference_id, reference_number, reference_type, status';
-  let { data: receiptsRaw, error: receiptsError } = await supabase
-    .from('receipts')
-    .select(receiptSelect)
-    .eq('is_deleted', false)
-    .or('reference_type.eq.order,reference_type.eq.ORDER');
-  if (receiptsError && shouldRetryReadWithoutIsDeletedFilter(receiptsError)) {
-    const r2 = await supabase
-      .from('receipts')
-      .select(receiptSelect)
-      .or('reference_type.eq.order,reference_type.eq.ORDER');
-    receiptsRaw = r2.data;
-    receiptsError = r2.error;
+  if (!orderIds.length && !orderNumbers.length) {
+    return { orders: [], bomRows: bomList };
   }
-  if (receiptsError) throw receiptsError;
 
-  const activeOrderReceipts = (receiptsRaw || []).filter((r: any) => {
-    const refType = String(r?.reference_type || '').trim().toLowerCase();
-    const status = String(r?.status || '').trim().toLowerCase();
-    return refType === 'order' && status === 'active';
-  });
-  const receiptOrderIds = new Set(
-    activeOrderReceipts
-      .map((r: any) => (r?.reference_id ? String(r.reference_id) : ''))
-      .filter(Boolean)
-  );
-  const receiptOrderNumbers = new Set(
-    activeOrderReceipts
-      .map((r: any) => String(r?.reference_number || '').trim())
-      .filter(Boolean)
-  );
+  const linkedOrders = await fetchOrdersForReceiptLinks(orderIds, orderNumbers);
+  const linkedIds = linkedOrders.map((o) => String(o.id)).filter(Boolean);
+  if (!linkedIds.length) {
+    return { orders: [], bomRows: bomList };
+  }
 
-  const allOrders = (allOrdersRaw || [])
-    .filter((o: any) => !o.order_type || o.order_type === 'custom')
-    .filter((o: any) => {
-      const byId = receiptOrderIds.has(String(o.id || ''));
-      const byNumber = receiptOrderNumbers.has(String(o.order_number || '').trim());
-      return byId || byNumber;
-    })
+  const [{ data: orderItems, error: itemsError }, customerRows] = await Promise.all([
+    fetchOrderItemsByOrderIds(linkedIds, BOM_LIST_ORDER_ITEMS_SELECT),
+    fetchRowsInChunks(
+      'orders',
+      'id, customer:customers(company_name, contact_person)',
+      'id',
+      linkedIds
+    ),
+  ]);
+
+  if (itemsError) throw itemsError;
+
+  const itemsByOrderId: Record<string, any[]> = {};
+  for (const item of orderItems || []) {
+    const oid = String((item as { order_id?: string }).order_id || '');
+    if (!oid) continue;
+    if (!itemsByOrderId[oid]) itemsByOrderId[oid] = [];
+    itemsByOrderId[oid].push(item);
+  }
+
+  const customerByOrderId = new Map<string, Order['customer']>();
+  for (const row of customerRows || []) {
+    const id = String((row as { id?: string }).id || '');
+    const customer = (row as { customer?: Order['customer'] }).customer;
+    if (id && customer) customerByOrderId.set(id, customer);
+  }
+
+  const allOrders = linkedOrders
     .map((o: any) => ({
       ...o,
-      order_items: (o.order_items || []).filter((it: any) => it?.is_deleted !== true),
+      customer: customerByOrderId.get(String(o.id)) || o.customer || undefined,
+      order_items: itemsByOrderId[String(o.id)] || [],
     }))
-    .filter((o: any) => (o.order_items || []).length > 0) as unknown as Order[];
+    .filter((o: any) => (o.order_items || []).length > 0)
+    .sort((a: any, b: any) => {
+      const aTime = new Date(String(a.order_date || 0)).getTime();
+      const bTime = new Date(String(b.order_date || 0)).getTime();
+      return bTime - aTime;
+    }) as unknown as Order[];
 
   return { orders: allOrders, bomRows: bomList };
 }

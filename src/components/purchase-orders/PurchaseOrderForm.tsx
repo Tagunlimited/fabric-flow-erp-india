@@ -843,7 +843,7 @@ export function PurchaseOrderForm() {
       item_color: pending.item_color || null,
       fabric_name: isFabric ? pending.fabric_name || null : undefined,
       fabric_for_supplier: isFabric ? pending.fabric_for_supplier || null : undefined,
-      fabric_color: isFabric ? pending.fabric_color || undefined : undefined,
+      fabric_color: pending.fabric_color || undefined,
       selected_colors: normalizeSelectedColors((pending as any).selected_colors),
       fabric_gsm: isFabric ? pending.fabric_gsm || undefined : undefined,
       fabric_id: isFabric ? pending.fabric_id ?? undefined : undefined,
@@ -853,7 +853,14 @@ export function PurchaseOrderForm() {
       product_name: pending.product_name,
     };
 
-    if (!isFabric) return base;
+    if (!isFabric) {
+      const colorFields = poLineColorPayload(base, null);
+      return {
+        ...base,
+        selected_colors: colorFields.selected_colors,
+        item_color: colorFields.item_color,
+      };
+    }
 
     const normalized = normalizePoFabricLine(
       { ...base, item_type: 'fabric', fabric_id: pending.fabric_id },
