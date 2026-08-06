@@ -173,6 +173,9 @@ const resolveScalarItemColorForPendingItem = async (
   const existingColor = (item.item_color || '').trim();
   if (existingColor) return existingColor;
 
+  const fromSelected = selectedColorsDisplayText(item.selected_colors, item.fabric_color || null);
+  if (fromSelected !== 'N/A') return fromSelected;
+
   const typeKey = (item.item_type || item.category || '').toLowerCase();
   if (typeKey === 'fabric') {
     return (item.fabric_color || '').trim() || null;
@@ -226,6 +229,10 @@ const resolveScalarItemColorForPendingItem = async (
     });
   }
 
+  if (!resolvedColor && (item.fabric_color || '').trim()) {
+    resolvedColor = item.fabric_color!.trim();
+  }
+
   cache.set(cacheKey, resolvedColor);
   return resolvedColor;
 };
@@ -262,7 +269,7 @@ export const buildPendingItemGroups = (rows: PendingItem[]): PendingItemGroup[] 
             item.selected_colors,
             item.fabric_color
           )}${item.fabric_gsm ? ` - ${item.fabric_gsm} GSM` : ''}`
-        : `${item.item_name} - ${selectedColorsDisplayText(item.selected_colors, item.item_color || '')}`;
+        : `${item.item_name} - ${selectedColorsDisplayText(item.selected_colors, item.item_color || item.fabric_color || '')}`;
       
       groupsMap.set(key, {
         key,
