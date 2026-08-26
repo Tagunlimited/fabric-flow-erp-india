@@ -447,7 +447,10 @@ const CuttingManagerPage = () => {
                 'id, category_name, category_image_url',
                 'id',
                 productCategoryIds
-              )
+              ).catch((err) => {
+                console.error('Failed to load product categories for cutting jobs', err);
+                return [];
+              })
             : Promise.resolve([]),
           fabricIds.length > 0
             ? fetchRowsInChunks(
@@ -455,10 +458,16 @@ const CuttingManagerPage = () => {
                 'id, fabric_name, color, gsm, image, hex',
                 'id',
                 fabricIds
-              )
+              ).catch((err) => {
+                console.error('Failed to load fabrics for cutting jobs', err);
+                return [];
+              })
             : Promise.resolve([]),
           customerIds.length > 0
-            ? fetchRowsInChunks('customers', 'id, company_name', 'id', customerIds)
+            ? fetchRowsInChunks('customers', 'id, company_name', 'id', customerIds).catch((err) => {
+                console.error('Failed to load customers for cutting jobs', err);
+                return [];
+              })
             : Promise.resolve([]),
         ]);
 
