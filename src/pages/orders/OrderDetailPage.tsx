@@ -112,6 +112,56 @@ interface SalesManager {
 interface Fabric {
   id: string;
   name: string;
+  color?: string | null;
+  gsm?: string | number | null;
+}
+
+/** Prefer order-line color/GSM; fall back to fabric_master variant and specs. */
+function resolveOrderItemColorGsm(
+  item: {
+    color?: string | null;
+    gsm?: string | number | null;
+    fabric_id?: string | null;
+    specifications?: unknown;
+  },
+  fabric?: Fabric | null
+): { color: string; gsm: string } {
+  let specs: Record<string, unknown> = {};
+  try {
+    const raw = item.specifications;
+    specs =
+      typeof raw === 'string'
+        ? (JSON.parse(raw) as Record<string, unknown>)
+        : ((raw as Record<string, unknown>) || {});
+  } catch {
+    specs = {};
+  }
+
+  const selectedFromSpecs = (() => {
+    const selected = specs.selected_colors;
+    if (!Array.isArray(selected) || selected.length === 0) return '';
+    return selected
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return '';
+        const row = entry as Record<string, unknown>;
+        return String(row.colorName ?? row.color_name ?? row.name ?? '').trim();
+      })
+      .filter(Boolean)
+      .join(', ');
+  })();
+
+  const color = String(
+    item.color ||
+      selectedFromSpecs ||
+      specs.color ||
+      fabric?.color ||
+      ''
+  ).trim();
+
+  const gsmRaw = String(item.gsm ?? specs.gsm ?? fabric?.gsm ?? '').trim();
+  const gsm = gsmRaw ? (/\d/.test(gsmRaw) && !/gsm/i.test(gsmRaw) ? `${gsmRaw} GSM` : gsmRaw) : '';
+
+  return { color, gsm };
 }
 
 interface Customer {
@@ -1760,14 +1810,16 @@ export default function OrderDetailPage() {
         if (fabricIds.length > 0) {
           const { data: fabricsData } = await supabase
             .from('fabric_master')
-            .select('id, fabric_name')
+            .select('id, fabric_name, color, gsm')
             .in('id', fabricIds);
           
           if (fabricsData) {
             const fabricsMap = (fabricsData as any[]).reduce((acc: { [key: string]: Fabric }, fabric: any) => {
               acc[fabric.id] = {
                 id: fabric.id,
-                name: fabric.fabric_name  // Map fabric_name to name
+                name: fabric.fabric_name, // Map fabric_name to name
+                color: fabric.color ?? null,
+                gsm: fabric.gsm ?? null,
               } as Fabric;
               return acc;
             }, {} as { [key: string]: Fabric });
@@ -1998,8 +2050,14 @@ export default function OrderDetailPage() {
         product_description: it.product_description || '',
         fabric_id: it.fabric_id || '',
         fabric_base_id: specs.fabric_base_id || it.fabric_base_id || '',
-        color: it.color || '',
-        gsm: it.gsm || '',
+        ...(() => {
+          const resolved = resolveOrderItemColorGsm(it, fabrics[it.fabric_id]);
+          return {
+            color: resolved.color,
+            // Store numeric/plain GSM in edit fields (strip display suffix)
+            gsm: resolved.gsm.replace(/\s*GSM\s*$/i, '').trim(),
+          };
+        })(),
         product_category_id: it.product_category_id || '',
         size_type_id: sizeTypeId,
         quantity: computedQty,
@@ -3171,7 +3229,26 @@ export default function OrderDetailPage() {
                                 <Label>Fabric</Label>
                                 <Select 
                                   value={it.fabric_id || 'none'} 
-                                  onValueChange={(v) => setEditItems(prev => prev.map((p, i) => i === itemIdx ? { ...p, fabric_id: v === 'none' ? '' : v } : p))}
+                                  onValueChange={(v) =>
+                                    setEditItems((prev) =>
+                                      prev.map((p, i) => {
+                                        if (i !== itemIdx) return p;
+                                        if (v === 'none') {
+                                          return { ...p, fabric_id: '', color: '', gsm: '' };
+                                        }
+                                        const fabric = fabrics[v];
+                                        return {
+                                          ...p,
+                                          fabric_id: v,
+                                          color: fabric?.color || p.color || '',
+                                          gsm:
+                                            fabric?.gsm != null && String(fabric.gsm).trim() !== ''
+                                              ? String(fabric.gsm)
+                                              : p.gsm || '',
+                                        };
+                                      })
+                                    )
+                                  }
                                 >
                                   <SelectTrigger><SelectValue placeholder="Select fabric" /></SelectTrigger>
                                   <SelectContent>
@@ -3706,14 +3783,24 @@ export default function OrderDetailPage() {
                                     <span className="text-xs text-muted-foreground block">Fabric</span>
                                     <span className="font-medium">{fabrics[item.fabric_id]?.name || 'N/A'}</span>
                                   </div>
-                                  <div className="bg-muted/30 rounded-lg p-3">
-                                    <span className="text-xs text-muted-foreground block">Color</span>
-                                    <span className="font-medium">{item.color}</span>
-                                  </div>
-                                  <div className="bg-muted/30 rounded-lg p-3">
-                                    <span className="text-xs text-muted-foreground block">GSM</span>
-                                    <span className="font-medium">{item.gsm}</span>
-                                  </div>
+                                  {(() => {
+                                    const { color, gsm } = resolveOrderItemColorGsm(
+                                      item,
+                                      fabrics[item.fabric_id]
+                                    );
+                                    return (
+                                      <>
+                                        <div className="bg-muted/30 rounded-lg p-3">
+                                          <span className="text-xs text-muted-foreground block">Color</span>
+                                          <span className="font-medium">{color || '—'}</span>
+                                        </div>
+                                        <div className="bg-muted/30 rounded-lg p-3">
+                                          <span className="text-xs text-muted-foreground block">GSM</span>
+                                          <span className="font-medium">{gsm || '—'}</span>
+                                        </div>
+                                      </>
+                                    );
+                                  })()}
                                   <div className="bg-muted/30 rounded-lg p-3">
                                     <span className="text-xs text-muted-foreground block">Total Quantity</span>
                                     <span className="font-medium">{item.quantity} pcs</span>
@@ -4138,7 +4225,20 @@ export default function OrderDetailPage() {
                                   <td className="border border-gray-300 px-3 py-2">
                                     <div className="text-sm">
                                       <div className="text-gray-600 text-xs font-medium">
-                                        {fabrics[displayItem.fabric_id || item.fabric_id]?.name} - {displayItem.color || item.color}, {displayItem.gsm || item.gsm} GSM
+                                        {(() => {
+                                          const fabricId = displayItem.fabric_id || item.fabric_id;
+                                          const fabric = fabrics[fabricId];
+                                          const { color, gsm } = resolveOrderItemColorGsm(
+                                            {
+                                              color: displayItem.color || item.color,
+                                              gsm: displayItem.gsm || item.gsm,
+                                              fabric_id: fabricId,
+                                              specifications: item.specifications,
+                                            },
+                                            fabric
+                                          );
+                                          return [fabric?.name, color, gsm].filter(Boolean).join(' - ') || '—';
+                                        })()}
                                       </div>
                                       <div className="font-medium">{displayItem.product_description || item.product_description}</div>
                                       <div className="text-gray-600 text-xs">

@@ -1615,6 +1615,12 @@ const getSelectedFabricVariant = (productIndex: number) => {
           const product = formData.products[productIndex];
           if (!product.product_category_id) throw new Error(`Product ${productIndex + 1}: Please select a product category`);
           if (!product.fabric_id) throw new Error(`Product ${productIndex + 1}: Please select a fabric`);
+          if (!String(product.color || '').trim()) {
+            throw new Error(`Product ${productIndex + 1}: Please select a color`);
+          }
+          if (!String(product.gsm || '').trim()) {
+            throw new Error(`Product ${productIndex + 1}: Please enter GSM`);
+          }
           if (!product.size_type_id) throw new Error(`Product ${productIndex + 1}: Please select a size type`);
 
           const totalQuantity = Object.values(product.sizes_quantities || {}).reduce((total, qty) => total + qty, 0);
@@ -1842,6 +1848,16 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
         if (!product.fabric_id) {
           toast.error(`Product ${productIndex + 1}: Please select a fabric`);
+          return;
+        }
+
+        if (!String(product.color || '').trim()) {
+          toast.error(`Product ${productIndex + 1}: Please select a color`);
+          return;
+        }
+
+        if (!String(product.gsm || '').trim()) {
+          toast.error(`Product ${productIndex + 1}: Please enter GSM`);
           return;
         }
 

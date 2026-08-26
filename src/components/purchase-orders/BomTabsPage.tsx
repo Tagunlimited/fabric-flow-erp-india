@@ -14,6 +14,7 @@ import { fetchOrderItemsByOrderIds } from '@/lib/fetchOrderItemsBulk';
 import { fetchRowsInChunks } from '@/lib/fetchRowsInChunks';
 import { cn } from '@/lib/utils';
 import { orderLineEligibleForBom } from './bomOrderLineUtils';
+import { toast } from 'sonner';
 import '../../pages/OrdersPageViewSwitch.css';
 import {
   Dialog,
@@ -118,7 +119,10 @@ async function fetchCustomOrdersWithBomRefs(): Promise<{ orders: Order[]; bomRow
       'id, customer:customers(company_name, contact_person)',
       'id',
       linkedIds
-    ),
+    ).catch((err) => {
+      console.error('Failed to load BOM order customers', err);
+      return [];
+    }),
   ]);
 
   if (itemsError) throw itemsError;
@@ -325,6 +329,7 @@ function OrdersWithoutBom({ onOpenLinePicker, refreshTrigger }: OrdersWithoutBom
       setOrders(eligibleOrders);
     } catch (error) {
       console.error('Error fetching orders pending BOM:', error);
+      toast.error('Failed to load orders pending BOM. Try Refresh.');
     } finally {
       setLoading(false);
     }
@@ -715,6 +720,7 @@ function OrdersCompleteBom({ refreshTrigger }: OrdersCompleteBomProps) {
       setOrders(eligible);
     } catch (error) {
       console.error('Error fetching orders with complete BOM:', error);
+      toast.error('Failed to load completed BOM orders. Try Refresh.');
     } finally {
       setLoading(false);
     }
