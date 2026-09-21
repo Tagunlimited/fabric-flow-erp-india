@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { WarehouseInventory, InventoryTransferData, Bin } from '@/types/warehouse-inventory';
+import { logInventoryTransfer } from '@/utils/inventoryLogging';
 import { toast } from 'sonner';
 
 interface InventoryTransferModalProps {
@@ -194,7 +195,6 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
 
         // Log the transfer for the new row
         try {
-          const { logInventoryTransfer } = await import('@/utils/inventoryLogging');
           await logInventoryTransfer(
             targetInventoryId,
             {
@@ -250,7 +250,6 @@ export const InventoryTransferModal: React.FC<InventoryTransferModalProps> = ({
 
         // Log the transfer
         try {
-          const { logInventoryTransfer } = await import('@/utils/inventoryLogging');
           await logInventoryTransfer(
             inventory.id,
             {

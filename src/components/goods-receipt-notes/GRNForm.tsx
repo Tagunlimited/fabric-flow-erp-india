@@ -1,4 +1,5 @@
 import { deriveGrnHeaderStatusFromLines } from '@/utils/grnStatus';
+import { classifyPurchaseOrderReceipt } from '@/utils/poReceiptStatus';
 import { recalcOrderStatus } from '@/lib/recalcOrderStatus';
 import {
   isOutsourceManualPoLine,
@@ -6,6 +7,7 @@ import {
   OUTSOURCE_MANUAL_ENTRY_MODE,
   sizesQuantitiesToRows,
 } from '@/lib/orderLineSizes';
+import { fetchRowsInChunks } from '@/lib/fetchRowsInChunks';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -44,6 +46,7 @@ import { GRNPrintExport } from './GRNPrintExport';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { getGrnItemColorDisplay } from '@/lib/grnColorSwatch';
 import { normalizeSelectedColors, type BomSelectedColor } from '@/utils/bomSelectedColors';
+import { logInventoryAddition } from '@/utils/inventoryLogging';
 
 type GRN = {
   id?: string;
@@ -112,8 +115,36 @@ type PurchaseOrder = {
   status: string;
   total_amount: number;
   items: any[];
-  grns?: Array<{ id: string; status?: string | null }>;
+  grns?: Array<{
+    id: string;
+    status?: string | null;
+    grn_items?: Array<{
+      po_item_id: string;
+      approved_quantity?: number | null;
+      received_quantity?: number | null;
+      quality_status?: string | null;
+    }> | null;
+  }>;
 };
+
+const PO_ITEM_SELECT = `
+  id,
+  po_id,
+  item_type,
+  item_id,
+  item_name,
+  item_image_url,
+  quantity,
+  unit_of_measure,
+  fabric_name,
+  fabric_color,
+  selected_colors,
+  fabric_gsm,
+  fabric_id,
+  sizes_quantities,
+  entry_mode,
+  size_type_id
+`;
 
 type Supplier = {
   id: string;
@@ -263,6 +294,7 @@ const GRNForm = () => {
   const fetchPurchaseOrders = useCallback(async () => {
     try {
       setLoadingPOs(true);
+      const preferPoId = isNew ? searchParams.get('po') : null;
       const { data, error } = await supabase
         .from('purchase_orders')
         .select(`
@@ -273,99 +305,75 @@ const GRNForm = () => {
           status,
           total_amount,
           supplier:supplier_master(id, supplier_name, supplier_code),
-          grns:grn_master(id)
+          grns:grn_master(
+            id,
+            status,
+            grn_items(po_item_id, approved_quantity, received_quantity, quality_status)
+          )
         `)
-        // Show all purchase orders regardless of status
+        .eq('is_deleted', false)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
       console.log('Fetched purchase orders:', data?.length || 0, 'orders');
 
-      const purchaseOrderList = ((data as PurchaseOrder[]) || []).map(po => ({
+      const purchaseOrderList = ((data as PurchaseOrder[]) || []).map((po) => ({
         ...po,
-        items: []
+        items: [] as any[],
+        grns: (po.grns || []).map((g: any) => ({
+          id: g.id,
+          status: g.status,
+          grn_items: g.grn_items || [],
+        })),
       }));
-      const poIds = purchaseOrderList.map(po => po.id);
+      const poIds = purchaseOrderList.map((po) => po.id);
 
-      const receivedByPo = new Map<string, number>();
       const itemsByPo = new Map<string, any[]>();
 
       if (poIds.length > 0) {
-        const { data: poItems, error: poItemsError } = await supabase
-          .from('purchase_order_items')
-          .select(
-            `
-              id,
-              po_id,
-              item_type,
-              item_id,
-              item_name,
-              item_image_url,
-              quantity,
-              unit_of_measure,
-              fabric_name,
-              fabric_color,
-              selected_colors,
-              fabric_gsm,
-              fabric_id,
-              sizes_quantities,
-              entry_mode,
-              size_type_id
-            `
-          )
-          .in('po_id', poIds);
-
-        if (poItemsError) {
-          console.warn('Failed to fetch purchase order line items for GRN form', poItemsError);
-        } else {
-          (poItems || []).forEach(item => {
-            const poId = (item as any).po_id;
-            if (!itemsByPo.has(poId)) {
-              itemsByPo.set(poId, []);
-            }
+        try {
+          // Smaller batches: many lines per PO can hit PostgREST's 1000-row default.
+          const poItems = await fetchRowsInChunks(
+            'purchase_order_items',
+            PO_ITEM_SELECT,
+            'po_id',
+            poIds,
+            25
+          );
+          (poItems || []).forEach((item: any) => {
+            const poId = item.po_id;
+            if (!poId) return;
+            if (!itemsByPo.has(poId)) itemsByPo.set(poId, []);
             itemsByPo.get(poId)!.push(item);
           });
-        }
-
-        const { data: grnTotals, error: grnTotalsError } = await supabase
-          .from('grn_items')
-          .select('received_quantity, purchase_order_items!inner(po_id)')
-          .in('purchase_order_items.po_id', poIds);
-
-        if (grnTotalsError) {
-          console.warn('Failed to fetch aggregated GRN totals for POs', grnTotalsError);
-        } else {
-          (grnTotals || []).forEach(entry => {
-            const poId = (entry as any)?.purchase_order_items?.po_id;
-            if (poId) {
-              const current = receivedByPo.get(poId) || 0;
-              receivedByPo.set(poId, current + Number((entry as any).received_quantity || 0));
-            }
-          });
+        } catch (poItemsError) {
+          console.warn('Failed to fetch purchase order line items for GRN form', poItemsError);
         }
       }
-      
-      // Filter out POs that are fully received (only for new GRN creation)
+
+      const enrichedPOs = purchaseOrderList.map((po) => ({
+        ...po,
+        items: itemsByPo.get(po.id) || [],
+      }));
+
+      // New GRN: only POs that still need receipt (same rules as PO dashboard)
       if (isNew) {
-        const filteredPOs = purchaseOrderList.filter(po => {
-          // Skip POs that already have at least one GRN
-          if (po.grns && po.grns.length > 0) {
-            return false;
-          }
-
-          po.items = itemsByPo.get(po.id) || [];
-
-          const totalOrdered = (po.items || []).reduce((sum, item: any) => sum + Number(item.quantity || 0), 0);
-          const totalReceived = receivedByPo.get(po.id) || 0;
-
-          return totalReceived < totalOrdered;
+        let filteredPOs = enrichedPOs.filter((po) => {
+          const bucket = classifyPurchaseOrderReceipt(po);
+          return bucket === 'needs_grn' || bucket === 'open_grn';
         });
+
+        // Dashboard "Create GRN" deep-link: keep that PO selectable even if classification fails.
+        if (preferPoId && !filteredPOs.some((po) => po.id === preferPoId)) {
+          const preferred = enrichedPOs.find((po) => po.id === preferPoId);
+          if (preferred && preferred.status !== 'cancelled') {
+            filteredPOs = [preferred, ...filteredPOs];
+          }
+        }
+
+        console.log('POs available for new GRN:', filteredPOs.length);
         setPurchaseOrders(filteredPOs as any);
       } else {
-        const enrichedPOs = purchaseOrderList.map(po => ({
-          ...po,
-          items: itemsByPo.get(po.id) || []
-        }));
         setPurchaseOrders(enrichedPOs as any);
       }
     } catch (error) {
@@ -374,7 +382,7 @@ const GRNForm = () => {
     } finally {
       setLoadingPOs(false);
     }
-  }, [isNew]);
+  }, [isNew, searchParams]);
 
   // Fetch suppliers
   const fetchSuppliers = useCallback(async () => {
@@ -1235,7 +1243,6 @@ const GRNForm = () => {
             }
 
             // Always create a log entry for this addition
-            const { logInventoryAddition } = await import('@/utils/inventoryLogging');
             await logInventoryAddition(
               warehouseInventoryId,
               {
@@ -2167,14 +2174,14 @@ const GRNForm = () => {
                         loadingPOs 
                           ? "Loading purchase orders..." 
                           : isNew && purchaseOrders.length === 0 
-                            ? "No POs available (all fully received)" 
+                            ? "No POs awaiting GRN" 
                             : "Select Purchase Order"
                       } />
                     </SelectTrigger>
                     <SelectContent>
                       {purchaseOrders.length === 0 ? (
                         <div className="p-2 text-sm text-muted-foreground">
-                          {isNew ? "All purchase orders are fully received" : "No purchase orders found"}
+                          {isNew ? "No purchase orders awaiting receipt" : "No purchase orders found"}
                         </div>
                       ) : (
                         purchaseOrders.map((po) => (
@@ -2187,7 +2194,7 @@ const GRNForm = () => {
                   </Select>
                   {isNew && purchaseOrders.length === 0 && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      All purchase orders have been fully received. You can only edit existing GRNs.
+                      No open purchase orders need a GRN right now. Check Procurement → Purchase Orders.
                     </p>
                   )}
               </div>

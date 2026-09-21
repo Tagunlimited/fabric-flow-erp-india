@@ -26,6 +26,7 @@ import {
   type OutsourceLineContext,
   type OutsourcePoAwaitingGrn,
 } from '@/lib/outsourceFulfillment';
+import { fetchRowsInChunks } from '@/lib/fetchRowsInChunks';
 
 interface PurchaseOrderLite {
   id: string;
@@ -85,13 +86,12 @@ async function attachOrderNumbersToPurchaseOrders<
 
   let bomPoLinks: { po_id: string; bom_id: string }[] = [];
   try {
-    const { data: bpi } = await supabase
-      .from('bom_po_items' as any)
-      .select('po_id, bom_id')
-      .in(
-        'po_id',
-        rows.map((r) => r.id)
-      );
+    const bpi = await fetchRowsInChunks(
+      'bom_po_items',
+      'po_id, bom_id',
+      'po_id',
+      rows.map((r) => r.id)
+    );
     bomPoLinks = (bpi || []).filter((r: any) => r?.po_id && r?.bom_id) as { po_id: string; bom_id: string }[];
     bomPoLinks.forEach((l) => bomIds.add(l.bom_id));
   } catch {
@@ -107,12 +107,10 @@ async function attachOrderNumbersToPurchaseOrders<
     return rows.map((r) => ({ ...r, order_numbers: [] as string[] }));
   }
 
-  const { data: boms, error: bomsError } = await supabase
-    .from('bom_records')
-    .select('id, order_id')
-    .in('id', [...bomIds]);
-
-  if (bomsError) {
+  let boms: { id: string; order_id: string | null }[] = [];
+  try {
+    boms = await fetchRowsInChunks('bom_records', 'id, order_id', 'id', [...bomIds]);
+  } catch (bomsError) {
     console.warn('Could not resolve orders for purchase orders', bomsError);
     return rows.map((r) => ({ ...r, order_numbers: [] as string[] }));
   }
@@ -138,19 +136,22 @@ async function attachOrderNumbersToPurchaseOrders<
 
   const orderIdToNumber = new Map<string, string>();
   if (allOrderIds.size > 0) {
-    const { data: ords, error: ordErr } = await supabase
-      .from('orders')
-      .select('id, order_number')
-      .eq('is_deleted', false)
-      .in('id', [...allOrderIds]);
-    if (ordErr) {
-      console.warn('Could not load order numbers for purchase orders', ordErr);
-    } else {
+    try {
+      const ords = await fetchRowsInChunks(
+        'orders',
+        'id, order_number',
+        'id',
+        [...allOrderIds],
+        undefined,
+        (q: any) => q.eq('is_deleted', false)
+      );
       (ords || []).forEach((o: any) => {
         if (o?.id && o?.order_number != null && String(o.order_number).trim()) {
           orderIdToNumber.set(o.id, String(o.order_number).trim());
         }
       });
+    } catch (ordErr) {
+      console.warn('Could not load order numbers for purchase orders', ordErr);
     }
   }
 

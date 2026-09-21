@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Minus, Plus, Package, MapPin, RefreshCw } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { logInventoryRemoval } from '@/utils/inventoryLogging';
 
 interface FabricInfo {
   fabric_id: string;
@@ -590,7 +591,6 @@ export const FabricPickingDialog: React.FC<FabricPickingDialogProps> = ({
               
               // Log the inventory removal
               try {
-                const { logInventoryRemoval } = await import('@/utils/inventoryLogging');
                 await logInventoryRemoval(
                   bestMatch.id,
                   {

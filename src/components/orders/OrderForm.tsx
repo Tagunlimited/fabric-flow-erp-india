@@ -3017,7 +3017,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                             className="group inline-flex items-center cursor-pointer font-medium text-sm px-3 py-2 text-white bg-gradient-to-r from-[#0f0c29] via-[#302b63] to-[#24243e] border-0 tracking-[0.05em] rounded-2xl"
                           >
                             <svg
-                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[5px] group-hover:rotate-90"
+                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-smooth group-hover:translate-x-[5px] group-hover:rotate-90"
                               viewBox="0 0 24 24"
                               xmlns="http://www.w3.org/2000/svg"
                               aria-hidden="true"
@@ -3028,7 +3028,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                 fill="currentColor"
                               ></path>
                             </svg>
-                            <span className="transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[7px]">
+                            <span className="transition-transform duration-500 ease-smooth group-hover:translate-x-[7px]">
                               {expandedProductSections[productIndex]?.reference ? 'Hide' : 'Launch'}
                             </span>
                           </button>
@@ -3043,7 +3043,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                             className="group inline-flex items-center cursor-pointer font-medium text-sm px-3 py-2 text-white bg-gradient-to-r from-[#0f0c29] via-[#302b63] to-[#24243e] border-0 tracking-[0.05em] rounded-2xl"
                           >
                             <svg
-                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[5px] group-hover:rotate-90"
+                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-smooth group-hover:translate-x-[5px] group-hover:rotate-90"
                               viewBox="0 0 24 24"
                               xmlns="http://www.w3.org/2000/svg"
                               aria-hidden="true"
@@ -3054,7 +3054,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                 fill="currentColor"
                               ></path>
                             </svg>
-                            <span className="transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[7px]">
+                            <span className="transition-transform duration-500 ease-smooth group-hover:translate-x-[7px]">
                               {expandedProductSections[productIndex]?.attachments ? 'Hide' : 'Launch'}
                             </span>
                           </button>
@@ -3069,7 +3069,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                             className="group inline-flex items-center cursor-pointer font-medium text-sm px-3 py-2 text-white bg-gradient-to-r from-[#0f0c29] via-[#302b63] to-[#24243e] border-0 tracking-[0.05em] rounded-2xl"
                           >
                             <svg
-                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[5px] group-hover:rotate-90"
+                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-smooth group-hover:translate-x-[5px] group-hover:rotate-90"
                               viewBox="0 0 24 24"
                               xmlns="http://www.w3.org/2000/svg"
                               aria-hidden="true"
@@ -3080,7 +3080,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                 fill="currentColor"
                               ></path>
                             </svg>
-                            <span className="transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[7px]">
+                            <span className="transition-transform duration-500 ease-smooth group-hover:translate-x-[7px]">
                               {expandedProductSections[productIndex]?.branding ? 'Hide' : 'Launch'}
                             </span>
                           </button>
@@ -3096,7 +3096,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                             className="group inline-flex items-center cursor-pointer font-medium text-sm px-3 py-2 text-white bg-gradient-to-r from-[#0f0c29] via-[#302b63] to-[#24243e] border-0 tracking-[0.05em] rounded-2xl"
                           >
                             <svg
-                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[5px] group-hover:rotate-90"
+                              className="mr-1 h-4 w-4 rotate-[30deg] transition-transform duration-500 ease-smooth group-hover:translate-x-[5px] group-hover:rotate-90"
                               viewBox="0 0 24 24"
                               xmlns="http://www.w3.org/2000/svg"
                               aria-hidden="true"
@@ -3107,7 +3107,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
                                 fill="currentColor"
                               ></path>
                             </svg>
-                            <span className="transition-transform duration-500 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:translate-x-[7px]">
+                            <span className="transition-transform duration-500 ease-smooth group-hover:translate-x-[7px]">
                               {expandedProductSections[productIndex]?.mockup ? 'Hide' : 'Launch'}
                             </span>
                           </button>

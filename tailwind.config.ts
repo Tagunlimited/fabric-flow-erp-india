@@ -148,7 +148,10 @@ export default {
 				'erp-md': 'var(--shadow-md)',
 				'erp-lg': 'var(--shadow-lg)',
 				'erp-xl': 'var(--shadow-xl)'
-			}
+			},
+			transitionTimingFunction: {
+				smooth: 'cubic-bezier(0.76, 0, 0.24, 1)',
+			},
 		}
 	},
 	plugins: [require("tailwindcss-animate")],
