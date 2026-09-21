@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { ArrowRight, User, Package } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { supabase } from '@/integrations/supabase/client';
 
 interface OrderAssignment {
   id: string;
@@ -167,8 +168,6 @@ export const ReassignCuttingMasterDialog: React.FC<ReassignCuttingMasterDialogPr
 
     setLoading(true);
     try {
-      const { supabase } = await import('@/integrations/supabase/client');
-      
       // Get current user for assigned_by fields
       const { data: { user } } = await supabase.auth.getUser();
       
