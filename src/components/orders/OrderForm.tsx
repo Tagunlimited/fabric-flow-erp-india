@@ -1735,7 +1735,7 @@ const getSelectedFabricVariant = (productIndex: number) => {
 
       // Retry only on order_number unique collisions (not idempotency or generic errors).
       let orderResult: any = null;
-      const maxRetries = 3;
+      const maxRetries = 8;
 
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         const orderNumber = await allocateOrderNumber('TUC');
@@ -1786,8 +1786,9 @@ const getSelectedFabricVariant = (productIndex: number) => {
               orderResult = existing;
               break;
             }
+            // order_number collision: allocate_order_number should advance; retry.
             if (attempt < maxRetries - 1) {
-              await new Promise((resolve) => setTimeout(resolve, 100));
+              await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
               continue;
             }
           }
