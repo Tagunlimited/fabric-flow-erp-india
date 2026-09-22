@@ -774,7 +774,7 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
       const { subtotal, gstAmount, total, balance } = calculateTotals();
 
       let orderData: { id: string } | null = null;
-      const maxRetries = 3;
+      const maxRetries = 8;
 
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         const orderNumber = await allocateOrderNumber('RMO');
@@ -815,7 +815,7 @@ export function ReadymadeOrderForm({ preSelectedCustomer, onOrderCreated }: Read
               break;
             }
             if (attempt < maxRetries - 1) {
-              await new Promise((resolve) => setTimeout(resolve, 100));
+              await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
               continue;
             }
           }
